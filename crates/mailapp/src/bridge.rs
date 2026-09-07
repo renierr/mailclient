@@ -17,6 +17,7 @@ pub mod qobject {
     extern "RustQt" {
         /// App-level controller object.
         #[qobject]
+        #[qml_element]
         #[qproperty(QString, db_path)]
         #[qproperty(i32, account_count)]
         #[qproperty(QString, folders_json)]
@@ -37,8 +38,9 @@ pub mod qobject {
 
         /// Create an account from a JSON form
         /// (`{name,email,imap_host,imap_port,imap_sec,imap_user,password,
-        /// smtp_host,smtp_port,smtp_sec,smtp_user}`); password goes to the OS
-        /// keyring. Returns `""` or an error message.
+        /// smtp_host,smtp_port,smtp_sec,smtp_user,smtp_password}`); passwords go
+        /// to the OS keyring (empty SMTP password = same as IMAP).
+        /// Returns `""` or an error message.
         #[qinvokable]
         fn add_account(self: Pin<&mut Self>, form: &QString) -> QString;
 
@@ -164,10 +166,11 @@ fn current_account(db: &mailcore::Db, wanted: i64) -> Result<mailcore::models::A
 
 /// Connect an IMAP session using the keyring secret.
 fn imap_session(account: &mailcore::models::Account) -> Result<ImapSync, String> {
-    let secret = auth::load_secret(&account.auth_vault_key)
+    let secrets = auth::load_account_secrets(&account.auth_vault_key)
         .map_err(|e| format!("no password in keyring: {e}"))?;
     let mut imap = ImapSync::new(account);
-    imap.connect(&secret).map_err(|e| e.to_string())?;
+    imap.connect(&secrets.imap_password)
+        .map_err(|e| e.to_string())?;
     Ok(imap)
 }
 
@@ -248,34 +251,55 @@ impl qobject::Bridge {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        if let Ok(list) = accounts::list(&db) {
-            if list.iter().any(|a| a.email_address == email) {
-                return qstring("account already exists");
+        let account_name = if name.is_empty() { email.clone() } else { name };
+        let form_account = NewAccount {
+            name: account_name,
+            email_address: email.clone(),
+            imap_host,
+            imap_port: u16_field("imap_port", 993),
+            imap_security: str_field("imap_sec"),
+            imap_username: imap_user,
+            smtp_host,
+            smtp_port: u16_field("smtp_port", 465),
+            smtp_security: str_field("smtp_sec"),
+            smtp_username: smtp_user,
+            auth_vault_key: String::new(), // replaced below
+            check_interval_secs: 300,
+        };
+        // Re-saving an existing email updates it (also migrates its secrets
+        // into the current keyring backend); otherwise a fresh row is created.
+        let id = match accounts::list(&db)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|a| a.email_address == email)
+        {
+            Some(existing) => {
+                if let Err(e) = accounts::update_connection(&db, existing.id, &form_account) {
+                    return qstring(&e.to_string());
+                }
+                if let Err(e) = auth::save_account_secrets(
+                    &existing.auth_vault_key,
+                    &password,
+                    &str_field("smtp_password"),
+                ) {
+                    return qstring(&format!("keyring unavailable: {e}"));
+                }
+                existing.id
             }
-        }
-        let vault = auth::new_vault_key();
-        if let Err(e) = auth::save_secret(&vault, &password) {
-            return qstring(&format!("keyring unavailable: {e}"));
-        }
-        let id = match accounts::create(
-            &db,
-            &NewAccount {
-                name: if name.is_empty() { email.clone() } else { name },
-                email_address: email,
-                imap_host,
-                imap_port: u16_field("imap_port", 993),
-                imap_security: str_field("imap_sec"),
-                imap_username: imap_user,
-                smtp_host,
-                smtp_port: u16_field("smtp_port", 465),
-                smtp_security: str_field("smtp_sec"),
-                smtp_username: smtp_user,
-                auth_vault_key: vault,
-                check_interval_secs: 300,
-            },
-        ) {
-            Ok(id) => id,
-            Err(e) => return qstring(&e.to_string()),
+            None => {
+                let vault = auth::new_vault_key();
+                if let Err(e) =
+                    auth::save_account_secrets(&vault, &password, &str_field("smtp_password"))
+                {
+                    return qstring(&format!("keyring unavailable: {e}"));
+                }
+                let mut with_vault = form_account;
+                with_vault.auth_vault_key = vault;
+                match accounts::create(&db, &with_vault) {
+                    Ok(id) => id,
+                    Err(e) => return qstring(&e.to_string()),
+                }
+            }
         };
         push_feeds(&mut self, &db, id, -1);
         self.as_mut()
@@ -449,12 +473,10 @@ impl qobject::Bridge {
             Ok(a) => a,
             Err(e) => return qstring(&e),
         };
-        let smtp_secret = match auth::load_secret(&acc.auth_vault_key) {
+        let secrets = match auth::load_account_secrets(&acc.auth_vault_key) {
             Ok(s) => s,
             Err(e) => return qstring(&format!("no password in keyring: {e}")),
         };
-        // Same credential usually works for IMAP; sent-copy skips itself otherwise.
-        let imap_secret = auth::load_secret(&acc.auth_vault_key).ok();
         let mut sender = SmtpSender::new(&acc);
         // Interactive Send click = explicit user consent (see SendPolicy docs).
         let req = SendRequest {
@@ -462,8 +484,8 @@ impl qobject::Bridge {
             subject: &subject,
             body_text: &body,
             policy: &SendPolicy::Unrestricted,
-            password: &smtp_secret,
-            imap_password: imap_secret.as_deref(),
+            password: &secrets.smtp_password,
+            imap_password: Some(&secrets.imap_password),
         };
         match sender.send_raw(&db, acc.id, &req) {
             Ok(()) => {

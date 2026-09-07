@@ -82,6 +82,37 @@ pub fn list(db: &Db) -> Result<Vec<Account>> {
     Ok(rows)
 }
 
+/// Update connection fields of an existing account (vault key untouched).
+pub fn update_connection(db: &Db, id: i64, a: &NewAccount) -> Result<()> {
+    let ts = super::now();
+    let n = db.conn().execute(
+        "update accounts set name = ?1, email_address = ?2, imap_host = ?3,
+            imap_port = ?4, imap_security = ?5, imap_username = ?6,
+            smtp_host = ?7, smtp_port = ?8, smtp_security = ?9,
+            smtp_username = ?10, check_interval_secs = ?11, updated_at = ?12
+         where id = ?13",
+        params![
+            a.name,
+            a.email_address,
+            a.imap_host,
+            a.imap_port as i64,
+            a.imap_security,
+            a.imap_username,
+            a.smtp_host,
+            a.smtp_port as i64,
+            a.smtp_security,
+            a.smtp_username,
+            a.check_interval_secs as i64,
+            ts,
+            id,
+        ],
+    )?;
+    if n == 0 {
+        return Err(StoreError::NotFound(format!("account {id}")));
+    }
+    Ok(())
+}
+
 /// Delete an account (folders/messages/queue cascade).
 pub fn delete(db: &Db, id: i64) -> Result<()> {
     let n = db

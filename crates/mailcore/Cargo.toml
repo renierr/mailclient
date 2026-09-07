@@ -20,7 +20,10 @@ lettre = "0.11"
 imap = "2.4"
 native-tls = "0.2"
 mail-parser = "0.11"
-keyring = "3"
+# Secret Service (freedesktop) on Linux: persistent desktop keyring entries
+# visible in GNOME Passwords / KDE Wallet. (Plain `linux-native` would be the
+# invisible, non-persistent kernel keyutils store.)
+keyring = { version = "3", features = ["linux-native-sync-persistent"] }
 
 [dev-dependencies]
 tempfile = "3.0"

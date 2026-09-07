@@ -27,7 +27,8 @@ Dialog {
             smtp_host: smtpField.text,
             smtp_port: smtpPortField.text,
             smtp_sec: smtpSecBox.currentText,
-            smtp_user: smtpUserField.text
+            smtp_user: smtpUserField.text,
+            smtp_password: smtpPassField.text
         }))
     }
 
@@ -88,6 +89,9 @@ Dialog {
 
             Label { text: qsTr("SMTP user") }
             TextField { id: smtpUserField; Layout.fillWidth: true; placeholderText: qsTr("same as IMAP user") }
+
+            Label { text: qsTr("SMTP password") }
+            TextField { id: smtpPassField; Layout.fillWidth: true; echoMode: TextInput.Password; placeholderText: qsTr("same as IMAP password") }
         }
     }
 }
