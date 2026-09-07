@@ -81,8 +81,23 @@ DB location: `~/.local/share/mailclient/mailclient.sqlite` (override `MAILCLIENT
 
 UI iteration: `./scripts/dev.sh` runs the app against live `crates/mailapp/qml/` (embedded module is the fallback). Note: files using `import Mailclient` (currently `Settings.qml`) only load inside the app, not under standalone `qml6` — preview other components individually with `qml6` instead.
 
-## 6. Roadmap Notes
+## 7. Roadmap Notes
 
 - Sync engine behind `SyncProvider` trait; IMAP first, JMAP/POP3 later without touching UI.
 - HTML compose editing: `TextArea` rich-text now, consider WebEngine-based editor in M2.
 - Windows: keep all paths via `directories`, no Linux-only calls outside `mailapp` platform shim.
+
+## 8. Known Flaws & Repair List (user-reported, 2026-09-07)
+
+Broken right now — fix before any new features:
+
+| # | Flaw | Status | Planned fix |
+|---|---|---|---|
+| F1 | Cannot select other mails in the list (selection stuck / jumps back) | ⬜ open | Decouple selection from feed reload: select by UID not index, guard `onCurrentIndexChanged` reentrancy during model rebuild |
+| F2 | No body shown in reader (empty pane) | ⬜ open | Fix plain-body rendering (`TextEdit` in `ScrollView` shows nothing → back to `Text`), tolerant `is_html` bool check, verify feed roles reach QML |
+| F3 | Composer is not WYSIWYG (Bold etc. don't reflect visually) | ⬜ open | `TextArea.insert("<b>")` inserts literal tags — move toolbar to real formatting (WebEngine `contentEditable` + `execCommand`, per roadmap) or source-explicit editing |
+| F4 | Composer fields are placeholder-only, no labels | ⬜ open | Add short `From:` / `To:` / `Cc:` labels beside each field |
+| F5 | Cancel loses the composed entry without asking | ⬜ open | Dirty tracking + "Discard draft?" confirm on Cancel/close when content changed |
+| F6 | Overall UI looks sterile, flawed vs modern clients | ⬜ open | Design pass: list delegates (unread dot, hover, snippet), reader typography, spacing, composer styling — after F1–F5 work |
+
+Reported working (keep while fixing): account setup + keyring, manual ⟳ sync, folder tree, send + Sent-copy, star/delete, remote-image blocking default.
