@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Mailclient
+Comment=Modern mail client (Rust + QML)
+Exec=@HOME@/.local/bin/mailapp
+Icon=@HOME@/.local/share/mailclient/resources/mailclient.svg
+Terminal=false
+Categories=Network;Email;Office;
+StartupWMClass=mailapp

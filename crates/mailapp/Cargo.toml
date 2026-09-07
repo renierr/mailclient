@@ -1,0 +1,22 @@
+[package]
+name = "mailapp"
+version = "0.1.0"
+edition = "2021"
+description = "Qt/QML desktop shell for mailclient (cxx-qt bridge over mailcore)."
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "mailapp"
+path = "src/main.rs"
+
+[dependencies]
+cxx = "1.0"
+cxx-qt = "0.9"
+cxx-qt-lib = { version = "0.9", features = ["qt_full"] }
+mailcore = { path = "../mailcore" }
+directories = "6.0"
+log = "0.4"
+env_logger = "0.11"
+
+[build-dependencies]
+cxx-qt-build = { version = "0.9", features = ["link_qt_object_files"] }

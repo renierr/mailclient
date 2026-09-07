@@ -1,0 +1,44 @@
+# Rust
+/target/
+**/target/
+Cargo.lock
+# keep workspace Cargo.lock for a binary app? we ignore for libs, keep for app:
+!Cargo.lock
+
+# Qt / QML build artefacts
+build/
+*.o
+*.so.*
+moc_*.cpp
+qrc_*.cpp
+*.qm
+.qmlcache/
+.qmltypes.lint
+
+# dist output (built app bundle, gitignored per spec)
+/dist/
+
+# SQLite local data
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+data/
+
+# Secrets / local config
+*.pem
+*.key
+.env
+config.local.toml
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Misc
+/tmp/
+*.log
