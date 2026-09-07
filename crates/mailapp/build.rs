@@ -28,5 +28,6 @@ fn main() {
     .qt_module("Quick")
     .qt_module("QuickControls2")
     .qt_module("Network")
+    .qt_module("WebEngineQuick")
     .build();
 }

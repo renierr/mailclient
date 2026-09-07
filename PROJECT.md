@@ -47,8 +47,8 @@ Secrets live in the OS keyring keyed by `accounts.auth_vault_key`, never in SQLi
 |---|---|---|
 | 0 | Repo scaffold: workspace, `mailcore` schema + CRUD, `mailapp` cxx-qt skeleton, QML shell, `scripts/{build,dev,install-local}.sh`, `dist/` bundle | ✅ done |
 | 1 | Real IMAP sync + app wiring: account setup (keyring), LIST/SELECT/FETCH, UIDVALIDITY handling, flag push/delete, send + Sent-copy, live folder/message feeds in QML | ✅ done (verified live against test account) |
-| 2 | Composer polish: drafts, HTML editing, attachments | ⬜ next |
-| 3 | QML models live + FTS search UI + WebEngine reader sandbox | ⬜ planned (feeds are JSON strings today; native list models later) |
+| 2 | Composer polish: drafts, attachments, full rich-text editor (toolbar wraps selection today) | ⬜ next |
+| 3 | Reader/search: FTS search UI, remote-image handling polish | ⬜ planned (WebEngine sandbox with JS off is live; feeds are JSON strings today; native list models later) |
 | 4 | Contacts, threading, notifications, settings UI extras | ⬜ planned |
 | 5 | Polish: background IDLE/polling sync, offline/error states, onboarding, `.desktop`/icons, Windows feasibility | ⬜ planned (sync is manual ⟳ for now; IDLE not yet) |
 
@@ -59,7 +59,15 @@ Current state detail:
 - Verified live: 5 folders mapped, messages synced, test mail delivered + filed to Sent.
 - QML is a responsive 3-pane shell (sidebar / list / reader + composer dialog + account setup dialog) with mock data so `qml6 qml/Main.qml` runs without Rust.
 
-## 5. Build / Run / Install
+## 5. Sync Strategy (when / what / scaling)
+
+Manual ⟳ today; background IDLE + polling in M5.
+
+- **When**: only on explicit ⟳ press. Selecting folders/messages reads local SQLite only (plus best-effort `\Seen`/`\Flagged` push on open/star). Nothing syncs on its own yet.
+- **What**: full folder LIST (roles re-mapped every run, custom IMAP folders included), then per folder: `UID SEARCH ALL` → flag refresh for known UIDs → full `RFC822` fetch only for unknown UIDs → local delete of server-expunged UIDs → `UIDVALIDITY` resync on change.
+- **Scaling (massive mailboxes)**: current cost per folder is one SEARCH + flag FETCH over all UIDs (chunked) — fine to tens of thousands, slow beyond. Planned steps: larger FETCH chunks → newest-N window sync with on-demand backfill → CONDSTORE/QRESYNC flag deltas → per-folder selective sync → IDLE push + interval polling.
+
+## 6. Build / Run / Install
 
 ```sh
 ./scripts/dev.sh            # debug build + run (uses ./crates/mailapp/qml live)

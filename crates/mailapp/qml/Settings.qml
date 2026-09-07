@@ -2,9 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-import Mailclient
-
-// Settings dialog, backed by the Rust SettingsBridge (SQLite store).
+// Settings dialog, backed by the shared SettingsBridge passed in from Main.
 // Explicit sync on open/save (no bindings that user edits could break).
 Dialog {
     id: root
@@ -16,14 +14,13 @@ Dialog {
 
     signal statusMessage(string text)
 
-    SettingsBridge {
-        id: settings
-    }
+    // Shared bridge owned by Main (single source of truth).
+    property var settingsBridge
 
     onOpened: {
-        settings.load()
-        copyBox.checked = settings.sent_copy_enabled
-        imagesBox.checked = settings.load_remote_images
+        settingsBridge.load()
+        copyBox.checked = settingsBridge.sent_copy_enabled
+        imagesBox.checked = settingsBridge.load_remote_images
     }
 
     ColumnLayout {
@@ -34,13 +31,13 @@ Dialog {
             id: copyBox
             Layout.fillWidth: true
             text: qsTr("Save a copy of sent mail in Sent")
-            onToggled: settings.sent_copy_enabled = checked
+            onToggled: settingsBridge.sent_copy_enabled = checked
         }
         CheckBox {
             id: imagesBox
             Layout.fillWidth: true
             text: qsTr("Load remote images in HTML mail (not recommended)")
-            onToggled: settings.load_remote_images = checked
+            onToggled: settingsBridge.load_remote_images = checked
         }
         Label {
             Layout.fillWidth: true
@@ -52,7 +49,7 @@ Dialog {
     }
 
     onAccepted: {
-        settings.save()
+        settingsBridge.save()
         root.statusMessage(qsTr("Settings saved"))
     }
 }

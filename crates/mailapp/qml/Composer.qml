@@ -16,7 +16,11 @@ Dialog {
     signal statusMessage(string text)
     signal sendRequested(string payload)
 
+    property string accountEmail: ""
+
     function openForReply(message) {
+        if (fromField.text === "")
+            fromField.text = root.accountEmail
         if (message !== undefined) {
             toField.text = message.from || ""
             subjectField.text = "Re: " + (message.subject || "")
@@ -26,6 +30,8 @@ Dialog {
     }
 
     function openForForward(message) {
+        if (fromField.text === "")
+            fromField.text = root.accountEmail
         if (message !== undefined) {
             toField.text = ""
             subjectField.text = "Fwd: " + (message.subject || "")
@@ -34,10 +40,31 @@ Dialog {
         open()
     }
 
+    // Wrap the selection (or caret) in rich-text tags.
+    function wrapSelection(before, after) {
+        var s = bodyArea.selectionStart
+        var e = bodyArea.selectionEnd
+        if (s === e) {
+            bodyArea.insert(s, before + after)
+            bodyArea.cursorPosition = s + before.length
+        } else {
+            var sel = bodyArea.selectedText
+            bodyArea.remove(s, e)
+            bodyArea.insert(s, before + sel + after)
+            bodyArea.cursorPosition = s + before.length + sel.length + after.length
+        }
+        bodyArea.forceActiveFocus()
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 8
 
+        TextField {
+            id: fromField
+            Layout.fillWidth: true
+            placeholderText: qsTr("From (defaults to account email)")
+        }
         TextField {
             id: toField
             Layout.fillWidth: true
@@ -58,18 +85,24 @@ Dialog {
                 text: qsTr("B")
                 font.bold: true
                 Accessible.name: qsTr("Bold")
-                onClicked: bodyArea.insert(bodyArea.cursorPosition, "<b></b>")
+                onClicked: root.wrapSelection("<b>", "</b>")
             }
             ToolButton {
                 text: qsTr("I")
                 font.italic: true
                 Accessible.name: qsTr("Italic")
-                onClicked: bodyArea.insert(bodyArea.cursorPosition, "<i></i>")
+                onClicked: root.wrapSelection("<i>", "</i>")
+            }
+            ToolButton {
+                text: qsTr("U")
+                font.underline: true
+                Accessible.name: qsTr("Underline")
+                onClicked: root.wrapSelection("<u>", "</u>")
             }
             ToolButton {
                 text: qsTr("🔗")
                 Accessible.name: qsTr("Insert link")
-                onClicked: bodyArea.insert(bodyArea.cursorPosition, "<a href=\"https://\">link</a>")
+                onClicked: root.wrapSelection("<a href=\"https://\">", "</a>")
             }
             ToolButton {
                 text: qsTr("📎")
@@ -104,6 +137,7 @@ Dialog {
                 highlighted: true
                 onClicked: {
                     root.sendRequested(JSON.stringify({
+                        from: fromField.text,
                         to: toField.text,
                         subject: subjectField.text,
                         body: bodyArea.text

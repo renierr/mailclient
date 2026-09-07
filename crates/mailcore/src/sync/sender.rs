@@ -68,6 +68,9 @@ impl SendPolicy {
 pub struct SendRequest<'a> {
     /// Recipients (checked against the [`SendPolicy`]).
     pub to: &'a [String],
+    /// Sender identity. `None` = account email. Any other address is used
+    /// verbatim (server may reject logins that must match the username).
+    pub from: Option<&'a str>,
     pub subject: &'a str,
     pub body_text: &'a str,
     pub policy: &'a SendPolicy,
@@ -146,9 +149,13 @@ impl MailSender for SmtpSender {
         req.policy.check(&refs)?;
 
         let queue_id = queue::enqueue(db, account_id, None)?;
-        let mut builder = Message::builder()
-            .from(self.from.parse()?)
-            .subject(req.subject);
+        let from: &str = req.from.filter(|s| !s.is_empty()).unwrap_or(&self.from);
+        if !from.contains('@') {
+            return Err(StoreError::InvalidInput(format!(
+                "invalid sender address: {from}"
+            )));
+        }
+        let mut builder = Message::builder().from(from.parse()?).subject(req.subject);
         for t in req.to {
             builder = builder.to(t.parse()?);
         }

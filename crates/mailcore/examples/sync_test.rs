@@ -139,6 +139,7 @@ fn main() -> Result<(), String> {
                 account_id,
                 &SendRequest {
                     to: std::slice::from_ref(&to),
+                    from: None,
                     subject: "Mailclient M1 test",
                     body_text:
                         "Hello from the mailclient M1 sync harness. If you read this, SMTP works.",

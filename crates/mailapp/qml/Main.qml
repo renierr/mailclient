@@ -23,6 +23,10 @@ ApplicationWindow {
         id: backend
     }
 
+    SettingsBridge {
+        id: appSettings
+    }
+
     ListModel {
         id: folderModel
     }
@@ -74,6 +78,7 @@ ApplicationWindow {
     }
 
     Component.onCompleted: {
+        appSettings.load()
         var r = reloadAll()
         if (backend.account_count === 0) {
             root.statusText = qsTr("Add an account to start")
@@ -177,6 +182,7 @@ ApplicationWindow {
             id: messageView
             SplitView.fillWidth: true
             SplitView.minimumWidth: 300
+            loadRemoteImages: appSettings.load_remote_images
             message: messageModel.count > 0 ? messageModel.get(Math.min(root.currentMessageIndex, messageModel.count - 1)) : undefined
             onReplyRequested: composer.openForReply(messageModel.get(root.currentMessageIndex))
             onForwardRequested: composer.openForForward(messageModel.get(root.currentMessageIndex))
@@ -213,6 +219,7 @@ ApplicationWindow {
 
     Composer {
         id: composer
+        accountEmail: backend.current_account_email
         onStatusMessage: text => root.statusText = text
         onSendRequested: payload => {
             var r = backend.send_mail(payload)
@@ -242,6 +249,7 @@ ApplicationWindow {
     }
     Settings {
         id: settingsDialog
+        settingsBridge: appSettings
         onStatusMessage: text => root.statusText = text
     }
 }

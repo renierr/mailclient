@@ -51,15 +51,35 @@ pub fn upsert(
     Ok(id)
 }
 
-/// List folders of one account ordered by path.
+/// List folders of one account: inbox first, then special roles in a fixed
+/// order, then custom folders alphabetically.
 pub fn list_by_account(db: &Db, account_id: i64) -> Result<Vec<Folder>> {
     let mut stmt = db.conn().prepare(&format!(
         "select {COLS} from folders where account_id = ?1 order by path"
     ))?;
-    let rows = stmt
+    let mut rows = stmt
         .query_map([account_id], row_to_folder)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.sort_by(|a, b| {
+        role_weight(a.role).cmp(&role_weight(b.role)).then_with(|| {
+            a.path
+                .to_ascii_lowercase()
+                .cmp(&b.path.to_ascii_lowercase())
+        })
+    });
     Ok(rows)
+}
+
+fn role_weight(role: FolderRole) -> u8 {
+    match role {
+        FolderRole::Inbox => 0,
+        FolderRole::Drafts => 1,
+        FolderRole::Sent => 2,
+        FolderRole::Archive => 3,
+        FolderRole::Junk => 4,
+        FolderRole::Trash => 5,
+        FolderRole::Custom => 6,
+    }
 }
 
 /// Fetch one folder by `(account_id, path)`.
@@ -141,5 +161,41 @@ mod tests {
         assert_eq!(f.uid_validity, Some(123));
         assert_eq!(f.uid_next, Some(456));
         assert!(f.last_sync_at.is_some());
+    }
+
+    #[test]
+    fn inbox_first_then_roles_then_custom() {
+        let db = Db::open_in_memory().unwrap();
+        let acc = mk_account(&db);
+        for (path, role) in [
+            ("Trash", FolderRole::Trash),
+            ("INBOX.Work", FolderRole::Custom),
+            ("Sent", FolderRole::Sent),
+            ("INBOX", FolderRole::Inbox),
+            ("Archive", FolderRole::Archive),
+            ("Drafts", FolderRole::Drafts),
+            ("Junk", FolderRole::Junk),
+            ("Zebra", FolderRole::Custom),
+        ] {
+            upsert(&db, acc, path, "/", role).unwrap();
+        }
+        let names: Vec<String> = list_by_account(&db, acc)
+            .unwrap()
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "INBOX",
+                "Drafts",
+                "Sent",
+                "Archive",
+                "Junk",
+                "Trash",
+                "INBOX.Work",
+                "Zebra"
+            ]
+        );
     }
 }

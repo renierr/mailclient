@@ -24,6 +24,7 @@ pub mod qobject {
         #[qproperty(QString, messages_json)]
         #[qproperty(i64, current_account_id)]
         #[qproperty(i64, current_folder_id)]
+        #[qproperty(QString, current_account_email)]
         #[namespace = "mailclient"]
         type Bridge = super::BridgeRust;
 
@@ -65,7 +66,7 @@ pub mod qobject {
         #[qinvokable]
         fn delete_message(self: Pin<&mut Self>, uid: i32) -> QString;
 
-        /// Send a message from a JSON form (`{to,subject,body}`) via the
+        /// Send a message from a JSON form (`{from,to,subject,body}`) via the
         /// current account. Interactive user action = explicit send consent.
         #[qinvokable]
         fn send_mail(self: Pin<&mut Self>, form: &QString) -> QString;
@@ -116,6 +117,7 @@ pub struct BridgeRust {
     messages_json: QString,
     current_account_id: i64,
     current_folder_id: i64,
+    current_account_email: QString,
 }
 
 impl Default for BridgeRust {
@@ -127,6 +129,7 @@ impl Default for BridgeRust {
             messages_json: qstring("[]"),
             current_account_id: -1,
             current_folder_id: -1,
+            current_account_email: qstring(""),
         }
     }
 }
@@ -144,10 +147,14 @@ fn push_feeds(
     } else {
         "[]".to_string()
     };
+    let email = accounts::get(db, account_id)
+        .map(|a| a.email_address)
+        .unwrap_or_default();
     bridge.as_mut().set_folders_json(qstring(&folders));
     bridge.as_mut().set_messages_json(qstring(&msgs));
     bridge.as_mut().set_current_account_id(account_id);
     bridge.as_mut().set_current_folder_id(folder_id);
+    bridge.as_mut().set_current_account_email(qstring(&email));
 }
 
 /// Resolve the current account: stored id if still present, else the first.
@@ -454,6 +461,12 @@ impl qobject::Bridge {
                 .to_string()
         };
         let to_raw = str_field("to");
+        let from_raw = str_field("from");
+        let from = if from_raw.is_empty() {
+            None
+        } else {
+            Some(from_raw.as_str())
+        };
         let subject = str_field("subject");
         let body = str_field("body");
         let to: Vec<String> = to_raw
@@ -481,6 +494,7 @@ impl qobject::Bridge {
         // Interactive Send click = explicit user consent (see SendPolicy docs).
         let req = SendRequest {
             to: &to,
+            from,
             subject: &subject,
             body_text: &body,
             policy: &SendPolicy::Unrestricted,
