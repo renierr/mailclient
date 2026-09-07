@@ -55,7 +55,7 @@ Pane {
         }
         Rectangle {
             Layout.fillWidth: true
-            height: 1
+            Layout.preferredHeight: 1
             opacity: 0.2
             color: palette.text
         }
@@ -69,6 +69,9 @@ Pane {
                 text: root.message ? root.message.body : ""
                 textFormat: Text.RichText
                 wrapMode: Text.Wrap
+                // Base color for HTML without explicit colors (theme-aware).
+                color: palette.text
+                linkColor: palette.link
                 onLinkActivated: link => root.statusMessage(qsTr("Blocked remote link (M3 sandbox): %1").arg(link))
             }
         }
