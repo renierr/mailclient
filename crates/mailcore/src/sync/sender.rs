@@ -64,21 +64,139 @@ impl SendPolicy {
     }
 }
 
+/// Outgoing body format (user setting `compose_send_format`, resilient).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendFormat {
+    /// `text/plain` only — safest, always readable.
+    Plain,
+    /// `multipart/alternative` plain + html — default, resilient.
+    Multipart,
+    /// `text/html` only.
+    Html,
+}
+
+impl SendFormat {
+    /// Parse user setting; unknown/empty → `Multipart`.
+    #[must_use]
+    pub fn parse(raw: &str) -> Self {
+        match crate::store::settings::normalize_send_format(raw) {
+            "plain" => Self::Plain,
+            "html" => Self::Html,
+            _ => Self::Multipart,
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Multipart => "multipart",
+            Self::Html => "html",
+        }
+    }
+}
+
 /// One outbound message (transport details come from the account).
 pub struct SendRequest<'a> {
     /// Recipients (checked against the [`SendPolicy`]).
     pub to: &'a [String],
+    /// Cc recipients (also policy-checked).
+    pub cc: &'a [String],
     /// Sender identity. `None` = account email. Any other address is used
     /// verbatim (server may reject logins that must match the username).
     pub from: Option<&'a str>,
     pub subject: &'a str,
+    /// Plain-text source. For composer rich text this may hold HTML source —
+    /// [`resolve_bodies`] sorts that out resiliently.
     pub body_text: &'a str,
+    /// Optional explicit HTML source (composer rich text). `None` = derive.
+    pub body_html: Option<&'a str>,
+    /// User-chosen format (see [`SendFormat`]).
+    pub format: SendFormat,
     pub policy: &'a SendPolicy,
     /// SMTP password (keyring or test env), never stored.
     pub password: &'a str,
     /// IMAP password for filing the Sent copy (if `sent_copy_enabled`).
     /// `None` skips the copy with a warning; the send still succeeds.
     pub imap_password: Option<&'a str>,
+}
+
+/// Split composer input into `(plain, Option<html>)` for the send format.
+///
+/// - Composer `body_text` holding rich HTML (legacy + current QML sends
+///   `TextArea.text` with `RichText`) is detected via
+///   [`crate::html::looks_like_html`] and converted, never sent as literal
+///   tags in plain mode.
+/// - Outgoing HTML is sanitized via [`crate::html::sanitize_for_send`].
+/// - Missing sides are derived so `multipart` never has an empty part.
+pub fn resolve_bodies(
+    body_text: &str,
+    body_html: Option<&str>,
+    format: SendFormat,
+) -> (String, Option<String>) {
+    let explicit_html = body_html
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(crate::html::sanitize_for_send);
+    let text_holds_html = crate::html::looks_like_html(body_text);
+    match format {
+        SendFormat::Plain => {
+            let plain = if let Some(h) = explicit_html.as_deref() {
+                crate::html::html_to_text(h)
+            } else if text_holds_html {
+                crate::html::html_to_text(body_text)
+            } else {
+                body_text.trim().to_string()
+            };
+            (
+                if plain.is_empty() {
+                    "(empty)".to_string()
+                } else {
+                    plain
+                },
+                None,
+            )
+        }
+        SendFormat::Html => {
+            let html = if let Some(h) = explicit_html {
+                h
+            } else if text_holds_html {
+                crate::html::sanitize_for_send(body_text)
+            } else {
+                crate::html::text_to_html(body_text)
+            };
+            let html = if html.trim().is_empty() {
+                "<p>(empty)</p>".to_string()
+            } else {
+                html
+            };
+            (crate::html::html_to_text(&html), Some(html))
+        }
+        SendFormat::Multipart => {
+            let has_explicit = explicit_html.is_some();
+            let html = if let Some(h) = explicit_html {
+                h
+            } else if text_holds_html {
+                crate::html::sanitize_for_send(body_text)
+            } else if body_text.trim().is_empty() {
+                "<p>(empty)</p>".to_string()
+            } else {
+                crate::html::text_to_html(body_text)
+            };
+            let mut plain = if text_holds_html || has_explicit {
+                crate::html::html_to_text(&html)
+            } else {
+                body_text.trim().to_string()
+            };
+            if plain.trim().is_empty() {
+                plain = crate::html::html_to_text(&html);
+            }
+            if plain.trim().is_empty() {
+                plain = "(empty)".to_string();
+            }
+            (plain, Some(html))
+        }
+    }
 }
 
 /// SMTP submission endpoint derived from an account.
@@ -145,8 +263,9 @@ impl SmtpSender {
 
 impl MailSender for SmtpSender {
     fn send_raw(&mut self, db: &Db, account_id: i64, req: &SendRequest<'_>) -> Result<()> {
-        let refs: Vec<&str> = req.to.iter().map(String::as_str).collect();
-        req.policy.check(&refs)?;
+        let mut all: Vec<&str> = req.to.iter().map(String::as_str).collect();
+        all.extend(req.cc.iter().map(String::as_str));
+        req.policy.check(&all)?;
 
         let queue_id = queue::enqueue(db, account_id, None)?;
         let from: &str = req.from.filter(|s| !s.is_empty()).unwrap_or(&self.from);
@@ -159,9 +278,20 @@ impl MailSender for SmtpSender {
         for t in req.to {
             builder = builder.to(t.parse()?);
         }
-        let email = builder
-            .header(ContentType::TEXT_PLAIN)
-            .body(req.body_text.to_string())?;
+        for c in req.cc {
+            builder = builder.cc(c.parse()?);
+        }
+        let (plain, html) = resolve_bodies(req.body_text, req.body_html, req.format);
+        let email = match (req.format, html) {
+            (SendFormat::Plain, _) => builder.header(ContentType::TEXT_PLAIN).body(plain)?,
+            (_, Some(h)) if req.format == SendFormat::Html => {
+                builder.header(ContentType::TEXT_HTML).body(h)?
+            }
+            (_, Some(h)) => {
+                builder.multipart(lettre::message::MultiPart::alternative_plain_html(plain, h))?
+            }
+            (_, None) => builder.header(ContentType::TEXT_PLAIN).body(plain)?,
+        };
 
         match self.transport(req.password)?.send(&email) {
             Ok(response) => {
@@ -280,5 +410,26 @@ mod tests {
         assert!(SendPolicy::Unrestricted
             .check(&["anyone@example.com"])
             .is_ok());
+    }
+
+    #[test]
+    fn bodies_resilient_across_formats() {
+        // Legacy: composer rich HTML arrived in `body_text`, must not leak tags.
+        let (p, h) = resolve_bodies("<b>hi</b><script>x()</script>", None, SendFormat::Plain);
+        assert_eq!(p, "hi");
+        assert!(h.is_none());
+        // Multipart derives the missing plain side.
+        let (p2, h2) = resolve_bodies("<p>hi<br>there</p>", None, SendFormat::Multipart);
+        assert!(h2.unwrap().contains("hi"));
+        assert_eq!(p2, "hi\nthere");
+        // Plain input still gains an html twin in multipart mode.
+        let (p3, h3) = resolve_bodies("hello", None, SendFormat::Multipart);
+        assert_eq!(p3, "hello");
+        assert!(h3.unwrap().contains("hello"));
+        // Outgoing scripts are stripped even for the sender's own HTML.
+        let (_, evil) = resolve_bodies("<p>t</p><script>alert(1)</script>", None, SendFormat::Html);
+        assert!(!evil.unwrap().contains("script"));
+        // Unknown format string falls back to multipart, never panics.
+        assert_eq!(SendFormat::parse("nonsense"), SendFormat::Multipart);
     }
 }

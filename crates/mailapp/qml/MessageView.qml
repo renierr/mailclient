@@ -3,10 +3,11 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtWebEngine
 
-// Reader pane. `message` is a ListElement-like object with
-// {subject, from, date, body}. HTML bodies render in a sandboxed
-// WebEngine view (JS/plugins off, remote images per setting);
-// plain text uses RichText.
+// Reader pane. `message` roles come from Rust feed:
+// {subject, from, date, body_text, body_html, is_html, has_remote_images, body}.
+// - Plain mail renders as PlainText (never shows HTML source as code).
+// - HTML was sanitized in Rust (scripts/handlers/styles/remote gated);
+//   WebEngine runs with JS/plugins off, remote images per setting + one-shot.
 Pane {
     id: root
 
@@ -20,26 +21,42 @@ Pane {
 
     padding: 8
 
-    property bool isHtml: false
-    property string htmlBody: ""
-
-    function looksLikeHtml(t) {
-        return t.indexOf("<") !== -1 && t.indexOf(">") !== -1
-    }
+    // Derived, decided in Rust — no QML `<`/`>` guessing.
+    property bool isHtml: message !== undefined && message.is_html === true
+    property string plainBody: message ? (message.body_text !== undefined ? message.body_text : (message.body || "")) : ""
+    property string htmlBody: message ? (message.body_html !== undefined ? message.body_html : "") : ""
+    property bool hasRemote: message !== undefined && message.has_remote_images === true
+    property bool allowRemoteOnce: false
 
     onMessageChanged: {
-        var b = root.message ? root.message.body : ""
-        if (looksLikeHtml(b)) {
-            root.isHtml = true
-            root.htmlBody = b
-        } else {
-            root.isHtml = false
-        }
+        // One-shot remote consent is per-message.
+        root.allowRemoteOnce = false
+        if (root.isHtml && bodyLoader.item)
+            bodyLoader.item.loadHtml(wrapDoc(root.htmlBody), "")
+    }
+    onHtmlBodyChanged: {
+        if (root.isHtml && bodyLoader.item)
+            bodyLoader.item.loadHtml(wrapDoc(root.htmlBody), "")
+    }
+    onLoadRemoteImagesChanged: {
+        if (root.isHtml && bodyLoader.item)
+            bodyLoader.item.loadHtml(wrapDoc(root.htmlBody), "")
+    }
+    onAllowRemoteOnceChanged: {
+        if (root.isHtml && bodyLoader.item)
+            bodyLoader.item.loadHtml(wrapDoc(root.htmlBody), "")
     }
 
-    onHtmlBodyChanged: {
-        if (bodyLoader.item)
-            bodyLoader.item.loadHtml(root.htmlBody, "")
+    function effectiveAutoLoad() {
+        return root.loadRemoteImages || root.allowRemoteOnce
+    }
+
+    // Trusted wrapper added AFTER Rust sanitizing (so layout CSS is ours).
+    function wrapDoc(inner) {
+        return "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+            + "<style>body{font-family:sans-serif;font-size:14px;line-height:1.5;max-width:72ch;margin:12px;word-wrap:break-word}"
+            + "img{max-width:100%;height:auto}pre{white-space:pre-wrap}table{border-collapse:collapse}td,th{padding:4px 8px}</style>"
+            + "</head><body>" + inner + "</body></html>"
     }
 
     ColumnLayout {
@@ -88,20 +105,41 @@ Pane {
             color: palette.text
         }
 
+        // Privacy banner: sanitizer saw remote images but autoload is off.
+        Frame {
+            Layout.fillWidth: true
+            visible: root.isHtml && root.hasRemote && !root.effectiveAutoLoad()
+            RowLayout {
+                width: parent.width
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    text: qsTr("Remote images blocked (tracking protection).")
+                    font.pixelSize: 12
+                }
+                Button {
+                    text: qsTr("Show once")
+                    onClicked: {
+                        root.allowRemoteOnce = true
+                        root.statusMessage(qsTr("Remote images allowed for this message only"))
+                    }
+                }
+            }
+        }
+
         ScrollView {
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
             visible: !root.isHtml
-            Text {
+            TextEdit {
                 width: root.width - 32
-                text: root.message ? root.message.body : ""
-                textFormat: Text.RichText
-                wrapMode: Text.Wrap
-                // Base color for text without explicit colors (theme-aware).
+                text: root.plainBody
+                textFormat: TextEdit.PlainText
+                wrapMode: TextEdit.Wrap
+                readOnly: true
+                selectByMouse: true
                 color: palette.text
-                linkColor: palette.link
-                onLinkActivated: link => root.statusMessage(qsTr("Blocked remote link (M3 sandbox): %1").arg(link))
             }
         }
 
@@ -113,7 +151,7 @@ Pane {
             visible: root.isHtml
             active: root.message !== undefined && root.isHtml
             sourceComponent: webComp
-            onLoaded: item.loadHtml(root.htmlBody, "")
+            onLoaded: item.loadHtml(wrapDoc(root.htmlBody), "")
         }
     }
 
@@ -123,7 +161,7 @@ Pane {
             settings.javascriptEnabled: false
             settings.localContentCanAccessRemoteUrls: false
             settings.pluginsEnabled: false
-            settings.autoLoadImages: root.loadRemoteImages
+            settings.autoLoadImages: root.effectiveAutoLoad()
         }
     }
 

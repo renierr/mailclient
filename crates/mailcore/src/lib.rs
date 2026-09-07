@@ -6,6 +6,7 @@
 pub mod db;
 pub mod error;
 pub mod feed;
+pub mod html;
 pub mod models;
 pub mod search;
 pub mod store;

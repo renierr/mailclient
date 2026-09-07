@@ -66,8 +66,12 @@ pub mod qobject {
         #[qinvokable]
         fn delete_message(self: Pin<&mut Self>, uid: i32) -> QString;
 
-        /// Send a message from a JSON form (`{from,to,subject,body}`) via the
-        /// current account. Interactive user action = explicit send consent.
+        /// Send a message from a JSON form
+        /// (`{from,to,subject,body,body_html?}`; `body` holds composer rich
+        /// HTML source, `body_html` is an optional explicit override).
+        /// The effective MIME shape comes from the `compose_send_format`
+        /// setting (`plain`|`multipart`|`html`, resilient default
+        /// `multipart`). Interactive user action = explicit send consent.
         #[qinvokable]
         fn send_mail(self: Pin<&mut Self>, form: &QString) -> QString;
     }
@@ -78,6 +82,7 @@ pub mod qobject {
         #[qml_element]
         #[qproperty(bool, sent_copy_enabled)]
         #[qproperty(bool, load_remote_images)]
+        #[qproperty(QString, compose_send_format)]
         #[namespace = "mailclient"]
         type SettingsBridge = super::SettingsBridgeRust;
 
@@ -97,7 +102,7 @@ use cxx_qt_lib::QString;
 use mailcore::models::NewAccount;
 use mailcore::store::{accounts, folders, messages};
 use mailcore::sync::imap::ImapSync;
-use mailcore::sync::sender::{SendPolicy, SendRequest, SmtpSender};
+use mailcore::sync::sender::{SendFormat, SendPolicy, SendRequest, SmtpSender};
 use mailcore::sync::traits::{MailSender, SyncProvider};
 use mailcore::{auth, feed};
 
@@ -469,6 +474,15 @@ impl qobject::Bridge {
         };
         let subject = str_field("subject");
         let body = str_field("body");
+        // Optional explicit HTML override (new Composer sends both; old
+        // payloads only have `body` holding rich HTML source — handled in
+        // `resolve_bodies` either way).
+        let body_html_raw = str_field("body_html");
+        let body_html = if body_html_raw.trim().is_empty() {
+            None
+        } else {
+            Some(body_html_raw)
+        };
         let to: Vec<String> = to_raw
             .split([',', ';'])
             .map(|s| s.trim().to_string())
@@ -477,6 +491,11 @@ impl qobject::Bridge {
         if to.is_empty() {
             return qstring("add at least one recipient");
         }
+        let cc: Vec<String> = str_field("cc")
+            .split([',', ';'])
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
         let db = match open_db() {
             Ok(d) => d,
             Err(e) => return qstring(&e),
@@ -492,11 +511,16 @@ impl qobject::Bridge {
         };
         let mut sender = SmtpSender::new(&acc);
         // Interactive Send click = explicit user consent (see SendPolicy docs).
+        // Resilient: unknown setting values fall back to multipart.
+        let format = SendFormat::parse(&mailcore::store::settings::get_send_format(&db));
         let req = SendRequest {
             to: &to,
+            cc: &cc,
             from,
             subject: &subject,
             body_text: &body,
+            body_html: body_html.as_deref(),
+            format,
             policy: &SendPolicy::Unrestricted,
             password: &secrets.smtp_password,
             imap_password: Some(&secrets.imap_password),
@@ -516,6 +540,7 @@ impl qobject::Bridge {
 pub struct SettingsBridgeRust {
     sent_copy_enabled: bool,
     load_remote_images: bool,
+    compose_send_format: QString,
 }
 
 impl Default for SettingsBridgeRust {
@@ -523,6 +548,7 @@ impl Default for SettingsBridgeRust {
         Self {
             sent_copy_enabled: true,
             load_remote_images: false,
+            compose_send_format: qstring("multipart"),
         }
     }
 }
@@ -553,6 +579,8 @@ impl qobject::SettingsBridge {
                 )
                 .unwrap_or(false),
             );
+            self.as_mut()
+                .set_compose_send_format(qstring(&mailcore::store::settings::get_send_format(&db)));
         }
     }
 
@@ -561,6 +589,10 @@ impl qobject::SettingsBridge {
         if let Some(db) = Self::open_db() {
             let sent = *self.sent_copy_enabled();
             let remote = *self.load_remote_images();
+            let format = mailcore::store::settings::normalize_send_format(
+                &self.compose_send_format().to_string(),
+            )
+            .to_string();
             if let Err(e) = mailcore::store::settings::set_bool(
                 &db,
                 mailcore::store::settings::SENT_COPY_ENABLED,
@@ -574,6 +606,13 @@ impl qobject::SettingsBridge {
                 remote,
             ) {
                 log::warn!("settings: cannot save remote-images: {e}");
+            }
+            if let Err(e) = mailcore::store::settings::set(
+                &db,
+                mailcore::store::settings::COMPOSE_SEND_FORMAT,
+                &format,
+            ) {
+                log::warn!("settings: cannot save send-format: {e}");
             }
         }
     }

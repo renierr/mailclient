@@ -6,7 +6,8 @@ use serde_json::json;
 
 use crate::db::Db;
 use crate::error::Result;
-use crate::store::{folders, messages};
+use crate::store::{folders, messages, settings};
+use crate::{html, html::Sanitized};
 
 /// Max messages per folder feed (keeps QML lists snappy).
 pub const FEED_LIMIT: u64 = 200;
@@ -42,10 +43,56 @@ fn short_date(rfc3339: Option<&str>) -> String {
     }
 }
 
-/// `[{uid, subject, from, date, snippet, unread, starred, body}]`, newest first.
+/// `[{uid, subject, from, date, snippet, unread, starred, body_text,
+/// body_html, is_html, has_remote_images, body}]`, newest first.
+/// - `body_html` is **sanitized** (scripts/handlers/remote-img gated by the
+///   `load_remote_images` setting); never trust the stored raw HTML in QML.
+/// - `is_html` is decided in Rust (no QML `<`/`>` guessing).
+/// - `body` is kept for backward compat = sanitized html if any, else text.
 pub fn messages_json(db: &Db, folder_id: i64) -> Result<String> {
+    let allow_remote = settings::get_bool(db, settings::LOAD_REMOTE_IMAGES).unwrap_or(false);
     let mut arr = Vec::new();
     for m in messages::list_by_folder(db, folder_id, FEED_LIMIT, 0)? {
+        let raw_html = m.body_html.as_deref().unwrap_or("");
+        let raw_text = m.body_text.as_deref().unwrap_or("");
+        // A stored `body_text` may itself hold HTML source (legacy
+        // plain-only sends of composer rich text). Prefer a real html part,
+        // else upgrade text that looks like HTML.
+        let candidate_html = if html::looks_like_html(raw_html)
+            || !raw_html.trim().is_empty() && m.body_html.is_some()
+        {
+            raw_html
+        } else if html::looks_like_html(raw_text) {
+            raw_text
+        } else {
+            ""
+        };
+        let Sanitized {
+            html: safe_html,
+            had_remote,
+        } = html::sanitize(candidate_html, allow_remote);
+        // `had_remote` only matters when we actually had an html body.
+        let is_html =
+            !safe_html.trim().is_empty() || (!candidate_html.trim().is_empty() && had_remote);
+        let plain = if raw_text.trim().is_empty() && !candidate_html.trim().is_empty() {
+            html::html_to_text(candidate_html)
+        } else {
+            raw_text.to_string()
+        };
+        // When remote images were stripped the sanitized html can be empty
+        // (image-only newsletter) — still route to WebEngine so the banner
+        // ("images blocked") shows instead of raw-tag text.
+        let body_html = if is_html && safe_html.trim().is_empty() {
+            // Minimal placeholder keeps the html branch alive.
+            "<p>[images blocked — choose Show images]</p>".to_string()
+        } else {
+            safe_html
+        };
+        let legacy_body = if is_html {
+            body_html.clone()
+        } else {
+            plain.clone()
+        };
         arr.push(json!({
             "uid": m.uid,
             "subject": m.subject.as_deref().unwrap_or("(no subject)"),
@@ -54,7 +101,11 @@ pub fn messages_json(db: &Db, folder_id: i64) -> Result<String> {
             "snippet": m.snippet.as_deref().unwrap_or(""),
             "unread": !m.is_read,
             "starred": m.is_starred,
-            "body": m.body_html.as_deref().or(m.body_text.as_deref()).unwrap_or(""),
+            "body_text": plain,
+            "body_html": body_html,
+            "is_html": is_html,
+            "has_remote_images": had_remote && is_html,
+            "body": legacy_body,
         }));
     }
     Ok(serde_json::to_string(&arr)?)
@@ -109,6 +160,45 @@ mod tests {
         assert_eq!(msgs[0]["from"], "alice@example.com");
         assert!(msgs[0]["unread"].as_bool().unwrap());
         assert_eq!(msgs[0]["body"], "<b>hi</b>");
+        assert!(msgs[0]["is_html"].as_bool().unwrap());
+        assert_eq!(msgs[0]["body_html"], "<b>hi</b>");
+    }
+
+    #[test]
+    fn script_is_stripped_and_plain_stays_plain() {
+        let (db, acc, f) = setup();
+        let mut evil = msg_store::sample_new(acc, f, 8);
+        evil.body_text = None;
+        evil.body_html = Some(
+            "<p>hi</p><script>alert(1)</script><img src=\"https://example.com/t.png\">".to_string(),
+        );
+        msg_store::upsert(&db, &evil).unwrap();
+        let msgs: serde_json::Value =
+            serde_json::from_str(&messages_json(&db, f).unwrap()).unwrap();
+        let row = msgs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["uid"] == 8)
+            .unwrap();
+        assert!(!row["body_html"].as_str().unwrap().contains("script"));
+        assert!(!row["body_html"].as_str().unwrap().contains("example.com"));
+        assert!(row["has_remote_images"].as_bool().unwrap());
+
+        let mut plain = msg_store::sample_new(acc, f, 9);
+        plain.body_text = Some("I <3 you".to_string());
+        plain.body_html = None;
+        msg_store::upsert(&db, &plain).unwrap();
+        let msgs2: serde_json::Value =
+            serde_json::from_str(&messages_json(&db, f).unwrap()).unwrap();
+        let row2 = msgs2
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["uid"] == 9)
+            .unwrap();
+        assert!(!row2["is_html"].as_bool().unwrap());
+        assert_eq!(row2["body_text"], "I <3 you");
     }
 
     #[test]

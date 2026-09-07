@@ -18,7 +18,7 @@ use mailcore::db::Db;
 use mailcore::models::NewAccount;
 use mailcore::store::{accounts, folders, messages};
 use mailcore::sync::imap::ImapSync;
-use mailcore::sync::sender::{SendPolicy, SendRequest, SmtpSender};
+use mailcore::sync::sender::{SendFormat, SendPolicy, SendRequest, SmtpSender};
 use mailcore::sync::traits::{MailSender, SyncProvider};
 
 fn var(name: &str) -> Result<String, String> {
@@ -139,10 +139,13 @@ fn main() -> Result<(), String> {
                 account_id,
                 &SendRequest {
                     to: std::slice::from_ref(&to),
+                    cc: &[],
                     from: None,
                     subject: "Mailclient M1 test",
                     body_text:
                         "Hello from the mailclient M1 sync harness. If you read this, SMTP works.",
+                    body_html: None,
+                    format: SendFormat::Plain,
                     policy: &policy,
                     password: &smtp_pass,
                     imap_password: Some(&imap_pass),

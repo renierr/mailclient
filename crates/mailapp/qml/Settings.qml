@@ -17,10 +17,19 @@ Dialog {
     // Shared bridge owned by Main (single source of truth).
     property var settingsBridge
 
+    function formatIndex(v) {
+        if (v === "plain")
+            return 0
+        if (v === "html")
+            return 2
+        return 1
+    }
+
     onOpened: {
         settingsBridge.load()
         copyBox.checked = settingsBridge.sent_copy_enabled
         imagesBox.checked = settingsBridge.load_remote_images
+        formatBox.currentIndex = formatIndex(settingsBridge.compose_send_format)
     }
 
     ColumnLayout {
@@ -38,6 +47,25 @@ Dialog {
             Layout.fillWidth: true
             text: qsTr("Load remote images in HTML mail (not recommended)")
             onToggled: settingsBridge.load_remote_images = checked
+        }
+        Label {
+            text: qsTr("Send mail as")
+        }
+        ComboBox {
+            id: formatBox
+            Layout.fillWidth: true
+            model: [qsTr("Plain text (safest)"), qsTr("Multipart plain + HTML (recommended)"), qsTr("HTML only")]
+            onActivated: index => {
+                var v = ["plain", "multipart", "html"][index]
+                settingsBridge.compose_send_format = v
+            }
+        }
+        Label {
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            opacity: 0.7
+            font.pixelSize: 12
+            text: qsTr("Multipart sends plain + HTML so every client reads it; plain strips formatting; HTML-only may look broken in old clients.")
         }
         Label {
             Layout.fillWidth: true

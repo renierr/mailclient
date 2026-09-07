@@ -220,6 +220,7 @@ ApplicationWindow {
     Composer {
         id: composer
         accountEmail: backend.current_account_email
+        sendFormat: appSettings.compose_send_format
         onStatusMessage: text => root.statusText = text
         onSendRequested: payload => {
             var r = backend.send_mail(payload)

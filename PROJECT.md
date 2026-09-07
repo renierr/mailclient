@@ -47,15 +47,15 @@ Secrets live in the OS keyring keyed by `accounts.auth_vault_key`, never in SQLi
 |---|---|---|
 | 0 | Repo scaffold: workspace, `mailcore` schema + CRUD, `mailapp` cxx-qt skeleton, QML shell, `scripts/{build,dev,install-local}.sh`, `dist/` bundle | ✅ done |
 | 1 | Real IMAP sync + app wiring: account setup (keyring), LIST/SELECT/FETCH, UIDVALIDITY handling, flag push/delete, send + Sent-copy, live folder/message feeds in QML | ✅ done (verified live against test account) |
-| 2 | Composer polish: drafts, attachments, full rich-text editor (toolbar wraps selection today) | ⬜ next |
-| 3 | Reader/search: FTS search UI, remote-image handling polish | ⬜ planned (WebEngine sandbox with JS off is live; feeds are JSON strings today; native list models later) |
+| 2 | Composer polish: drafts, attachments, full rich-text editor (toolbar wraps selection today) | 🔶 partial (rich HTML compose + source view + Cc + send-format setting done; drafts/attachments still M2) |
+| 3 | Reader/search: FTS search UI, remote-image handling polish | 🔶 partial (safe sanitized HTML reader + remote-block banner + show-once done; FTS UI still M3) |
 | 4 | Contacts, threading, notifications, settings UI extras | ⬜ planned |
 | 5 | Polish: background IDLE/polling sync, offline/error states, onboarding, `.desktop`/icons, Windows feasibility | ⬜ planned (sync is manual ⟳ for now; IDLE not yet) |
 
 Current state detail:
-- `mailcore`: SQLite schema v2 (incl. FTS5 + `settings` table with migration), typed stores (accounts/folders/messages/queue/contacts/settings), IMAP sync (SPECIAL-USE role mapping, UID FETCH + MIME parsing, UIDVALIDITY resync, expunge, flag refresh/push, server-side delete, Sent-copy APPEND), SMTP send with `SendPolicy`, keyring auth, JSON feeds for QML. 14 unit tests green.
-- `mailapp`: `Bridge` (accounts, sync, select/read/star/delete/send, JSON feeds) + `SettingsBridge`, embedded `Mailclient` QML module with filesystem override.
-- `qml`: live 3-pane UI — real folders/messages, working sync/send/reply/forward/star/delete, account setup with ports+encryption, settings dialog. No mocks remain (search box + drafts still point at M2/M3).
+- `mailcore`: SQLite schema v2 (incl. FTS5 + `settings` table with migration), typed stores (accounts/folders/messages/queue/contacts/settings incl. `compose_send_format`), `html` sanitizer (std-only tokenize→clean→serialise, remote/private-host gating, entity-aware), IMAP sync (SPECIAL-USE role mapping, UID FETCH + MIME parsing, UIDVALIDITY resync, expunge, flag refresh/push, server-side delete, Sent-copy APPEND), SMTP send with `SendPolicy` + `SendFormat` (plain/multipart/html, resilient fallback, Cc, sanitized outgoing), keyring auth, safe JSON feeds (`body_text`/`body_html` sanitized/`is_html`/`has_remote_images` + legacy `body`). 27 unit tests green.
+- `mailapp`: `Bridge` (accounts, sync, select/read/star/delete/send with Cc + format-aware bodies, JSON feeds) + `SettingsBridge` (`sent_copy_enabled`, `load_remote_images`, `compose_send_format`), embedded `Mailclient` QML module with filesystem override.
+- `qml`: live 3-pane UI — real folders/messages, working sync/send/reply/forward/star/delete, account setup with ports+encryption, settings dialog (incl. send-format picker). Reader: PlainText for plain (no more HTML-code display), sanitized WebEngine + blocked-images banner + show-once. Composer: WYSIWYG + HTML-source toggle, list/quote/link/clear, Cc wired, reply/forward quote from `body_text`. No mocks remain (search box + drafts still point at M2/M3).
 - Verified live: 5 folders mapped, messages synced, test mail delivered + filed to Sent.
 - QML is a responsive 3-pane shell (sidebar / list / reader + composer dialog + account setup dialog) with mock data so `qml6 qml/Main.qml` runs without Rust.
 

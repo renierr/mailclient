@@ -12,6 +12,9 @@ use crate::error::Result;
 pub const SENT_COPY_ENABLED: &str = "sent_copy_enabled";
 /// Load remote images in HTML mail (default: off — privacy).
 pub const LOAD_REMOTE_IMAGES: &str = "load_remote_images";
+/// Outgoing format: `plain` | `multipart` (default, resilient) | `html`.
+/// Unknown/empty values fall back to `multipart`.
+pub const COMPOSE_SEND_FORMAT: &str = "compose_send_format";
 
 /// Built-in default for a known key, if any.
 #[must_use]
@@ -19,6 +22,7 @@ pub fn defaults(key: &str) -> Option<&'static str> {
     match key {
         SENT_COPY_ENABLED => Some("1"),
         LOAD_REMOTE_IMAGES => Some("0"),
+        COMPOSE_SEND_FORMAT => Some("multipart"),
         _ => None,
     }
 }
@@ -57,9 +61,43 @@ pub fn set_bool(db: &Db, key: &str, value: bool) -> Result<()> {
     set(db, key, if value { "1" } else { "0" })
 }
 
+/// Outgoing send format, resilient: unknown values become `multipart`.
+#[must_use]
+pub fn normalize_send_format(raw: &str) -> &'static str {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "plain" => "plain",
+        "html" => "html",
+        _ => "multipart",
+    }
+}
+
+/// Validated outgoing format for the settings store.
+pub fn get_send_format(db: &Db) -> String {
+    match get(db, COMPOSE_SEND_FORMAT) {
+        Ok(Some(v)) => normalize_send_format(&v).to_string(),
+        _ => defaults(COMPOSE_SEND_FORMAT)
+            .unwrap_or("multipart")
+            .to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn send_format_resilient() {
+        assert_eq!(normalize_send_format("plain"), "plain");
+        assert_eq!(normalize_send_format(" HTML "), "html");
+        assert_eq!(normalize_send_format("weird"), "multipart");
+        assert_eq!(normalize_send_format(""), "multipart");
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(get_send_format(&db), "multipart");
+        set(&db, COMPOSE_SEND_FORMAT, "plain").unwrap();
+        assert_eq!(get_send_format(&db), "plain");
+        set(&db, COMPOSE_SEND_FORMAT, "nonsense").unwrap();
+        assert_eq!(get_send_format(&db), "multipart");
+    }
 
     #[test]
     fn defaults_apply_and_overrides_win() {
