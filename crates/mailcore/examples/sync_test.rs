@@ -1,13 +1,16 @@
 //! M1 test harness: sync the `.env` test account into a scratch SQLite DB.
 //!
+//! NEVER runs against the live server unless explicitly asked, every time:
 //! ```sh
-//! ./scripts/dev.sh --example sync_test -p mailcore   # via dev.sh (loads .env)
-//! MAILCLIENT_SEND_TEST_MAIL=1 ...                    # + send one test mail
+//! cargo run -p mailcore --example sync_test -- --live            # sync only
+//! MAILCLIENT_SEND_TEST_MAIL=1 ... -- --live                     # + one test mail
 //! ```
+//! Without `--live` the harness exits immediately. `cargo test` never touches
+//! the network (unit tests use in-memory SQLite only).
 //!
 //! Read-only by default. Sending happens ONLY when `MAILCLIENT_SEND_TEST_MAIL=1`
-//! is set, and even then only to the [`SendPolicy`] allowlist
-//! (`MAILCLIENT_TEST_SEND_ALLOWLIST`, empty by default = deny all).
+//! is set alongside `--live`, and even then only to the [`SendPolicy`]
+//! allowlist (`MAILCLIENT_TEST_SEND_ALLOWLIST`, empty by default = deny all).
 
 use std::env;
 
@@ -23,6 +26,9 @@ fn var(name: &str) -> Result<String, String> {
 }
 
 fn main() -> Result<(), String> {
+    if !env::args().any(|a| a == "--live") {
+        return Err("refusing live run without explicit consent: re-run with `-- --live`".to_string());
+    }
     dotenvy::dotenv().ok();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .init();
@@ -133,6 +139,7 @@ fn main() -> Result<(), String> {
                     body_text: "Hello from the mailclient M1 sync harness. If you read this, SMTP works.",
                     policy: &policy,
                     password: &smtp_pass,
+                    imap_password: Some(&imap_pass),
                 },
             )
             .map_err(|e| e.to_string())?;

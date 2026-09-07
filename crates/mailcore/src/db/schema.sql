@@ -139,3 +139,11 @@ create table if not exists send_queue (
 );
 create index if not exists idx_send_queue_pending
     on send_queue (status, created_at);
+
+-- ------------------------------------------------------------ app settings
+-- Simple key/value store for user preferences (see store::settings for keys
+-- and defaults). Secrets never belong here — they live in the OS keyring.
+create table if not exists settings (
+    key   text primary key,
+    value text not null
+);

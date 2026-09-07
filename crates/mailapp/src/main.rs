@@ -1,13 +1,16 @@
 //! mailapp — Qt/QML shell over `mailcore`.
 //!
 //! Boots a `QGuiApplication` + `QQmlApplicationEngine`, opens (and migrates)
-//! the SQLite DB, then loads `Main.qml` from the filesystem so designers can
-//! iterate without recompiling Rust:
+//! the SQLite DB, then loads `Main.qml`:
 //!
-//! 1. `$MAILCLIENT_QML_DIR/Main.qml` (explicit override)
+//! 1. `$MAILCLIENT_QML_DIR/Main.qml` (explicit override, designer iteration)
 //! 2. `<exe>/../share/mailclient/qml/Main.qml` (installed: `~/.local/...`)
 //! 3. `<exe>/../qml/Main.qml` (dist bundle: `dist/mailclient/...`)
-//! 4. `qml/Main.qml` (workspace root, `./scripts/dev.sh`)
+//! 4. Embedded `Mailclient` QML module
+//!    (`qrc:/qt/qml/Mailclient/qml/Main.qml`, always available)
+//!
+//! Rust QObjects (`Mailclient` module) are registered in the binary, so
+//! `import Mailclient` resolves no matter where `Main.qml` loads from.
 
 pub mod bridge;
 
@@ -16,7 +19,7 @@ use std::path::PathBuf;
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QUrl};
 use mailcore::{Db, default_db_path};
 
-/// Locate `Main.qml` using the search order documented above.
+/// Filesystem candidates for `Main.qml` (see module docs).
 fn find_main_qml() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("MAILCLIENT_QML_DIR") {
         let p = PathBuf::from(dir).join("Main.qml");
@@ -36,10 +39,6 @@ fn find_main_qml() -> Option<PathBuf> {
             }
         }
     }
-    let cwd = PathBuf::from("qml/Main.qml");
-    if cwd.is_file() {
-        return Some(cwd);
-    }
     None
 }
 
@@ -54,13 +53,17 @@ fn main() {
         Err(e) => log::error!("cannot open database at {}: {e}", db_path.display()),
     }
 
-    let qml = find_main_qml().unwrap_or_else(|| {
-        eprintln!("mailapp: Main.qml not found; set MAILCLIENT_QML_DIR");
-        std::process::exit(1);
-    });
-    log::info!("loading QML from {}", qml.display());
-    let abs = std::path::absolute(&qml).unwrap_or(qml);
-    let url = QUrl::from(format!("file://{}", abs.display()).as_str());
+    let url = match find_main_qml() {
+        Some(qml) => {
+            log::info!("loading QML from {}", qml.display());
+            let abs = std::path::absolute(&qml).unwrap_or(qml);
+            QUrl::from(format!("file://{}", abs.display()).as_str())
+        }
+        None => {
+            log::info!("loading embedded QML module");
+            QUrl::from("qrc:/qt/qml/Mailclient/qml/Main.qml")
+        }
+    };
 
     let mut app = QGuiApplication::new();
     let mut engine = QQmlApplicationEngine::new();

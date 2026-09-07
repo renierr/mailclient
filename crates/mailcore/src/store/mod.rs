@@ -6,6 +6,7 @@ pub mod contacts;
 pub mod folders;
 pub mod messages;
 pub mod queue;
+pub mod settings;
 
 use crate::error::Result;
 

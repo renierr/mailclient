@@ -17,7 +17,7 @@ echo "==> assembling dist/mailclient"
 rm -rf dist/mailclient
 mkdir -p dist/mailclient/bin dist/mailclient/qml dist/mailclient/resources
 cp target/release/mailapp dist/mailclient/bin/
-cp -r qml/* dist/mailclient/qml/
+cp -r crates/mailapp/qml/* dist/mailclient/qml/
 cp -r resources/* dist/mailclient/resources/ 2>/dev/null || true
 git rev-parse --short HEAD 2>/dev/null > dist/mailclient/VERSION \
     || echo "unversioned" > dist/mailclient/VERSION
@@ -25,7 +25,8 @@ git rev-parse --short HEAD 2>/dev/null > dist/mailclient/VERSION \
 cat <<EOF
 Done. Run it with:
     ./dist/mailclient/bin/mailapp
-QML is loaded from dist/mailclient/qml (override: MAILCLIENT_QML_DIR=qml).
+QML is embedded, with dist/mailclient/qml as filesystem fallback
+(override: MAILCLIENT_QML_DIR=crates/mailapp/qml).
 Install to ~/.local:
     ./scripts/install-local.sh
 EOF

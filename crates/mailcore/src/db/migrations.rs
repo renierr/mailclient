@@ -8,10 +8,16 @@ use rusqlite::Connection;
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
-/// Embedded v1 DDL.
-const SCHEMA_V1: &str = include_str!("schema.sql");
+/// Full DDL for fresh installs (== latest schema).
+const SCHEMA_FULL: &str = include_str!("schema.sql");
+
+/// v2 DDL: app settings table (already part of `schema.sql` for fresh installs).
+const SCHEMA_V2: &str = "create table if not exists settings (
+    key   text primary key,
+    value text not null
+);";
 
 /// Create or upgrade the database to [`SCHEMA_VERSION`].
 pub fn ensure_schema(conn: &Connection) -> Result<()> {
@@ -27,12 +33,22 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         .unwrap_or(0);
 
     if current == 0 {
-        conn.execute_batch(SCHEMA_V1)?;
+        conn.execute_batch(SCHEMA_FULL)?;
         conn.execute(
             "insert into schema_meta (key, value) values ('version', ?1)",
             [SCHEMA_VERSION.to_string()],
         )?;
+        return Ok(());
     }
-    // Future: `if current < 2 { migrate_v2(conn)?; }` etc.
+    if current < 2 {
+        conn.execute_batch(SCHEMA_V2)?;
+    }
+    // Future: `if current < 3 { migrate_v3(conn)?; }` etc.
+    if current != SCHEMA_VERSION {
+        conn.execute(
+            "update schema_meta set value = ?1 where key = 'version'",
+            [SCHEMA_VERSION.to_string()],
+        )?;
+    }
     Ok(())
 }

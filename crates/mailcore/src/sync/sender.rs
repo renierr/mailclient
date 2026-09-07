@@ -16,8 +16,9 @@ use lettre::{Message, SmtpTransport, Transport};
 
 use crate::db::Db;
 use crate::error::{Result, StoreError};
-use crate::models::Account;
-use crate::store::queue;
+use crate::models::{Account, FolderRole};
+use crate::store::{folders, queue, settings};
+use crate::sync::imap::ImapSync;
 use crate::sync::traits::MailSender;
 
 /// Recipient policy enforced before every send.
@@ -73,6 +74,9 @@ pub struct SendRequest<'a> {
     pub policy: &'a SendPolicy,
     /// SMTP password (keyring or test env), never stored.
     pub password: &'a str,
+    /// IMAP password for filing the Sent copy (if `sent_copy_enabled`).
+    /// `None` skips the copy with a warning; the send still succeeds.
+    pub imap_password: Option<&'a str>,
 }
 
 /// SMTP submission endpoint derived from an account.
@@ -155,6 +159,7 @@ impl MailSender for SmtpSender {
             Ok(response) => {
                 log::info!("smtp: sent to {:?}: {response:?}", req.to);
                 queue::mark_sent(db, queue_id)?;
+                self.save_sent_copy(db, account_id, req, &email.formatted());
                 Ok(())
             }
             Err(e) => {
@@ -162,6 +167,65 @@ impl MailSender for SmtpSender {
                 Err(StoreError::Smtp(e))
             }
         }
+    }
+}
+
+impl SmtpSender {
+    /// File the sent MIME bytes into the account's Sent folder (Thunderbird-style).
+    /// Best-effort: skipped (with a warning) when the `sent_copy_enabled`
+    /// setting is off, no Sent folder is known, or no IMAP credential is
+    /// available. Never fails the send itself.
+    fn save_sent_copy(
+        &self,
+        db: &Db,
+        account_id: i64,
+        req: &SendRequest<'_>,
+        raw: &[u8],
+    ) {
+        match settings::get_bool(db, settings::SENT_COPY_ENABLED) {
+            Ok(true) => {}
+            Ok(false) => {
+                log::info!("smtp: sent-copy disabled by setting");
+                return;
+            }
+            Err(e) => {
+                log::warn!("smtp: cannot read sent-copy setting, skipping copy: {e}");
+                return;
+            }
+        }
+        let sent_path = match folders::list_by_account(db, account_id) {
+            Ok(list) => list.into_iter().find(|f| f.role == FolderRole::Sent).map(|f| f.path),
+            Err(e) => {
+                log::warn!("smtp: cannot list folders, skipping sent copy: {e}");
+                return;
+            }
+        };
+        let Some(sent_path) = sent_path else {
+            log::warn!("smtp: no Sent folder known, skipping sent copy");
+            return;
+        };
+        let Some(imap_password) = req.imap_password else {
+            log::warn!("smtp: no IMAP credential, skipping sent copy");
+            return;
+        };
+        let account = match crate::store::accounts::get(db, account_id) {
+            Ok(a) => a,
+            Err(e) => {
+                log::warn!("smtp: cannot load account, skipping sent copy: {e}");
+                return;
+            }
+        };
+        let mut imap = ImapSync::new(&account);
+        if let Err(e) = imap.connect(imap_password) {
+            log::warn!("smtp: IMAP connect failed, skipping sent copy: {e}");
+            return;
+        }
+        if let Err(e) = imap.append_to_folder(&sent_path, raw) {
+            log::warn!("smtp: APPEND to {sent_path} failed: {e}");
+        } else {
+            log::info!("smtp: saved copy to {sent_path}");
+        }
+        imap.disconnect();
     }
 }
 

@@ -14,6 +14,7 @@ qrc_*.cpp
 *.qm
 .qmlcache/
 .qmltypes.lint
+.qmlls.ini
 
 # dist output (built app bundle, gitignored per spec)
 /dist/

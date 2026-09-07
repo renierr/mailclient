@@ -156,6 +156,13 @@ impl ImapSync {
         }
     }
 
+    /// APPEND raw MIME bytes to a folder (used for Sent copies), marked `\Seen`.
+    pub fn append_to_folder(&mut self, folder_path: &str, raw: &[u8]) -> Result<()> {
+        self.session()?
+            .append_with_flags(folder_path, raw, &[Flag::Seen])?;
+        Ok(())
+    }
+
     fn session(&mut self) -> Result<&mut TlsSession> {
         self.session.as_mut().ok_or_else(|| {
             StoreError::InvalidInput("not connected: call connect() first".to_string())
