@@ -469,6 +469,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dotenvy"
+version = "0.15.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
+
+[[package]]
 name = "email-encoding"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -645,6 +651,18 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+
+[[package]]
+name = "hashify"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd1246c0e5493286aeb2dde35b1f4eb9c4ce00e628641210a5e553fc001a1f26"
+dependencies = [
+ "indexmap",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "hashlink"
@@ -1019,6 +1037,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
+name = "mail-parser"
+version = "0.11.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b3a9080c1fb8190e232df37a10aa1b3d6b08be084e537069913f025e0ce86c5"
+dependencies = [
+ "hashify",
+]
+
+[[package]]
 name = "mailapp"
 version = "0.1.0"
 dependencies = [
@@ -1038,9 +1065,12 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "directories",
+ "dotenvy",
+ "env_logger",
  "imap",
  "lettre",
  "log",
+ "mail-parser",
  "native-tls",
  "rusqlite",
  "serde",

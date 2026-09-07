@@ -45,7 +45,7 @@ Secrets live in the OS keyring keyed by `accounts.auth_vault_key`, never in SQLi
 | # | Milestone | Status |
 |---|---|---|
 | 0 | Repo scaffold: workspace, `mailcore` schema + CRUD, `mailapp` cxx-qt skeleton, QML shell, `scripts/{build,dev,install-local}.sh`, `dist/` bundle | ✅ done (this commit) |
-| 1 | Real IMAP sync: LIST/SELECT/FETCH, UIDVALIDITY handling, IDLE + polling, flag push | ⬜ next |
+| 1 | Real IMAP sync: LIST/SELECT/FETCH, UIDVALIDITY handling, IDLE + polling, flag push | 🟡 engine done, verified live; QML models + IDLE next (see below) |
 | 2 | Send path: composer → `send_queue` → `lettre` SMTP, drafts, attachments | ⬜ planned |
 | 3 | QML models live: folder tree, virtualised message list, WebEngine reader, search + FTS | ⬜ planned |
 | 4 | Contacts, threading, notifications, keyring secrets, settings UI | ⬜ planned |
@@ -53,7 +53,10 @@ Secrets live in the OS keyring keyed by `accounts.auth_vault_key`, never in SQLi
 
 Current state detail:
 - `mailcore` compiles with rusqlite-backed `Db`, full v1 schema incl. FTS5, and tested CRUD for accounts/folders/messages/queue/contacts.
-- `mailapp` is a cxx-qt skeleton bridge (`Bridge` QObject with `ping`, `accountCount`, `dbPath`) that boots `qml/Main.qml`; full list models land in Milestone 1–3.
+- **M1 sync engine works against a live server** (`crates/mailcore/examples/sync_test.rs` + `.env`): login, LIST with SPECIAL-USE role mapping (inbox/sent/drafts/trash/junk + custom IMAP folders kept), UID FETCH with MIME parsing into SQLite, UIDVALIDITY resync, expunge handling, flag refresh. Verified: 5 folders, 20 messages synced.
+- SMTP send path implemented with an allowlist policy (`SendPolicy`: test sends only to explicitly allowlisted recipients; unset allowlist denies all); **verified live** against the test account. Follow-up for M2: APPEND sent mail to the Sent folder (the provider doesn't file it server-side).
+- Still open in M1: Rust `QAbstractListModel`s (folder tree, message list) replacing QML mocks; IDLE/polling background sync; `push_flags` live test.
+- `mailapp` is a cxx-qt skeleton bridge (`Bridge` QObject with `ping`, `accountCount`, `dbPath`) that boots `qml/Main.qml`; full list models land with the rest of M1.
 - QML is a responsive 3-pane shell (sidebar / list / reader + composer dialog + account setup dialog) with mock data so `qml6 qml/Main.qml` runs without Rust.
 
 ## 5. Build / Run / Install

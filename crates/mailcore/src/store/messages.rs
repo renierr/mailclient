@@ -220,6 +220,61 @@ pub fn list_attachments(db: &Db, message_id: i64) -> Result<Vec<Attachment>> {
     Ok(rows)
 }
 
+/// All UIDs cached for a folder (for sync diffing).
+pub fn list_uids(db: &Db, folder_id: i64) -> Result<Vec<u32>> {
+    let mut stmt = db
+        .conn()
+        .prepare("select uid from messages where folder_id = ?1")?;
+    let rows = stmt
+        .query_map([folder_id], |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows.into_iter().map(|u| u as u32).collect())
+}
+
+/// Delete all messages of a folder (UIDVALIDITY resync). Returns rows removed.
+pub fn delete_by_folder(db: &Db, folder_id: i64) -> Result<u64> {
+    let n = db
+        .conn()
+        .execute("delete from messages where folder_id = ?1", [folder_id])?;
+    Ok(n as u64)
+}
+
+/// Delete one UID in a folder. Returns `true` if a row existed.
+pub fn delete_by_uid(db: &Db, folder_id: i64, uid: u32) -> Result<bool> {
+    let n = db.conn().execute(
+        "delete from messages where folder_id = ?1 and uid = ?2",
+        params![folder_id, uid as i64],
+    )?;
+    Ok(n > 0)
+}
+
+/// Update flags of one UID in a folder (no-op if unknown).
+pub fn set_flags_by_uid(
+    db: &Db,
+    account_id: i64,
+    folder_id: i64,
+    uid: u32,
+    is_read: bool,
+    is_starred: bool,
+    is_draft: bool,
+) -> Result<()> {
+    db.conn().execute(
+        "update messages set is_read = ?1, is_starred = ?2, is_draft = ?3,
+            updated_at = ?4
+         where account_id = ?5 and folder_id = ?6 and uid = ?7",
+        params![
+            i64::from(is_read),
+            i64::from(is_starred),
+            i64::from(is_draft),
+            now(),
+            account_id,
+            folder_id,
+            uid as i64,
+        ],
+    )?;
+    Ok(())
+}
+
 /// Helper used by tests.
 #[cfg(test)]
 pub fn sample_new(account_id: i64, folder_id: i64, uid: u32) -> NewMessage {

@@ -26,6 +26,10 @@ This file is normative for all coding agents (human or AI) working in this repo.
 ### MUST NOT
 - Do **not** install/upgrade/remove system or language packages (`pacman`, `cargo install`, `npm`, `pip`, …) without explicit user consent. Running and building with already-installed tools is fine; if something is missing, stop and ask.
 - Do **not** commit to git, push, create PRs, or change git config unless the user explicitly asks.
+- **Consent is per-action: never auto-commit or auto-push.** Ask the user for
+  consent before every commit and every push. One consent covers exactly that
+  one action — it never carries over to newer commits or pushes. When in doubt,
+  leave changes uncommitted and say so.
 - Do **not** add broad new external dependencies without justification. Prefer: std → small well-scoped crate → large framework. Large additions (new Qt modules, new async runtime, new DB) require user approval.
 - Do **not** put business logic in QML. QML is view-only; logic lives in Rust and is exposed via explicit bridge types.
 - Do **not** invent new top-level directories without updating this file and `PROJECT.md`.
@@ -55,6 +59,16 @@ Anything else (new crypto, new runtime, new Qt modules beyond Core/Gui/Qml/Quick
 - HTML mail is untrusted: render in WebEngine with remote content blocked by default; no JS bridge into Rust except an explicit allow-list.
 - Never log message bodies, passwords, or tokens. Log IDs and subjects at `debug` at most.
 - Network: TLS required by default; plaintext IMAP/SMTP only with explicit per-account opt-in.
+- Test sending is allowlist-only: `mailcore` refuses any recipient outside
+  `MAILCLIENT_TEST_SEND_ALLOWLIST` (unset = deny all, configured locally via
+  gitignored `.env`, never committed). Real sending requires
+  `MAILCLIENT_ALLOW_ANY_RECIPIENT=1`. Never add ad-hoc bypasses.
+- **Privacy (hard rule): never write or comment any real account or mail
+  information.** No real addresses, credentials, hosts, passwords, subjects,
+  bodies, or sender/recipient data in docs, comments, tests, examples, or
+  commit messages — nowhere that could be committed. Test fixtures use
+  `@example.com` / `@example.org` (RFC 2606) only. Real values live solely in
+  the local gitignored `.env` and the OS keyring.
 
 ## 7. Definition of Done (per step)
 
