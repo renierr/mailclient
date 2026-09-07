@@ -2,9 +2,10 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
+import Mailclient
+
 // App shell: 3-pane mail layout (sidebar / list / reader).
-// M0 runs on mock data so `qml6 qml/Main.qml` works without Rust.
-// Rust list models (M1-M3) will replace the ListModels below 1:1.
+// Data comes from the Rust Bridge (SQLite + IMAP); no mock models remain.
 ApplicationWindow {
     id: root
     visible: true
@@ -14,43 +15,75 @@ ApplicationWindow {
     minimumHeight: 480
     title: qsTr("Mailclient")
 
-    property string currentAccount: "Work"
-    property string currentFolder: "INBOX"
+    property string currentFolder: ""
     property int currentMessageIndex: 0
-    property string statusText: qsTr("Ready — add an account to start syncing")
+    property string statusText: qsTr("Starting…")
 
-    // --- mock data (replaced by Rust models in M1-M3) -------------------
+    Bridge {
+        id: backend
+    }
+
     ListModel {
         id: folderModel
-        ListElement { name: "INBOX";  role: "inbox";   unread: 2 }
-        ListElement { name: "Drafts"; role: "drafts";  unread: 0 }
-        ListElement { name: "Sent";   role: "sent";    unread: 0 }
-        ListElement { name: "Archive"; role: "archive"; unread: 0 }
-        ListElement { name: "Spam";   role: "junk";    unread: 5 }
-        ListElement { name: "Trash";  role: "trash";   unread: 0 }
     }
     ListModel {
         id: messageModel
-        ListElement {
-            subject: "Welcome to Mailclient"; from: "alice@example.com"
-            date: "09:12"; snippet: "This is a local mock message…"
-            unread: true; starred: false
-            body: "<h2>Welcome!</h2><p>This is a <b>mock</b> message rendered as rich text. The Rust/IMAP sync (M1) will replace it with real mail.</p>"
+    }
+
+    function reloadFolders() {
+        var arr = JSON.parse(backend.folders_json)
+        folderModel.clear()
+        for (var i = 0; i < arr.length; i++)
+            folderModel.append(arr[i])
+        // Keep selection if still present, else inbox, else first.
+        var found = false
+        for (var j = 0; j < folderModel.count; j++) {
+            if (folderModel.get(j).name === root.currentFolder) {
+                found = true
+                break
+            }
         }
-        ListElement {
-            subject: "Design notes: QML reader"; from: "bob@example.com"
-            date: "08:03"; snippet: "WebEngine sandboxing for untrusted HTML…"
-            unread: true; starred: true
-            body: "<p>Reminder: render untrusted HTML in <b>QtWebEngine</b> with remote content blocked (M3). Plain rich text is fine for the M0 shell.</p>"
-        }
-        ListElement {
-            subject: "Lunch?"; from: "carol@example.com"
-            date: "Yesterday"; snippet: "Are you free at noon tomorrow?"
-            unread: false; starred: false
-            body: "<p>Are you free at noon tomorrow?</p><p>— Carol</p>"
+        if (!found) {
+            var inbox = ""
+            for (var k = 0; k < folderModel.count; k++) {
+                if (folderModel.get(k).role === "inbox")
+                    inbox = folderModel.get(k).name
+            }
+            root.currentFolder = inbox !== "" ? inbox : (folderModel.count > 0 ? folderModel.get(0).name : "")
         }
     }
-    // --------------------------------------------------------------------
+
+    function reloadMessages() {
+        var arr = JSON.parse(backend.messages_json)
+        messageModel.clear()
+        for (var i = 0; i < arr.length; i++)
+            messageModel.append(arr[i])
+        if (root.currentMessageIndex >= messageModel.count)
+            root.currentMessageIndex = 0
+    }
+
+    function reloadAll() {
+        var r = backend.refresh_accounts()
+        reloadFolders()
+        reloadMessages()
+        return r
+    }
+
+    function showResult(okMessage, result) {
+        root.statusText = result === "" ? okMessage : result
+    }
+
+    Component.onCompleted: {
+        var r = reloadAll()
+        if (backend.account_count === 0) {
+            root.statusText = qsTr("Add an account to start")
+            accountSetup.open()
+        } else if (r !== "") {
+            root.statusText = r
+        } else {
+            root.statusText = qsTr("Ready")
+        }
+    }
 
     header: ToolBar {
         RowLayout {
@@ -67,6 +100,7 @@ ApplicationWindow {
             Button {
                 text: qsTr("Compose")
                 highlighted: true
+                enabled: backend.account_count > 0
                 onClicked: composer.open()
             }
             TextField {
@@ -78,7 +112,15 @@ ApplicationWindow {
             ToolButton {
                 text: qsTr("⟳")
                 Accessible.name: qsTr("Sync now")
-                onClicked: root.statusText = qsTr("IMAP sync lands in M1 — nothing to do yet")
+                enabled: backend.account_count > 0
+                onClicked: {
+                    root.statusText = qsTr("Syncing…")
+                    // NOTE: blocking network call; async worker is a follow-up.
+                    var r = backend.sync_now()
+                    reloadFolders()
+                    reloadMessages()
+                    root.statusText = r
+                }
             }
             ToolButton {
                 text: qsTr("✉ Account")
@@ -100,11 +142,18 @@ ApplicationWindow {
             SplitView.preferredWidth: 240
             SplitView.minimumWidth: 160
             folders: folderModel
-            currentAccount: root.currentAccount
+            currentAccount: backend.account_count > 0 ? qsTr("%n account(s)", "", backend.account_count) : qsTr("No account")
             currentFolder: root.currentFolder
             onFolderSelected: path => {
-                root.currentFolder = path
-                root.statusText = qsTr("Folder: %1").arg(path)
+                var r = backend.select_folder(path)
+                if (r === "") {
+                    root.currentFolder = path
+                    root.currentMessageIndex = 0
+                    reloadMessages()
+                    root.statusText = qsTr("Folder: %1").arg(path)
+                } else {
+                    root.statusText = r
+                }
             }
             onAddAccountRequested: accountSetup.open()
         }
@@ -116,14 +165,38 @@ ApplicationWindow {
             currentIndex: root.currentMessageIndex
             onMessageSelected: index => {
                 root.currentMessageIndex = index
+                var m = messageModel.get(index)
+                if (m !== undefined) {
+                    backend.open_message(m.uid)
+                    reloadFolders()
+                    reloadMessages()
+                }
             }
         }
         MessageView {
             id: messageView
             SplitView.fillWidth: true
             SplitView.minimumWidth: 300
-            message: messageModel.get(root.currentMessageIndex)
+            message: messageModel.count > 0 ? messageModel.get(Math.min(root.currentMessageIndex, messageModel.count - 1)) : undefined
             onReplyRequested: composer.openForReply(messageModel.get(root.currentMessageIndex))
+            onForwardRequested: composer.openForForward(messageModel.get(root.currentMessageIndex))
+            onStarRequested: {
+                var m = messageModel.get(root.currentMessageIndex)
+                if (m !== undefined) {
+                    showResult("", backend.toggle_star(m.uid))
+                    reloadMessages()
+                }
+            }
+            onDeleteRequested: {
+                var d = messageModel.get(root.currentMessageIndex)
+                if (d !== undefined) {
+                    var r = backend.delete_message(d.uid)
+                    root.currentMessageIndex = 0
+                    reloadFolders()
+                    reloadMessages()
+                    showResult(qsTr("Deleted"), r)
+                }
+            }
             onStatusMessage: text => root.statusText = text
         }
     }
@@ -141,10 +214,31 @@ ApplicationWindow {
     Composer {
         id: composer
         onStatusMessage: text => root.statusText = text
+        onSendRequested: payload => {
+            var r = backend.send_mail(payload)
+            if (r === "") {
+                composer.close()
+                reloadFolders()
+                reloadMessages()
+                root.statusText = qsTr("Sent")
+            } else {
+                root.statusText = r
+            }
+        }
     }
     AccountSetup {
         id: accountSetup
         onStatusMessage: text => root.statusText = text
+        onAccountSubmit: payload => {
+            var r = backend.add_account(payload)
+            if (r === "") {
+                accountSetup.close()
+                reloadAll()
+                root.statusText = qsTr("Account added — press ⟳ to sync")
+            } else {
+                root.statusText = r
+            }
+        }
     }
     Settings {
         id: settingsDialog

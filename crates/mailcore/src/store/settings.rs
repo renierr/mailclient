@@ -3,7 +3,7 @@
 //! Secrets never belong here (OS keyring only). Unknown keys return `None`;
 //! known keys fall back to [`defaults`] when unset.
 
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{params, OptionalExtension};
 
 use crate::db::Db;
 use crate::error::Result;
@@ -73,7 +73,10 @@ mod tests {
         assert!(!get_bool(&db, SENT_COPY_ENABLED).unwrap());
         set(&db, SENT_COPY_ENABLED, "true").unwrap();
         assert!(get_bool(&db, SENT_COPY_ENABLED).unwrap());
-        assert_eq!(get(&db, SENT_COPY_ENABLED).unwrap().as_deref(), Some("true"));
+        assert_eq!(
+            get(&db, SENT_COPY_ENABLED).unwrap().as_deref(),
+            Some("true")
+        );
         assert_eq!(get(&db, "missing").unwrap(), None);
     }
 }

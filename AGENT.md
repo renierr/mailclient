@@ -67,10 +67,11 @@ Anything else (new crypto, new runtime, new Qt modules beyond Core/Gui/Qml/Quick
 - HTML mail is untrusted: render in WebEngine with remote content blocked by default; no JS bridge into Rust except an explicit allow-list.
 - Never log message bodies, passwords, or tokens. Log IDs and subjects at `debug` at most.
 - Network: TLS required by default; plaintext IMAP/SMTP only with explicit per-account opt-in.
-- Test sending is allowlist-only: `mailcore` refuses any recipient outside
-  `MAILCLIENT_TEST_SEND_ALLOWLIST` (unset = deny all, configured locally via
-  gitignored `.env`, never committed). Real sending requires
-  `MAILCLIENT_ALLOW_ANY_RECIPIENT=1`. Never add ad-hoc bypasses.
+- Test sending is allowlist-only: automated sends (harness, workers, tests)
+  are refused for any recipient outside `MAILCLIENT_TEST_SEND_ALLOWLIST`
+  (unset = deny all, configured locally via gitignored `.env`, never
+  committed). An interactive Send click in the composer is explicit user
+  consent (`SendPolicy::Unrestricted`). Never add ad-hoc bypasses.
 - **Privacy (hard rule): never write or comment any real account or mail
   information.** No real addresses, credentials, hosts, passwords, subjects,
   bodies, or sender/recipient data in docs, comments, tests, examples, or

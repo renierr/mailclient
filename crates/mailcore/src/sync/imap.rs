@@ -35,8 +35,7 @@ pub struct ImapEndpoint {
 pub fn endpoint_for(account: &crate::models::Account) -> ImapEndpoint {
     ImapEndpoint {
         addr: format!("{}:{}", account.imap_host, account.imap_port),
-        implicit_tls: account.imap_port == 993
-            || account.imap_security.eq_ignore_ascii_case("tls"),
+        implicit_tls: account.imap_port == 993 || account.imap_security.eq_ignore_ascii_case("tls"),
     }
 }
 
@@ -163,6 +162,18 @@ impl ImapSync {
         Ok(())
     }
 
+    /// Delete one cached message server-side (`\Deleted` + expunge) and locally.
+    pub fn delete_message(&mut self, db: &Db, message_id: i64) -> Result<()> {
+        let message = messages::get(db, message_id)?;
+        let folder = folders::get(db, message.folder_id)?;
+        let session = self.session()?;
+        session.select(&folder.path)?;
+        session.uid_store(message.uid.to_string(), "+FLAGS (\\Deleted)")?;
+        session.expunge()?;
+        messages::delete(db, message_id)?;
+        Ok(())
+    }
+
     fn session(&mut self) -> Result<&mut TlsSession> {
         self.session.as_mut().ok_or_else(|| {
             StoreError::InvalidInput("not connected: call connect() first".to_string())
@@ -212,34 +223,27 @@ impl SyncProvider for ImapSync {
         // UIDVALIDITY change => server-side rebuild, drop local copies.
         if let Some(validity) = mb.uid_validity {
             if folder.uid_validity.is_some_and(|v| v != validity) {
-                log::warn!(
-                    "imap: UIDVALIDITY changed for {} — resyncing",
-                    folder.path
-                );
+                log::warn!("imap: UIDVALIDITY changed for {} — resyncing", folder.path);
                 messages::delete_by_folder(db, folder_id)?;
             }
         }
 
         let server_uids: HashSet<u32> = session.uid_search("ALL")?;
-        let local_uids: HashSet<u32> =
-            messages::list_uids(db, folder_id)?.into_iter().collect();
+        let local_uids: HashSet<u32> = messages::list_uids(db, folder_id)?.into_iter().collect();
 
         // 1. Flag refresh for messages we already have.
-        let existing: Vec<u32> =
-            server_uids.intersection(&local_uids).copied().collect();
+        let existing: Vec<u32> = server_uids.intersection(&local_uids).copied().collect();
         for chunk in existing.chunks(FETCH_CHUNK) {
-            let set = chunk.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+            let set = chunk
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
             for msg in session.uid_fetch(set, "(UID FLAGS)")?.iter() {
                 if let Some(uid) = msg.uid {
                     let (read, starred, draft) = flag_state(msg.flags());
                     messages::set_flags_by_uid(
-                        db,
-                        account.id,
-                        folder_id,
-                        uid,
-                        read,
-                        starred,
-                        draft,
+                        db, account.id, folder_id, uid, read, starred, draft,
                     )?;
                 }
             }
@@ -249,7 +253,11 @@ impl SyncProvider for ImapSync {
         let mut fetched = 0u64;
         let missing: Vec<u32> = server_uids.difference(&local_uids).copied().collect();
         for chunk in missing.chunks(FETCH_CHUNK) {
-            let set = chunk.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+            let set = chunk
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
             for msg in session.uid_fetch(set, "(UID FLAGS RFC822)")?.iter() {
                 let uid = msg.uid.unwrap_or(0);
                 if uid == 0 {
@@ -269,13 +277,15 @@ impl SyncProvider for ImapSync {
             expunged += 1;
         }
 
-        let validity = mb
-            .uid_validity
-            .unwrap_or(folder.uid_validity.unwrap_or(0));
+        let validity = mb.uid_validity.unwrap_or(folder.uid_validity.unwrap_or(0));
         let uid_next = mb.uid_next.unwrap_or(folder.uid_next.unwrap_or(0));
         folders::set_sync_state(db, folder_id, validity, uid_next)?;
 
-        Ok(SyncReport { fetched, expunged, folders: 0 })
+        Ok(SyncReport {
+            fetched,
+            expunged,
+            folders: 0,
+        })
     }
 
     fn push_flags(&mut self, db: &Db, message: &Message) -> Result<()> {
@@ -284,7 +294,11 @@ impl SyncProvider for ImapSync {
         session.select(&folder.path)?;
         let uid = message.uid.to_string();
         let seen = if message.is_read { "+FLAGS" } else { "-FLAGS" };
-        let flagged = if message.is_starred { "+FLAGS" } else { "-FLAGS" };
+        let flagged = if message.is_starred {
+            "+FLAGS"
+        } else {
+            "-FLAGS"
+        };
         session.uid_store(&uid, format!("{seen} (\\Seen)"))?;
         session.uid_store(&uid, format!("{flagged} (\\Flagged)"))?;
         Ok(())
@@ -316,9 +330,7 @@ fn parse_to_new(
 ) -> Result<NewMessage> {
     let parsed = mail_parser::MessageParser::default()
         .parse(raw)
-        .ok_or_else(|| {
-            StoreError::InvalidInput(format!("cannot parse message uid {uid}"))
-        })?;
+        .ok_or_else(|| StoreError::InvalidInput(format!("cannot parse message uid {uid}")))?;
     let (is_read, is_starred, is_draft) = flag_state(flags);
 
     let body_text = parsed.body_text(0).map(|c| c.into_owned());

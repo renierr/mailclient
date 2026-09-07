@@ -10,6 +10,9 @@ Pane {
 
     property var message
     signal replyRequested()
+    signal forwardRequested()
+    signal starRequested()
+    signal deleteRequested()
     signal statusMessage(string text)
 
     padding: 8
@@ -34,17 +37,17 @@ Pane {
             }
             ToolButton {
                 text: qsTr("→ Forward")
-                onClicked: root.statusMessage(qsTr("Forward lands with the composer in M2"))
+                onClicked: root.forwardRequested()
             }
             ToolButton {
                 text: qsTr("🗑")
                 Accessible.name: qsTr("Delete")
-                onClicked: root.statusMessage(qsTr("Move to Trash lands with IMAP sync in M1"))
+                onClicked: root.deleteRequested()
             }
             ToolButton {
                 text: qsTr("★")
                 Accessible.name: qsTr("Star")
-                onClicked: root.statusMessage(qsTr("Flag push lands with IMAP sync in M1"))
+                onClicked: root.starRequested()
             }
         }
 

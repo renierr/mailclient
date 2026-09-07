@@ -5,10 +5,13 @@
 
 pub mod db;
 pub mod error;
+pub mod feed;
 pub mod models;
 pub mod search;
 pub mod store;
 pub mod sync;
+
+pub mod auth;
 
 pub use db::{default_db_path, Db};
 pub use error::{Result, StoreError};

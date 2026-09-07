@@ -138,6 +138,18 @@ pub fn get(db: &Db, id: i64) -> Result<Message> {
         .ok_or_else(|| StoreError::NotFound(format!("message {id}")))
 }
 
+/// Fetch one message by `(folder_id, uid)` (used by sync/UI actions).
+pub fn get_by_uid(db: &Db, folder_id: i64, uid: u32) -> Result<Message> {
+    db.conn()
+        .query_row(
+            &format!("select {COLS} from messages where folder_id = ?1 and uid = ?2"),
+            params![folder_id, uid as i64],
+            row_to_message,
+        )
+        .optional()?
+        .ok_or_else(|| StoreError::NotFound(format!("message uid {uid} in folder {folder_id}")))
+}
+
 /// Number of unread messages in a folder (badge counter).
 pub fn count_unread(db: &Db, folder_id: i64) -> Result<u64> {
     let n: i64 = db.conn().query_row(

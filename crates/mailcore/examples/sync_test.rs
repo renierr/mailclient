@@ -27,11 +27,12 @@ fn var(name: &str) -> Result<String, String> {
 
 fn main() -> Result<(), String> {
     if !env::args().any(|a| a == "--live") {
-        return Err("refusing live run without explicit consent: re-run with `-- --live`".to_string());
+        return Err(
+            "refusing live run without explicit consent: re-run with `-- --live`".to_string(),
+        );
     }
     dotenvy::dotenv().ok();
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let email = var("MAILCLIENT_TEST_EMAIL")?;
     let imap_host = var("MAILCLIENT_TEST_IMAP_HOST")?;
@@ -51,7 +52,8 @@ fn main() -> Result<(), String> {
     let smtp_user = var("MAILCLIENT_TEST_SMTP_USER")?;
     let smtp_pass = var("MAILCLIENT_TEST_SMTP_PASS")?;
 
-    let db_path = env::var("MAILCLIENT_DB").unwrap_or_else(|_| "target/sync-test.sqlite".to_string());
+    let db_path =
+        env::var("MAILCLIENT_DB").unwrap_or_else(|_| "target/sync-test.sqlite".to_string());
     let db = Db::open(std::path::Path::new(&db_path)).map_err(|e| e.to_string())?;
     println!("db: {db_path}");
 
@@ -93,7 +95,9 @@ fn main() -> Result<(), String> {
     // IMAP sync.
     let mut imap = ImapSync::new(&account);
     imap.connect(&imap_pass).map_err(|e| e.to_string())?;
-    let synced = imap.sync_folders(&db, account_id).map_err(|e| e.to_string())?;
+    let synced = imap
+        .sync_folders(&db, account_id)
+        .map_err(|e| e.to_string())?;
     println!("--- folders ({}) ---", synced.len());
     for f in folders::list_by_account(&db, account_id).map_err(|e| e.to_string())? {
         println!(
@@ -136,7 +140,8 @@ fn main() -> Result<(), String> {
                 &SendRequest {
                     to: std::slice::from_ref(&to),
                     subject: "Mailclient M1 test",
-                    body_text: "Hello from the mailclient M1 sync harness. If you read this, SMTP works.",
+                    body_text:
+                        "Hello from the mailclient M1 sync harness. If you read this, SMTP works.",
                     policy: &policy,
                     password: &smtp_pass,
                     imap_password: Some(&imap_pass),

@@ -14,12 +14,22 @@ Dialog {
     standardButtons: Dialog.Cancel
 
     signal statusMessage(string text)
+    signal sendRequested(string payload)
 
     function openForReply(message) {
         if (message !== undefined) {
             toField.text = message.from || ""
             subjectField.text = "Re: " + (message.subject || "")
             bodyArea.text = "\n\n—\nOn " + (message.date || "") + ", " + (message.from || "") + " wrote:\n" + (message.snippet || "")
+        }
+        open()
+    }
+
+    function openForForward(message) {
+        if (message !== undefined) {
+            toField.text = ""
+            subjectField.text = "Fwd: " + (message.subject || "")
+            bodyArea.text = "\n\n— Forwarded message —\nFrom: " + (message.from || "") + "\nDate: " + (message.date || "") + "\nSubject: " + (message.subject || "") + "\n\n" + (message.snippet || "")
         }
         open()
     }
@@ -93,8 +103,11 @@ Dialog {
                 text: qsTr("Send")
                 highlighted: true
                 onClicked: {
-                    root.statusMessage(qsTr("Queued (mock) → real SMTP send in M2"))
-                    root.close()
+                    root.sendRequested(JSON.stringify({
+                        to: toField.text,
+                        subject: subjectField.text,
+                        body: bodyArea.text
+                    }))
                 }
             }
         }

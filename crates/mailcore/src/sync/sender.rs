@@ -1,10 +1,9 @@
-//! Outbound sending via SMTP (Milestone 1: plain-text + safety policy).
+//! Outbound sending via SMTP.
 //!
-//! Safety rule: while testing, mail may ONLY go to allowlisted recipients.
-//! [`SendPolicy::from_env`] reads:
-//! - `MAILCLIENT_TEST_SEND_ALLOWLIST`: comma-separated allowlist.
-//!   Unset/empty means "deny everything" (safest default).
-//! - `MAILCLIENT_ALLOW_ANY_RECIPIENT=1`: unlock real sending (production)
+//! Safety rule: automated sends (harness, queue workers, tests) may ONLY go
+//! to allowlisted recipients — see [`SendPolicy::from_env`] (unset/empty
+//! allowlist denies everything). An interactive Send click in the composer is
+//! explicit user consent and uses `SendPolicy::Unrestricted`.
 //!
 //! Passwords arrive as function args (from the OS keyring or test env),
 //! never from SQLite.
@@ -93,8 +92,7 @@ pub struct SmtpEndpoint {
 pub fn endpoint_for(account: &Account) -> SmtpEndpoint {
     SmtpEndpoint {
         addr: format!("{}:{}", account.smtp_host, account.smtp_port),
-        implicit_tls: account.smtp_port == 465
-            || account.smtp_security.eq_ignore_ascii_case("tls"),
+        implicit_tls: account.smtp_port == 465 || account.smtp_security.eq_ignore_ascii_case("tls"),
     }
 }
 
@@ -129,7 +127,10 @@ impl SmtpSender {
         let mut builder = SmtpTransport::relay(&host)?;
         builder = builder
             .port(port)
-            .credentials(Credentials::new(self.username.clone(), password.to_string()))
+            .credentials(Credentials::new(
+                self.username.clone(),
+                password.to_string(),
+            ))
             .tls(if self.endpoint.implicit_tls {
                 Tls::Wrapper(tls_params)
             } else {
@@ -175,13 +176,7 @@ impl SmtpSender {
     /// Best-effort: skipped (with a warning) when the `sent_copy_enabled`
     /// setting is off, no Sent folder is known, or no IMAP credential is
     /// available. Never fails the send itself.
-    fn save_sent_copy(
-        &self,
-        db: &Db,
-        account_id: i64,
-        req: &SendRequest<'_>,
-        raw: &[u8],
-    ) {
+    fn save_sent_copy(&self, db: &Db, account_id: i64, req: &SendRequest<'_>, raw: &[u8]) {
         match settings::get_bool(db, settings::SENT_COPY_ENABLED) {
             Ok(true) => {}
             Ok(false) => {
@@ -194,7 +189,10 @@ impl SmtpSender {
             }
         }
         let sent_path = match folders::list_by_account(db, account_id) {
-            Ok(list) => list.into_iter().find(|f| f.role == FolderRole::Sent).map(|f| f.path),
+            Ok(list) => list
+                .into_iter()
+                .find(|f| f.role == FolderRole::Sent)
+                .map(|f| f.path),
             Err(e) => {
                 log::warn!("smtp: cannot list folders, skipping sent copy: {e}");
                 return;
@@ -266,8 +264,14 @@ mod tests {
         assert!(policy.check(&["allowed@example.com"]).is_ok());
         assert!(policy.check(&["ALLOWED@example.com"]).is_ok());
         assert!(policy.check(&["someone@else.example"]).is_err());
-        assert!(policy.check(&["allowed@example.com", "evil@example.org"]).is_err());
-        assert!(SendPolicy::TestAllowlist(vec![]).check(&["anyone@example.com"]).is_err());
-        assert!(SendPolicy::Unrestricted.check(&["anyone@example.com"]).is_ok());
+        assert!(policy
+            .check(&["allowed@example.com", "evil@example.org"])
+            .is_err());
+        assert!(SendPolicy::TestAllowlist(vec![])
+            .check(&["anyone@example.com"])
+            .is_err());
+        assert!(SendPolicy::Unrestricted
+            .check(&["anyone@example.com"])
+            .is_ok());
     }
 }

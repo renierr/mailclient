@@ -17,7 +17,7 @@ pub mod bridge;
 use std::path::PathBuf;
 
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QUrl};
-use mailcore::{Db, default_db_path};
+use mailcore::{default_db_path, Db};
 
 /// Filesystem candidates for `Main.qml` (see module docs).
 fn find_main_qml() -> Option<PathBuf> {

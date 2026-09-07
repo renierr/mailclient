@@ -2,9 +2,8 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// First-run / add-account dialog. M0/M1: validates locally and reports;
-// M1b persists the account to SQLite + keyring and starts IMAP sync.
-// Content scrolls so the form stays usable on small screens.
+// First-run / add-account dialog. Submit goes to the Rust bridge, which
+// persists the account to SQLite + keyring. Content scrolls on small screens.
 Dialog {
     id: root
     title: qsTr("Add account")
@@ -12,9 +11,39 @@ Dialog {
     width: Math.min(parent ? parent.width - 80 : 520, 520)
     height: Math.min(parent ? parent.height - 60 : 620, 620)
     anchors.centerIn: parent
-    standardButtons: Dialog.Ok | Dialog.Cancel
 
     signal statusMessage(string text)
+    signal accountSubmit(string payload)
+
+    function submit() {
+        root.accountSubmit(JSON.stringify({
+            name: nameField.text,
+            email: emailField.text,
+            imap_host: imapField.text,
+            imap_port: imapPortField.text,
+            imap_sec: imapSecBox.currentText,
+            imap_user: imapUserField.text,
+            password: passField.text,
+            smtp_host: smtpField.text,
+            smtp_port: smtpPortField.text,
+            smtp_sec: smtpSecBox.currentText,
+            smtp_user: smtpUserField.text
+        }))
+    }
+
+    footer: RowLayout {
+        Button {
+            text: qsTr("Cancel")
+            Layout.alignment: Qt.AlignRight
+            onClicked: root.reject()
+        }
+        Button {
+            text: qsTr("Save")
+            Layout.alignment: Qt.AlignRight
+            highlighted: true
+            onClicked: root.submit()
+        }
+    }
 
     ScrollView {
         id: scroll
@@ -60,17 +89,5 @@ Dialog {
             Label { text: qsTr("SMTP user") }
             TextField { id: smtpUserField; Layout.fillWidth: true; placeholderText: qsTr("same as IMAP user") }
         }
-    }
-
-    onAccepted: {
-        if (emailField.text === "" || imapField.text === "" || passField.text === "") {
-            root.statusMessage(qsTr("Fill email, IMAP host and password (mock check)"))
-            return
-        }
-        if (smtpField.text === "") {
-            root.statusMessage(qsTr("Fill the SMTP host (mock check)"))
-            return
-        }
-        root.statusMessage(qsTr("Account '%1' will persist + sync in M1b").arg(emailField.text))
     }
 }

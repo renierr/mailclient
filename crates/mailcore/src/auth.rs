@@ -25,7 +25,7 @@ pub fn save_secret(vault_key: &str, secret: &str) -> Result<()> {
 /// Load a secret by vault key.
 pub fn load_secret(vault_key: &str) -> Result<String> {
     keyring::Entry::new(SERVICE, vault_key)
-        .map_err(|e| StoreError::InvalidInput(format!("keyring unavailable: {e}"))?
+        .map_err(|e| StoreError::InvalidInput(format!("keyring unavailable: {e}")))?
         .get_password()
         .map_err(|e| StoreError::InvalidInput(format!("keyring load failed: {e}")))
 }
@@ -33,7 +33,7 @@ pub fn load_secret(vault_key: &str) -> Result<String> {
 /// Delete a secret (account removal).
 pub fn delete_secret(vault_key: &str) -> Result<()> {
     keyring::Entry::new(SERVICE, vault_key)
-        .map_err(|e| StoreError::InvalidInput(format!("keyring unavailable: {e}"))?
+        .map_err(|e| StoreError::InvalidInput(format!("keyring unavailable: {e}")))?
         .delete_credential()
         .map_err(|e| StoreError::InvalidInput(format!("keyring delete failed: {e}")))
 }

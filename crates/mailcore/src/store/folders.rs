@@ -62,6 +62,18 @@ pub fn list_by_account(db: &Db, account_id: i64) -> Result<Vec<Folder>> {
     Ok(rows)
 }
 
+/// Fetch one folder by `(account_id, path)`.
+pub fn get_by_path(db: &Db, account_id: i64, path: &str) -> Result<Folder> {
+    db.conn()
+        .query_row(
+            &format!("select {COLS} from folders where account_id = ?1 and path = ?2"),
+            params![account_id, path],
+            row_to_folder,
+        )
+        .optional()?
+        .ok_or_else(|| StoreError::NotFound(format!("folder {path}")))
+}
+
 /// Fetch one folder by id.
 pub fn get(db: &Db, id: i64) -> Result<Folder> {
     db.conn()
