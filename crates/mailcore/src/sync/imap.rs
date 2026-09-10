@@ -127,19 +127,6 @@ struct Namespaces {
     shared: Vec<(String, Option<String>)>,
 }
 
-/// Ask the server for its namespaces (best effort — many servers don't
-/// implement RFC 2342, and groupware like Tobit David hides branches the
-/// login isn't entitled to; either way we just get fewer prefixes).
-fn query_namespaces(session: &mut TlsSession) -> Namespaces {
-    match session.run_command_and_read_response("NAMESPACE") {
-        Ok(raw) => parse_namespace_response(&raw),
-        Err(e) => {
-            log::debug!("imap: NAMESPACE unsupported, skipping: {e}");
-            Namespaces::default()
-        }
-    }
-}
-
 /// Parse a `* NAMESPACE ((...)...) ((...)...) ((...)...)` response into its
 /// three prefix groups. Malformed input yields what parsed so far (possibly
 /// empty) — never an error, since this is only a discovery hint.
@@ -239,6 +226,11 @@ pub struct ImapSync {
     port: u16,
     username: String,
     implicit_tls: bool,
+    /// Login password, memory-only (never logged, never stored — see AGENT.md:
+    /// secrets live in the keyring or memory). Kept so the session can
+    /// re-establish itself after a protocol desync without another keyring
+    /// round-trip; cleared on [`ImapSync::disconnect`].
+    password: Option<String>,
     session: Option<TlsSession>,
 }
 
@@ -252,6 +244,7 @@ impl ImapSync {
             port: account.imap_port,
             username: account.imap_username.clone(),
             implicit_tls: ep.implicit_tls,
+            password: None,
             session: None,
         }
     }
@@ -270,19 +263,76 @@ impl ImapSync {
         log::info!("imap: connecting to {}:{}", self.host, self.port);
         let tls = TlsConnector::builder().build()?;
         let client = imap::connect((self.host.as_str(), self.port), &self.host, &tls)?;
-        let session = client
+        let mut session = client
             .login(self.username.as_str(), password)
             .map_err(|(e, _)| StoreError::Imap(e))?;
+        self.password = Some(password.to_string());
+        // Raw protocol trace for diagnosing quirky servers (e.g. Tobit
+        // David): set MAILCLIENT_IMAP_DEBUG=1 to eprint every C:/S: line.
+        // WARNING: this includes the LOGIN password and message bodies —
+        // redact before sharing any captured log.
+        if std::env::var("MAILCLIENT_IMAP_DEBUG").is_ok() {
+            session.debug = true;
+            log::warn!("imap protocol debug on: raw traffic on stderr, redact before sharing");
+        }
         log::info!("imap: logged in as {}", self.username);
         self.session = Some(session);
         Ok(())
     }
 
-    /// LOGOUT (best effort).
+    /// LOGOUT (best effort). Also forgets the stored password.
     pub fn disconnect(&mut self) {
         if let Some(mut s) = self.session.take() {
             let _ = s.logout();
         }
+        self.password = None;
+    }
+
+    /// Drop the connection without LOGOUT and re-establish it with the stored
+    /// password. Heals a desynced stream (e.g. a stale tagged response our
+    /// parser couldn't consume past) — LOGOUT itself would trip over the same
+    /// stale bytes, so it is deliberately skipped here.
+    pub fn reconnect(&mut self) -> Result<()> {
+        let password = self.password.clone().ok_or_else(|| {
+            StoreError::InvalidInput("no stored password for reconnect".to_string())
+        })?;
+        log::warn!("imap: reconnecting {} to resync the stream", self.host);
+        self.session.take();
+        self.connect(&password)
+    }
+
+    /// Ask the server for its namespaces (best effort — many servers don't
+    /// implement RFC 2342, and groupware like Tobit David hides branches the
+    /// login isn't entitled to; either way we just get fewer prefixes).
+    ///
+    /// A parse failure means the server sent a response shape our IMAP parser
+    /// cannot model (proven: Tobit's `* NAMESPACE` line, which imap-proto 0.10
+    /// has no type for). The tagged completion then stays unread in the socket
+    /// buffer and the *next* command dies on the crate's tag assert — so on
+    /// exactly this error the session reconnects itself before returning.
+    /// BAD/NO answers are clean (their tagged line was consumed) and need nothing.
+    fn query_namespaces(&mut self) -> Namespaces {
+        let raw = match self.session() {
+            Ok(session) => match session.run_command_and_read_response("NAMESPACE") {
+                Ok(raw) => raw,
+                Err(imap::Error::Parse(_)) => {
+                    log::warn!("imap: NAMESPACE response unparseable, reconnecting to resync");
+                    if let Err(e) = self.reconnect() {
+                        log::warn!("imap: reconnect failed: {e}");
+                    }
+                    return Namespaces::default();
+                }
+                Err(e) => {
+                    log::debug!("imap: NAMESPACE unsupported, skipping: {e}");
+                    return Namespaces::default();
+                }
+            },
+            Err(e) => {
+                log::debug!("imap: no session for NAMESPACE query: {e}");
+                return Namespaces::default();
+            }
+        };
+        parse_namespace_response(&raw)
     }
 
     /// APPEND raw MIME bytes to a folder (used for Sent copies), marked `\Seen`.
@@ -853,7 +903,8 @@ impl SyncProvider for ImapSync {
         // Pass 4: LIST inside every NAMESPACE prefix (best effort, capped).
         // Shared / other-users' branches live outside "" and never appear in
         // passes 1–3; the server tells us where via RFC 2342 (when it bothers).
-        let ns = query_namespaces(self.session()?);
+        // The empty personal prefix is pass 1 again, so it is skipped.
+        let ns = self.query_namespaces();
         let mut ns_count = 0usize;
         for prefix in ns
             .personal

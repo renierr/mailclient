@@ -71,7 +71,11 @@ Manual ⟳ plus auto-refresh on startup, folder open, and after send.
   merge, per-root subtree `LIST` incl. dotted prefixes, `LIST` inside every
   `NAMESPACE` prefix — a single `LIST "*"` missed folders like Archive on
   groupware servers; `\Noselect`/`\NonExistent` skipped, first pass wins role
-  mapping, every find logged with raw attributes), then selective + windowed per folder: INBOX syncs flags + newest 200 full
+  mapping, every find logged with raw attributes. Servers whose responses
+  the IMAP parser cannot model (proven: Tobit's `* NAMESPACE`, which
+  imap-proto 0.10 has no type for) leave a stale tagged reply behind, so the
+  session reconnects itself on exactly that parse error before continuing),
+  then selective + windowed per folder: INBOX syncs flags + newest 200 full
   bodies (`FULL_SYNC_WINDOW`, matches feed limit); every other folder only
   flags + newest 50 (`QUICK_SYNC_WINDOW`) for fresh sidebar pills — custom
   folders never auto-sync all mail, they fill (newest 200) when opened via
