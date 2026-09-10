@@ -178,8 +178,9 @@ ApplicationWindow {
         reloadMessages()
     }
 
-    // Moves to Trash; the bridge reports which it did, because "moved" and
-    // "destroyed" are different promises.
+    // Moves to Trash — except spam (destroyed outright, junk never touches
+    // Trash) and Trash itself (deleting there is permanent). The bridge
+    // reports which it did because "moved" and "destroyed" differ.
     function deleteMessage(uid) {
         if (uid < 0)
             return
@@ -189,6 +190,18 @@ ApplicationWindow {
         reloadFolders()
         reloadMessages()
         root.statusText = r === "" ? qsTr("Deleted") : r
+    }
+
+    // One-click archive: moves to the Archive folder (created on demand).
+    function archiveMessage(uid) {
+        if (uid < 0)
+            return
+        var r = backend.archive_message(uid)
+        if (root.currentUid === uid)
+            root.currentUid = -1
+        reloadFolders()
+        reloadMessages()
+        root.statusText = r === "" ? qsTr("Archived") : r
     }
 
     function purgeMessage(uid) {
@@ -291,6 +304,7 @@ ApplicationWindow {
     Shortcut { sequences: ["Delete"]; onActivated: root.deleteMessage(root.currentUid) }
     Shortcut { sequences: ["Shift+Delete"]; onActivated: root.confirmPurge(root.currentUid) }
     Shortcut { sequences: ["S"]; onActivated: root.toggleStar(root.currentUid) }
+    Shortcut { sequences: ["A"]; onActivated: root.archiveMessage(root.currentUid) }
     Shortcut {
         sequences: ["R"]
         onActivated: if (root.currentUid >= 0) composer.openForReply(root.messageByUid(root.currentUid))
@@ -432,9 +446,9 @@ ApplicationWindow {
             busy: root.busy
             onMessageSelected: uid => root.openMessage(uid)
             onStarToggled: uid => root.toggleStar(uid)
+            onArchiveRequested: uid => root.archiveMessage(uid)
             onDeleteRequested: uid => root.deleteMessage(uid)
             onPurgeRequested: uid => root.confirmPurge(uid)
-            onLoadOlderRequested: root.loadOlder()
         }
 
         MessageView {
@@ -448,6 +462,7 @@ ApplicationWindow {
             onReplyAllRequested: composer.openForReply(root.messageByUid(root.currentUid))
             onForwardRequested: composer.openForForward(root.messageByUid(root.currentUid))
             onStarRequested: root.toggleStar(root.currentUid)
+            onArchiveRequested: root.archiveMessage(root.currentUid)
             onDeleteRequested: root.deleteMessage(root.currentUid)
             onStatusMessage: text => root.statusText = text
         }
@@ -564,6 +579,13 @@ ApplicationWindow {
         onVisibilityToggled: (path, subscribed) => {
             showResult("", backend.set_folder_subscribed(path, subscribed))
             reloadFolders()
+        }
+        onCreateRequested: path => {
+            var r = backend.create_folder(path)
+            reloadFolders()
+            reloadMessages()
+            foldersDialog.clearNewFolder()
+            showResult(qsTr("Folder created"), r)
         }
         onFolderSelected: path => {
             foldersDialog.close()

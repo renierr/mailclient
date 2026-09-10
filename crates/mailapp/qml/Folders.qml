@@ -28,6 +28,11 @@ Dialog {
     signal refreshRequested()
     signal visibilityToggled(string path, bool subscribed)
     signal folderSelected(string path)
+    signal createRequested(string path)
+
+    function clearNewFolder() {
+        newFolderField.text = ""
+    }
 
     function emitLater(sig, arg1, arg2) {
         if (arg1 === undefined)
@@ -98,6 +103,24 @@ Dialog {
     ColumnLayout {
         anchors.fill: parent
         spacing: Theme.sm
+
+        // Create a folder server-side (`/` separates levels: `Work/Client`).
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Theme.sm
+            AppTextField {
+                id: newFolderField
+                Layout.fillWidth: true
+                placeholderText: qsTr("New folder name… (`/` for subfolders)")
+                onAccepted: root.emitLater(root.createRequested, newFolderField.text)
+            }
+            AppButton {
+                text: qsTr("Create")
+                intent: "primary"
+                enabled: newFolderField.text.trim() !== ""
+                onClicked: root.createRequested(newFolderField.text)
+            }
+        }
 
         Label {
             Layout.fillWidth: true

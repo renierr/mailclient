@@ -55,7 +55,7 @@ Secrets live in the OS keyring keyed by `accounts.auth_vault_key`, never in SQLi
 Current state detail:
 - `mailcore`: SQLite schema v2 (incl. FTS5 + `settings` table with migration), typed stores (accounts/folders/messages/queue/contacts/settings incl. `compose_send_format`), `html` sanitizer (std-only tokenize→clean→serialise, remote/private-host gating, entity-aware), IMAP sync (SPECIAL-USE role mapping, windowed UID FETCH + MIME parsing — INBOX newest 200, others newest 50 auto / 200 on open — UIDVALIDITY resync, expunge, flag refresh/push, server-side delete, Sent-copy APPEND), SMTP send with `SendPolicy` + `SendFormat` (plain/multipart/html, resilient fallback, Cc, sanitized outgoing), keyring auth, safe JSON feeds (`body_text`/`body_html` sanitized/`is_html`/`has_remote_images` + legacy `body`, plus on-demand `message_html` for Show-once). 32 unit tests green.
 - `mailapp`: `Bridge` (accounts, selective sync + per-folder `sync_folder_now` + `load_older_messages` paging, folder LIST refresh + `subscribed` visibility, select/read/star/delete/send with Cc + format-aware bodies, on-demand `message_html`, paged JSON feeds) + `SettingsBridge` (`sent_copy_enabled`, `load_remote_images`, `compose_send_format`), embedded `Mailclient` QML module with filesystem override.
-- `qml`: live 3-pane UI — real folders/messages, working sync/send/reply/forward/star/delete, account setup with ports+encryption, settings dialog (incl. send-format picker), IMAP folder manager (LIST refresh, show/hide per folder, cached/unread counts). Reader: PlainText for plain (no more HTML-code display), sanitized WebEngine + blocked-images banner + working show-once (inline `cid:`/`data:` always load, remote gated + re-sanitized on demand). List pages newest-first with a "Show older messages" button (one 200-mail server batch per press). Startup auto-sync, folder-open fill, post-send Sent refresh. Composer: WYSIWYG + HTML-source toggle, list/quote/link/clear, Cc wired, reply/forward quote from `body_text`. No mocks remain (search box + drafts still point at M2/M3).
+- `qml`: live 3-pane UI — real folders/messages, working sync/send/reply/forward/star/delete/archive, account setup with ports+encryption, settings dialog (incl. send-format picker), IMAP folder manager (LIST refresh, show/hide per folder, create folders, cached/unread counts). Reader: PlainText for plain (no more HTML-code display), sanitized WebEngine + blocked-images banner + working show-once (inline `cid:`/`data:` always load, remote gated + re-sanitized on demand). List pages newest-first with a "Show older messages" button (one 200-mail server batch per press). Startup auto-sync, folder-open fill, post-send Sent refresh. Composer: WYSIWYG + HTML-source toggle, list/quote/link/clear, Cc wired, reply/forward quote from `body_text`. No mocks remain (search box + drafts still point at M2/M3).
 - Verified live: 5 folders mapped, messages synced, test mail delivered + filed to Sent.
 - QML is a responsive 3-pane shell (sidebar / list / reader + composer dialog + account setup dialog) with mock data so `qml6 qml/Main.qml` runs without Rust.
 
@@ -67,12 +67,18 @@ Manual ⟳ plus auto-refresh on startup, folder open, and after send.
   (deferred past first paint), on every folder open (that folder only), and
   best-effort Sent refresh after each send. Read/star stay local + queued
   (`flags_dirty`) and push on the next sync; delete/purge hit IMAP at once.
-- **What**: full folder LIST every run (cheap; custom IMAP folders included),
-  then selective + windowed per folder: INBOX syncs flags + newest 200 full
+- **What**: multi-pass folder discovery every run (recursive `LIST`, `LSUB`
+  merge, per-root subtree `LIST` incl. dotted prefixes, `LIST` inside every
+  `NAMESPACE` prefix — a single `LIST "*"` missed folders like Archive on
+  groupware servers; `\Noselect`/`\NonExistent` skipped, first pass wins role
+  mapping, every find logged with raw attributes), then selective + windowed per folder: INBOX syncs flags + newest 200 full
   bodies (`FULL_SYNC_WINDOW`, matches feed limit); every other folder only
   flags + newest 50 (`QUICK_SYNC_WINDOW`) for fresh sidebar pills — custom
   folders never auto-sync all mail, they fill (newest 200) when opened via
-  `sync_folder_now`. Expunge diffing is always full (local, no network);
+  `sync_folder_now`. Delete means Trash, except spam (destroyed outright,
+  junk never touches Trash) and Trash itself (deleting there is permanent);
+  one-click archive moves to Archive (auto-created server-side when missing).
+  Expunge diffing is always full (local, no network);
   UIDVALIDITY resync on change.
 - **Scaling (massive mailboxes)**: per-folder network is bounded by the window
   (one SEARCH + ≤200 flag FETCH + ≤200 RFC822 FETCH), not by mailbox size.

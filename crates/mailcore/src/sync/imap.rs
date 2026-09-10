@@ -52,10 +52,12 @@ pub fn endpoint_for(account: &crate::models::Account) -> ImapEndpoint {
     }
 }
 
-/// Whether a LISTED mailbox can hold messages (i.e. not `\Noselect`).
+/// Whether a LISTED mailbox can hold messages (i.e. not `\Noselect` and not
+/// a `\NonExistent` hierarchy placeholder).
 #[must_use]
 pub fn is_selectable(attributes: &[NameAttribute]) -> bool {
-    !attr_text(attributes).contains("noselect")
+    let t = attr_text(attributes);
+    !t.contains("noselect") && !t.contains("nonexistent")
 }
 
 /// Map a LISTED mailbox to a [`FolderRole`].
@@ -114,6 +116,121 @@ fn attr_text(attributes: &[NameAttribute]) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase()
+}
+
+/// Namespace prefixes reported by the server (RFC 2342): personal, other
+/// users', and shared. Each entry is `(prefix, delimiter-or-None)`.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Namespaces {
+    personal: Vec<(String, Option<String>)>,
+    other: Vec<(String, Option<String>)>,
+    shared: Vec<(String, Option<String>)>,
+}
+
+/// Ask the server for its namespaces (best effort — many servers don't
+/// implement RFC 2342, and groupware like Tobit David hides branches the
+/// login isn't entitled to; either way we just get fewer prefixes).
+fn query_namespaces(session: &mut TlsSession) -> Namespaces {
+    match session.run_command_and_read_response("NAMESPACE") {
+        Ok(raw) => parse_namespace_response(&raw),
+        Err(e) => {
+            log::debug!("imap: NAMESPACE unsupported, skipping: {e}");
+            Namespaces::default()
+        }
+    }
+}
+
+/// Parse a `* NAMESPACE ((...)...) ((...)...) ((...)...)` response into its
+/// three prefix groups. Malformed input yields what parsed so far (possibly
+/// empty) — never an error, since this is only a discovery hint.
+fn parse_namespace_response(raw: &[u8]) -> Namespaces {
+    let text = String::from_utf8_lossy(raw);
+    let Some(start) = text.find("NAMESPACE") else {
+        return Namespaces::default();
+    };
+    let bytes = text[start..].as_bytes();
+    let mut pos = "NAMESPACE".len();
+    let mut groups: Vec<Vec<(String, Option<String>)>> = Vec::new();
+    while groups.len() < 3 {
+        skip_ws(bytes, &mut pos);
+        if bytes.get(pos) == Some(&b'N') && text[start + pos..].starts_with("NIL") {
+            groups.push(Vec::new());
+            pos += 3;
+            continue;
+        }
+        if bytes.get(pos) != Some(&b'(') {
+            break;
+        }
+        pos += 1; // outer '('
+        let mut entries = Vec::new();
+        loop {
+            skip_ws(bytes, &mut pos);
+            if bytes.get(pos) == Some(&b')') {
+                pos += 1;
+                break;
+            }
+            if bytes.get(pos) != Some(&b'(') {
+                break;
+            }
+            pos += 1; // entry '('
+            skip_ws(bytes, &mut pos);
+            let prefix = parse_ns_string(bytes, &mut pos);
+            skip_ws(bytes, &mut pos);
+            let delim = parse_ns_string(bytes, &mut pos);
+            skip_ws(bytes, &mut pos);
+            if bytes.get(pos) == Some(&b')') {
+                pos += 1;
+            }
+            match (prefix, delim) {
+                (Some(Some(p)), Some(d)) => entries.push((p, d)),
+                _ => break,
+            }
+        }
+        groups.push(entries);
+    }
+    Namespaces {
+        personal: groups.first().cloned().unwrap_or_default(),
+        other: groups.get(1).cloned().unwrap_or_default(),
+        shared: groups.get(2).cloned().unwrap_or_default(),
+    }
+}
+
+fn skip_ws(bytes: &[u8], pos: &mut usize) {
+    while *pos < bytes.len() && matches!(bytes[*pos], b' ' | b'\t' | b'\r' | b'\n') {
+        *pos += 1;
+    }
+}
+
+/// Parse a quoted string (with backslash escapes) or `NIL` (→ `None`).
+fn parse_ns_string(bytes: &[u8], pos: &mut usize) -> Option<Option<String>> {
+    if bytes.get(*pos) == Some(&b'"') {
+        *pos += 1;
+        let mut out = String::new();
+        while *pos < bytes.len() {
+            let c = bytes[*pos];
+            if c == b'\\' && *pos + 1 < bytes.len() {
+                *pos += 1;
+                out.push(bytes[*pos] as char);
+            } else if c == b'"' {
+                *pos += 1;
+                return Some(Some(out));
+            } else {
+                out.push(c as char);
+            }
+            *pos += 1;
+        }
+        return Some(Some(out));
+    }
+    if *pos + 3 <= bytes.len()
+        && bytes[*pos..].starts_with(b"NIL")
+        && bytes
+            .get(*pos + 3)
+            .is_none_or(|c| matches!(c, b' ' | b'\t' | b'\r' | b'\n' | b')'))
+    {
+        *pos += 3;
+        return Some(None);
+    }
+    None
 }
 
 /// IMAP sync session. Construct with [`ImapSync::new`], then [`ImapSync::connect`].
@@ -176,16 +293,25 @@ impl ImapSync {
     }
 
     /// Move one message to the account's Trash folder -- what "delete" means
-    /// in a mail client.
+    /// in a mail client, with two exceptions that destroy immediately:
     ///
-    /// Returns the destination folder path. Callers get
-    /// [`TrashOutcome::Expunged`] instead when there is nowhere to move it
-    /// to: the message is already in Trash, or the account has no Trash
-    /// folder. Prefers `UID MOVE` (RFC 6851) and falls back to
-    /// `COPY` + `\Deleted` + `EXPUNGE` on servers without it.
+    /// - the message is already in Trash (deleting from Trash is permanent),
+    /// - the message is spam (filing junk into Trash just moves garbage
+    ///   around — it is destroyed instead).
+    ///
+    /// Callers get [`TrashOutcome::Expunged`] for both; otherwise the
+    /// destination folder path. Prefers `UID MOVE` (RFC 6851) and falls back
+    /// to `COPY` + `\Deleted` + `EXPUNGE` on servers without it.
     pub fn trash_message(&mut self, db: &Db, message_id: i64) -> Result<TrashOutcome> {
         let message = messages::get(db, message_id)?;
         let folder = folders::get(db, message.folder_id)?;
+
+        // Spam never touches Trash; Trash never keeps a second copy of itself.
+        if folder.role == FolderRole::Junk {
+            log::info!("imap: destroying spam directly (uid {})", message.uid);
+            self.delete_message(db, message_id)?;
+            return Ok(TrashOutcome::Expunged);
+        }
         let trash = folders::list_by_account(db, message.account_id)?
             .into_iter()
             .find(|f| f.role == FolderRole::Trash);
@@ -197,6 +323,72 @@ impl ImapSync {
             return Ok(TrashOutcome::Expunged);
         };
 
+        self.move_message_to(db, message_id, &trash.path)?;
+        // The server copy now lives in Trash; the local row belongs to the
+        // source folder and is gone from it. Syncing Trash pulls it back.
+        Ok(TrashOutcome::Moved(trash.path))
+    }
+
+    /// Move one message to the account's Archive folder — the one-click
+    /// "archive" action. Creates the Archive folder server-side when the
+    /// account has none, so the button always works. Archiving from inside
+    /// Archive itself is a no-op reported as [`ArchiveOutcome::AlreadyThere`].
+    pub fn archive_message(&mut self, db: &Db, message_id: i64) -> Result<ArchiveOutcome> {
+        let message = messages::get(db, message_id)?;
+        let folder = folders::get(db, message.folder_id)?;
+
+        let archive = match folders::list_by_account(db, message.account_id)?
+            .into_iter()
+            .find(|f| f.role == FolderRole::Archive)
+        {
+            Some(a) => a,
+            None => {
+                log::info!("imap: no Archive folder, creating one");
+                let delim = folders::list_by_account(db, message.account_id)
+                    .ok()
+                    .and_then(|fs| fs.first().map(|f| f.delimiter.clone()))
+                    .unwrap_or_else(|| "/".to_string());
+                self.create_folder_path(db, message.account_id, "Archive", &delim)?
+            }
+        };
+        if archive.id == folder.id {
+            return Ok(ArchiveOutcome::AlreadyThere);
+        }
+        self.move_message_to(db, message_id, &archive.path)?;
+        Ok(ArchiveOutcome::Moved(archive.path))
+    }
+
+    /// Move one message to an arbitrary folder of the same account — the
+    /// "move to…" action. Moving into the folder it already lives in is a no-op
+    /// reported as [`MoveOutcome::AlreadyThere`]. Subfolders work like any other
+    /// path (their hierarchy separator is part of the stored path).
+    pub fn move_to_folder(
+        &mut self,
+        db: &Db,
+        message_id: i64,
+        dest_id: i64,
+    ) -> Result<MoveOutcome> {
+        let message = messages::get(db, message_id)?;
+        let folder = folders::get(db, message.folder_id)?;
+        let dest = folders::get(db, dest_id)?;
+        if dest.account_id != message.account_id {
+            return Err(StoreError::InvalidInput(
+                "destination folder belongs to another account".to_string(),
+            ));
+        }
+        if dest.id == folder.id {
+            return Ok(MoveOutcome::AlreadyThere);
+        }
+        self.move_message_to(db, message_id, &dest.path)?;
+        Ok(MoveOutcome::Moved(dest.path))
+    }
+
+    /// Server-side move of one message into `dest_path` (plus local row
+    /// delete). Shared by trash and archive; prefers `UID MOVE`, falls back
+    /// to `COPY` + `\Deleted` + `EXPUNGE`.
+    fn move_message_to(&mut self, db: &Db, message_id: i64, dest_path: &str) -> Result<()> {
+        let message = messages::get(db, message_id)?;
+        let folder = folders::get(db, message.folder_id)?;
         let has_move = self
             .session()?
             .capabilities()
@@ -206,16 +398,45 @@ impl ImapSync {
         session.select(&folder.path)?;
         let uid = message.uid.to_string();
         if has_move {
-            session.uid_mv(&uid, &trash.path)?;
+            session.uid_mv(&uid, dest_path)?;
         } else {
-            session.uid_copy(&uid, &trash.path)?;
+            session.uid_copy(&uid, dest_path)?;
             session.uid_store(&uid, "+FLAGS (\\Deleted)")?;
             session.expunge()?;
         }
-        // The server copy now lives in Trash; the local row belongs to the
-        // source folder and is gone from it. Syncing Trash pulls it back.
         messages::delete(db, message_id)?;
-        Ok(TrashOutcome::Moved(trash.path))
+        Ok(())
+    }
+
+    /// Create an IMAP mailbox (plus any missing parents) and register it
+    /// locally via folder discovery. Returns the created [`Folder`].
+    /// `delimiter` is the account's hierarchy separator (nested input like
+    /// `Work/Client` uses it); missing parents are created first so one call
+    /// creates the whole chain. An already-existing path is success, not an
+    /// error — discovery simply returns it.
+    pub fn create_folder_path(
+        &mut self,
+        db: &Db,
+        account_id: i64,
+        path: &str,
+        delimiter: &str,
+    ) -> Result<Folder> {
+        let normalized = normalize_folder_path(path, delimiter)?;
+        let mut prefix = String::new();
+        for segment in normalized.split(delimiter) {
+            if !prefix.is_empty() {
+                prefix.push_str(delimiter);
+            }
+            prefix.push_str(segment);
+            match self.session()?.create(&prefix) {
+                Ok(()) => log::info!("imap: created folder {prefix}"),
+                Err(e) if is_already_exists(&e) => log::debug!("imap: folder exists: {prefix}"),
+                Err(e) => return Err(e.into()),
+            }
+        }
+        self.sync_folders(db, account_id)?;
+        folders::get_by_path(db, account_id, &normalized)
+            .map_err(|_| StoreError::InvalidInput(format!("server did not list {normalized}")))
     }
 
     /// Permanently destroy one message server-side (`\Deleted` + expunge)
@@ -445,8 +666,69 @@ impl ImapSync {
 pub enum TrashOutcome {
     /// Moved to this folder path.
     Moved(String),
-    /// Destroyed: it was already in Trash, or the account has no Trash.
+    /// Destroyed: it was spam, already in Trash, or the account has no Trash.
     Expunged,
+}
+
+/// What [`ImapSync::archive_message`] actually did, so the UI can say so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArchiveOutcome {
+    /// Moved to this folder path.
+    Moved(String),
+    /// Already in Archive: nothing to do.
+    AlreadyThere,
+}
+
+/// What [`ImapSync::move_to_folder`] actually did, so the UI can say so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MoveOutcome {
+    /// Moved to this folder path.
+    Moved(String),
+    /// Already in that folder: nothing to do.
+    AlreadyThere,
+}
+
+/// Validate + normalize a user-typed folder path: trims whitespace, maps `/`
+/// separators onto the account's hierarchy `delimiter`, rejects empties,
+/// empty segments (`a//b`), and the LIST wildcards `*`/`%` (legal in theory,
+/// but they would corrupt our own subtree discovery patterns).
+pub fn normalize_folder_path(input: &str, delimiter: &str) -> Result<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(StoreError::InvalidInput("folder name is empty".to_string()));
+    }
+    if trimmed.contains('*') || trimmed.contains('%') {
+        return Err(StoreError::InvalidInput(
+            "folder names may not contain * or %".to_string(),
+        ));
+    }
+    let unified = if delimiter != "/" {
+        trimmed.replace('/', delimiter)
+    } else {
+        trimmed.to_string()
+    };
+    let segments: Vec<&str> = unified.split(delimiter).map(str::trim).collect();
+    if segments.iter().any(|s| s.is_empty()) {
+        return Err(StoreError::InvalidInput(
+            "folder names may not be empty or contain empty levels".to_string(),
+        ));
+    }
+    if segments.iter().any(|s| s.chars().any(char::is_control)) {
+        return Err(StoreError::InvalidInput(
+            "folder names may not contain control characters".to_string(),
+        ));
+    }
+    Ok(segments.join(delimiter))
+}
+
+/// Best-effort "mailbox already exists" detection for CREATE races: servers
+/// word it differently (`ALREADYEXISTS`, `already exists`, `exists`), so a
+/// case-insensitive substring match beats an exact one.
+fn is_already_exists(e: &imap::Error) -> bool {
+    e.to_string()
+        .to_ascii_lowercase()
+        .contains("already exists")
+        || e.to_string().to_ascii_lowercase().contains("alreadyexists")
 }
 
 impl SyncProvider for ImapSync {
@@ -455,23 +737,163 @@ impl SyncProvider for ImapSync {
     }
 
     fn sync_folders(&mut self, db: &Db, account_id: i64) -> Result<Vec<Folder>> {
+        // Multi-pass discovery: a single `LIST "" "*"` misses folders on
+        // servers with restricted LIST output or namespace gaps (users kept
+        // seeing only the already-known folders, never e.g. Archive).
+        // Pass 1 = full recursive LIST, pass 2 = LSUB merge (subscribed
+        // folders some servers only report there), pass 3 = per-root subtree
+        // LIST for namespace roots the bare "*" didn't expand (both the
+        // reported delimiter and "." — Tobit David uses dotted prefixes),
+        // pass 4 = LIST inside every NAMESPACE prefix (personal/other/shared).
+        // First pass wins role mapping (it carries SPECIAL-USE); later passes
+        // only add names we haven't seen. Auxiliary passes never fail sync.
+        // Every first-seen entry is logged with its raw attributes so a
+        // short list can be traced to exactly what the server reported.
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut discovered: Vec<(String, String, FolderRole)> = Vec::new();
+        let mut consider =
+            |name: &str, delimiter: &str, role: FolderRole, attrs: &str, pass: &str| {
+                if seen.insert(name.to_string()) {
+                    log::info!(
+                        "imap: [{pass}] [{attrs}] delim={delimiter:?} {name} -> {}",
+                        role.as_str()
+                    );
+                    discovered.push((name.to_string(), delimiter.to_string(), role));
+                }
+            };
+
+        let mut list_count = 0usize;
+        let mut lsub_count = 0usize;
+        let mut subtree_count = 0usize;
+
+        // Pass 1: LIST "" "*".
         let names = self.session()?.list(Some(""), Some("*"))?;
-        let mut out = Vec::new();
-        let mut count = 0u64;
         for n in names.iter() {
             if !is_selectable(n.attributes()) {
                 log::debug!("imap: skipping non-selectable {}", n.name());
                 continue;
             }
-            let role = map_folder_role(n.attributes(), n.name());
-            let delimiter = n.delimiter().unwrap_or("/");
-            let id = folders::upsert(db, account_id, n.name(), delimiter, role)?;
-            log::info!("imap: folder {} -> {}", n.name(), role.as_str());
-            out.push(folders::get(db, id)?);
-            count += 1;
+            consider(
+                n.name(),
+                n.delimiter().unwrap_or("/"),
+                map_folder_role(n.attributes(), n.name()),
+                &attr_text(n.attributes()),
+                "LIST",
+            );
+            list_count += 1;
         }
-        log::info!("imap: {count} folders");
-        let _ = count;
+
+        // Pass 2: LSUB "" "*" (best effort).
+        match self.session()?.lsub(Some(""), Some("*")) {
+            Ok(subs) => {
+                for n in subs.iter() {
+                    if !is_selectable(n.attributes()) {
+                        continue;
+                    }
+                    consider(
+                        n.name(),
+                        n.delimiter().unwrap_or("/"),
+                        role_from_name(n.name()),
+                        &attr_text(n.attributes()),
+                        "LSUB",
+                    );
+                    lsub_count += 1;
+                }
+            }
+            Err(e) => log::warn!("imap: LSUB failed, continuing with LIST results: {e}"),
+        }
+
+        // Pass 3: subtree LIST per top-level root (best effort, capped).
+        // Both the reported delimiter and "." are tried: Tobit David serves
+        // dotted hierarchies (INBOX.Archive) that a "/"-joined pattern misses.
+        match self.session()?.list(Some(""), Some("%")) {
+            Ok(roots) => {
+                for root in roots.iter().take(64) {
+                    let delim = root.delimiter().unwrap_or("/");
+                    let base = root.name();
+                    if base.is_empty() {
+                        continue;
+                    }
+                    let join = |d: &str| {
+                        if base.ends_with(d) {
+                            format!("{base}*")
+                        } else {
+                            format!("{base}{d}*")
+                        }
+                    };
+                    let mut patterns = vec![join(delim)];
+                    if delim != "." {
+                        patterns.push(join("."));
+                    }
+                    for pattern in patterns {
+                        match self.session()?.list(Some(""), Some(pattern.as_str())) {
+                            Ok(children) => {
+                                for n in children.iter() {
+                                    if !is_selectable(n.attributes()) {
+                                        continue;
+                                    }
+                                    consider(
+                                        n.name(),
+                                        n.delimiter().unwrap_or("/"),
+                                        map_folder_role(n.attributes(), n.name()),
+                                        &attr_text(n.attributes()),
+                                        "SUBTREE",
+                                    );
+                                    subtree_count += 1;
+                                }
+                            }
+                            Err(e) => log::debug!("imap: subtree LIST {pattern} failed: {e}"),
+                        }
+                    }
+                }
+            }
+            Err(e) => log::debug!("imap: root LIST failed, skipping subtree pass: {e}"),
+        }
+
+        // Pass 4: LIST inside every NAMESPACE prefix (best effort, capped).
+        // Shared / other-users' branches live outside "" and never appear in
+        // passes 1–3; the server tells us where via RFC 2342 (when it bothers).
+        let ns = query_namespaces(self.session()?);
+        let mut ns_count = 0usize;
+        for prefix in ns
+            .personal
+            .iter()
+            .chain(ns.other.iter())
+            .chain(ns.shared.iter())
+            .map(|(p, _)| p)
+            .filter(|p| !p.is_empty())
+            .take(12)
+        {
+            match self.session()?.list(Some(prefix.as_str()), Some("*")) {
+                Ok(extra) => {
+                    for n in extra.iter() {
+                        if !is_selectable(n.attributes()) {
+                            continue;
+                        }
+                        consider(
+                            n.name(),
+                            n.delimiter().unwrap_or("/"),
+                            map_folder_role(n.attributes(), n.name()),
+                            &attr_text(n.attributes()),
+                            "NAMESPACE",
+                        );
+                        ns_count += 1;
+                    }
+                }
+                Err(e) => log::debug!("imap: namespace LIST {prefix:?} failed: {e}"),
+            }
+        }
+
+        log::info!(
+            "imap: discovery LIST*={list_count} LSUB={lsub_count} subtrees={subtree_count} namespaces={ns_count} merged={}",
+            discovered.len()
+        );
+        let mut out = Vec::new();
+        for (path, delimiter, role) in &discovered {
+            let id = folders::upsert(db, account_id, path, delimiter, *role)?;
+            out.push(folders::get(db, id)?);
+        }
+        log::info!("imap: {} folders", out.len());
         Ok(out)
     }
 
@@ -623,6 +1045,26 @@ mod tests {
     }
 
     #[test]
+    fn folder_path_normalization() {
+        assert_eq!(normalize_folder_path("  Work  ", "/").unwrap(), "Work");
+        assert_eq!(
+            normalize_folder_path("Work/Client", "/").unwrap(),
+            "Work/Client"
+        );
+        // "/" maps onto dotted hierarchies (Tobit David).
+        assert_eq!(
+            normalize_folder_path("Work/Client", ".").unwrap(),
+            "Work.Client"
+        );
+        assert!(normalize_folder_path("", "/").is_err());
+        assert!(normalize_folder_path("   ", "/").is_err());
+        assert!(normalize_folder_path("a//b", "/").is_err());
+        assert!(normalize_folder_path("/Lead", "/").is_err());
+        assert!(normalize_folder_path("100% x", "/").is_err());
+        assert!(normalize_folder_path("a*b", "/").is_err());
+    }
+
+    #[test]
     fn role_heuristics_cover_german_and_english_names() {
         assert_eq!(role_from_name("INBOX"), FolderRole::Inbox);
         assert_eq!(role_from_name("INBOX.Gesendet"), FolderRole::Sent);
@@ -633,5 +1075,84 @@ mod tests {
         assert_eq!(role_from_name("Archiv"), FolderRole::Archive);
         assert_eq!(role_from_name("INBOX.Projekte.Kunde"), FolderRole::Custom);
         assert_eq!(role_from_name("Family"), FolderRole::Custom);
+    }
+
+    #[test]
+    fn namespace_parser_survives_hostile_bytes() {
+        // Fuzz the NAMESPACE parser with adversarial inputs: it must never
+        // panic, only return partial/empty results. (A startup-sync abort was
+        // traced to this code path against a quirky groupware server.)
+        let mut state: u64 = 0x12345678abcdef;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let pieces: &[&[u8]] = &[
+            b"* NAMESPACE ",
+            b"((",
+            b"))",
+            b"(",
+            b")",
+            b"\"\"",
+            b"\"/\"",
+            b"\".\"",
+            b"\"INBOX.\"",
+            b"NIL",
+            b"N",
+            b"NI",
+            b" ",
+            b"\"",
+            b"\\",
+            b"\\\"",
+            b"\xc3\xa4",
+            b"\xff\xfe",
+            b"\x80",
+            b"A",
+            b"*",
+        ];
+        for _ in 0..50_000 {
+            let mut buf = Vec::new();
+            let n = (next() % 8) as usize;
+            for _ in 0..n {
+                buf.extend_from_slice(pieces[(next() % pieces.len() as u64) as usize]);
+            }
+            let _ = parse_namespace_response(&buf);
+        }
+    }
+
+    #[test]
+    fn namespace_response_parses_three_groups() {
+        let raw =
+            b"* NAMESPACE ((\"\" \"/\")) ((\"Other Users/\" \"/\")) ((\"Shared/\" \"/\"))\r\n\
+            a001 OK done\r\n";
+        let ns = parse_namespace_response(raw);
+        assert_eq!(ns.personal, vec![("".to_string(), Some("/".to_string()))]);
+        assert_eq!(
+            ns.other,
+            vec![("Other Users/".to_string(), Some("/".to_string()))]
+        );
+        assert_eq!(
+            ns.shared,
+            vec![("Shared/".to_string(), Some("/".to_string()))]
+        );
+    }
+
+    #[test]
+    fn namespace_response_tolerates_nil_and_garbage() {
+        let raw = b"* NAMESPACE ((\"INBOX.\" \".\")) NIL NIL\r\n";
+        let ns = parse_namespace_response(raw);
+        assert_eq!(
+            ns.personal,
+            vec![("INBOX.".to_string(), Some(".".to_string()))]
+        );
+        assert!(ns.other.is_empty() && ns.shared.is_empty());
+
+        assert_eq!(
+            parse_namespace_response(b"a001 BAD no\r\n"),
+            Namespaces::default()
+        );
+        assert_eq!(parse_namespace_response(b""), Namespaces::default());
     }
 }

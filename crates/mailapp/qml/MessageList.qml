@@ -32,6 +32,7 @@ Rectangle {
 
     signal messageSelected(int uid)
     signal starToggled(int uid)
+    signal archiveRequested(int uid)
     signal deleteRequested(int uid)
     signal purgeRequested(int uid)
     signal loadOlderRequested()
@@ -348,6 +349,10 @@ Rectangle {
         MenuItem {
             text: root.menuStarred ? qsTr("Remove star") : qsTr("Star")
             onTriggered: root.emitLater(root.starToggled, root.menuUid)
+        }
+        MenuItem {
+            text: qsTr("Archive")
+            onTriggered: root.emitLater(root.archiveRequested, root.menuUid)
         }
         MenuItem {
             text: qsTr("Move to Trash")

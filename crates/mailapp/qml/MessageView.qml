@@ -28,6 +28,7 @@ Rectangle {
     signal replyAllRequested()
     signal forwardRequested()
     signal starRequested()
+    signal archiveRequested()
     signal deleteRequested()
     signal statusMessage(string text)
 
@@ -190,6 +191,11 @@ Rectangle {
                         contentColor: root.message && root.message.starred ? Theme.star : Theme.text
                         tooltip: qsTr("Star (S)")
                         onClicked: root.starRequested()
+                    }
+                    IconButton {
+                        text: "🗄"
+                        tooltip: qsTr("Archive (A)")
+                        onClicked: root.archiveRequested()
                     }
                     IconButton {
                         text: "🗑"

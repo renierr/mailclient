@@ -21,9 +21,12 @@ pub fn folders_json(db: &Db, account_id: i64) -> Result<String> {
             "name": f.path,
             "role": f.role.as_str(),
             "unread": messages::count_unread(db, f.id)?,
-            // Sidebar visibility toggle + cached total (see Folders dialog).
+            // Sidebar visibility toggle + cached total (see Folders dialog),
+            // plus the hierarchy delimiter so the move picker can indent
+            // subfolders (depth = segments - 1).
             "subscribed": f.subscribed,
             "count": messages::count_by_folder(db, f.id)?,
+            "delimiter": f.delimiter,
         }));
     }
     Ok(serde_json::to_string(&arr)?)
@@ -318,6 +321,7 @@ mod tests {
             serde_json::from_str(&folders_json(&db, acc).unwrap()).unwrap();
         assert_eq!(folders[0]["subscribed"], true);
         assert_eq!(folders[0]["count"], 0);
+        assert_eq!(folders[0]["delimiter"], "/");
         let m = msg_store::sample_new(acc, f, 21);
         msg_store::upsert(&db, &m).unwrap();
         let folders2: serde_json::Value =

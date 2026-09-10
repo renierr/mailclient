@@ -128,11 +128,31 @@ pub mod qobject {
         #[qinvokable]
         fn toggle_star(self: Pin<&mut Self>, uid: i32) -> QString;
 
-        /// Move a message to Trash (what the delete action means). Returns
-        /// `"Moved to <folder>"`, or `"Deleted permanently"` when it was
-        /// already in Trash / the account has none, else an error message.
+        /// Move a message to Trash (what the delete action means), except:
+        /// spam is destroyed immediately (junk never touches Trash) and so is
+        /// anything deleted from inside Trash itself. Returns `"Moved to
+        /// <folder>"`, or `"Deleted permanently"` for both destroy cases.
         #[qinvokable]
         fn delete_message(self: Pin<&mut Self>, uid: i32) -> QString;
+
+        /// Move a message to the Archive folder (one-click archive).
+        /// Creates the Archive folder server-side when the account has none.
+        /// Returns `"Archived to <folder>"` or `"Already in Archive"`.
+        #[qinvokable]
+        fn archive_message(self: Pin<&mut Self>, uid: i32) -> QString;
+
+        /// Move a message to any folder of the same account (by path,
+        /// subfolders included — hierarchy is part of the path).
+        /// Returns `"Moved to <folder>"` or `"Already here"`.
+        #[qinvokable]
+        fn move_message(self: Pin<&mut Self>, uid: i32, path: &QString) -> QString;
+
+        /// Create an IMAP folder (`/` separates levels, e.g. `Work/Client`;
+        /// mapped onto the account's hierarchy delimiter). Missing parents
+        /// are created too; an existing path is success. Returns `"Created
+        /// <path>"`, `"Folder already exists"`, or an error message.
+        #[qinvokable]
+        fn create_folder(self: Pin<&mut Self>, path: &QString) -> QString;
 
         /// Destroy a message server-side (`\Deleted` + expunge). No undo;
         /// only for an explicit "delete permanently" action.
@@ -175,7 +195,8 @@ use cxx_qt_lib::QString;
 use mailcore::models::NewAccount;
 use mailcore::store::{accounts, folders, messages};
 use mailcore::sync::imap::{
-    ImapSync, TrashOutcome, FULL_SYNC_WINDOW, OLDER_BATCH, QUICK_SYNC_WINDOW,
+    ArchiveOutcome, ImapSync, MoveOutcome, TrashOutcome, FULL_SYNC_WINDOW, OLDER_BATCH,
+    QUICK_SYNC_WINDOW,
 };
 use mailcore::sync::sender::{SendFormat, SendPolicy, SendRequest, SmtpSender};
 use mailcore::sync::traits::{MailSender, SyncProvider};
@@ -286,6 +307,27 @@ fn imap_session(account: &mailcore::models::Account) -> Result<ImapSync, String>
     imap.connect(&secrets.imap_password)
         .map_err(|e| e.to_string())?;
     Ok(imap)
+}
+
+/// Run a fallible sync action, converting a Rust panic into an error string.
+///
+/// cxx turns any panic crossing the QML bridge into SIGABRT (its Guard
+/// double-panics by design), which kills the app on something as routine as
+/// startup auto-sync. A sync panic must surface as a status message instead —
+/// the failure is logged with its payload for diagnosis.
+fn guard_sync(label: &str, f: impl FnOnce() -> Result<String, String>) -> Result<String, String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(r) => r,
+        Err(payload) => {
+            let detail = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "unknown cause".to_string());
+            log::error!("{label} aborted by panic: {detail}");
+            Err(format!("{label} hit an internal error ({detail})"))
+        }
+    }
 }
 
 impl qobject::Bridge {
@@ -525,7 +567,7 @@ impl qobject::Bridge {
             Err(e) => return qstring(&e),
         };
         let wanted = *self.current_account_id();
-        let result: Result<String, String> = (|| {
+        let result = guard_sync("Sync", || {
             let acc = current_account(&db, wanted)?;
             let mut imap = imap_session(&acc)?;
             // Push locally queued read/star changes first, so the fetch below
@@ -598,7 +640,7 @@ impl qobject::Bridge {
                 "Synced {} folders: +{fetched} new, -{expunged} removed{flags}{scope}{hidden}",
                 folders.len()
             ))
-        })();
+        });
         match result {
             Ok(s) => qstring(&s),
             Err(e) => qstring(&e),
@@ -611,7 +653,7 @@ impl qobject::Bridge {
             Err(e) => return qstring(&e),
         };
         let wanted = *self.current_account_id();
-        let result: Result<String, String> = (|| {
+        let result = guard_sync("Sync", || {
             let acc = current_account(&db, wanted)?;
             let folder =
                 folders::get_by_path(&db, acc.id, &path.to_string()).map_err(|e| e.to_string())?;
@@ -633,7 +675,7 @@ impl qobject::Bridge {
                 "Synced {}: +{} new, -{} removed",
                 folder.path, r.fetched, r.expunged
             ))
-        })();
+        });
         match result {
             Ok(s) => qstring(&s),
             Err(e) => qstring(&e),
@@ -650,7 +692,7 @@ impl qobject::Bridge {
         if folder_id < 0 {
             return qstring("no folder selected");
         }
-        let result: Result<String, String> = (|| {
+        let result = guard_sync("Sync", || {
             let acc = current_account(&db, wanted)?;
             // Sanity: the folder must belong to this account.
             let folder = folders::get(&db, folder_id).map_err(|e| e.to_string())?;
@@ -672,7 +714,7 @@ impl qobject::Bridge {
             } else {
                 Ok("Caught up — no older messages on the server".to_string())
             }
-        })();
+        });
         match result {
             Ok(s) => qstring(&s),
             Err(e) => qstring(&e),
@@ -685,7 +727,7 @@ impl qobject::Bridge {
             Err(e) => return qstring(&e),
         };
         let wanted = *self.current_account_id();
-        let result: Result<String, String> = (|| {
+        let result = guard_sync("Sync", || {
             let acc = current_account(&db, wanted)?;
             let mut imap = imap_session(&acc)?;
             let list = imap.sync_folders(&db, acc.id).map_err(|e| e.to_string())?;
@@ -704,7 +746,7 @@ impl qobject::Bridge {
             };
             push_feeds(&mut self, &db, acc.id, folder_id);
             Ok(format!("Found {} IMAP folders", list.len()))
-        })();
+        });
         match result {
             Ok(s) => qstring(&s),
             Err(e) => qstring(&e),
@@ -805,61 +847,137 @@ impl qobject::Bridge {
     }
 
     pub fn delete_message(mut self: Pin<&mut Self>, uid: i32) -> QString {
-        let db = match open_db() {
-            Ok(d) => d,
-            Err(e) => return qstring(&e),
-        };
-        let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
-        let Ok(msg) = messages::get_by_uid(&db, folder_id, uid as u32) else {
-            return qstring("");
-        };
-        let acc = match accounts::get(&db, acc_id) {
-            Ok(a) => a,
-            Err(e) => return qstring(&e.to_string()),
-        };
-        let mut imap = match imap_session(&acc) {
-            Ok(s) => s,
-            Err(e) => return qstring(&e),
-        };
-        let r = imap.trash_message(&db, msg.id).map_err(|e| e.to_string());
-        imap.disconnect();
-        let outcome = match r {
-            Ok(o) => o,
-            Err(e) => return qstring(&e),
-        };
-        push_feeds(&mut self, &db, acc_id, folder_id);
-        // Reported, not silent: "deleted permanently" is a different promise
-        // from "moved to Trash" and the user needs to know which happened.
-        match outcome {
-            TrashOutcome::Moved(path) => qstring(&format!("Moved to {path}")),
-            TrashOutcome::Expunged => qstring("Deleted permanently"),
+        // Guarded: any panic becomes a status message, never SIGABRT.
+        let result = guard_sync("Delete", || {
+            let db = open_db()?;
+            let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+            let msg =
+                messages::get_by_uid(&db, folder_id, uid as u32).map_err(|_| String::new())?;
+            let acc = accounts::get(&db, acc_id).map_err(|e| e.to_string())?;
+            let mut imap = imap_session(&acc)?;
+            let r = imap.trash_message(&db, msg.id).map_err(|e| e.to_string());
+            imap.disconnect();
+            let outcome = r?;
+            push_feeds(&mut self, &db, acc_id, folder_id);
+            // Reported, not silent: "deleted permanently" is a different promise
+            // from "moved to Trash" and the user needs to know which happened.
+            Ok(match outcome {
+                TrashOutcome::Moved(path) => format!("Moved to {path}"),
+                TrashOutcome::Expunged => "Deleted permanently".to_string(),
+            })
+        });
+        match result {
+            Ok(s) => qstring(&s),
+            Err(e) => qstring(&e),
+        }
+    }
+
+    pub fn archive_message(mut self: Pin<&mut Self>, uid: i32) -> QString {
+        // Guarded: any panic becomes a status message, never SIGABRT.
+        let result = guard_sync("Archive", || {
+            let db = open_db()?;
+            let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+            let msg =
+                messages::get_by_uid(&db, folder_id, uid as u32).map_err(|_| String::new())?;
+            let acc = accounts::get(&db, acc_id).map_err(|e| e.to_string())?;
+            let mut imap = imap_session(&acc)?;
+            let r = imap.archive_message(&db, msg.id).map_err(|e| e.to_string());
+            imap.disconnect();
+            let outcome = r?;
+            push_feeds(&mut self, &db, acc_id, folder_id);
+            Ok(match outcome {
+                ArchiveOutcome::Moved(path) => format!("Archived to {path}"),
+                ArchiveOutcome::AlreadyThere => "Already in Archive".to_string(),
+            })
+        });
+        match result {
+            Ok(s) => qstring(&s),
+            Err(e) => qstring(&e),
+        }
+    }
+
+    pub fn move_message(mut self: Pin<&mut Self>, uid: i32, path: &QString) -> QString {
+        // Guarded: any panic becomes a status message, never SIGABRT.
+        let wanted = *self.current_account_id();
+        let current = *self.current_folder_id();
+        let path = path.to_string();
+        let result = guard_sync("Move", || {
+            let db = open_db()?;
+            let acc = current_account(&db, wanted)?;
+            let msg = messages::get_by_uid(&db, current, uid as u32).map_err(|_| String::new())?;
+            let dest = folders::get_by_path(&db, acc.id, &path).map_err(|e| e.to_string())?;
+            let mut imap = imap_session(&acc)?;
+            let r = imap
+                .move_to_folder(&db, msg.id, dest.id)
+                .map_err(|e| e.to_string());
+            imap.disconnect();
+            let outcome = r?;
+            push_feeds(&mut self, &db, acc.id, current);
+            Ok(match outcome {
+                MoveOutcome::Moved(path) => format!("Moved to {path}"),
+                MoveOutcome::AlreadyThere => "Already here".to_string(),
+            })
+        });
+        match result {
+            Ok(s) => qstring(&s),
+            Err(e) => qstring(&e),
+        }
+    }
+
+    pub fn create_folder(mut self: Pin<&mut Self>, path: &QString) -> QString {
+        // Guarded: any panic becomes a status message, never SIGABRT.
+        let wanted = *self.current_account_id();
+        let current = *self.current_folder_id();
+        let path = path.to_string();
+        let result = guard_sync("Sync", || {
+            let db = open_db()?;
+            let acc = current_account(&db, wanted)?;
+            // Already known locally (same normalized path) = success.
+            let delimiter = folders::list_by_account(&db, acc.id)
+                .unwrap_or_default()
+                .first()
+                .map(|f| f.delimiter.clone())
+                .unwrap_or_else(|| "/".to_string());
+            let normalized =
+                mailcore::sync::imap::normalize_folder_path(&path.to_string(), &delimiter)
+                    .map_err(|e| e.to_string())?;
+            if folders::get_by_path(&db, acc.id, &normalized).is_ok() {
+                push_feeds(&mut self, &db, acc.id, current);
+                return Ok("Folder already exists".to_string());
+            }
+            let mut imap = imap_session(&acc)?;
+            let folder = imap
+                .create_folder_path(&db, acc.id, &normalized, &delimiter)
+                .map_err(|e| e.to_string())?;
+            imap.disconnect();
+            push_feeds(&mut self, &db, acc.id, current);
+            Ok(format!("Created {}", folder.path))
+        });
+        match result {
+            Ok(s) => qstring(&s),
+            Err(e) => qstring(&e),
         }
     }
 
     pub fn purge_message(mut self: Pin<&mut Self>, uid: i32) -> QString {
-        let db = match open_db() {
-            Ok(d) => d,
-            Err(e) => return qstring(&e),
-        };
-        let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
-        let Ok(msg) = messages::get_by_uid(&db, folder_id, uid as u32) else {
-            return qstring("");
-        };
-        let acc = match accounts::get(&db, acc_id) {
-            Ok(a) => a,
-            Err(e) => return qstring(&e.to_string()),
-        };
-        let mut imap = match imap_session(&acc) {
-            Ok(s) => s,
-            Err(e) => return qstring(&e),
-        };
-        let r = imap.delete_message(&db, msg.id).map_err(|e| e.to_string());
-        imap.disconnect();
-        if let Err(e) = r {
-            return qstring(&e);
+        // Guarded: any panic becomes a status message, never SIGABRT.
+        let result = guard_sync("Delete", || {
+            let db = open_db()?;
+            let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+            let msg =
+                messages::get_by_uid(&db, folder_id, uid as u32).map_err(|_| String::new())?;
+            let acc = accounts::get(&db, acc_id).map_err(|e| e.to_string())?;
+            let mut imap = imap_session(&acc)?;
+            let r = imap.delete_message(&db, msg.id).map_err(|e| e.to_string());
+            imap.disconnect();
+            r?;
+            push_feeds(&mut self, &db, acc_id, folder_id);
+            Ok("Deleted permanently".to_string())
+        });
+        match result {
+            Ok(s) => qstring(&s),
+            Err(e) => qstring(&e),
         }
-        push_feeds(&mut self, &db, acc_id, folder_id);
-        qstring("Deleted permanently")
     }
 
     pub fn send_mail(mut self: Pin<&mut Self>, form: &QString) -> QString {
@@ -905,57 +1023,54 @@ impl qobject::Bridge {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        let db = match open_db() {
-            Ok(d) => d,
-            Err(e) => return qstring(&e),
-        };
-        let wanted = *self.current_account_id();
-        let acc = match current_account(&db, wanted) {
-            Ok(a) => a,
-            Err(e) => return qstring(&e),
-        };
-        let secrets = match auth::load_account_secrets(&acc.auth_vault_key) {
-            Ok(s) => s,
-            Err(e) => return qstring(&format!("no password in keyring: {e}")),
-        };
-        let mut sender = SmtpSender::new(&acc);
-        // Interactive Send click = explicit user consent (see SendPolicy docs).
-        // Resilient: unknown setting values fall back to multipart.
-        let format = SendFormat::parse(&mailcore::store::settings::get_send_format(&db));
-        let req = SendRequest {
-            to: &to,
-            cc: &cc,
-            from,
-            subject: &subject,
-            body_text: &body,
-            body_html: body_html.as_deref(),
-            format,
-            policy: &SendPolicy::Unrestricted,
-            password: &secrets.smtp_password,
-            imap_password: Some(&secrets.imap_password),
-        };
-        match sender.send_raw(&db, acc.id, &req) {
-            Ok(()) => {
-                // Refresh after send: the SMTP + APPEND already happened, so
-                // pull the Sent copy (if enabled) best-effort — offline or
-                // server hiccup must never fail a successful send.
-                if let Ok(sent) = folders::list_by_account(&db, acc.id)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .find(|f| f.role == mailcore::models::FolderRole::Sent)
-                    .map(|f| f.id)
-                    .ok_or(())
-                {
-                    if let Ok(mut imap) = imap_session(&acc) {
-                        let _ = imap.sync_folder_window(&db, sent, Some(QUICK_SYNC_WINDOW));
-                        imap.disconnect();
-                    }
+        // Guarded: any panic becomes a status message, never SIGABRT.
+        let result = guard_sync("Send", || {
+            let db = open_db()?;
+            let wanted = *self.current_account_id();
+            let acc = current_account(&db, wanted)?;
+            let secrets = auth::load_account_secrets(&acc.auth_vault_key)
+                .map_err(|e| format!("no password in keyring: {e}"))?;
+            let mut sender = SmtpSender::new(&acc);
+            // Interactive Send click = explicit user consent (see SendPolicy docs).
+            // Resilient: unknown setting values fall back to multipart.
+            let format = SendFormat::parse(&mailcore::store::settings::get_send_format(&db));
+            let req = SendRequest {
+                to: &to,
+                cc: &cc,
+                from,
+                subject: &subject,
+                body_text: &body,
+                body_html: body_html.as_deref(),
+                format,
+                policy: &SendPolicy::Unrestricted,
+                password: &secrets.smtp_password,
+                imap_password: Some(&secrets.imap_password),
+            };
+            sender
+                .send_raw(&db, acc.id, &req)
+                .map_err(|e| e.to_string())?;
+            // Refresh after send: the SMTP + APPEND already happened, so
+            // pull the Sent copy (if enabled) best-effort — offline or
+            // server hiccup must never fail a successful send.
+            if let Ok(sent) = folders::list_by_account(&db, acc.id)
+                .unwrap_or_default()
+                .into_iter()
+                .find(|f| f.role == mailcore::models::FolderRole::Sent)
+                .map(|f| f.id)
+                .ok_or(())
+            {
+                if let Ok(mut imap) = imap_session(&acc) {
+                    let _ = imap.sync_folder_window(&db, sent, Some(QUICK_SYNC_WINDOW));
+                    imap.disconnect();
                 }
-                let folder_id = *self.current_folder_id();
-                push_feeds(&mut self, &db, acc.id, folder_id);
-                qstring("")
             }
-            Err(e) => qstring(&e.to_string()),
+            let folder_id = *self.current_folder_id();
+            push_feeds(&mut self, &db, acc.id, folder_id);
+            Ok(String::new())
+        });
+        match result {
+            Ok(s) => qstring(&s),
+            Err(e) => qstring(&e),
         }
     }
 }
