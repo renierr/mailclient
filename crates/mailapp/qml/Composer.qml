@@ -2,6 +2,9 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
+import Mailclient
+import "components"
+
 // Compose dialog: WYSIWYG TextArea (RichText) + HTML-source toggle.
 // Sends rich HTML source as `body`/`body_html`; Rust (`resolve_bodies` +
 // `compose_send_format` setting) derives plain/multipart resiliently and
@@ -13,14 +16,33 @@ Dialog {
     width: Math.min(parent ? parent.width - 80 : 720, 720)
     height: Math.min(parent ? parent.height - 80 : 600, 600)
     anchors.centerIn: parent
-    standardButtons: Dialog.Cancel
 
     signal statusMessage(string text)
     signal sendRequested(string payload)
 
+    background: Rectangle {
+        color: Theme.bg
+        radius: Theme.radiusLg
+        border.width: 1
+        border.color: Theme.border
+    }
+
     property string accountEmail: ""
     property string sendFormat: "multipart"
     property bool sourceMode: false
+
+    // Flaw F5: Cancel used to throw the draft away silently. Everything the
+    // user typed sets this, and closing then asks first.
+    property bool dirty: false
+
+    function markClean() { root.dirty = false }
+
+    function requestClose() {
+        if (root.dirty)
+            discardConfirm.open()
+        else
+            root.close()
+    }
 
     function plainToHtmlQuote(t) {
         var esc = t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -37,6 +59,7 @@ Dialog {
             bodyArea.text = "<p></p><p>—</p>" + plainToHtmlQuote("On " + (message.date || "") + ", " + (message.from || "") + " wrote:\n" + q)
         }
         root.sourceMode = false
+        root.markClean()
         open()
     }
 
@@ -52,6 +75,20 @@ Dialog {
                 + (message.subject || "") + "</p>" + plainToHtmlQuote(q)
         }
         root.sourceMode = false
+        root.markClean()
+        open()
+    }
+
+    // A fresh compose must not inherit the previous message's text.
+    function openBlank() {
+        fromField.text = root.accountEmail
+        toField.text = ""
+        ccField.text = ""
+        subjectField.text = ""
+        bodyArea.text = ""
+        sourceArea.text = ""
+        root.sourceMode = false
+        root.markClean()
         open()
     }
 
@@ -112,25 +149,35 @@ Dialog {
         anchors.fill: parent
         spacing: 8
 
-        TextField {
+        // Flaw F4: these were placeholder-only, so the fields read as blank
+        // boxes once filled in. Every field is labelled now.
+        FormField {
             id: fromField
             Layout.fillWidth: true
-            placeholderText: qsTr("From (defaults to account email)")
+            label: qsTr("From")
+            placeholderText: qsTr("defaults to the account address")
+            onTextChanged: root.dirty = true
         }
-        TextField {
+        FormField {
             id: toField
             Layout.fillWidth: true
-            placeholderText: qsTr("To (comma separated)")
+            label: qsTr("To")
+            required: true
+            placeholderText: qsTr("name@example.com, second@example.com")
+            onTextChanged: root.dirty = true
         }
-        TextField {
+        FormField {
             id: ccField
             Layout.fillWidth: true
-            placeholderText: qsTr("Cc (optional, comma separated)")
+            label: qsTr("Cc")
+            placeholderText: qsTr("optional, comma separated")
+            onTextChanged: root.dirty = true
         }
-        TextField {
+        FormField {
             id: subjectField
             Layout.fillWidth: true
-            placeholderText: qsTr("Subject")
+            label: qsTr("Subject")
+            onTextChanged: root.dirty = true
         }
 
         RowLayout {
@@ -204,6 +251,8 @@ Dialog {
                 wrapMode: TextArea.Wrap
                 textFormat: TextArea.RichText
                 selectByMouse: true
+                color: Theme.text
+                onTextChanged: root.dirty = true
             }
         }
 
@@ -219,23 +268,70 @@ Dialog {
                 textFormat: TextArea.PlainText
                 font.family: "monospace"
                 selectByMouse: true
+                color: Theme.text
+                onTextChanged: root.dirty = true
             }
         }
 
         RowLayout {
-            Layout.alignment: Qt.AlignRight
+            Layout.fillWidth: true
+            spacing: Theme.sm
+            Label {
+                text: root.dirty ? qsTr("Unsaved draft") : ""
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontTiny
+            }
+            Item { Layout.fillWidth: true }
+            Button {
+                text: qsTr("Discard")
+                onClicked: root.requestClose()
+            }
             Button {
                 text: qsTr("Save draft")
                 onClicked: {
                     root.statusMessage(qsTr("Drafts land with the send path in M2"))
+                    root.markClean()
                     root.close()
                 }
             }
             Button {
                 text: qsTr("Send")
                 highlighted: true
+                enabled: toField.text.trim() !== ""
                 onClicked: root.sendRequested(root.collectPayload())
             }
+        }
+    }
+
+    // Flaw F5: never lose typed content without asking.
+    Dialog {
+        id: discardConfirm
+        title: qsTr("Discard draft?")
+        modal: true
+        anchors.centerIn: parent
+        width: 380
+        padding: Theme.lg
+        standardButtons: Dialog.Cancel | Dialog.Discard
+
+        background: Rectangle {
+            color: Theme.bg
+            radius: Theme.radiusLg
+            border.width: 1
+            border.color: Theme.border
+        }
+
+        onDiscarded: {
+            root.markClean()
+            discardConfirm.close()
+            root.close()
+        }
+
+        Label {
+            width: parent.width
+            wrapMode: Text.Wrap
+            color: Theme.text
+            font.pixelSize: Theme.fontBase
+            text: qsTr("This message has not been sent. Discard it?")
         }
     }
 }

@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -18,6 +18,10 @@ const SCHEMA_V2: &str = "create table if not exists settings (
     key   text primary key,
     value text not null
 );";
+
+/// v3 DDL: `messages.flags_dirty` — local read/star changes awaiting an IMAP
+/// push, so flag toggles never block the UI on the network.
+const SCHEMA_V3: &str = "alter table messages add column flags_dirty integer not null default 0;";
 
 /// Create or upgrade the database to [`SCHEMA_VERSION`].
 pub fn ensure_schema(conn: &Connection) -> Result<()> {
@@ -43,7 +47,10 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
     if current < 2 {
         conn.execute_batch(SCHEMA_V2)?;
     }
-    // Future: `if current < 3 { migrate_v3(conn)?; }` etc.
+    if current < 3 {
+        conn.execute_batch(SCHEMA_V3)?;
+    }
+    // Future: `if current < 4 { migrate_v4(conn)?; }` etc.
     if current != SCHEMA_VERSION {
         conn.execute(
             "update schema_meta set value = ?1 where key = 'version'",

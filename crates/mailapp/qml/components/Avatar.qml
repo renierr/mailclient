@@ -1,21 +1,26 @@
 import QtQuick
 
-// Circle with the sender's initial.
+import Mailclient
+
+// Circle with the sender's initial, coloured deterministically from the name.
 Rectangle {
     id: root
-    property string initials: "?"
 
-    width: 36
-    height: 36
-    radius: 18
-    opacity: 1
-    color: Qt.hsla(((initials.length > 0 ? initials.charCodeAt(0) : 63) * 47 % 360) / 360, 0.45, 0.55, 1)
+    property string initials: "?"
+    property string seed: initials
+
+    implicitWidth: 34
+    implicitHeight: 34
+    width: implicitWidth
+    height: implicitHeight
+    radius: width / 2
+    color: Theme.avatarColor(root.seed)
 
     Text {
         anchors.centerIn: parent
         text: root.initials
         color: "white"
         font.bold: true
-        font.pixelSize: 16
+        font.pixelSize: Math.round(root.width * 0.42)
     }
 }

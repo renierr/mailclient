@@ -25,6 +25,7 @@ pub mod qobject {
         #[qproperty(i64, current_account_id)]
         #[qproperty(i64, current_folder_id)]
         #[qproperty(QString, current_account_email)]
+        #[qproperty(QString, accounts_json)]
         #[namespace = "mailclient"]
         type Bridge = super::BridgeRust;
 
@@ -45,6 +46,20 @@ pub mod qobject {
         #[qinvokable]
         fn add_account(self: Pin<&mut Self>, form: &QString) -> QString;
 
+        /// Switch the active account and refresh the feeds.
+        #[qinvokable]
+        fn select_account(self: Pin<&mut Self>, id: i64) -> QString;
+
+        /// Delete an account with its folders/messages and keyring secrets.
+        /// Returns `""` or an error message.
+        #[qinvokable]
+        fn delete_account(self: Pin<&mut Self>, id: i64) -> QString;
+
+        /// One account as a JSON form for the edit dialog (no password —
+        /// secrets never leave the keyring). `{}` if the id is unknown.
+        #[qinvokable]
+        fn account_form(&self, id: i64) -> QString;
+
         /// Run a full IMAP sync for the current account (blocking).
         /// Returns a summary or an error message.
         #[qinvokable]
@@ -54,11 +69,13 @@ pub mod qobject {
         #[qinvokable]
         fn select_folder(self: Pin<&mut Self>, path: &QString) -> QString;
 
-        /// Mark a message read (locally + server flag push, best effort).
+        /// Mark a message read locally. Never touches the network: the flag
+        /// is queued (`flags_dirty`) and pushed by the next sync, so clicking
+        /// a message cannot block on IMAP.
         #[qinvokable]
         fn open_message(self: Pin<&mut Self>, uid: i32) -> QString;
 
-        /// Flip the starred flag (locally + server flag push, best effort).
+        /// Flip the starred flag locally; pushed by the next sync.
         #[qinvokable]
         fn toggle_star(self: Pin<&mut Self>, uid: i32) -> QString;
 
@@ -123,6 +140,7 @@ pub struct BridgeRust {
     current_account_id: i64,
     current_folder_id: i64,
     current_account_email: QString,
+    accounts_json: QString,
 }
 
 impl Default for BridgeRust {
@@ -135,6 +153,7 @@ impl Default for BridgeRust {
             current_account_id: -1,
             current_folder_id: -1,
             current_account_email: qstring(""),
+            accounts_json: qstring("[]"),
         }
     }
 }
@@ -160,6 +179,8 @@ fn push_feeds(
     bridge.as_mut().set_current_account_id(account_id);
     bridge.as_mut().set_current_folder_id(folder_id);
     bridge.as_mut().set_current_account_email(qstring(&email));
+    let accts = feed::accounts_json(db).unwrap_or_else(|_| "[]".to_string());
+    bridge.as_mut().set_accounts_json(qstring(&accts));
 }
 
 /// Resolve the current account: stored id if still present, else the first.
@@ -250,8 +271,8 @@ impl qobject::Bridge {
         let password = str_field("password");
         let smtp_host = str_field("smtp_host");
         let mut smtp_user = str_field("smtp_user");
-        if email.is_empty() || imap_host.is_empty() || password.is_empty() {
-            return qstring("fill email, IMAP host and password");
+        if email.is_empty() || imap_host.is_empty() {
+            return qstring("fill email and IMAP host");
         }
         if smtp_host.is_empty() {
             return qstring("fill the SMTP host");
@@ -289,16 +310,23 @@ impl qobject::Bridge {
                 if let Err(e) = accounts::update_connection(&db, existing.id, &form_account) {
                     return qstring(&e.to_string());
                 }
-                if let Err(e) = auth::save_account_secrets(
-                    &existing.auth_vault_key,
-                    &password,
-                    &str_field("smtp_password"),
-                ) {
-                    return qstring(&format!("keyring unavailable: {e}"));
+                // Blank password on an edit = keep the stored secret; the
+                // dialog never shows it, so re-typing must not be required.
+                if !password.is_empty() {
+                    if let Err(e) = auth::save_account_secrets(
+                        &existing.auth_vault_key,
+                        &password,
+                        &str_field("smtp_password"),
+                    ) {
+                        return qstring(&format!("keyring unavailable: {e}"));
+                    }
                 }
                 existing.id
             }
             None => {
+                if password.is_empty() {
+                    return qstring("a password is required for a new account");
+                }
                 let vault = auth::new_vault_key();
                 if let Err(e) =
                     auth::save_account_secrets(&vault, &password, &str_field("smtp_password"))
@@ -319,6 +347,88 @@ impl qobject::Bridge {
         qstring("")
     }
 
+    pub fn select_account(mut self: Pin<&mut Self>, id: i64) -> QString {
+        let db = match open_db() {
+            Ok(d) => d,
+            Err(e) => return qstring(&e),
+        };
+        let Ok(acc) = accounts::get(&db, id) else {
+            return qstring("unknown account");
+        };
+        // Prefer the inbox of the account we switch to.
+        let folder_id = folders::list_by_account(&db, acc.id)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|f| f.role == mailcore::models::FolderRole::Inbox)
+            .map(|f| f.id)
+            .unwrap_or(-1);
+        push_feeds(&mut self, &db, acc.id, folder_id);
+        qstring("")
+    }
+
+    pub fn delete_account(mut self: Pin<&mut Self>, id: i64) -> QString {
+        let db = match open_db() {
+            Ok(d) => d,
+            Err(e) => return qstring(&e),
+        };
+        let Ok(acc) = accounts::get(&db, id) else {
+            return qstring("unknown account");
+        };
+        // Drop the keyring entry first: if the row went away and this failed,
+        // the secret would be orphaned with nothing left pointing at it.
+        if let Err(e) = auth::delete_account_secrets(&acc.auth_vault_key) {
+            log::warn!("keyring entry for {} not removed: {e}", acc.email_address);
+        }
+        if let Err(e) = accounts::delete(&db, id) {
+            return qstring(&e.to_string());
+        }
+        // Fall back to whichever account remains, if any.
+        match accounts::list(&db).unwrap_or_default().first() {
+            Some(next) => {
+                let folder_id = folders::list_by_account(&db, next.id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|f| f.role == mailcore::models::FolderRole::Inbox)
+                    .map(|f| f.id)
+                    .unwrap_or(-1);
+                let next_id = next.id;
+                push_feeds(&mut self, &db, next_id, folder_id);
+            }
+            None => {
+                push_feeds(&mut self, &db, -1, -1);
+                self.as_mut().set_current_account_email(qstring(""));
+            }
+        }
+        self.as_mut()
+            .set_account_count(accounts::list(&db).map(|l| l.len() as i32).unwrap_or(0));
+        qstring("")
+    }
+
+    pub fn account_form(&self, id: i64) -> QString {
+        let Ok(db) = open_db() else {
+            return qstring("{}");
+        };
+        let Ok(a) = accounts::get(&db, id) else {
+            return qstring("{}");
+        };
+        // Passwords stay in the keyring; the dialog leaves the field blank and
+        // an empty password on save keeps the stored one.
+        let form = serde_json::json!({
+            "id": a.id,
+            "name": a.name,
+            "email": a.email_address,
+            "imap_host": a.imap_host,
+            "imap_port": a.imap_port.to_string(),
+            "imap_sec": a.imap_security,
+            "imap_user": a.imap_username,
+            "smtp_host": a.smtp_host,
+            "smtp_port": a.smtp_port.to_string(),
+            "smtp_sec": a.smtp_security,
+            "smtp_user": a.smtp_username,
+        });
+        qstring(&form.to_string())
+    }
+
     pub fn sync_now(mut self: Pin<&mut Self>) -> QString {
         let db = match open_db() {
             Ok(d) => d,
@@ -328,6 +438,15 @@ impl qobject::Bridge {
         let result: Result<String, String> = (|| {
             let acc = current_account(&db, wanted)?;
             let mut imap = imap_session(&acc)?;
+            // Push locally queued read/star changes first, so the fetch below
+            // cannot overwrite them with stale server flags.
+            let mut pushed = 0u64;
+            for m in messages::list_flags_dirty(&db, acc.id).unwrap_or_default() {
+                if imap.push_flags(&db, &m).is_ok() {
+                    let _ = messages::clear_flags_dirty(&db, m.id);
+                    pushed += 1;
+                }
+            }
             let folders = imap.sync_folders(&db, acc.id).map_err(|e| e.to_string())?;
             let mut fetched = 0u64;
             let mut expunged = 0u64;
@@ -351,8 +470,13 @@ impl qobject::Bridge {
                 .map(|f| f.id)
                 .unwrap_or(-1);
             push_feeds(&mut self, &db, acc.id, folder_id);
+            let flags = if pushed > 0 {
+                format!(", {pushed} flag(s) pushed")
+            } else {
+                String::new()
+            };
             Ok(format!(
-                "Synced {} folders: +{fetched} new, -{expunged} removed",
+                "Synced {} folders: +{fetched} new, -{expunged} removed{flags}",
                 folders.len()
             ))
         })();
@@ -391,15 +515,10 @@ impl qobject::Bridge {
             return qstring("");
         };
         if !msg.is_read {
+            // Local write + dirty mark only. Pushing \Seen here meant a full
+            // IMAP connect on every click, which froze the list and made
+            // selection appear stuck; `sync_now` flushes the queue instead.
             let _ = messages::set_flags(&db, msg.id, true, msg.is_starred);
-            // Best-effort server flag push.
-            if let Ok(acc) = accounts::get(&db, acc_id) {
-                if let Ok(mut imap) = imap_session(&acc) {
-                    let updated = messages::get(&db, msg.id).unwrap_or(msg);
-                    let _ = imap.push_flags(&db, &updated);
-                    imap.disconnect();
-                }
-            }
         }
         push_feeds(&mut self, &db, acc_id, folder_id);
         qstring("")
@@ -414,15 +533,8 @@ impl qobject::Bridge {
         let Ok(msg) = messages::get_by_uid(&db, folder_id, uid as u32) else {
             return qstring("");
         };
+        // Queued, not pushed: see open_message.
         let _ = messages::set_flags(&db, msg.id, msg.is_read, !msg.is_starred);
-        if let Ok(acc) = accounts::get(&db, acc_id) {
-            if let Ok(mut imap) = imap_session(&acc) {
-                if let Ok(updated) = messages::get(&db, msg.id) {
-                    let _ = imap.push_flags(&db, &updated);
-                }
-                imap.disconnect();
-            }
-        }
         push_feeds(&mut self, &db, acc_id, folder_id);
         qstring("")
     }

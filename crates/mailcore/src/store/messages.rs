@@ -160,15 +160,44 @@ pub fn count_unread(db: &Db, folder_id: i64) -> Result<u64> {
     Ok(n as u64)
 }
 
-/// Flip read/starred flags.
+/// Flip read/starred flags, marking the row for the next server push.
+///
+/// The UI calls this on click and returns immediately; `flags_dirty` is what
+/// keeps the change from being reverted by the next sync (see
+/// [`list_flags_dirty`], [`clear_flags_dirty`]).
 pub fn set_flags(db: &Db, id: i64, is_read: bool, is_starred: bool) -> Result<()> {
     let n = db.conn().execute(
-        "update messages set is_read = ?1, is_starred = ?2, updated_at = ?3 where id = ?4",
+        "update messages set is_read = ?1, is_starred = ?2, flags_dirty = 1,
+            updated_at = ?3
+         where id = ?4",
         params![i64::from(is_read), i64::from(is_starred), now(), id],
     )?;
     if n == 0 {
         return Err(StoreError::NotFound(format!("message {id}")));
     }
+    Ok(())
+}
+
+/// Messages of an account whose flags still need pushing to the server.
+pub fn list_flags_dirty(db: &Db, account_id: i64) -> Result<Vec<Message>> {
+    let conn = db.conn();
+    let mut stmt = conn.prepare(&format!(
+        "select {COLS} from messages
+         where account_id = ?1 and flags_dirty = 1
+         order by folder_id, uid"
+    ))?;
+    let rows = stmt.query_map([account_id], row_to_message)?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+/// Mark one message's flags as pushed.
+pub fn clear_flags_dirty(db: &Db, id: i64) -> Result<()> {
+    db.conn()
+        .execute("update messages set flags_dirty = 0 where id = ?1", [id])?;
     Ok(())
 }
 
@@ -362,6 +391,34 @@ mod tests {
         assert_eq!(count_unread(&db, f).unwrap(), 1);
         delete(&db, id).unwrap();
         assert!(matches!(get(&db, id), Err(StoreError::NotFound(_))));
+    }
+
+    #[test]
+    fn local_flag_change_queues_for_push_then_clears() {
+        let (db, acc, f) = setup();
+        let id = upsert(&db, &sample_new(acc, f, 1)).unwrap();
+        let other = upsert(&db, &sample_new(acc, f, 2)).unwrap();
+        // A freshly synced message owes the server nothing.
+        assert!(list_flags_dirty(&db, acc).unwrap().is_empty());
+
+        // Reading a message locally (the click path) queues the flag push
+        // instead of doing it inline.
+        set_flags(&db, id, true, false).unwrap();
+        let dirty = list_flags_dirty(&db, acc).unwrap();
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(dirty[0].id, id);
+        assert!(dirty[0].is_read);
+
+        // Once pushed, the row is settled and stays out of the queue.
+        clear_flags_dirty(&db, id).unwrap();
+        assert!(list_flags_dirty(&db, acc).unwrap().is_empty());
+
+        // Starring queues too, and only the touched row.
+        set_flags(&db, other, false, true).unwrap();
+        let dirty = list_flags_dirty(&db, acc).unwrap();
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(dirty[0].id, other);
+        assert!(dirty[0].is_starred);
     }
 
     #[test]

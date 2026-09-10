@@ -6,6 +6,15 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# ~/.local + a .desktop entry are freedesktop concepts; on Windows the
+# dist/ bundle from build.sh is the deliverable.
+case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*)
+        echo "install-local.sh is Linux-only; run ./scripts/build.sh and use"              "dist/mailclient/ directly." >&2
+        exit 1
+        ;;
+esac
+
 ./scripts/build.sh
 
 BIN="$HOME/.local/bin"

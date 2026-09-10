@@ -6,7 +6,7 @@ use serde_json::json;
 
 use crate::db::Db;
 use crate::error::Result;
-use crate::store::{folders, messages, settings};
+use crate::store::{accounts, folders, messages, settings};
 use crate::{html, html::Sanitized};
 
 /// Max messages per folder feed (keeps QML lists snappy).
@@ -21,6 +21,27 @@ pub fn folders_json(db: &Db, account_id: i64) -> Result<String> {
             "name": f.path,
             "role": f.role.as_str(),
             "unread": messages::count_unread(db, f.id)?,
+        }));
+    }
+    Ok(serde_json::to_string(&arr)?)
+}
+
+/// `[{id, name, email, imap_host, smtp_host}]` for the account manager.
+pub fn accounts_json(db: &Db) -> Result<String> {
+    let mut arr = Vec::new();
+    for a in accounts::list(db)? {
+        arr.push(json!({
+            "id": a.id,
+            "name": a.name,
+            "email": a.email_address,
+            "imap_host": a.imap_host,
+            "imap_port": a.imap_port,
+            "imap_sec": a.imap_security,
+            "imap_user": a.imap_username,
+            "smtp_host": a.smtp_host,
+            "smtp_port": a.smtp_port,
+            "smtp_sec": a.smtp_security,
+            "smtp_user": a.smtp_username,
         }));
     }
     Ok(serde_json::to_string(&arr)?)

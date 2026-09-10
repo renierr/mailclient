@@ -20,10 +20,25 @@ lettre = "0.11"
 imap = "2.4"
 native-tls = "0.2"
 mail-parser = "0.11"
-# Secret Service (freedesktop) on Linux: persistent desktop keyring entries
+
+# Keyring backend is per-OS: the `keyring` crate compiles to a useless mock
+# store unless exactly one platform feature is enabled, and each feature only
+# builds on its own OS -- hence one target-scoped dependency per platform
+# rather than a feature list on a single entry.
+#
+# Linux: Secret Service (freedesktop) for persistent desktop keyring entries
 # visible in GNOME Passwords / KDE Wallet. (Plain `linux-native` would be the
 # invisible, non-persistent kernel keyutils store.)
+[target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["linux-native-sync-persistent"] }
+
+# Windows: Credential Manager (the "Windows Credentials" vault).
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+# macOS: the login Keychain.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
 
 [dev-dependencies]
 tempfile = "3.0"

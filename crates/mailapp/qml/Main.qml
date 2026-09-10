@@ -3,21 +3,31 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 import Mailclient
+import "components"
 
 // App shell: 3-pane mail layout (sidebar / list / reader).
 // Data comes from the Rust Bridge (SQLite + IMAP); no mock models remain.
+//
+// Selection is held as a UID (`currentUid`), not a row index. Indices break
+// the moment the feed is rebuilt — which happens after every open, star,
+// delete and sync — and that was the cause of flaw F1.
 ApplicationWindow {
     id: root
     visible: true
-    width: 1280
-    height: 800
-    minimumWidth: 760
-    minimumHeight: 480
+    // Never open larger than the screen actually offers: at 150% scaling a
+    // 1320x860 logical window is ~1980x1290 physical, which does not fit a
+    // 1080p laptop and pushes the reader pane off the edge.
+    width: Math.min(1320, Screen.desktopAvailableWidth - 80)
+    height: Math.min(860, Screen.desktopAvailableHeight - 80)
+    minimumWidth: 720
+    minimumHeight: 460
     title: qsTr("Mailclient")
+    color: Theme.bg
 
     property string currentFolder: ""
-    property int currentMessageIndex: 0
+    property int currentUid: -1
     property string statusText: qsTr("Starting…")
+    property bool busy: false
 
     Bridge {
         id: backend
@@ -27,12 +37,11 @@ ApplicationWindow {
         id: appSettings
     }
 
-    ListModel {
-        id: folderModel
-    }
-    ListModel {
-        id: messageModel
-    }
+    ListModel { id: folderModel }
+    ListModel { id: messageModel }
+    ListModel { id: accountModel }
+
+    // --- feed plumbing ----------------------------------------------------
 
     function reloadFolders() {
         var arr = JSON.parse(backend.folders_json)
@@ -62,19 +71,109 @@ ApplicationWindow {
         messageModel.clear()
         for (var i = 0; i < arr.length; i++)
             messageModel.append(arr[i])
-        if (root.currentMessageIndex >= messageModel.count)
-            root.currentMessageIndex = 0
+        // Drop the selection only if that message really is gone.
+        if (root.messageByUid(root.currentUid) === undefined)
+            root.currentUid = -1
+    }
+
+    function reloadAccounts() {
+        var arr = JSON.parse(backend.accounts_json)
+        accountModel.clear()
+        for (var i = 0; i < arr.length; i++)
+            accountModel.append(arr[i])
     }
 
     function reloadAll() {
         var r = backend.refresh_accounts()
+        reloadAccounts()
         reloadFolders()
         reloadMessages()
         return r
     }
 
+    function messageByUid(uid) {
+        if (uid < 0)
+            return undefined
+        for (var i = 0; i < messageModel.count; i++) {
+            if (messageModel.get(i).uid === uid)
+                return messageModel.get(i)
+        }
+        return undefined
+    }
+
     function showResult(okMessage, result) {
         root.statusText = result === "" ? okMessage : result
+    }
+
+    // --- actions ----------------------------------------------------------
+
+    function openMessage(uid) {
+        root.currentUid = uid
+        // Local-only mark-as-read: fast, no network on the click path.
+        var r = backend.open_message(uid)
+        reloadFolders()
+        reloadMessages()
+        if (r !== "")
+            root.statusText = r
+    }
+
+    function syncNow() {
+        if (backend.account_count === 0) {
+            root.statusText = qsTr("Add an account first")
+            return
+        }
+        root.busy = true
+        root.statusText = qsTr("Syncing…")
+        // NOTE: blocking network call; async worker is a follow-up.
+        var r = backend.sync_now()
+        reloadFolders()
+        reloadMessages()
+        root.busy = false
+        root.statusText = r
+    }
+
+    function toggleStar(uid) {
+        if (uid < 0)
+            return
+        showResult("", backend.toggle_star(uid))
+        reloadMessages()
+    }
+
+    function deleteMessage(uid) {
+        if (uid < 0)
+            return
+        var r = backend.delete_message(uid)
+        if (root.currentUid === uid)
+            root.currentUid = -1
+        reloadFolders()
+        reloadMessages()
+        showResult(qsTr("Deleted"), r)
+    }
+
+    function selectFolder(path) {
+        var r = backend.select_folder(path)
+        if (r === "") {
+            root.currentFolder = path
+            root.currentUid = -1
+            reloadMessages()
+            root.statusText = qsTr("Folder: %1").arg(path)
+        } else {
+            root.statusText = r
+        }
+    }
+
+    function selectAccount(id) {
+        var r = backend.select_account(id)
+        if (r === "") {
+            root.currentUid = -1
+            root.currentFolder = ""
+            reloadAccounts()
+            reloadFolders()
+            reloadMessages()
+            root.statusText = qsTr("Account: %1").arg(backend.current_account_email)
+        } else {
+            root.statusText = r
+        }
     }
 
     Component.onCompleted: {
@@ -82,7 +181,7 @@ ApplicationWindow {
         var r = reloadAll()
         if (backend.account_count === 0) {
             root.statusText = qsTr("Add an account to start")
-            accountSetup.open()
+            accountSetup.openNew()
         } else if (r !== "") {
             root.statusText = r
         } else {
@@ -90,50 +189,125 @@ ApplicationWindow {
         }
     }
 
-    header: ToolBar {
+    // --- keyboard ---------------------------------------------------------
+
+    Shortcut { sequences: ["Ctrl+N"]; onActivated: composer.openBlank() }
+    Shortcut { sequences: ["Ctrl+R", "F5"]; onActivated: root.syncNow() }
+    Shortcut { sequences: ["Ctrl+F"]; onActivated: searchField.forceActiveFocus() }
+    Shortcut { sequences: ["Down"]; onActivated: messageList.step(1) }
+    Shortcut { sequences: ["Up"]; onActivated: messageList.step(-1) }
+    Shortcut { sequences: ["Delete"]; onActivated: root.deleteMessage(root.currentUid) }
+    Shortcut { sequences: ["S"]; onActivated: root.toggleStar(root.currentUid) }
+    Shortcut {
+        sequences: ["R"]
+        onActivated: if (root.currentUid >= 0) composer.openForReply(root.messageByUid(root.currentUid))
+    }
+    Shortcut {
+        sequences: ["F"]
+        onActivated: if (root.currentUid >= 0) composer.openForForward(root.messageByUid(root.currentUid))
+    }
+
+    // --- chrome -----------------------------------------------------------
+
+    header: Rectangle {
+        implicitHeight: Theme.toolbarHeight
+        color: Theme.bgAlt
+
+        Rectangle {
+            anchors.bottom: parent.bottom
+            width: parent.width
+            height: 1
+            color: Theme.border
+        }
+
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: 8
-            anchors.rightMargin: 8
-            spacing: 8
+            anchors.leftMargin: Theme.sm
+            anchors.rightMargin: Theme.sm
+            spacing: Theme.sm
 
-            ToolButton {
-                text: qsTr("☰")
-                Accessible.name: qsTr("Toggle sidebar")
+            IconButton {
+                text: "☰"
+                tooltip: qsTr("Toggle sidebar")
                 onClicked: sidebar.visible = !sidebar.visible
             }
+
             Button {
-                text: qsTr("Compose")
-                highlighted: true
+                text: qsTr("✎  Compose")
                 enabled: backend.account_count > 0
-                onClicked: composer.open()
+                onClicked: composer.openBlank()
+                implicitHeight: 32
+
+                background: Rectangle {
+                    radius: Theme.radius
+                    color: parent.enabled
+                           ? (parent.pressed ? Qt.darker(Theme.accent, 1.2) : Theme.accent)
+                           : Theme.border
+                }
+                contentItem: Text {
+                    text: parent.text
+                    color: parent.enabled ? Theme.accentText : Theme.textMuted
+                    font.pixelSize: Theme.fontBase
+                    font.bold: true
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    leftPadding: Theme.sm
+                    rightPadding: Theme.sm
+                }
             }
+
+            // Live filter over the loaded feed (server-side FTS is M3).
             TextField {
                 id: searchField
                 Layout.fillWidth: true
-                placeholderText: qsTr("Search mail… (FTS in M3)")
-                onAccepted: root.statusText = qsTr("Search is wired to SQLite FTS in M3")
-            }
-            ToolButton {
-                text: qsTr("⟳")
-                Accessible.name: qsTr("Sync now")
-                enabled: backend.account_count > 0
-                onClicked: {
-                    root.statusText = qsTr("Syncing…")
-                    // NOTE: blocking network call; async worker is a follow-up.
-                    var r = backend.sync_now()
-                    reloadFolders()
-                    reloadMessages()
-                    root.statusText = r
+                Layout.maximumWidth: 460
+                implicitHeight: 32
+                placeholderText: qsTr("Search sender, subject or snippet…")
+                color: Theme.text
+                placeholderTextColor: Theme.textMuted
+                font.pixelSize: Theme.fontBase
+                leftPadding: Theme.sm
+                rightPadding: clearSearch.visible ? 28 : Theme.sm
+                selectByMouse: true
+
+                background: Rectangle {
+                    radius: Theme.radius
+                    color: Theme.bg
+                    border.width: 1
+                    border.color: searchField.activeFocus ? Theme.accent : Theme.border
                 }
+
+                IconButton {
+                    id: clearSearch
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 24
+                    height: 24
+                    visible: searchField.text !== ""
+                    text: "✕"
+                    fontSize: Theme.fontSmall
+                    tooltip: qsTr("Clear search")
+                    onClicked: searchField.text = ""
+                }
+                Keys.onEscapePressed: searchField.text = ""
             }
-            ToolButton {
-                text: qsTr("✉ Account")
-                onClicked: accountSetup.open()
+
+            Item { Layout.fillWidth: true }
+
+            IconButton {
+                text: "⟳"
+                tooltip: qsTr("Sync now (Ctrl+R)")
+                enabled: backend.account_count > 0 && !root.busy
+                onClicked: root.syncNow()
             }
-            ToolButton {
-                text: qsTr("⚙")
-                Accessible.name: qsTr("Settings")
+            IconButton {
+                text: "✉"
+                tooltip: qsTr("Accounts")
+                onClicked: accountsDialog.open()
+            }
+            IconButton {
+                text: "⚙"
+                tooltip: qsTr("Settings")
                 onClicked: settingsDialog.open()
             }
         }
@@ -142,80 +316,93 @@ ApplicationWindow {
     SplitView {
         anchors.fill: parent
 
+        handle: Rectangle {
+            implicitWidth: 1
+            color: SplitHandle.pressed || SplitHandle.hovered ? Theme.accent : Theme.border
+        }
+
         Sidebar {
             id: sidebar
-            SplitView.preferredWidth: 240
+            SplitView.preferredWidth: 250
             SplitView.minimumWidth: 160
             folders: folderModel
-            currentAccount: backend.account_count > 0 ? qsTr("%n account(s)", "", backend.account_count) : qsTr("No account")
+            accounts: accountModel
             currentFolder: root.currentFolder
-            onFolderSelected: path => {
-                var r = backend.select_folder(path)
-                if (r === "") {
-                    root.currentFolder = path
-                    root.currentMessageIndex = 0
-                    reloadMessages()
-                    root.statusText = qsTr("Folder: %1").arg(path)
-                } else {
-                    root.statusText = r
-                }
-            }
-            onAddAccountRequested: accountSetup.open()
+            currentEmail: backend.current_account_email
+            currentAccountId: backend.current_account_id
+            onFolderSelected: path => root.selectFolder(path)
+            onAccountSelected: id => root.selectAccount(id)
+            onAddAccountRequested: accountSetup.openNew()
+            onManageAccountsRequested: accountsDialog.open()
         }
+
         MessageList {
             id: messageList
-            SplitView.preferredWidth: 340
-            SplitView.minimumWidth: 220
+            SplitView.preferredWidth: 360
+            SplitView.minimumWidth: 240
             messages: messageModel
-            currentIndex: root.currentMessageIndex
-            onMessageSelected: index => {
-                root.currentMessageIndex = index
-                var m = messageModel.get(index)
-                if (m !== undefined) {
-                    backend.open_message(m.uid)
-                    reloadFolders()
-                    reloadMessages()
-                }
-            }
+            currentUid: root.currentUid
+            folderName: root.currentFolder
+            filterText: searchField.text
+            onMessageSelected: uid => root.openMessage(uid)
+            onStarToggled: uid => root.toggleStar(uid)
+            onDeleteRequested: uid => root.deleteMessage(uid)
         }
+
         MessageView {
             id: messageView
             SplitView.fillWidth: true
-            SplitView.minimumWidth: 300
+            SplitView.minimumWidth: 260
             loadRemoteImages: appSettings.load_remote_images
-            message: messageModel.count > 0 ? messageModel.get(Math.min(root.currentMessageIndex, messageModel.count - 1)) : undefined
-            onReplyRequested: composer.openForReply(messageModel.get(root.currentMessageIndex))
-            onForwardRequested: composer.openForForward(messageModel.get(root.currentMessageIndex))
-            onStarRequested: {
-                var m = messageModel.get(root.currentMessageIndex)
-                if (m !== undefined) {
-                    showResult("", backend.toggle_star(m.uid))
-                    reloadMessages()
-                }
-            }
-            onDeleteRequested: {
-                var d = messageModel.get(root.currentMessageIndex)
-                if (d !== undefined) {
-                    var r = backend.delete_message(d.uid)
-                    root.currentMessageIndex = 0
-                    reloadFolders()
-                    reloadMessages()
-                    showResult(qsTr("Deleted"), r)
-                }
-            }
+            message: root.messageByUid(root.currentUid)
+            onReplyRequested: composer.openForReply(root.messageByUid(root.currentUid))
+            onReplyAllRequested: composer.openForReply(root.messageByUid(root.currentUid))
+            onForwardRequested: composer.openForForward(root.messageByUid(root.currentUid))
+            onStarRequested: root.toggleStar(root.currentUid)
+            onDeleteRequested: root.deleteMessage(root.currentUid)
             onStatusMessage: text => root.statusText = text
         }
     }
 
-    footer: ToolBar {
-        Label {
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.left: parent.left
-            anchors.leftMargin: 12
-            text: root.statusText
-            elide: Text.ElideRight
+    footer: Rectangle {
+        implicitHeight: 26
+        color: Theme.bgAlt
+
+        Rectangle {
+            anchors.top: parent.top
+            width: parent.width
+            height: 1
+            color: Theme.border
+        }
+
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: Theme.md
+            anchors.rightMargin: Theme.md
+            spacing: Theme.sm
+
+            Label {
+                text: root.busy ? "⟳" : ""
+                color: Theme.accent
+                font.pixelSize: Theme.fontSmall
+            }
+            Label {
+                Layout.fillWidth: true
+                text: root.statusText
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+                elide: Text.ElideRight
+            }
+            Label {
+                text: backend.current_account_email
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontTiny
+                elide: Text.ElideRight
+            }
         }
     }
+
+    // --- dialogs ----------------------------------------------------------
 
     Composer {
         id: composer
@@ -225,6 +412,7 @@ ApplicationWindow {
         onSendRequested: payload => {
             var r = backend.send_mail(payload)
             if (r === "") {
+                composer.markClean()
                 composer.close()
                 reloadFolders()
                 reloadMessages()
@@ -234,20 +422,39 @@ ApplicationWindow {
             }
         }
     }
+
     AccountSetup {
         id: accountSetup
         onStatusMessage: text => root.statusText = text
         onAccountSubmit: payload => {
             var r = backend.add_account(payload)
             if (r === "") {
+                var wasEditing = accountSetup.editing
                 accountSetup.close()
                 reloadAll()
-                root.statusText = qsTr("Account added — press ⟳ to sync")
+                root.statusText = wasEditing ? qsTr("Account updated")
+                                             : qsTr("Account added — press ⟳ to sync")
             } else {
                 root.statusText = r
             }
         }
     }
+
+    Accounts {
+        id: accountsDialog
+        accounts: accountModel
+        currentAccountId: backend.current_account_id
+        onStatusMessage: text => root.statusText = text
+        onAddRequested: accountSetup.openNew()
+        onEditRequested: id => accountSetup.openEdit(backend.account_form(id), id)
+        onAccountSelected: id => root.selectAccount(id)
+        onDeleteConfirmed: id => {
+            var r = backend.delete_account(id)
+            reloadAll()
+            showResult(qsTr("Account removed"), r)
+        }
+    }
+
     Settings {
         id: settingsDialog
         settingsBridge: appSettings

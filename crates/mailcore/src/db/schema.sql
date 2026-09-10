@@ -65,6 +65,11 @@ create table if not exists messages (
     body_html          text,
     is_read            integer not null default 0,
     is_starred         integer not null default 0,
+    -- 1 = local flag change not yet pushed to the server. Set on every local
+    -- read/star toggle so the UI never has to wait for IMAP; the next sync
+    -- pushes and clears it. Without this the server would win and silently
+    -- revert the local change.
+    flags_dirty        integer not null default 0,
     is_draft           integer not null default 0,
     has_attachments    integer not null default 0,
     keywords           text not null default '[]',

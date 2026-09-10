@@ -79,7 +79,7 @@ qmllint crates/mailapp/qml/*.qml crates/mailapp/qml/components/*.qml  # QML lint
 
 DB location: `~/.local/share/mailclient/mailclient.sqlite` (override `MAILCLIENT_DB=/tmp/x.sqlite` for tests/dev).
 
-UI iteration: `./scripts/dev.sh` runs the app against live `crates/mailapp/qml/` (embedded module is the fallback). Note: files using `import Mailclient` (currently `Settings.qml`) only load inside the app, not under standalone `qml6` — preview other components individually with `qml6` instead.
+UI iteration: `./scripts/dev.sh` runs the app against live `crates/mailapp/qml/` (embedded module is the fallback). Every pane now does `import Mailclient` for the `Theme` singleton and the Rust QObjects, so no component previews standalone under `qml6` — iterate through `dev.sh`, which rebuilds and re-embeds on each run. Static checking is `qmllint` (its "Member not found on type Theme" noise is only the module not being importable outside the binary; the `Quick.layout-positioning` warnings are real).
 
 ## 7. Roadmap Notes
 
@@ -87,17 +87,19 @@ UI iteration: `./scripts/dev.sh` runs the app against live `crates/mailapp/qml/`
 - HTML compose editing: `TextArea` rich-text now, consider WebEngine-based editor in M2.
 - Windows: keep all paths via `directories`, no Linux-only calls outside `mailapp` platform shim.
 
-## 8. Known Flaws & Repair List (user-reported, 2026-09-07)
+## 8. Known Flaws & Repair List (user-reported)
 
-Broken right now — fix before any new features:
+F1–F8 below; F3 is the only one still open.
 
-| # | Flaw | Status | Planned fix |
+| # | Flaw | Status | Resolution |
 |---|---|---|---|
-| F1 | Cannot select other mails in the list (selection stuck / jumps back) | ⬜ open | Decouple selection from feed reload: select by UID not index, guard `onCurrentIndexChanged` reentrancy during model rebuild |
-| F2 | No body shown in reader (empty pane) | ⬜ open | Fix plain-body rendering (`TextEdit` in `ScrollView` shows nothing → back to `Text`), tolerant `is_html` bool check, verify feed roles reach QML |
-| F3 | Composer is not WYSIWYG (Bold etc. don't reflect visually) | ⬜ open | `TextArea.insert("<b>")` inserts literal tags — move toolbar to real formatting (WebEngine `contentEditable` + `execCommand`, per roadmap) or source-explicit editing |
-| F4 | Composer fields are placeholder-only, no labels | ⬜ open | Add short `From:` / `To:` / `Cc:` labels beside each field |
-| F5 | Cancel loses the composed entry without asking | ⬜ open | Dirty tracking + "Discard draft?" confirm on Cancel/close when content changed |
-| F6 | Overall UI looks sterile, flawed vs modern clients | ⬜ open | Design pass: list delegates (unread dot, hover, snippet), reader typography, spacing, composer styling — after F1–F5 work |
+| F1 | Cannot select other mails in the list (selection stuck / jumps back) | ✅ fixed | Selection is a UID, not a row index: clicks report `messageSelected(uid)`, the highlight derives from `currentUid`, and `onCurrentIndexChanged` no longer re-emits selection. Feed rebuilds can no longer move it. `open_message` also stopped opening an IMAP connection per click (see F8) |
+| F2 | No body shown in reader (empty pane) | ✅ fixed | Plain bodies render in a `Flickable` + sized `TextEdit`; the old `ScrollView` + unsized `TextEdit` had no height and drew nothing |
+| F3 | Composer is not WYSIWYG (Bold etc. don't reflect visually) | ⬜ open | Still tag-based `TextArea.insert`. Needs the WebEngine `contentEditable` + `execCommand` editor from the roadmap; deliberately out of the UI pass |
+| F4 | Composer fields are placeholder-only, no labels | ✅ fixed | Shared `components/FormField.qml` labels From/To/Cc/Subject (and every dialog field) |
+| F5 | Cancel loses the composed entry without asking | ✅ fixed | `dirty` tracking on all fields + a "Discard draft?" confirm; prefilled reply/forward quotes do not count as unsaved work |
+| F6 | Overall UI looks sterile, flawed vs modern clients | ✅ fixed | `qml/Theme.qml` design-token singleton (light/dark, spacing, radius, type) + full redesign: list delegates with unread dot, hover, accent bar and inline star; reader header block; sidebar account chip and unread pills; themed dialogs. `main.rs` pins the Basic Controls style so Windows and Linux render identically instead of falling back to the native Windows style |
+| F7 | Cannot manage accounts — a mistyped account can only be added, never removed or corrected | ✅ fixed | New `qml/Accounts.qml` manager (list, switch, edit, remove with confirm) on `Bridge.accounts_json` / `select_account` / `delete_account` / `account_form`. Editing keeps the stored password when the field is left blank; removal also drops the keyring secret |
+| F8 | Clicking a message froze the UI and could revert read state | ✅ fixed | `open_message` / `toggle_star` write locally and set `messages.flags_dirty` (schema v3); `sync_now` pushes the queue before fetching, so the server cannot overwrite a local change |
 
 Reported working (keep while fixing): account setup + keyring, manual ⟳ sync, folder tree, send + Sent-copy, star/delete, remote-image blocking default.

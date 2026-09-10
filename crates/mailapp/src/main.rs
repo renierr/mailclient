@@ -16,7 +16,7 @@ pub mod bridge;
 
 use std::path::PathBuf;
 
-use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QUrl};
+use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QQuickStyle, QString, QUrl};
 use mailcore::{default_db_path, Db};
 
 /// Filesystem candidates for `Main.qml` (see module docs).
@@ -57,13 +57,24 @@ fn main() {
         Some(qml) => {
             log::info!("loading QML from {}", qml.display());
             let abs = std::path::absolute(&qml).unwrap_or(qml);
-            QUrl::from(format!("file://{}", abs.display()).as_str())
+            // `format!("file://{abs}")` breaks on Windows: the drive letter
+            // parses as the URL scheme and backslashes are not separators, so
+            // Qt treats it as a remote host. QUrl::fromLocalFile does the
+            // platform-correct encoding.
+            QUrl::from_local_file(&QString::from(abs.display().to_string().as_str()))
         }
         None => {
             log::info!("loading embedded QML module");
             QUrl::from("qrc:/qt/qml/Mailclient/qml/Main.qml")
         }
     };
+
+    // Pin the Controls style before any QML loads. Without this Qt picks the
+    // platform default -- the native Windows style, which ignores most
+    // customisation and looks nothing like the Linux build. Basic applies no
+    // styling of its own, so qml/Theme.qml is fully in charge and both
+    // platforms render identically.
+    QQuickStyle::set_style(&QString::from("Basic"));
 
     let mut app = QGuiApplication::new();
     let mut engine = QQmlApplicationEngine::new();
