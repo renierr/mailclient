@@ -2,7 +2,7 @@
 # Dev loop: debug build + run against ./crates/mailapp/qml (no install).
 # Works on Linux and in MSYS2/Git Bash on Windows (see scripts/qt-env.sh).
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")"
 
 # shellcheck source=scripts/qt-env.sh
 . ./scripts/qt-env.sh

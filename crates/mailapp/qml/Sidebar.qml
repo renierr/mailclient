@@ -6,7 +6,9 @@ import Mailclient
 import "components"
 
 // Folder/account sidebar. Expects `folders` ListModel with
-// {name, role, unread} and `accounts` ListModel with {id, name, email}.
+// {name, role, unread, subscribed, count} and `accounts` ListModel with
+// {id, name, email}. Only subscribed (visible) folders are listed — the rest
+// live in the Folders manager.
 Rectangle {
     id: root
 
@@ -19,7 +21,28 @@ Rectangle {
     signal folderSelected(string path)
     signal accountSelected(int id)
     signal manageAccountsRequested()
+    signal manageFoldersRequested()
     signal addAccountRequested()
+
+    // Visible subset of `folders` (subscribed !== false). Kept as its own
+    // model so hiding a folder never destroys the full feed the manager
+    // dialog reads — same in-place update discipline as ModelSync.
+    ListModel { id: shown }
+
+    function refreshShown() {
+        var rows = []
+        if (root.folders) {
+            for (var i = 0; i < root.folders.count; i++) {
+                var f = root.folders.get(i)
+                if (f.subscribed === false)
+                    continue
+                rows.push({ name: f.name, role: f.role, unread: f.unread })
+            }
+        }
+        ModelSync.sync(shown, rows, "name")
+    }
+
+    onFoldersChanged: root.refreshShown()
 
     // Switching account or folder rebuilds the models these delegates and the
     // account popup are built from, so the emit is deferred out of the click
@@ -116,16 +139,28 @@ Rectangle {
             }
         }
 
-        Label {
+        RowLayout {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.md
+            Layout.rightMargin: Theme.sm
             Layout.topMargin: Theme.xs
             Layout.bottomMargin: Theme.xs
-            text: qsTr("FOLDERS")
-            color: Theme.textMuted
-            font.pixelSize: Theme.fontTiny
-            font.bold: true
-            font.letterSpacing: 1
+            spacing: Theme.xs
+
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("FOLDERS")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontTiny
+                font.bold: true
+                font.letterSpacing: 1
+            }
+
+            IconButton {
+                text: "⛭"
+                tooltip: qsTr("Manage IMAP folders…")
+                onClicked: root.manageFoldersRequested()
+            }
         }
 
         ListView {
@@ -133,7 +168,7 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            model: root.folders
+            model: shown
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
@@ -210,9 +245,9 @@ Rectangle {
         Label {
             Layout.fillWidth: true
             Layout.margins: Theme.md
-            visible: !root.folders || root.folders.count === 0
+            visible: shown.count === 0
             text: root.currentEmail === "" ? qsTr("Add an account to begin.")
-                                           : qsTr("No folders yet — press ⟳ to sync.")
+                                            : qsTr("No folders yet — press ⟳ to sync.")
             color: Theme.textMuted
             font.pixelSize: Theme.fontSmall
             wrapMode: Text.Wrap

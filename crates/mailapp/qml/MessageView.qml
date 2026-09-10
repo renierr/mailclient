@@ -9,13 +9,21 @@ import "components"
 // Reader pane. `message` roles come from the Rust feed:
 // {subject, from, date, body_text, body_html, is_html, has_remote_images}.
 // - Plain mail renders as PlainText (never shows HTML source as code).
-// - HTML was sanitized in Rust (scripts/handlers/styles/remote gated);
-//   WebEngine runs with JS/plugins off, remote images per setting + one-shot.
+// - HTML was sanitized in Rust (scripts/handlers/styles stripped).
+//   Inline `cid:`/`data:` images are part of the mail and always shown;
+//   remote `http(s)` images are stripped unless the setting allows them or
+//   the user taps "Show once" (re-sanitized on demand via `backend`).
+// - WebEngine runs with JS/plugins off. `autoLoadImages` stays on so inline
+//   images render; remote blocking is done by the sanitizer (which removed
+//   the URLs) plus `localContentCanAccessRemoteUrls` (defense in depth).
 Rectangle {
     id: root
 
     property var message
     property bool loadRemoteImages: false
+    // Rust Bridge, for the on-demand "Show once" re-sanitize. Set by Main.
+    property var backend
+    property string remoteHtml: ""
     signal replyRequested()
     signal replyAllRequested()
     signal forwardRequested()
@@ -41,15 +49,38 @@ Rectangle {
     onMessageUidChanged: {
         // One-shot remote consent is per-message.
         root.allowRemoteOnce = false
+        root.remoteHtml = ""
         root.reloadHtml()
     }
-    onHtmlBodyChanged: root.reloadHtml()
+    onHtmlBodyChanged: {
+        // A fresh feed (sync, settings toggle) invalidates the one-shot copy.
+        if (!root.allowRemoteOnce)
+            root.remoteHtml = ""
+        root.reloadHtml()
+    }
+    onRemoteHtmlChanged: root.reloadHtml()
     onLoadRemoteImagesChanged: root.reloadHtml()
     onAllowRemoteOnceChanged: root.reloadHtml()
 
     function reloadHtml() {
-        if (root.isHtml && bodyLoader.item)
-            bodyLoader.item.loadHtml(root.wrapDoc(root.htmlBody), "")
+        if (root.isHtml && bodyLoader.item) {
+            var body = root.remoteHtml !== "" ? root.remoteHtml : root.htmlBody
+            bodyLoader.item.loadHtml(root.wrapDoc(body), "")
+        }
+    }
+
+    function showRemoteOnce() {
+        if (!root.message || root.message.uid === undefined)
+            return
+        // The feed stripped remote URLs (setting off), so re-sanitize the
+        // stored raw body with remotes kept for this view only.
+        var html = ""
+        if (root.backend && root.backend.message_html)
+            html = root.backend.message_html(root.message.uid, true)
+        if (html !== "")
+            root.remoteHtml = html
+        root.allowRemoteOnce = true
+        root.statusMessage(qsTr("Remote images allowed for this message only"))
     }
 
     function effectiveAutoLoad() {
@@ -198,10 +229,7 @@ Rectangle {
                 }
                 AppButton {
                     text: qsTr("Show once")
-                    onClicked: {
-                        root.allowRemoteOnce = true
-                        root.statusMessage(qsTr("Remote images allowed for this message only"))
-                    }
+                    onClicked: root.showRemoteOnce()
                 }
             }
         }
@@ -255,9 +283,14 @@ Rectangle {
         WebEngineView {
             backgroundColor: Theme.bg
             settings.javascriptEnabled: false
-            settings.localContentCanAccessRemoteUrls: false
+            // Inline cid:/data: images must render even when remote is
+            // blocked, and the sanitizer already removed remote URLs — so
+            // image loading stays on. Remote blocking for the allow-listed
+            // case is enforced here: local content may only reach out when
+            // the user consented (setting or Show-once).
+            settings.autoLoadImages: true
+            settings.localContentCanAccessRemoteUrls: root.effectiveAutoLoad()
             settings.pluginsEnabled: false
-            settings.autoLoadImages: root.effectiveAutoLoad()
         }
     }
 

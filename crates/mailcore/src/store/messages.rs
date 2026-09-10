@@ -160,6 +160,28 @@ pub fn count_unread(db: &Db, folder_id: i64) -> Result<u64> {
     Ok(n as u64)
 }
 
+/// Total cached messages in a folder (drives the "load older" button:
+/// shown rows vs cached rows vs server remainder).
+pub fn count_by_folder(db: &Db, folder_id: i64) -> Result<u64> {
+    let n: i64 = db.conn().query_row(
+        "select count(*) from messages where folder_id = ?1",
+        [folder_id],
+        |r| r.get(0),
+    )?;
+    Ok(n as u64)
+}
+
+/// Smallest cached UID in a folder, if any. Older-batch sync fetches server
+/// UIDs below this; `None` means the folder is empty locally.
+pub fn min_uid(db: &Db, folder_id: i64) -> Result<Option<u32>> {
+    let v: Option<i64> = db.conn().query_row(
+        "select min(uid) from messages where folder_id = ?1",
+        [folder_id],
+        |r| r.get(0),
+    )?;
+    Ok(v.map(|u| u as u32))
+}
+
 /// Flip read/starred flags, marking the row for the next server push.
 ///
 /// The UI calls this on click and returns immediately; `flags_dirty` is what
@@ -419,6 +441,17 @@ mod tests {
         assert_eq!(dirty.len(), 1);
         assert_eq!(dirty[0].id, other);
         assert!(dirty[0].is_starred);
+    }
+
+    #[test]
+    fn count_and_min_uid_track_cache() {
+        let (db, acc, f) = setup();
+        assert_eq!(count_by_folder(&db, f).unwrap(), 0);
+        assert_eq!(min_uid(&db, f).unwrap(), None);
+        upsert(&db, &sample_new(acc, f, 5)).unwrap();
+        upsert(&db, &sample_new(acc, f, 9)).unwrap();
+        assert_eq!(count_by_folder(&db, f).unwrap(), 2);
+        assert_eq!(min_uid(&db, f).unwrap(), Some(5));
     }
 
     #[test]

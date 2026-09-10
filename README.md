@@ -13,9 +13,9 @@ Details: [`PROJECT.md`](PROJECT.md) (goal, architecture, roadmap) and
 ## Quick start
 
 ```sh
-./scripts/dev.sh            # debug build + run (uses ./crates/mailapp/qml live)
-./scripts/build.sh          # release bundle -> dist/mailclient/
-./scripts/install-local.sh  # install to ~/.local (+ .desktop entry)
+./dev.sh                # debug build + run (uses ./crates/mailapp/qml live)
+/build.sh              # release bundle -> dist/mailclient/
+/scripts/install-local.sh  # install to ~/.local (+ .desktop entry)
 
 cargo test -p mailcore      # backend unit tests
 qmllint crates/mailapp/qml/*.qml crates/mailapp/qml/components/*.qml  # QML lint (qmllint in /usr/lib/qt6/bin)
@@ -74,7 +74,7 @@ come from the `directories` crate, so on Windows the SQLite cache lands under
 crates/mailcore/   pure-Rust core: db, models, store, sync, search
 crates/mailapp/    cxx-qt bridge binary (Qt models + main) + qml/ UI
 resources/         .desktop entry + icon
-scripts/           build.sh / dev.sh / install-local.sh (+ *.ps1 for Windows)
+scripts/           helpers: install-local.sh, qt-env.sh (+ *.ps1 for Windows)
 dist/              gitignored build output
 ```
 

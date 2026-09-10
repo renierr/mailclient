@@ -23,11 +23,22 @@ Rectangle {
     property int currentUid: -1
     property string folderName: ""
     property string filterText: ""
+    // Paging: `limit` is the backend page size (grows via "load older"),
+    // `totalCount` the cached DB total for the folder. The footer shows when
+    // the page is full and unfiltered — i.e. the server may hold more.
+    property int totalCount: 0
+    property int limit: 200
+    property bool busy: false
 
     signal messageSelected(int uid)
     signal starToggled(int uid)
     signal deleteRequested(int uid)
     signal purgeRequested(int uid)
+    signal loadOlderRequested()
+
+    readonly property bool canLoadOlder: root.filterText === ""
+        && root.messages.length > 0
+        && root.messages.length >= root.limit
 
     // Row actions rebuild the feed, which destroys the delegates. Emitting
     // straight from a delegate's click handler therefore deletes the item
@@ -153,7 +164,7 @@ Rectangle {
         ListView {
             id: list
             width: parent.width
-            height: parent.height - 38
+            height: parent.height - 38 - (loadOlderBar.visible ? loadOlderBar.implicitHeight : 0)
             clip: true
             model: filtered
             boundsBehavior: Flickable.StopAtBounds
@@ -290,6 +301,42 @@ Rectangle {
                         tooltip: row.model.starred ? qsTr("Remove star") : qsTr("Star")
                         onClicked: root.emitLater(root.starToggled, row.model.uid)
                     }
+                }
+            }
+        }
+
+        // Paging footer: one batch (200) per press, fetched from the server
+        // below the oldest cached UID, then appended to the feed. Hidden for
+        // small folders and while filtering (the filter only sees loaded mail).
+        Rectangle {
+            id: loadOlderBar
+            width: parent.width
+            implicitHeight: root.canLoadOlder ? 56 : 0
+            visible: root.canLoadOlder
+            color: Theme.bgAlt
+            clip: true
+            Rectangle {
+                anchors.top: parent.top
+                width: parent.width
+                height: 1
+                color: Theme.border
+            }
+            Row {
+                anchors.centerIn: parent
+                spacing: Theme.sm
+                Label {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: root.totalCount > root.messages.length
+                          ? qsTr("%1 of %2 shown").arg(root.messages.length).arg(root.totalCount)
+                          : qsTr("%1 shown").arg(root.messages.length)
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.fontSmall
+                }
+                AppButton {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: root.busy ? qsTr("Loading…") : qsTr("Show older messages")
+                    enabled: !root.busy
+                    onClicked: root.loadOlderRequested()
                 }
             }
         }

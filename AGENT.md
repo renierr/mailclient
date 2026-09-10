@@ -57,7 +57,7 @@ Anything else (new crypto, new runtime, new Qt modules beyond Core/Gui/Qml/Quick
 
 ## 5. Workflows
 
-- Build: `./scripts/build.sh` (release bundle into `dist/`). Dev loop: `./scripts/dev.sh`. Install locally: `./scripts/install-local.sh` (`~/.local`). Never hand-roll `cargo build` output paths in docs; point to the scripts.
+- Build: `./build.sh` (release bundle into `dist/`). Dev loop: `./dev.sh`. Install locally: `./scripts/install-local.sh` (`~/.local`). Never hand-roll `cargo build` output paths in docs; point to the scripts.
 - Tests: `cargo test --workspace`. QML smoke: `qml6 qml/Main.qml` or `qmllint qml/*.qml` if no display.
 - Debugging crashes on Omarchy: load the `diagnose-crash` skill path (systemd-coredump) — do not guess.
 - Desktop integration files live in `resources/` (`.desktop`, icons). Install script links them; do not hardcode `$HOME` in code — use `directories`.
@@ -83,5 +83,5 @@ Anything else (new crypto, new runtime, new Qt modules beyond Core/Gui/Qml/Quick
 
 1. `cargo fmt --check`, `cargo clippy -p mailcore -- -D warnings`, `cargo test -p mailcore` green.
 2. `qmllint` clean on touched QML (or noted as skipped headless with reason).
-3. `./scripts/build.sh` produces a runnable `dist/mailclient/bin/mailapp` (or current milestone binary).
+3. `./build.sh` produces a runnable `dist/mailclient/bin/mailapp` (or current milestone binary).
 4. `PROJECT.md` status table updated; no secrets/binaries/`dist/` staged.

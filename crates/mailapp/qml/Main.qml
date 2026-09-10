@@ -73,6 +73,9 @@ ApplicationWindow {
         // Synced in place, never cleared: clearing destroys every sidebar
         // delegate on every click (see qml/ModelSync.qml).
         ModelSync.sync(folderModel, JSON.parse(backend.folders_json), "name")
+        // The sidebar shows a subscribed-only subset, and in-place row edits
+        // don't re-fire `onFoldersChanged` — refresh the subset explicitly.
+        sidebar.refreshShown()
         // Keep selection if still present, else inbox, else first.
         var found = false
         for (var j = 0; j < folderModel.count; j++) {
@@ -153,6 +156,21 @@ ApplicationWindow {
         root.statusText = r
     }
 
+    // One older batch (200) below the oldest cached UID, then the page grows
+    // so the list extends backwards without losing scroll position (the
+    // models update in place — see ModelSync).
+    function loadOlder() {
+        if (root.busy)
+            return
+        root.busy = true
+        root.statusText = qsTr("Loading older messages…")
+        var r = backend.load_older_messages()
+        reloadFolders()
+        reloadMessages()
+        root.busy = false
+        root.statusText = r
+    }
+
     function toggleStar(uid) {
         if (uid < 0)
             return
@@ -199,7 +217,15 @@ ApplicationWindow {
             root.currentFolder = path
             root.currentUid = -1
             reloadMessages()
-            root.statusText = qsTr("Folder: %1").arg(path)
+            // On-demand fill: auto-sync only covered this folder quickly
+            // (newest 50), so fetch its newest 200 now that it is open.
+            // Single-folder + windowed, still cheap; failure keeps the cache.
+            var s = backend.sync_folder_now(path)
+            reloadFolders()
+            reloadMessages()
+            root.statusText = s === "" || s.indexOf("Synced") === 0
+                ? qsTr("Folder: %1").arg(path)
+                : s
         } else {
             root.statusText = r
         }
@@ -246,6 +272,12 @@ ApplicationWindow {
             root.statusText = r
         } else {
             root.statusText = qsTr("Ready")
+            // Refresh on startup: show the cache immediately, then sync.
+            // Deferred so first paint happens first (sync blocks on network).
+            Qt.callLater(function () {
+                if (backend.account_count > 0)
+                    root.syncNow()
+            })
         }
     }
 
@@ -345,6 +377,12 @@ ApplicationWindow {
                 onClicked: root.syncNow()
             }
             IconButton {
+                text: "🗂"
+                tooltip: qsTr("Manage IMAP folders")
+                enabled: backend.account_count > 0
+                onClicked: foldersDialog.open()
+            }
+            IconButton {
                 text: "✉"
                 tooltip: qsTr("Accounts")
                 onClicked: accountsDialog.open()
@@ -378,6 +416,7 @@ ApplicationWindow {
             onAccountSelected: id => root.selectAccount(id)
             onAddAccountRequested: accountSetup.openNew()
             onManageAccountsRequested: accountsDialog.open()
+            onManageFoldersRequested: foldersDialog.open()
         }
 
         MessageList {
@@ -388,10 +427,14 @@ ApplicationWindow {
             currentUid: root.currentUid
             folderName: root.currentFolder
             filterText: searchField.text
+            totalCount: backend.messages_total
+            limit: backend.message_limit
+            busy: root.busy
             onMessageSelected: uid => root.openMessage(uid)
             onStarToggled: uid => root.toggleStar(uid)
             onDeleteRequested: uid => root.deleteMessage(uid)
             onPurgeRequested: uid => root.confirmPurge(uid)
+            onLoadOlderRequested: root.loadOlder()
         }
 
         MessageView {
@@ -399,6 +442,7 @@ ApplicationWindow {
             SplitView.fillWidth: true
             SplitView.minimumWidth: 260
             loadRemoteImages: appSettings.load_remote_images
+            backend: backend
             message: root.messageByUid(root.currentUid)
             onReplyRequested: composer.openForReply(root.messageByUid(root.currentUid))
             onReplyAllRequested: composer.openForReply(root.messageByUid(root.currentUid))
@@ -500,6 +544,34 @@ ApplicationWindow {
         }
     }
 
+    Folders {
+        id: foldersDialog
+        folders: folderModel
+        currentFolder: root.currentFolder
+        busy: root.busy
+        onStatusMessage: text => root.statusText = text
+        onRefreshRequested: {
+            if (root.busy)
+                return
+            root.busy = true
+            root.statusText = qsTr("Refreshing folders…")
+            var r = backend.refresh_folders()
+            reloadFolders()
+            reloadMessages()
+            root.busy = false
+            showResult(qsTr("Folders refreshed"), r)
+        }
+        onVisibilityToggled: (path, subscribed) => {
+            showResult("", backend.set_folder_subscribed(path, subscribed))
+            reloadFolders()
+        }
+        onFolderSelected: path => {
+            foldersDialog.close()
+            // Out of the click handler: selecting rebuilds the feed.
+            Qt.callLater(root.selectFolder, path)
+        }
+    }
+
     Dialog {
         id: purgeConfirm
         title: qsTr("Delete permanently?")
@@ -554,6 +626,11 @@ ApplicationWindow {
         id: settingsDialog
         settingsBridge: appSettings
         dbPath: backend.db_path
-        onStatusMessage: text => root.statusText = text
+        onStatusMessage: text => {
+            // The image setting changes what the feed sanitizes to, so the
+            // open message must re-render from a fresh feed.
+            reloadMessages()
+            root.statusText = text
+        }
     }
 }

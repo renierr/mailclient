@@ -6,8 +6,8 @@ use serde_json::json;
 
 use crate::db::Db;
 use crate::error::Result;
+use crate::html::{self, Sanitized};
 use crate::store::{accounts, folders, messages, settings};
-use crate::{html, html::Sanitized};
 
 /// Max messages per folder feed (keeps QML lists snappy).
 pub const FEED_LIMIT: u64 = 200;
@@ -21,6 +21,9 @@ pub fn folders_json(db: &Db, account_id: i64) -> Result<String> {
             "name": f.path,
             "role": f.role.as_str(),
             "unread": messages::count_unread(db, f.id)?,
+            // Sidebar visibility toggle + cached total (see Folders dialog).
+            "subscribed": f.subscribed,
+            "count": messages::count_by_folder(db, f.id)?,
         }));
     }
     Ok(serde_json::to_string(&arr)?)
@@ -71,56 +74,87 @@ fn short_date(rfc3339: Option<&str>) -> String {
     }
 }
 
-/// `[{uid, subject, from, date, snippet, unread, starred, body_text,
-/// body_html, is_html, has_remote_images, body}]`, newest first.
-/// - `body_html` is **sanitized** (scripts/handlers/remote-img gated by the
-///   `load_remote_images` setting); never trust the stored raw HTML in QML.
-/// - `is_html` is decided in Rust (no QML `<`/`>` guessing).
-/// - `body` is kept for backward compat = sanitized html if any, else text.
-pub fn messages_json(db: &Db, folder_id: i64) -> Result<String> {
-    let allow_remote = settings::get_bool(db, settings::LOAD_REMOTE_IMAGES).unwrap_or(false);
-    let mut arr = Vec::new();
-    for m in messages::list_by_folder(db, folder_id, FEED_LIMIT, 0)? {
-        let raw_html = m.body_html.as_deref().unwrap_or("");
-        let raw_text = m.body_text.as_deref().unwrap_or("");
-        // A stored `body_text` may itself hold HTML source (legacy
-        // plain-only sends of composer rich text). Prefer a real html part,
-        // else upgrade text that looks like HTML.
-        let candidate_html = if html::looks_like_html(raw_html)
-            || !raw_html.trim().is_empty() && m.body_html.is_some()
-        {
+/// Sanitized bodies for one message: `(safe_html, had_remote, is_html, plain)`.
+///
+/// Shared by the list feed and the on-demand `message_html` path, so the
+/// banner ("Show once") and the feed can never disagree.
+pub fn sanitized_bodies(
+    body_html: Option<&str>,
+    body_text: Option<&str>,
+    allow_remote: bool,
+) -> (String, bool, bool, String) {
+    let raw_html = body_html.unwrap_or("");
+    let raw_text = body_text.unwrap_or("");
+    // A stored `body_text` may itself hold HTML source (legacy
+    // plain-only sends of composer rich text). Prefer a real html part,
+    // else upgrade text that looks like HTML.
+    let candidate_html =
+        if html::looks_like_html(raw_html) || !raw_html.trim().is_empty() && body_html.is_some() {
             raw_html
         } else if html::looks_like_html(raw_text) {
             raw_text
         } else {
             ""
         };
-        let Sanitized {
-            html: safe_html,
-            had_remote,
-        } = html::sanitize(candidate_html, allow_remote);
-        // `had_remote` only matters when we actually had an html body.
-        let is_html =
-            !safe_html.trim().is_empty() || (!candidate_html.trim().is_empty() && had_remote);
-        let plain = if raw_text.trim().is_empty() && !candidate_html.trim().is_empty() {
-            html::html_to_text(candidate_html)
+    let Sanitized {
+        html: safe_html,
+        had_remote,
+    } = html::sanitize(candidate_html, allow_remote);
+    // `had_remote` only matters when we actually had an html body.
+    let is_html = !safe_html.trim().is_empty() || (!candidate_html.trim().is_empty() && had_remote);
+    let plain = if raw_text.trim().is_empty() && !candidate_html.trim().is_empty() {
+        html::html_to_text(candidate_html)
+    } else {
+        raw_text.to_string()
+    };
+    // When remote images were stripped the sanitized html can be empty
+    // (image-only newsletter) — still route to WebEngine so the banner
+    // ("images blocked") shows instead of raw-tag text.
+    let body_html = if is_html && safe_html.trim().is_empty() {
+        // Keeps the html branch alive, and says which of the two it is
+        // rather than blaming blocked images for an empty body.
+        if had_remote {
+            "<p>[images blocked — choose Show images]</p>".to_string()
         } else {
-            raw_text.to_string()
-        };
-        // When remote images were stripped the sanitized html can be empty
-        // (image-only newsletter) — still route to WebEngine so the banner
-        // ("images blocked") shows instead of raw-tag text.
-        let body_html = if is_html && safe_html.trim().is_empty() {
-            // Keeps the html branch alive, and says which of the two it is
-            // rather than blaming blocked images for an empty body.
-            if had_remote {
-                "<p>[images blocked — choose Show images]</p>".to_string()
-            } else {
-                "<p>[no displayable content]</p>".to_string()
-            }
-        } else {
-            safe_html
-        };
+            "<p>[no displayable content]</p>".to_string()
+        }
+    } else {
+        safe_html
+    };
+    (body_html, had_remote, is_html, plain)
+}
+
+/// Sanitized HTML for one message, re-sanitized on demand.
+///
+/// The list feed strips remote images when the setting is off, so "Show
+/// once" cannot reuse `body_html` — the URLs are already gone. This
+/// re-sanitizes the stored raw body with `allow_remote=true` for that one
+/// view. Inline `cid:`/`data:` images are always kept (they are part of the
+/// mail, not tracking pixels).
+pub fn message_html(db: &Db, folder_id: i64, uid: u32, allow_remote: bool) -> Result<String> {
+    let m = messages::get_by_uid(db, folder_id, uid)?;
+    let (body_html, _, _, _) =
+        sanitized_bodies(m.body_html.as_deref(), m.body_text.as_deref(), allow_remote);
+    Ok(body_html)
+}
+/// `[{uid, subject, from, date, snippet, unread, starred, body_text,
+/// body_html, is_html, has_remote_images, body}]`, newest first.
+/// - `body_html` is **sanitized** (scripts/handlers/remote-img gated by the
+///   `load_remote_images` setting); never trust the stored raw HTML in QML.
+/// - Inline `cid:`/`data:` images are part of the mail and always kept —
+///   only remote `http(s)` images are gated (blocked by default).
+/// - `is_html` is decided in Rust (no QML `<`/`>` guessing).
+/// - `body` is kept for backward compat = sanitized html if any, else text.
+///
+/// `limit`/`offset` page the local cache newest-first. The list grows via
+/// "load older": the bridge backfills the next server batch into SQLite
+/// first (`sync_older`), then raises `limit` so the new rows appear.
+pub fn messages_json_paged(db: &Db, folder_id: i64, limit: u64, offset: u64) -> Result<String> {
+    let allow_remote = settings::get_bool(db, settings::LOAD_REMOTE_IMAGES).unwrap_or(false);
+    let mut arr = Vec::new();
+    for m in messages::list_by_folder(db, folder_id, limit, offset)? {
+        let (body_html, had_remote, is_html, plain) =
+            sanitized_bodies(m.body_html.as_deref(), m.body_text.as_deref(), allow_remote);
         let legacy_body = if is_html {
             body_html.clone()
         } else {
@@ -142,6 +176,11 @@ pub fn messages_json(db: &Db, folder_id: i64) -> Result<String> {
         }));
     }
     Ok(serde_json::to_string(&arr)?)
+}
+
+/// First page of a folder (default list view).
+pub fn messages_json(db: &Db, folder_id: i64) -> Result<String> {
+    messages_json_paged(db, folder_id, FEED_LIMIT, 0)
 }
 
 #[cfg(test)]
@@ -232,6 +271,76 @@ mod tests {
             .unwrap();
         assert!(!row2["is_html"].as_bool().unwrap());
         assert_eq!(row2["body_text"], "I <3 you");
+    }
+
+    #[test]
+    fn inline_images_survive_while_remote_stays_gated() {
+        // Inline cid:/data: are part of the mail and always kept; remote
+        // http(s) is stripped by default and re-appears on demand.
+        let (html_blocked, had_remote, is_html, _) = sanitized_bodies(
+            Some("<p>hi<img src=\"cid:part1\"><img src=\"https://example.com/t.png\"></p>"),
+            None,
+            false,
+        );
+        assert!(is_html);
+        assert!(had_remote);
+        assert!(html_blocked.contains("cid:part1"));
+        assert!(!html_blocked.contains("example.com"));
+
+        let (html_allowed, _, _, _) = sanitized_bodies(
+            Some("<p>hi<img src=\"cid:part1\"><img src=\"https://example.com/t.png\"></p>"),
+            None,
+            true,
+        );
+        assert!(html_allowed.contains("cid:part1"));
+        assert!(html_allowed.contains("example.com"));
+    }
+
+    #[test]
+    fn message_html_resanitizes_for_show_once() {
+        let (db, acc, f) = setup();
+        let mut m = msg_store::sample_new(acc, f, 11);
+        m.body_text = None;
+        m.body_html = Some("<p>hi<img src=\"https://example.com/t.png\"></p>".to_string());
+        msg_store::upsert(&db, &m).unwrap();
+        // Feed default (setting off) strips the remote URL…
+        let blocked = message_html(&db, f, 11, false).unwrap();
+        assert!(!blocked.contains("example.com"));
+        // …but Show-once gets it back from the stored raw body.
+        let allowed = message_html(&db, f, 11, true).unwrap();
+        assert!(allowed.contains("example.com"));
+    }
+
+    #[test]
+    fn folders_carry_subscribed_and_count() {
+        let (db, acc, f) = setup();
+        let folders: serde_json::Value =
+            serde_json::from_str(&folders_json(&db, acc).unwrap()).unwrap();
+        assert_eq!(folders[0]["subscribed"], true);
+        assert_eq!(folders[0]["count"], 0);
+        let m = msg_store::sample_new(acc, f, 21);
+        msg_store::upsert(&db, &m).unwrap();
+        let folders2: serde_json::Value =
+            serde_json::from_str(&folders_json(&db, acc).unwrap()).unwrap();
+        assert_eq!(folders2[0]["count"], 1);
+    }
+
+    #[test]
+    fn paged_feed_slices_newest_first() {
+        let (db, acc, f) = setup();
+        for uid in [31u32, 32, 33] {
+            let mut m = msg_store::sample_new(acc, f, uid);
+            m.date = Some(format!("2026-09-0{uid}T10:00:00+00:00"));
+            msg_store::upsert(&db, &m).unwrap();
+        }
+        let page1: serde_json::Value =
+            serde_json::from_str(&messages_json_paged(&db, f, 2, 0).unwrap()).unwrap();
+        assert_eq!(page1.as_array().unwrap().len(), 2);
+        assert_eq!(page1[0]["uid"], 33);
+        let page2: serde_json::Value =
+            serde_json::from_str(&messages_json_paged(&db, f, 2, 2).unwrap()).unwrap();
+        assert_eq!(page2.as_array().unwrap().len(), 1);
+        assert_eq!(page2[0]["uid"], 31);
     }
 
     #[test]

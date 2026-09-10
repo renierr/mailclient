@@ -106,6 +106,21 @@ pub fn get(db: &Db, id: i64) -> Result<Folder> {
         .ok_or_else(|| StoreError::NotFound(format!("folder {id}")))
 }
 
+/// Show/hide a folder in the sidebar ("which to view"). Display-only: the
+/// row stays cached locally, and an explicit open still syncs it. New folders
+/// from LIST default to visible; the choice survives re-syncs because
+/// [`upsert`] never overwrites this column.
+pub fn set_subscribed(db: &Db, id: i64, subscribed: bool) -> Result<()> {
+    let n = db.conn().execute(
+        "update folders set subscribed = ?1, updated_at = ?2 where id = ?3",
+        rusqlite::params![i64::from(subscribed), now(), id],
+    )?;
+    if n == 0 {
+        return Err(StoreError::NotFound(format!("folder {id}")));
+    }
+    Ok(())
+}
+
 /// Record UIDVALIDITY/UIDNEXT + sync timestamp after a successful SELECT.
 pub fn set_sync_state(db: &Db, id: i64, uid_validity: u32, uid_next: u32) -> Result<()> {
     let ts = now();
@@ -161,6 +176,24 @@ mod tests {
         assert_eq!(f.uid_validity, Some(123));
         assert_eq!(f.uid_next, Some(456));
         assert!(f.last_sync_at.is_some());
+    }
+
+    #[test]
+    fn subscribed_toggle_survives_upsert() {
+        let db = Db::open_in_memory().unwrap();
+        let acc = mk_account(&db);
+        let id = upsert(&db, acc, "INBOX.Old", "/", FolderRole::Custom).unwrap();
+        assert!(get(&db, id).unwrap().subscribed);
+        set_subscribed(&db, id, false).unwrap();
+        assert!(!get(&db, id).unwrap().subscribed);
+        // Re-LIST must not reset the user's choice.
+        assert_eq!(
+            upsert(&db, acc, "INBOX.Old", "/", FolderRole::Custom).unwrap(),
+            id
+        );
+        assert!(!get(&db, id).unwrap().subscribed);
+        set_subscribed(&db, id, true).unwrap();
+        assert!(get(&db, id).unwrap().subscribed);
     }
 
     #[test]

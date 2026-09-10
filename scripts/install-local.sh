@@ -10,12 +10,12 @@ cd "$(dirname "$0")/.."
 # dist/ bundle from build.sh is the deliverable.
 case "$(uname -s)" in
     MINGW* | MSYS* | CYGWIN*)
-        echo "install-local.sh is Linux-only; run ./scripts/build.sh and use"              "dist/mailclient/ directly." >&2
+        echo "install-local.sh is Linux-only; run ./build.sh and use"              "dist/mailclient/ directly." >&2
         exit 1
         ;;
 esac
 
-./scripts/build.sh
+./build.sh
 
 BIN="$HOME/.local/bin"
 SHARE="$HOME/.local/share/mailclient"
