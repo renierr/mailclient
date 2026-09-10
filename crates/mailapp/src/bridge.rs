@@ -124,6 +124,11 @@ pub mod qobject {
         #[qinvokable]
         fn open_message(self: Pin<&mut Self>, uid: i32) -> QString;
 
+        /// Explicitly set the read flag locally (manual mark read/unread,
+        /// e.g. from the list context menu). Queued like `open_message`.
+        #[qinvokable]
+        fn mark_read(self: Pin<&mut Self>, uid: i32, read: bool) -> QString;
+
         /// Flip the starred flag locally; pushed by the next sync.
         #[qinvokable]
         fn toggle_star(self: Pin<&mut Self>, uid: i32) -> QString;
@@ -176,6 +181,8 @@ pub mod qobject {
         #[qproperty(bool, sent_copy_enabled)]
         #[qproperty(bool, load_remote_images)]
         #[qproperty(QString, compose_send_format)]
+        #[qproperty(bool, auto_mark_read)]
+        #[qproperty(i32, mark_read_delay_secs)]
         #[namespace = "mailclient"]
         type SettingsBridge = super::SettingsBridgeRust;
 
@@ -831,6 +838,21 @@ impl qobject::Bridge {
         qstring("")
     }
 
+    pub fn mark_read(mut self: Pin<&mut Self>, uid: i32, read: bool) -> QString {
+        let db = match open_db() {
+            Ok(d) => d,
+            Err(e) => return qstring(&e),
+        };
+        let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+        let Ok(msg) = messages::get_by_uid(&db, folder_id, uid as u32) else {
+            return qstring("");
+        };
+        // Queued, not pushed: see open_message.
+        let _ = messages::set_flags(&db, msg.id, read, msg.is_starred);
+        push_feeds(&mut self, &db, acc_id, folder_id);
+        qstring("")
+    }
+
     pub fn toggle_star(mut self: Pin<&mut Self>, uid: i32) -> QString {
         let db = match open_db() {
             Ok(d) => d,
@@ -1080,6 +1102,8 @@ pub struct SettingsBridgeRust {
     sent_copy_enabled: bool,
     load_remote_images: bool,
     compose_send_format: QString,
+    auto_mark_read: bool,
+    mark_read_delay_secs: i32,
 }
 
 impl Default for SettingsBridgeRust {
@@ -1088,6 +1112,8 @@ impl Default for SettingsBridgeRust {
             sent_copy_enabled: true,
             load_remote_images: false,
             compose_send_format: qstring("multipart"),
+            auto_mark_read: true,
+            mark_read_delay_secs: 0,
         }
     }
 }
@@ -1120,6 +1146,15 @@ impl qobject::SettingsBridge {
             );
             self.as_mut()
                 .set_compose_send_format(qstring(&mailcore::store::settings::get_send_format(&db)));
+            self.as_mut().set_auto_mark_read(
+                mailcore::store::settings::get_bool(&db, mailcore::store::settings::AUTO_MARK_READ)
+                    .unwrap_or(true),
+            );
+            self.as_mut()
+                .set_mark_read_delay_secs(mailcore::store::settings::get_delay_secs(
+                    &db,
+                    mailcore::store::settings::MARK_READ_DELAY_SECS,
+                ) as i32);
         }
     }
 
@@ -1132,6 +1167,8 @@ impl qobject::SettingsBridge {
                 &self.compose_send_format().to_string(),
             )
             .to_string();
+            let auto_read = *self.auto_mark_read();
+            let delay = *self.mark_read_delay_secs() as i64;
             if let Err(e) = mailcore::store::settings::set_bool(
                 &db,
                 mailcore::store::settings::SENT_COPY_ENABLED,
@@ -1152,6 +1189,20 @@ impl qobject::SettingsBridge {
                 &format,
             ) {
                 log::warn!("settings: cannot save send-format: {e}");
+            }
+            if let Err(e) = mailcore::store::settings::set_bool(
+                &db,
+                mailcore::store::settings::AUTO_MARK_READ,
+                auto_read,
+            ) {
+                log::warn!("settings: cannot save auto-mark-read: {e}");
+            }
+            if let Err(e) = mailcore::store::settings::set_delay_secs(
+                &db,
+                mailcore::store::settings::MARK_READ_DELAY_SECS,
+                delay,
+            ) {
+                log::warn!("settings: cannot save mark-read delay: {e}");
             }
         }
     }

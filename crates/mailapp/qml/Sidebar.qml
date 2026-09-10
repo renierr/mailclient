@@ -36,7 +36,12 @@ Rectangle {
                 var f = root.folders.get(i)
                 if (f.subscribed === false)
                     continue
-                rows.push({ name: f.name, role: f.role, unread: f.unread })
+                rows.push({
+                    name: f.name,
+                    role: f.role,
+                    unread: f.unread,
+                    count: f.count !== undefined ? f.count : 0
+                })
             }
         }
         ModelSync.sync(shown, rows, "name")
@@ -181,6 +186,10 @@ Rectangle {
                 readonly property bool current: folderRow.model.name === root.currentFolder
 
                 onClicked: root.emitLater(root.folderSelected, folderRow.model.name)
+                ToolTip.visible: folderRow.hovered
+                ToolTip.text: qsTr("%1 total · %2 unread")
+                              .arg(folderRow.model.count || 0)
+                              .arg(folderRow.model.unread)
                 // Padding, not anchors: a control's contentItem is sized by
                 // the control, so anchor margins inside it are ignored.
                 leftPadding: Theme.md + Theme.sm
@@ -220,6 +229,14 @@ Rectangle {
                         color: folderRow.current ? Theme.accent : Theme.text
                         font.pixelSize: Theme.fontBase
                         font.bold: folderRow.model.unread > 0
+                    }
+                    // Total cached, muted — with the unread pill next to it
+                    // the row reads as "3 unread of 128".
+                    Label {
+                        visible: (folderRow.model.count || 0) > 0
+                        text: folderRow.model.count
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
                     }
                     // Unread count as a pill, the way mail clients do it.
                     Rectangle {

@@ -74,11 +74,23 @@ Dialog {
         return 1
     }
 
+    function delayIndex(secs) {
+        var steps = [0, 3, 5, 10, 30]
+        var idx = steps.indexOf(secs)
+        return idx >= 0 ? idx : 0
+    }
+
+    function delaySecs(idx) {
+        return [0, 3, 5, 10, 30][idx] || 0
+    }
+
     onOpened: {
         settingsBridge.load()
         copyBox.checked = settingsBridge.sent_copy_enabled
         imagesBox.checked = settingsBridge.load_remote_images
         formatBox.currentIndex = formatIndex(settingsBridge.compose_send_format)
+        readBox.checked = settingsBridge.auto_mark_read
+        delayBox.currentIndex = delayIndex(settingsBridge.mark_read_delay_secs)
     }
 
     ColumnLayout {
@@ -96,6 +108,42 @@ Dialog {
             Layout.fillWidth: true
             text: qsTr("Load remote images in HTML mail (not recommended)")
             onToggled: root.settingsBridge.load_remote_images = checked
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            implicitHeight: 1
+            color: Theme.border
+        }
+
+        Label {
+            text: qsTr("READING MAIL")
+            color: Theme.textMuted
+            font.pixelSize: Theme.fontTiny
+            font.bold: true
+            font.letterSpacing: 1
+        }
+        AppCheckBox {
+            id: readBox
+            Layout.fillWidth: true
+            text: qsTr("Automatically mark messages as read when viewed")
+            onToggled: root.settingsBridge.auto_mark_read = checked
+        }
+        AppComboBox {
+            id: delayBox
+            Layout.fillWidth: true
+            enabled: readBox.checked
+            model: [qsTr("Immediately"), qsTr("After 3 seconds"), qsTr("After 5 seconds"), qsTr("After 10 seconds"), qsTr("After 30 seconds")]
+            onActivated: index => {
+                root.settingsBridge.mark_read_delay_secs = delaySecs(index)
+            }
+        }
+        Label {
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            color: Theme.textMuted
+            font.pixelSize: Theme.fontSmall
+            text: qsTr("With a delay, only messages still open when the timer elapses count as read. Right-click any message to mark it read or unread manually.")
         }
 
         Rectangle {

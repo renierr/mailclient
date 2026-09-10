@@ -133,6 +133,24 @@ ApplicationWindow {
         if (uid < 0 || uid === root.currentUid)
             return  // already open: re-clicking a row must not reload anything
         root.currentUid = uid
+        markReadTimer.stop()
+        if (!appSettings.auto_mark_read) {
+            return  // stay unread until the user says otherwise
+        }
+        if (appSettings.mark_read_delay_secs <= 0) {
+            markAsRead(uid)
+        } else {
+            // Thunderbird-style: counts as read only if still viewing it
+            // when the delay elapses; moving on keeps it unread.
+            markReadTimer.uid = uid
+            markReadTimer.interval = appSettings.mark_read_delay_secs * 1000
+            markReadTimer.start()
+        }
+    }
+
+    function markAsRead(uid) {
+        if (uid < 0)
+            return
         // Local-only mark-as-read: fast, no network on the click path.
         var r = backend.open_message(uid)
         reloadFolders()
@@ -204,6 +222,16 @@ ApplicationWindow {
         root.statusText = r === "" ? qsTr("Archived") : r
     }
 
+    // Move picker: remembers which message, the dialog reports the target.
+    function openMove(uid) {
+        if (uid < 0)
+            return
+        var m = root.messageByUid(uid)
+        moveDialog.uid = uid
+        moveDialog.subject = m !== undefined ? m.subject : ""
+        moveDialog.open()
+    }
+
     function purgeMessage(uid) {
         if (uid < 0)
             return
@@ -227,6 +255,7 @@ ApplicationWindow {
     function selectFolder(path) {
         var r = backend.select_folder(path)
         if (r === "") {
+            markReadTimer.stop()
             root.currentFolder = path
             root.currentUid = -1
             reloadMessages()
@@ -247,6 +276,7 @@ ApplicationWindow {
     function selectAccount(id) {
         var r = backend.select_account(id)
         if (r === "") {
+            markReadTimer.stop()
             root.currentUid = -1
             root.currentFolder = ""
             reloadAccounts()
@@ -273,6 +303,17 @@ ApplicationWindow {
     Connections {
         target: Application.styleHints
         function onColorSchemeChanged() { backend.apply_native_theme(Theme.dark) }
+    }
+
+    // Delayed mark-as-read: fires only while the same message is still open.
+    Timer {
+        id: markReadTimer
+        property int uid: -1
+        repeat: false
+        onTriggered: {
+            if (markReadTimer.uid >= 0 && markReadTimer.uid === root.currentUid)
+                root.markAsRead(markReadTimer.uid)
+        }
     }
 
     Component.onCompleted: {
@@ -305,6 +346,7 @@ ApplicationWindow {
     Shortcut { sequences: ["Shift+Delete"]; onActivated: root.confirmPurge(root.currentUid) }
     Shortcut { sequences: ["S"]; onActivated: root.toggleStar(root.currentUid) }
     Shortcut { sequences: ["A"]; onActivated: root.archiveMessage(root.currentUid) }
+    Shortcut { sequences: ["M"]; onActivated: root.openMove(root.currentUid) }
     Shortcut {
         sequences: ["R"]
         onActivated: if (root.currentUid >= 0) composer.openForReply(root.messageByUid(root.currentUid))
@@ -447,6 +489,13 @@ ApplicationWindow {
             onMessageSelected: uid => root.openMessage(uid)
             onStarToggled: uid => root.toggleStar(uid)
             onArchiveRequested: uid => root.archiveMessage(uid)
+            onMoveRequested: uid => root.openMove(uid)
+            onMarkReadRequested: (uid, read) => {
+                var r = backend.mark_read(uid, read)
+                reloadFolders()
+                reloadMessages()
+                root.statusText = r !== "" ? r : (read ? qsTr("Marked as read") : qsTr("Marked as unread"))
+            }
             onDeleteRequested: uid => root.deleteMessage(uid)
             onPurgeRequested: uid => root.confirmPurge(uid)
         }
@@ -463,6 +512,7 @@ ApplicationWindow {
             onForwardRequested: composer.openForForward(root.messageByUid(root.currentUid))
             onStarRequested: root.toggleStar(root.currentUid)
             onArchiveRequested: root.archiveMessage(root.currentUid)
+            onMoveRequested: root.openMove(root.currentUid)
             onDeleteRequested: root.deleteMessage(root.currentUid)
             onStatusMessage: text => root.statusText = text
         }
@@ -591,6 +641,25 @@ ApplicationWindow {
             foldersDialog.close()
             // Out of the click handler: selecting rebuilds the feed.
             Qt.callLater(root.selectFolder, path)
+        }
+    }
+
+    MoveTo {
+        id: moveDialog
+        folders: folderModel
+        currentFolder: root.currentFolder
+        onFolderChosen: path => {
+            var target = moveDialog.uid
+            moveDialog.close()
+            // Out of the click handler: moving rebuilds the feed.
+            Qt.callLater(function () {
+                var r = backend.move_message(target, path)
+                if (root.currentUid === target)
+                    root.currentUid = -1
+                reloadFolders()
+                reloadMessages()
+                root.statusText = r === "" ? qsTr("Moved") : r
+            })
         }
     }
 

@@ -176,7 +176,7 @@ Dialog {
                             Layout.fillWidth: true
                         }
                         Label {
-                            text: qsTr("%1 cached · %2 unread")
+                            text: qsTr("%1 total · %2 unread")
                                   .arg(folderRow.model.count !== undefined ? folderRow.model.count : 0)
                                   .arg(folderRow.model.unread)
                             color: Theme.textMuted

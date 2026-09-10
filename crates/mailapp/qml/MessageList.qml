@@ -33,6 +33,8 @@ Rectangle {
     signal messageSelected(int uid)
     signal starToggled(int uid)
     signal archiveRequested(int uid)
+    signal moveRequested(int uid)
+    signal markReadRequested(int uid, bool read)
     signal deleteRequested(int uid)
     signal purgeRequested(int uid)
     signal loadOlderRequested()
@@ -55,6 +57,7 @@ Rectangle {
     // rebuilds.
     property int menuUid: -1
     property bool menuStarred: false
+    property bool menuUnread: false
 
     color: Theme.bg
 
@@ -214,6 +217,7 @@ Rectangle {
                         if (mouse.button === Qt.RightButton) {
                             root.menuUid = row.model.uid
                             root.menuStarred = row.model.starred
+                            root.menuUnread = row.model.unread
                             rowMenu.popup()
                         } else {
                             root.emitLater(root.messageSelected, row.model.uid)
@@ -347,12 +351,20 @@ Rectangle {
         id: rowMenu
 
         MenuItem {
+            text: root.menuUnread ? qsTr("Mark as read") : qsTr("Mark as unread")
+            onTriggered: Qt.callLater(root.markReadRequested, root.menuUid, root.menuUnread)
+        }
+        MenuItem {
             text: root.menuStarred ? qsTr("Remove star") : qsTr("Star")
             onTriggered: root.emitLater(root.starToggled, root.menuUid)
         }
         MenuItem {
             text: qsTr("Archive")
             onTriggered: root.emitLater(root.archiveRequested, root.menuUid)
+        }
+        MenuItem {
+            text: qsTr("Move to…")
+            onTriggered: root.emitLater(root.moveRequested, root.menuUid)
         }
         MenuItem {
             text: qsTr("Move to Trash")

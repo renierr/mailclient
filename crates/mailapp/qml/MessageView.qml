@@ -29,6 +29,7 @@ Rectangle {
     signal forwardRequested()
     signal starRequested()
     signal archiveRequested()
+    signal moveRequested()
     signal deleteRequested()
     signal statusMessage(string text)
 
@@ -196,6 +197,11 @@ Rectangle {
                         text: "🗄"
                         tooltip: qsTr("Archive (A)")
                         onClicked: root.archiveRequested()
+                    }
+                    IconButton {
+                        text: "📁"
+                        tooltip: qsTr("Move to… (M)")
+                        onClicked: root.moveRequested()
                     }
                     IconButton {
                         text: "🗑"

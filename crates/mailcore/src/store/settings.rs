@@ -15,6 +15,11 @@ pub const LOAD_REMOTE_IMAGES: &str = "load_remote_images";
 /// Outgoing format: `plain` | `multipart` (default, resilient) | `html`.
 /// Unknown/empty values fall back to `multipart`.
 pub const COMPOSE_SEND_FORMAT: &str = "compose_send_format";
+/// Automatically mark a message read when viewed (default: on).
+pub const AUTO_MARK_READ: &str = "auto_mark_read";
+/// Delay in seconds before an opened message counts as read (default: `0` =
+/// immediately, Thunderbird-style; capped at 300).
+pub const MARK_READ_DELAY_SECS: &str = "mark_read_delay_secs";
 
 /// Built-in default for a known key, if any.
 #[must_use]
@@ -23,6 +28,8 @@ pub fn defaults(key: &str) -> Option<&'static str> {
         SENT_COPY_ENABLED => Some("1"),
         LOAD_REMOTE_IMAGES => Some("0"),
         COMPOSE_SEND_FORMAT => Some("multipart"),
+        AUTO_MARK_READ => Some("1"),
+        MARK_READ_DELAY_SECS => Some("0"),
         _ => None,
     }
 }
@@ -81,6 +88,36 @@ pub fn get_send_format(db: &Db) -> String {
     }
 }
 
+/// Clamp a mark-as-read delay into the sane range (seconds).
+#[must_use]
+pub fn normalize_delay_secs(raw: i64) -> i64 {
+    raw.clamp(0, 300)
+}
+
+/// Delay in seconds before an opened message counts as read.
+/// Unset/unparseable values fall back to the built-in default.
+pub fn get_delay_secs(db: &Db, key: &str) -> i64 {
+    match get(db, key) {
+        Ok(Some(v)) => v
+            .trim()
+            .parse::<i64>()
+            .map(normalize_delay_secs)
+            .unwrap_or_else(|_| {
+                defaults(key)
+                    .and_then(|d| d.parse::<i64>().ok())
+                    .unwrap_or(0)
+            }),
+        _ => defaults(key)
+            .and_then(|d| d.parse::<i64>().ok())
+            .unwrap_or(0),
+    }
+}
+
+/// Store a mark-as-read delay (normalized first).
+pub fn set_delay_secs(db: &Db, key: &str, value: i64) -> Result<()> {
+    set(db, key, &normalize_delay_secs(value).to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,6 +134,22 @@ mod tests {
         assert_eq!(get_send_format(&db), "plain");
         set(&db, COMPOSE_SEND_FORMAT, "nonsense").unwrap();
         assert_eq!(get_send_format(&db), "multipart");
+    }
+
+    #[test]
+    fn mark_read_defaults_and_delay_bounds() {
+        assert_eq!(normalize_delay_secs(-5), 0);
+        assert_eq!(normalize_delay_secs(5), 5);
+        assert_eq!(normalize_delay_secs(9999), 300);
+        let db = Db::open_in_memory().unwrap();
+        assert!(get_bool(&db, AUTO_MARK_READ).unwrap());
+        assert_eq!(get_delay_secs(&db, MARK_READ_DELAY_SECS), 0);
+        set_delay_secs(&db, MARK_READ_DELAY_SECS, 10).unwrap();
+        assert_eq!(get_delay_secs(&db, MARK_READ_DELAY_SECS), 10);
+        set(&db, MARK_READ_DELAY_SECS, "nonsense").unwrap();
+        assert_eq!(get_delay_secs(&db, MARK_READ_DELAY_SECS), 0);
+        set_bool(&db, AUTO_MARK_READ, false).unwrap();
+        assert!(!get_bool(&db, AUTO_MARK_READ).unwrap());
     }
 
     #[test]
