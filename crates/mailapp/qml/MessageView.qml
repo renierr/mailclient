@@ -32,7 +32,13 @@ Rectangle {
     readonly property bool hasRemote: message !== undefined && message.has_remote_images === true
     property bool allowRemoteOnce: false
 
-    onMessageChanged: {
+    // Keyed on the UID, not on `message` itself: the feed is re-parsed after
+    // every open, star, delete and sync, so `message` is a fresh object each
+    // time even when it is the same mail. Reloading WebEngine on object
+    // identity meant tearing the document down and back up on every click.
+    readonly property int messageUid: message !== undefined && message !== null ? message.uid : -1
+
+    onMessageUidChanged: {
         // One-shot remote consent is per-message.
         root.allowRemoteOnce = false
         root.reloadHtml()

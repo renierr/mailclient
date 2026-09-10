@@ -24,6 +24,9 @@ fn main() {
             // Design tokens, registered as a singleton so every pane reads
             // the same values via `import Mailclient` (see qml/Theme.qml).
             .qml_file(QmlFile::from("qml/Theme.qml").singleton(true))
+            // In-place ListModel updates, shared by every pane that owns a
+            // feed model (see qml/ModelSync.qml).
+            .qml_file(QmlFile::from("qml/ModelSync.qml").singleton(true))
             .qml_file("qml/Main.qml")
             .qml_file("qml/Sidebar.qml")
             .qml_file("qml/MessageList.qml")

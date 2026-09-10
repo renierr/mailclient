@@ -58,16 +58,21 @@ ApplicationWindow {
     }
 
     ListModel { id: folderModel }
-    ListModel { id: messageModel }
     ListModel { id: accountModel }
+
+    // The message feed is kept as plain JavaScript objects, not a ListModel.
+    // `ListModel.get()` hands out QObjects the model owns, so the reader pane
+    // holding the selected message was dereferencing freed memory the moment a
+    // reload cleared the model -- the segfault on repeated clicks. Plain
+    // objects are snapshots and stay valid.
+    property var messageRows: []
 
     // --- feed plumbing ----------------------------------------------------
 
     function reloadFolders() {
-        var arr = JSON.parse(backend.folders_json)
-        folderModel.clear()
-        for (var i = 0; i < arr.length; i++)
-            folderModel.append(arr[i])
+        // Synced in place, never cleared: clearing destroys every sidebar
+        // delegate on every click (see qml/ModelSync.qml).
+        ModelSync.sync(folderModel, JSON.parse(backend.folders_json), "name")
         // Keep selection if still present, else inbox, else first.
         var found = false
         for (var j = 0; j < folderModel.count; j++) {
@@ -87,20 +92,14 @@ ApplicationWindow {
     }
 
     function reloadMessages() {
-        var arr = JSON.parse(backend.messages_json)
-        messageModel.clear()
-        for (var i = 0; i < arr.length; i++)
-            messageModel.append(arr[i])
+        root.messageRows = JSON.parse(backend.messages_json)
         // Drop the selection only if that message really is gone.
         if (root.messageByUid(root.currentUid) === undefined)
             root.currentUid = -1
     }
 
     function reloadAccounts() {
-        var arr = JSON.parse(backend.accounts_json)
-        accountModel.clear()
-        for (var i = 0; i < arr.length; i++)
-            accountModel.append(arr[i])
+        ModelSync.sync(accountModel, JSON.parse(backend.accounts_json), "id")
     }
 
     function reloadAll() {
@@ -114,9 +113,9 @@ ApplicationWindow {
     function messageByUid(uid) {
         if (uid < 0)
             return undefined
-        for (var i = 0; i < messageModel.count; i++) {
-            if (messageModel.get(i).uid === uid)
-                return messageModel.get(i)
+        for (var i = 0; i < root.messageRows.length; i++) {
+            if (root.messageRows[i].uid === uid)
+                return root.messageRows[i]
         }
         return undefined
     }
@@ -128,6 +127,8 @@ ApplicationWindow {
     // --- actions ----------------------------------------------------------
 
     function openMessage(uid) {
+        if (uid < 0 || uid === root.currentUid)
+            return  // already open: re-clicking a row must not reload anything
         root.currentUid = uid
         // Local-only mark-as-read: fast, no network on the click path.
         var r = backend.open_message(uid)
@@ -216,6 +217,23 @@ ApplicationWindow {
         } else {
             root.statusText = r
         }
+    }
+
+    // Windows draws the caption bar outside the Qt scene and does not follow
+    // the desktop colour scheme on its own, so a dark app came up with a white
+    // title bar. The bridge tells DWM; on Linux it does nothing. Driven from a
+    // timer because the native window has to exist first, and re-applied if
+    // the desktop switches between light and dark while running.
+    Timer {
+        interval: 0
+        running: true
+        repeat: false
+        onTriggered: backend.apply_native_theme(Theme.dark)
+    }
+
+    Connections {
+        target: Application.styleHints
+        function onColorSchemeChanged() { backend.apply_native_theme(Theme.dark) }
     }
 
     Component.onCompleted: {
@@ -366,7 +384,7 @@ ApplicationWindow {
             id: messageList
             SplitView.preferredWidth: 360
             SplitView.minimumWidth: 240
-            messages: messageModel
+            messages: root.messageRows
             currentUid: root.currentUid
             folderName: root.currentFolder
             filterText: searchField.text

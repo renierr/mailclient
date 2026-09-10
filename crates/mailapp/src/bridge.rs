@@ -33,6 +33,12 @@ pub mod qobject {
         #[qinvokable]
         fn ping(&self, message: &QString) -> QString;
 
+        /// Ask the window manager for dark or light window decorations.
+        /// Windows needs telling explicitly (Qt leaves the caption bar light
+        /// on a dark desktop); elsewhere this is a no-op.
+        #[qinvokable]
+        fn apply_native_theme(&self, dark: bool);
+
         /// Reload accounts/feeds from the DB. Returns `""` or a status message
         /// (`"no account — add one first"` when empty).
         #[qinvokable]
@@ -219,6 +225,11 @@ impl qobject::Bridge {
     pub fn ping(&self, message: &QString) -> QString {
         let text = message.to_string();
         QString::from(format!("pong: {text}").as_str())
+    }
+
+    /// See [`crate::platform::set_dark_decorations`].
+    pub fn apply_native_theme(&self, dark: bool) {
+        crate::platform::set_dark_decorations(dark);
     }
 
     pub fn refresh_accounts(mut self: Pin<&mut Self>) -> QString {

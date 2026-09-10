@@ -4,8 +4,8 @@ import QtQuick.Controls
 import Mailclient
 import "components"
 
-// Message list. Expects `messages` ListModel with
-// {uid, subject, from, date, snippet, unread, starred}.
+// Message list. Expects `messages` to be an array of plain objects with
+// {uid, subject, from, date, snippet, unread, starred} (Main.qml's feed).
 //
 // Selection is keyed on UID, never on the row index (flaw F1). The old code
 // bound `ListView.currentIndex` to a property, then reassigned it from a
@@ -17,7 +17,9 @@ import "components"
 Rectangle {
     id: root
 
-    property var messages
+    // Plain JS array, not a ListModel: see qml/ModelSync.qml for why the feed
+    // is never handed around as model-owned objects.
+    property var messages: []
     property int currentUid: -1
     property string folderName: ""
     property string filterText: ""
@@ -54,15 +56,30 @@ Rectangle {
             || (m.snippet || "").toLowerCase().indexOf(q) !== -1
     }
 
-    function rebuildFiltered() {
-        filtered.clear()
-        if (!root.messages)
-            return
-        for (var i = 0; i < root.messages.count; i++) {
-            var m = root.messages.get(i)
-            if (root.matches(m))
-                filtered.append(m)
+    // Only the roles a row actually draws. The feed also carries the full
+    // bodies, which have no business in a list model.
+    function displayRow(m) {
+        return {
+            uid: m.uid,
+            subject: m.subject,
+            from: m.from,
+            date: m.date,
+            snippet: m.snippet,
+            unread: m.unread,
+            starred: m.starred
         }
+    }
+
+    function rebuildFiltered() {
+        var rows = []
+        var src = root.messages || []
+        for (var i = 0; i < src.length; i++) {
+            if (root.matches(src[i]))
+                rows.push(root.displayRow(src[i]))
+        }
+        // In place: clearing the model destroyed and rebuilt every delegate on
+        // every click, including the one whose mouse handler was still running.
+        ModelSync.sync(filtered, rows, "uid")
     }
 
     function indexOfUid(uid) {
@@ -90,20 +107,10 @@ Rectangle {
     onMessagesChanged: root.scheduleRebuild()
     onFilterTextChanged: root.scheduleRebuild()
 
-    // Coalesced, never immediate. `reloadMessages()` clears the feed and then
-    // appends row by row, so countChanged fires once per row: rebuilding
-    // eagerly meant one full rebuild per appended message (quadratic, and it
-    // destroyed and recreated every delegate each time, right under the
-    // handler that started it). Qt.callLater collapses the whole storm into a
-    // single rebuild after the model has settled.
+    // Coalesced: a reload plus a filter keystroke in the same tick should cost
+    // one rebuild, not two, and never one while a click handler is unwinding.
     function scheduleRebuild() {
         Qt.callLater(root.rebuildFiltered)
-    }
-
-    Connections {
-        target: root.messages
-        // The feed is replaced wholesale on every reload; mirror it.
-        function onCountChanged() { root.scheduleRebuild() }
     }
 
     Column {
@@ -137,7 +144,7 @@ Rectangle {
                 anchors.rightMargin: Theme.md
                 text: root.filterText === ""
                       ? qsTr("%1").arg(filtered.count)
-                      : qsTr("%1 of %2").arg(filtered.count).arg(root.messages ? root.messages.count : 0)
+                      : qsTr("%1 of %2").arg(filtered.count).arg(root.messages ? root.messages.length : 0)
                 color: Theme.textMuted
                 font.pixelSize: Theme.fontSmall
             }

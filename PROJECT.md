@@ -89,7 +89,7 @@ UI iteration: `./scripts/dev.sh` runs the app against live `crates/mailapp/qml/`
 
 ## 8. Known Flaws & Repair List (user-reported)
 
-F1–F13 below; all currently closed.
+F1–F15 below; all currently closed.
 
 | # | Flaw | Status | Resolution |
 |---|---|---|---|
@@ -106,6 +106,8 @@ F1–F13 below; all currently closed.
 | F11 | Message list showed the wrong time | ✅ fixed | `short_date` formatted the sender's own offset and compared against UTC midnight; it converts to `chrono::Local` first, so times read as the local clock and today/yesterday flip at local midnight |
 | F12 | Buttons, dialogs and menus looked like a different app | ✅ fixed | Everything the app draws now comes from the design system: `AppButton`, `AppTextField`, `AppComboBox`, `AppCheckBox`, `AppMenu`, plus a window `palette` for the style-drawn leftovers (ScrollBar, ToolTip, selection). `standardButtons` are gone — those are drawn by the Controls style and cannot match |
 | F13 | From address let you send as any domain | ✅ fixed | Composer splits the account address: the local part is editable, the domain is fixed and labelled as such (another domain would fail SPF/DMARC anyway) |
+| F14 | Segfault after clicking the same message repeatedly | ✅ fixed | Every reload did `ListModel.clear()` + `append()` per row. `ListModel.get()` hands out QObjects the model owns, so the reader pane — which held the selected message — was left dereferencing freed memory as soon as the next click cleared the model, and every delegate was destroyed and rebuilt underneath the mouse handler that triggered it. The feed is now plain JavaScript objects (snapshots that stay valid), list models are updated in place by `ModelSync.sync()` (remove, insert, move, and write only the roles that changed), the reader keys its reloads on the UID instead of object identity, and re-clicking the open message is a no-op |
+| F15 | Window title bar stayed white on a dark desktop | ✅ fixed | Windows draws the caption bar outside the Qt scene and Qt does not set `DWMWA_USE_IMMERSIVE_DARK_MODE` from the system colour scheme — a stock Qt window reports the attribute as off on a fully dark desktop. `platform.rs` sets it on the app's own top-level windows (and again if the desktop scheme changes); on Linux the compositor already follows the preference, so it is a no-op |
 
 
 Reported working (keep while fixing): account setup + keyring, manual ⟳ sync, folder tree, send + Sent-copy, star/delete, remote-image blocking default.

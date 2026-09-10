@@ -13,6 +13,7 @@
 //! `import Mailclient` resolves no matter where `Main.qml` loads from.
 
 pub mod bridge;
+pub mod platform;
 
 use std::path::PathBuf;
 
