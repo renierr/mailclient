@@ -27,6 +27,14 @@ Dialog {
     signal accountSelected(int id)
     signal deleteConfirmed(int id)
 
+    // These rebuild the account model, destroying the row that was clicked.
+    function emitLater(sig, arg) {
+        if (arg === undefined)
+            Qt.callLater(sig)
+        else
+            Qt.callLater(sig, arg)
+    }
+
     // Pending delete, so the confirm dialog knows what it is confirming.
     property int pendingDeleteId: -1
     property string pendingDeleteEmail: ""
@@ -60,14 +68,14 @@ Dialog {
 
     footer: RowLayout {
         spacing: Theme.sm
-        Button {
+        AppButton {
             Layout.leftMargin: Theme.lg
             Layout.bottomMargin: Theme.md
             text: qsTr("Add account…")
             onClicked: root.addRequested()
         }
         Item { Layout.fillWidth: true }
-        Button {
+        AppButton {
             Layout.rightMargin: Theme.lg
             Layout.bottomMargin: Theme.md
             text: qsTr("Close")
@@ -152,12 +160,12 @@ Dialog {
                     text: "✓"
                     tooltip: qsTr("Use this account")
                     enabled: !accountRow.current
-                    onClicked: root.accountSelected(accountRow.model.id)
+                    onClicked: root.emitLater(root.accountSelected, accountRow.model.id)
                 }
                 IconButton {
                     text: "✎"
                     tooltip: qsTr("Edit")
-                    onClicked: root.editRequested(accountRow.model.id)
+                    onClicked: root.emitLater(root.editRequested, accountRow.model.id)
                 }
                 IconButton {
                     text: "🗑"
@@ -190,7 +198,6 @@ Dialog {
         anchors.centerIn: parent
         width: 420
         padding: Theme.lg
-        standardButtons: Dialog.Cancel | Dialog.Yes
 
         background: Rectangle {
             color: Theme.bg
@@ -199,9 +206,27 @@ Dialog {
             border.color: Theme.border
         }
 
-        onAccepted: {
-            root.deleteConfirmed(root.pendingDeleteId)
-            root.pendingDeleteId = -1
+        // Explicit footer instead of standardButtons: those are drawn by the
+        // Controls style, so they would not match any other button here.
+        footer: RowLayout {
+            spacing: Theme.sm
+            Item { Layout.fillWidth: true }
+            AppButton {
+                text: qsTr("Cancel")
+                onClicked: confirmDelete.close()
+            }
+            AppButton {
+                Layout.rightMargin: Theme.lg
+                Layout.bottomMargin: Theme.md
+                Layout.topMargin: Theme.sm
+                text: qsTr("Remove")
+                intent: "danger"
+                onClicked: {
+                    root.deleteConfirmed(root.pendingDeleteId)
+                    root.pendingDeleteId = -1
+                    confirmDelete.close()
+                }
+            }
         }
 
         Label {

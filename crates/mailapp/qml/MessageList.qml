@@ -25,6 +25,22 @@ Rectangle {
     signal messageSelected(int uid)
     signal starToggled(int uid)
     signal deleteRequested(int uid)
+    signal purgeRequested(int uid)
+
+    // Row actions rebuild the feed, which destroys the delegates. Emitting
+    // straight from a delegate's click handler therefore deletes the item
+    // whose handler is still running -- a use-after-free that segfaulted the
+    // app on delete. Qt.callLater defers the emit until the handler (and, for
+    // the context menu, the popup close animation) has unwound.
+    function emitLater(sig, uid) {
+        Qt.callLater(sig, uid)
+    }
+
+    // Context menu target. The menu lives here, not in the delegate: a popup
+    // parented to a row would be destroyed underneath itself as the model
+    // rebuilds.
+    property int menuUid: -1
+    property bool menuStarred: false
 
     color: Theme.bg
 
@@ -71,13 +87,23 @@ Rectangle {
         id: filtered
     }
 
-    onMessagesChanged: root.rebuildFiltered()
-    onFilterTextChanged: root.rebuildFiltered()
+    onMessagesChanged: root.scheduleRebuild()
+    onFilterTextChanged: root.scheduleRebuild()
+
+    // Coalesced, never immediate. `reloadMessages()` clears the feed and then
+    // appends row by row, so countChanged fires once per row: rebuilding
+    // eagerly meant one full rebuild per appended message (quadratic, and it
+    // destroyed and recreated every delegate each time, right under the
+    // handler that started it). Qt.callLater collapses the whole storm into a
+    // single rebuild after the model has settled.
+    function scheduleRebuild() {
+        Qt.callLater(root.rebuildFiltered)
+    }
 
     Connections {
         target: root.messages
         // The feed is replaced wholesale on every reload; mirror it.
-        function onCountChanged() { root.rebuildFiltered() }
+        function onCountChanged() { root.scheduleRebuild() }
     }
 
     Column {
@@ -166,22 +192,13 @@ Rectangle {
                     hoverEnabled: true
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     onClicked: mouse => {
-                        if (mouse.button === Qt.RightButton)
+                        if (mouse.button === Qt.RightButton) {
+                            root.menuUid = row.model.uid
+                            root.menuStarred = row.model.starred
                             rowMenu.popup()
-                        else
-                            root.messageSelected(row.model.uid)
-                    }
-                }
-
-                Menu {
-                    id: rowMenu
-                    MenuItem {
-                        text: row.model.starred ? qsTr("Remove star") : qsTr("Star")
-                        onTriggered: root.starToggled(row.model.uid)
-                    }
-                    MenuItem {
-                        text: qsTr("Delete")
-                        onTriggered: root.deleteRequested(row.model.uid)
+                        } else {
+                            root.emitLater(root.messageSelected, row.model.uid)
+                        }
                     }
                 }
 
@@ -264,10 +281,28 @@ Rectangle {
                         text: row.model.starred ? "★" : "☆"
                         contentColor: row.model.starred ? Theme.star : Theme.textMuted
                         tooltip: row.model.starred ? qsTr("Remove star") : qsTr("Star")
-                        onClicked: root.starToggled(row.model.uid)
+                        onClicked: root.emitLater(root.starToggled, row.model.uid)
                     }
                 }
             }
+        }
+    }
+
+    AppMenu {
+        id: rowMenu
+
+        MenuItem {
+            text: root.menuStarred ? qsTr("Remove star") : qsTr("Star")
+            onTriggered: root.emitLater(root.starToggled, root.menuUid)
+        }
+        MenuItem {
+            text: qsTr("Move to Trash")
+            onTriggered: root.emitLater(root.deleteRequested, root.menuUid)
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Delete permanently…")
+            onTriggered: root.emitLater(root.purgeRequested, root.menuUid)
         }
     }
 

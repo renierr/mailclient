@@ -162,7 +162,52 @@ impl ImapSync {
         Ok(())
     }
 
-    /// Delete one cached message server-side (`\Deleted` + expunge) and locally.
+    /// Move one message to the account's Trash folder -- what "delete" means
+    /// in a mail client.
+    ///
+    /// Returns the destination folder path. Callers get
+    /// [`TrashOutcome::Expunged`] instead when there is nowhere to move it
+    /// to: the message is already in Trash, or the account has no Trash
+    /// folder. Prefers `UID MOVE` (RFC 6851) and falls back to
+    /// `COPY` + `\Deleted` + `EXPUNGE` on servers without it.
+    pub fn trash_message(&mut self, db: &Db, message_id: i64) -> Result<TrashOutcome> {
+        let message = messages::get(db, message_id)?;
+        let folder = folders::get(db, message.folder_id)?;
+        let trash = folders::list_by_account(db, message.account_id)?
+            .into_iter()
+            .find(|f| f.role == FolderRole::Trash);
+
+        // Already in Trash, or no Trash at all: the only remaining meaning of
+        // "delete" is destroying it, and the caller is told so.
+        let Some(trash) = trash.filter(|t| t.id != folder.id) else {
+            self.delete_message(db, message_id)?;
+            return Ok(TrashOutcome::Expunged);
+        };
+
+        let has_move = self
+            .session()?
+            .capabilities()
+            .map(|caps| caps.has_str("MOVE"))
+            .unwrap_or(false);
+        let session = self.session()?;
+        session.select(&folder.path)?;
+        let uid = message.uid.to_string();
+        if has_move {
+            session.uid_mv(&uid, &trash.path)?;
+        } else {
+            session.uid_copy(&uid, &trash.path)?;
+            session.uid_store(&uid, "+FLAGS (\\Deleted)")?;
+            session.expunge()?;
+        }
+        // The server copy now lives in Trash; the local row belongs to the
+        // source folder and is gone from it. Syncing Trash pulls it back.
+        messages::delete(db, message_id)?;
+        Ok(TrashOutcome::Moved(trash.path))
+    }
+
+    /// Permanently destroy one message server-side (`\Deleted` + expunge)
+    /// and locally. No undo -- use [`Self::trash_message`] for the normal
+    /// delete action.
     pub fn delete_message(&mut self, db: &Db, message_id: i64) -> Result<()> {
         let message = messages::get(db, message_id)?;
         let folder = folders::get(db, message.folder_id)?;
@@ -179,6 +224,15 @@ impl ImapSync {
             StoreError::InvalidInput("not connected: call connect() first".to_string())
         })
     }
+}
+
+/// What [`ImapSync::trash_message`] actually did, so the UI can say so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrashOutcome {
+    /// Moved to this folder path.
+    Moved(String),
+    /// Destroyed: it was already in Trash, or the account has no Trash.
+    Expunged,
 }
 
 impl SyncProvider for ImapSync {

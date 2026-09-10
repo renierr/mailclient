@@ -187,13 +187,13 @@ Dialog {
             Layout.bottomMargin: Theme.md
             spacing: Theme.sm
             Item { Layout.fillWidth: true }
-            Button {
+            AppButton {
                 text: qsTr("Cancel")
                 onClicked: root.reject()
             }
-            Button {
+            AppButton {
                 text: root.editing ? qsTr("Save changes") : qsTr("Add account")
-                highlighted: true
+                intent: "primary"
                 onClicked: root.submit()
             }
         }
@@ -267,7 +267,7 @@ Dialog {
                         color: Theme.textMuted
                         font.pixelSize: Theme.fontSmall
                     }
-                    ComboBox {
+                    AppComboBox {
                         id: imapSecBox
                         Layout.preferredWidth: 120
                         model: ["TLS", "STARTTLS"]
@@ -324,7 +324,7 @@ Dialog {
                         color: Theme.textMuted
                         font.pixelSize: Theme.fontSmall
                     }
-                    ComboBox {
+                    AppComboBox {
                         id: smtpSecBox
                         Layout.preferredWidth: 120
                         model: ["TLS", "STARTTLS"]

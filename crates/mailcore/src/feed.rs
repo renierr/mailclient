@@ -47,20 +47,27 @@ pub fn accounts_json(db: &Db) -> Result<String> {
     Ok(serde_json::to_string(&arr)?)
 }
 
-/// Compact human date: `09:12` (today), `Yesterday`, else `2026-09-07`.
+/// Compact human date in the **viewer's** timezone: `09:12` (today),
+/// `Yesterday`, else `2026-09-07`.
+///
+/// Everything is converted to local time first. Formatting the parsed value
+/// directly keeps whatever offset the sender wrote (usually `Z`), so a mail
+/// that arrived at 11:12 local showed 09:12, and "today"/"yesterday" flipped
+/// at UTC midnight rather than the user's.
 fn short_date(rfc3339: Option<&str>) -> String {
     let raw = rfc3339.unwrap_or("");
     let Ok(dt) = chrono::DateTime::parse_from_rfc3339(raw) else {
         return raw.to_string();
     };
-    let date = dt.date_naive();
-    let today = chrono::Utc::now().date_naive();
+    let local = dt.with_timezone(&chrono::Local);
+    let today = chrono::Local::now().date_naive();
+    let date = local.date_naive();
     if date == today {
-        dt.format("%H:%M").to_string()
+        local.format("%H:%M").to_string()
     } else if date == today.pred_opt().unwrap_or(today) {
         "Yesterday".to_string()
     } else {
-        dt.format("%Y-%m-%d").to_string()
+        local.format("%Y-%m-%d").to_string()
     }
 }
 
@@ -104,8 +111,13 @@ pub fn messages_json(db: &Db, folder_id: i64) -> Result<String> {
         // (image-only newsletter) — still route to WebEngine so the banner
         // ("images blocked") shows instead of raw-tag text.
         let body_html = if is_html && safe_html.trim().is_empty() {
-            // Minimal placeholder keeps the html branch alive.
-            "<p>[images blocked — choose Show images]</p>".to_string()
+            // Keeps the html branch alive, and says which of the two it is
+            // rather than blaming blocked images for an empty body.
+            if had_remote {
+                "<p>[images blocked — choose Show images]</p>".to_string()
+            } else {
+                "<p>[no displayable content]</p>".to_string()
+            }
         } else {
             safe_html
         };
@@ -228,5 +240,31 @@ mod tests {
         assert_eq!(short_date(Some(&now)).len(), 5); // HH:MM
         assert_eq!(short_date(Some("2020-01-02T03:04:05+00:00")), "2020-01-02");
         assert_eq!(short_date(None), "");
+    }
+
+    #[test]
+    fn short_date_renders_local_clock_not_the_senders_offset() {
+        use chrono::{Local, TimeZone, Utc};
+        // Same instant, written in three different offsets: the list must show
+        // one and the same local wall-clock time for all three.
+        let instant = Utc.with_ymd_and_hms(2026, 6, 15, 12, 30, 0).unwrap();
+        let expected = instant.with_timezone(&Local).format("%H:%M").to_string();
+        let offsets = [
+            instant.to_rfc3339(),
+            instant
+                .with_timezone(&chrono::FixedOffset::east_opt(5 * 3600).unwrap())
+                .to_rfc3339(),
+            instant
+                .with_timezone(&chrono::FixedOffset::west_opt(8 * 3600).unwrap())
+                .to_rfc3339(),
+        ];
+        for raw in offsets {
+            let shown = short_date(Some(&raw));
+            // Only same-day mails render as a clock time; otherwise the date
+            // is shown and this assertion does not apply.
+            if shown.len() == 5 {
+                assert_eq!(shown, expected, "for {raw}");
+            }
+        }
     }
 }

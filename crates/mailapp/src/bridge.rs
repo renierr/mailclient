@@ -79,9 +79,16 @@ pub mod qobject {
         #[qinvokable]
         fn toggle_star(self: Pin<&mut Self>, uid: i32) -> QString;
 
-        /// Delete a message server-side (`\Deleted` + expunge) and locally.
+        /// Move a message to Trash (what the delete action means). Returns
+        /// `"Moved to <folder>"`, or `"Deleted permanently"` when it was
+        /// already in Trash / the account has none, else an error message.
         #[qinvokable]
         fn delete_message(self: Pin<&mut Self>, uid: i32) -> QString;
+
+        /// Destroy a message server-side (`\Deleted` + expunge). No undo;
+        /// only for an explicit "delete permanently" action.
+        #[qinvokable]
+        fn purge_message(self: Pin<&mut Self>, uid: i32) -> QString;
 
         /// Send a message from a JSON form
         /// (`{from,to,subject,body,body_html?}`; `body` holds composer rich
@@ -118,7 +125,7 @@ use core::pin::Pin;
 use cxx_qt_lib::QString;
 use mailcore::models::NewAccount;
 use mailcore::store::{accounts, folders, messages};
-use mailcore::sync::imap::ImapSync;
+use mailcore::sync::imap::{ImapSync, TrashOutcome};
 use mailcore::sync::sender::{SendFormat, SendPolicy, SendRequest, SmtpSender};
 use mailcore::sync::traits::{MailSender, SyncProvider};
 use mailcore::{auth, feed};
@@ -556,13 +563,45 @@ impl qobject::Bridge {
             Ok(s) => s,
             Err(e) => return qstring(&e),
         };
+        let r = imap.trash_message(&db, msg.id).map_err(|e| e.to_string());
+        imap.disconnect();
+        let outcome = match r {
+            Ok(o) => o,
+            Err(e) => return qstring(&e),
+        };
+        push_feeds(&mut self, &db, acc_id, folder_id);
+        // Reported, not silent: "deleted permanently" is a different promise
+        // from "moved to Trash" and the user needs to know which happened.
+        match outcome {
+            TrashOutcome::Moved(path) => qstring(&format!("Moved to {path}")),
+            TrashOutcome::Expunged => qstring("Deleted permanently"),
+        }
+    }
+
+    pub fn purge_message(mut self: Pin<&mut Self>, uid: i32) -> QString {
+        let db = match open_db() {
+            Ok(d) => d,
+            Err(e) => return qstring(&e),
+        };
+        let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+        let Ok(msg) = messages::get_by_uid(&db, folder_id, uid as u32) else {
+            return qstring("");
+        };
+        let acc = match accounts::get(&db, acc_id) {
+            Ok(a) => a,
+            Err(e) => return qstring(&e.to_string()),
+        };
+        let mut imap = match imap_session(&acc) {
+            Ok(s) => s,
+            Err(e) => return qstring(&e),
+        };
         let r = imap.delete_message(&db, msg.id).map_err(|e| e.to_string());
         imap.disconnect();
         if let Err(e) = r {
             return qstring(&e);
         }
         push_feeds(&mut self, &db, acc_id, folder_id);
-        qstring("")
+        qstring("Deleted permanently")
     }
 
     pub fn send_mail(mut self: Pin<&mut Self>, form: &QString) -> QString {

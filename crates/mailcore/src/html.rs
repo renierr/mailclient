@@ -71,6 +71,17 @@ fn void_tag(tag: &str) -> bool {
 }
 
 /// Tags whose *content* is dropped entirely (active/positional content).
+/// Tags whose **content** is dropped along with the tag.
+///
+/// `html` and `body` must NOT be listed here, and neither may the void
+/// `meta`/`link`/`base`: dropping their content means dropping the whole
+/// document. A full document is the normal case -- it is what Qt's rich-text
+/// editor emits and what most HTML mail looks like -- and listing them here
+/// sanitized every such body down to an empty string (an unsent body, and an
+/// empty reader pane). They fall through to `allowed_tag` instead, which
+/// skips the tag and keeps what is inside it.
+///
+/// `head` stays, so the `<style>`/`<meta>` block it wraps still goes away.
 fn drop_content_tag(tag: &str) -> bool {
     matches!(
         tag,
@@ -84,13 +95,8 @@ fn drop_content_tag(tag: &str) -> bool {
             | "button"
             | "select"
             | "textarea"
-            | "meta"
-            | "link"
-            | "base"
             | "title"
             | "head"
-            | "html"
-            | "body"
             | "noscript"
             | "template"
             | "slot"

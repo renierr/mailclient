@@ -24,6 +24,26 @@ ApplicationWindow {
     title: qsTr("Mailclient")
     color: Theme.bg
 
+    // Inherited by every control in the window. The wrapped components in
+    // components/ paint themselves from Theme, but ScrollBar, ToolTip, text
+    // selection and dialog overlays are drawn by the style -- without a
+    // palette they use its light defaults and read as a different app.
+    palette.window: Theme.bg
+    palette.windowText: Theme.text
+    palette.base: Theme.bg
+    palette.alternateBase: Theme.bgAlt
+    palette.button: Theme.bgRaised
+    palette.buttonText: Theme.text
+    palette.text: Theme.text
+    palette.placeholderText: Theme.textMuted
+    palette.mid: Theme.border
+    palette.midlight: Theme.border
+    palette.dark: Theme.border
+    palette.highlight: Theme.accent
+    palette.highlightedText: Theme.accentText
+    palette.toolTipBase: Theme.bgRaised
+    palette.toolTipText: Theme.text
+
     property string currentFolder: ""
     property int currentUid: -1
     property string statusText: qsTr("Starting…")
@@ -139,6 +159,8 @@ ApplicationWindow {
         reloadMessages()
     }
 
+    // Moves to Trash; the bridge reports which it did, because "moved" and
+    // "destroyed" are different promises.
     function deleteMessage(uid) {
         if (uid < 0)
             return
@@ -147,7 +169,27 @@ ApplicationWindow {
             root.currentUid = -1
         reloadFolders()
         reloadMessages()
-        showResult(qsTr("Deleted"), r)
+        root.statusText = r === "" ? qsTr("Deleted") : r
+    }
+
+    function purgeMessage(uid) {
+        if (uid < 0)
+            return
+        var r = backend.purge_message(uid)
+        if (root.currentUid === uid)
+            root.currentUid = -1
+        reloadFolders()
+        reloadMessages()
+        root.statusText = r === "" ? qsTr("Deleted permanently") : r
+    }
+
+    function confirmPurge(uid) {
+        if (uid < 0)
+            return
+        var m = root.messageByUid(uid)
+        purgeConfirm.uid = uid
+        purgeConfirm.subject = m !== undefined ? m.subject : ""
+        purgeConfirm.open()
     }
 
     function selectFolder(path) {
@@ -197,6 +239,7 @@ ApplicationWindow {
     Shortcut { sequences: ["Down"]; onActivated: messageList.step(1) }
     Shortcut { sequences: ["Up"]; onActivated: messageList.step(-1) }
     Shortcut { sequences: ["Delete"]; onActivated: root.deleteMessage(root.currentUid) }
+    Shortcut { sequences: ["Shift+Delete"]; onActivated: root.confirmPurge(root.currentUid) }
     Shortcut { sequences: ["S"]; onActivated: root.toggleStar(root.currentUid) }
     Shortcut {
         sequences: ["R"]
@@ -232,28 +275,11 @@ ApplicationWindow {
                 onClicked: sidebar.visible = !sidebar.visible
             }
 
-            Button {
+            AppButton {
                 text: qsTr("✎  Compose")
+                intent: "primary"
                 enabled: backend.account_count > 0
                 onClicked: composer.openBlank()
-                implicitHeight: 32
-
-                background: Rectangle {
-                    radius: Theme.radius
-                    color: parent.enabled
-                           ? (parent.pressed ? Qt.darker(Theme.accent, 1.2) : Theme.accent)
-                           : Theme.border
-                }
-                contentItem: Text {
-                    text: parent.text
-                    color: parent.enabled ? Theme.accentText : Theme.textMuted
-                    font.pixelSize: Theme.fontBase
-                    font.bold: true
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                    leftPadding: Theme.sm
-                    rightPadding: Theme.sm
-                }
             }
 
             // Live filter over the loaded feed (server-side FTS is M3).
@@ -347,6 +373,7 @@ ApplicationWindow {
             onMessageSelected: uid => root.openMessage(uid)
             onStarToggled: uid => root.toggleStar(uid)
             onDeleteRequested: uid => root.deleteMessage(uid)
+            onPurgeRequested: uid => root.confirmPurge(uid)
         }
 
         MessageView {
@@ -455,9 +482,60 @@ ApplicationWindow {
         }
     }
 
+    Dialog {
+        id: purgeConfirm
+        title: qsTr("Delete permanently?")
+        modal: true
+        anchors.centerIn: parent
+        width: 420
+        padding: Theme.lg
+
+        property int uid: -1
+        property string subject: ""
+
+        background: Rectangle {
+            color: Theme.bg
+            radius: Theme.radiusLg
+            border.width: 1
+            border.color: Theme.border
+        }
+
+        footer: RowLayout {
+            spacing: Theme.sm
+            Item { Layout.fillWidth: true }
+            AppButton {
+                text: qsTr("Cancel")
+                onClicked: purgeConfirm.close()
+            }
+            AppButton {
+                Layout.rightMargin: Theme.lg
+                Layout.bottomMargin: Theme.md
+                Layout.topMargin: Theme.sm
+                text: qsTr("Delete permanently")
+                intent: "danger"
+                onClicked: {
+                    var target = purgeConfirm.uid
+                    purgeConfirm.close()
+                    // Out of the click handler: purging rebuilds the feed.
+                    Qt.callLater(root.purgeMessage, target)
+                }
+            }
+        }
+
+        Label {
+            width: parent.width
+            wrapMode: Text.Wrap
+            color: Theme.text
+            font.pixelSize: Theme.fontBase
+            text: qsTr("“%1” will be destroyed on the server. This cannot be undone.")
+                  .arg(purgeConfirm.subject)
+        }
+    }
+
     Settings {
         id: settingsDialog
         settingsBridge: appSettings
+        dbPath: backend.db_path
         onStatusMessage: text => root.statusText = text
     }
 }

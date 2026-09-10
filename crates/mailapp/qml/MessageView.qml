@@ -190,9 +190,8 @@ Rectangle {
                     text: qsTr("Remote images blocked (tracking protection).")
                     font.pixelSize: Theme.fontSmall
                 }
-                Button {
+                AppButton {
                     text: qsTr("Show once")
-                    flat: true
                     onClicked: {
                         root.allowRemoteOnce = true
                         root.statusMessage(qsTr("Remote images allowed for this message only"))

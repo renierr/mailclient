@@ -12,7 +12,14 @@ echo "==> cargo build --release -p mailapp"
 cargo build --release -p mailapp
 
 echo "==> assembling dist/mailclient"
-rm -rf dist/mailclient
+# A running instance keeps its Qt/Chromium files open, so this rm fails and
+# `set -e` would abort with a bare "Device or resource busy" after the bundle
+# was already half-deleted. Say what to do about it instead.
+if ! rm -rf dist/mailclient 2>/dev/null; then
+    echo "cannot clear dist/mailclient -- files are in use." >&2
+    echo "Close the running mailapp (its WebEngine process holds"          "resources/icudtl.dat) and run this again." >&2
+    exit 1
+fi
 mkdir -p dist/mailclient/bin dist/mailclient/qml dist/mailclient/resources
 cp "target/release/mailapp$EXE_SUFFIX" dist/mailclient/bin/
 cp -r crates/mailapp/qml/* dist/mailclient/qml/

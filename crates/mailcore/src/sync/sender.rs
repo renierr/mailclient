@@ -432,4 +432,35 @@ mod tests {
         // Unknown format string falls back to multipart, never panics.
         assert_eq!(SendFormat::parse("nonsense"), SendFormat::Multipart);
     }
+
+    #[test]
+    fn full_html_document_body_survives_sanitizing() {
+        // A complete document is the normal case: Qt's rich-text editor emits
+        // one, and so does most HTML mail. Listing html/body/meta as
+        // content-dropping tags made every such body sanitize to nothing, so
+        // the recipient got "(empty)".
+        let doc = concat!(
+            "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.0//EN\">",
+            "<html><head><meta charset=\"utf-8\">",
+            "<style type=\"text/css\">p { color: red }</style></head>",
+            "<body><p>Hello <b>bold</b> world</p></body></html>"
+        );
+        for format in [SendFormat::Plain, SendFormat::Multipart, SendFormat::Html] {
+            let (plain, html) = resolve_bodies(doc, Some(doc), format);
+            assert!(
+                plain.contains("Hello") && plain.contains("bold"),
+                "plain lost the body for {format:?}: {plain:?}"
+            );
+            assert_ne!(plain, "(empty)", "for {format:?}");
+            if let Some(h) = html {
+                assert!(
+                    h.contains("Hello"),
+                    "html lost the body for {format:?}: {h:?}"
+                );
+                // Semantic tags survive; the dropped <style> block does not.
+                assert!(h.contains("<b>"), "formatting lost for {format:?}: {h:?}");
+                assert!(!h.contains("color: red"), "style leaked for {format:?}");
+            }
+        }
+    }
 }

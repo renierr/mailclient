@@ -34,7 +34,13 @@ fn main() {
             .qml_file("qml/Settings.qml")
             .qml_file("qml/components/Avatar.qml")
             .qml_file("qml/components/IconButton.qml")
-            .qml_file("qml/components/FormField.qml"),
+            .qml_file("qml/components/FormField.qml")
+            .qml_file("qml/components/AppTextField.qml")
+            .qml_file("qml/components/AppButton.qml")
+            .qml_file("qml/components/AppComboBox.qml")
+            .qml_file("qml/components/AppCheckBox.qml")
+            .qml_file("qml/components/AppMenu.qml")
+            .qml_file("qml/components/EditorFrame.qml"),
     )
     .file("src/bridge.rs")
     .qt_module("Quick")

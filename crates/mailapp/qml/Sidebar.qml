@@ -21,6 +21,16 @@ Rectangle {
     signal manageAccountsRequested()
     signal addAccountRequested()
 
+    // Switching account or folder rebuilds the models these delegates and the
+    // account popup are built from, so the emit is deferred out of the click
+    // handler (see MessageList.emitLater for the crash this avoids).
+    function emitLater(sig, arg) {
+        if (arg === undefined)
+            Qt.callLater(sig)
+        else
+            Qt.callLater(sig, arg)
+    }
+
     color: Theme.bgAlt
 
     Rectangle {
@@ -84,24 +94,24 @@ Rectangle {
                 }
             }
 
-            Menu {
+            AppMenu {
                 id: accountMenu
                 Repeater {
                     model: root.accounts
                     MenuItem {
                         required property var model
                         text: (model.id === root.currentAccountId ? "● " : "   ") + model.email
-                        onTriggered: root.accountSelected(model.id)
+                        onTriggered: root.emitLater(root.accountSelected, model.id)
                     }
                 }
                 MenuSeparator {}
                 MenuItem {
                     text: qsTr("Add account…")
-                    onTriggered: root.addAccountRequested()
+                    onTriggered: root.emitLater(root.addAccountRequested)
                 }
                 MenuItem {
                     text: qsTr("Manage accounts…")
-                    onTriggered: root.manageAccountsRequested()
+                    onTriggered: root.emitLater(root.manageAccountsRequested)
                 }
             }
         }
@@ -135,7 +145,7 @@ Rectangle {
                 required property var model
                 readonly property bool current: folderRow.model.name === root.currentFolder
 
-                onClicked: root.folderSelected(folderRow.model.name)
+                onClicked: root.emitLater(root.folderSelected, folderRow.model.name)
                 // Padding, not anchors: a control's contentItem is sized by
                 // the control, so anchor margins inside it are ignored.
                 leftPadding: Theme.md + Theme.sm

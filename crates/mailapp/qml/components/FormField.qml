@@ -4,8 +4,11 @@ import QtQuick.Layouts
 
 import Mailclient
 
-// Labelled text input for the dialogs. Fixes flaw F4 (placeholder-only fields
-// with no labels) in one place, and gives every dialog the same field look.
+// Labelled text input for the dialogs: label, field, optional hint.
+// Fixes flaw F4 (placeholder-only fields with no labels) in one place.
+//
+// Where the surrounding layout already provides the label — the composer's
+// header grid — use AppTextField directly instead, or you get two labels.
 ColumnLayout {
     id: root
 
@@ -41,26 +44,12 @@ ColumnLayout {
         Item { Layout.fillWidth: true }
     }
 
-    TextField {
+    AppTextField {
         id: field
         Layout.fillWidth: true
-        color: Theme.text
-        placeholderTextColor: Theme.textMuted
-        font.pixelSize: Theme.fontBase
-        selectByMouse: true
-        leftPadding: Theme.sm
-        rightPadding: Theme.sm
+        invalid: root.invalid
         onAccepted: root.accepted()
         onEditingFinished: root.editingFinished()
-
-        background: Rectangle {
-            radius: Theme.radius
-            color: Theme.bg
-            border.width: 1
-            border.color: root.invalid ? Theme.danger
-                        : field.activeFocus ? Theme.accent
-                        : Theme.border
-        }
     }
 
     Label {

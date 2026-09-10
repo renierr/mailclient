@@ -89,17 +89,23 @@ UI iteration: `./scripts/dev.sh` runs the app against live `crates/mailapp/qml/`
 
 ## 8. Known Flaws & Repair List (user-reported)
 
-F1–F8 below; F3 is the only one still open.
+F1–F13 below; all currently closed.
 
 | # | Flaw | Status | Resolution |
 |---|---|---|---|
 | F1 | Cannot select other mails in the list (selection stuck / jumps back) | ✅ fixed | Selection is a UID, not a row index: clicks report `messageSelected(uid)`, the highlight derives from `currentUid`, and `onCurrentIndexChanged` no longer re-emits selection. Feed rebuilds can no longer move it. `open_message` also stopped opening an IMAP connection per click (see F8) |
 | F2 | No body shown in reader (empty pane) | ✅ fixed | Plain bodies render in a `Flickable` + sized `TextEdit`; the old `ScrollView` + unsized `TextEdit` had no height and drew nothing |
-| F3 | Composer is not WYSIWYG (Bold etc. don't reflect visually) | ⬜ open | Still tag-based `TextArea.insert`. Needs the WebEngine `contentEditable` + `execCommand` editor from the roadmap; deliberately out of the UI pass |
+| F3 | Composer is not WYSIWYG (Bold etc. don't reflect visually) | ✅ fixed | `components/EditorFrame.qml`: a `contentEditable` WebEngine document driven by `execCommand`, so text changes visibly and the toolbar buttons light up from `queryCommandState`. QML's rich-text `TextArea` has no selection-formatting API, which is why the old toolbar could only insert literal tags |
 | F4 | Composer fields are placeholder-only, no labels | ✅ fixed | Shared `components/FormField.qml` labels From/To/Cc/Subject (and every dialog field) |
 | F5 | Cancel loses the composed entry without asking | ✅ fixed | `dirty` tracking on all fields + a "Discard draft?" confirm; prefilled reply/forward quotes do not count as unsaved work |
 | F6 | Overall UI looks sterile, flawed vs modern clients | ✅ fixed | `qml/Theme.qml` design-token singleton (light/dark, spacing, radius, type) + full redesign: list delegates with unread dot, hover, accent bar and inline star; reader header block; sidebar account chip and unread pills; themed dialogs. `main.rs` pins the Basic Controls style so Windows and Linux render identically instead of falling back to the native Windows style |
 | F7 | Cannot manage accounts — a mistyped account can only be added, never removed or corrected | ✅ fixed | New `qml/Accounts.qml` manager (list, switch, edit, remove with confirm) on `Bridge.accounts_json` / `select_account` / `delete_account` / `account_form`. Editing keeps the stored password when the field is left blank; removal also drops the keyring secret |
 | F8 | Clicking a message froze the UI and could revert read state | ✅ fixed | `open_message` / `toggle_star` write locally and set `messages.flags_dirty` (schema v3); `sync_now` pushes the queue before fetching, so the server cannot overwrite a local change |
+| F9 | Sent mail arrived with no body | ✅ fixed | `drop_content_tag` listed `html`/`body`/`meta`/`link`/`base`, whose **content** it drops — so any full HTML document (what a rich-text editor emits, and what most HTML mail is) sanitized to an empty string and the recipient got `(empty)`. They now fall through to the tag allow-list, which keeps the content. The same bug emptied HTML mail in the reader |
+| F10 | Formatting was lost on send even when typed | ✅ fixed | Qt rich text encodes bold as `style="font-weight:700"`, and the outgoing sanitizer strips `style` by design. The `execCommand` editor emits `<b>`/`<i>`/`<u>` instead, which survive |
+| F11 | Message list showed the wrong time | ✅ fixed | `short_date` formatted the sender's own offset and compared against UTC midnight; it converts to `chrono::Local` first, so times read as the local clock and today/yesterday flip at local midnight |
+| F12 | Buttons, dialogs and menus looked like a different app | ✅ fixed | Everything the app draws now comes from the design system: `AppButton`, `AppTextField`, `AppComboBox`, `AppCheckBox`, `AppMenu`, plus a window `palette` for the style-drawn leftovers (ScrollBar, ToolTip, selection). `standardButtons` are gone — those are drawn by the Controls style and cannot match |
+| F13 | From address let you send as any domain | ✅ fixed | Composer splits the account address: the local part is editable, the domain is fixed and labelled as such (another domain would fail SPF/DMARC anyway) |
+
 
 Reported working (keep while fixing): account setup + keyring, manual ⟳ sync, folder tree, send + Sent-copy, star/delete, remote-image blocking default.
