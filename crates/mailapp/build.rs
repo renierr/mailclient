@@ -32,6 +32,7 @@ fn main() {
             .qml_file("qml/MessageList.qml")
             .qml_file("qml/MessageView.qml")
             .qml_file("qml/Composer.qml")
+            .qml_file("qml/Contacts.qml")
             .qml_file("qml/AccountSetup.qml")
             .qml_file("qml/Accounts.qml")
             .qml_file("qml/Folders.qml")
@@ -45,6 +46,7 @@ fn main() {
             .qml_file("qml/components/AppComboBox.qml")
             .qml_file("qml/components/AppCheckBox.qml")
             .qml_file("qml/components/AppMenu.qml")
+            .qml_file("qml/components/RecipientField.qml")
             .qml_file("qml/components/EditorFrame.qml"),
     )
     .file("src/bridge.rs")

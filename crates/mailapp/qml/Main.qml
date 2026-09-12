@@ -444,6 +444,11 @@ ApplicationWindow {
                 onClicked: accountsDialog.open()
             }
             IconButton {
+                text: "@"
+                tooltip: qsTr("Contacts")
+                onClicked: contactsDialog.open()
+            }
+            IconButton {
                 text: "⚙"
                 tooltip: qsTr("Settings")
                 onClicked: settingsDialog.open()
@@ -563,6 +568,8 @@ ApplicationWindow {
         accountEmail: backend.current_account_email
         accountFromName: backend.current_account_from_name
         sendFormat: appSettings.compose_send_format
+        backend: backend
+        collectContacts: appSettings.collect_sent_contacts
         onStatusMessage: text => root.statusText = text
         onSendRequested: payload => {
             var r = backend.send_mail(payload)
@@ -608,6 +615,12 @@ ApplicationWindow {
             reloadAll()
             showResult(qsTr("Account removed"), r)
         }
+    }
+
+    Contacts {
+        id: contactsDialog
+        backend: backend
+        onStatusMessage: text => root.statusText = text
     }
 
     Folders {

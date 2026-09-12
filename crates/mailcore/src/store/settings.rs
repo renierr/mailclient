@@ -24,6 +24,9 @@ pub const AUTO_MARK_READ: &str = "auto_mark_read";
 /// Delay in seconds before an opened message counts as read (default: `0` =
 /// immediately, Thunderbird-style; capped at 300).
 pub const MARK_READ_DELAY_SECS: &str = "mark_read_delay_secs";
+/// Collect recipients of successfully sent mail for address suggestions
+/// (default: on).
+pub const COLLECT_SENT_CONTACTS: &str = "collect_sent_contacts";
 
 /// Built-in default for a known key, if any.
 #[must_use]
@@ -35,6 +38,7 @@ pub fn defaults(key: &str) -> Option<&'static str> {
         COMPOSE_INCLUDE_PLAIN => Some("1"),
         AUTO_MARK_READ => Some("1"),
         MARK_READ_DELAY_SECS => Some("0"),
+        COLLECT_SENT_CONTACTS => Some("1"),
         _ => None,
     }
 }
@@ -150,6 +154,7 @@ mod tests {
         assert_eq!(normalize_delay_secs(9999), 300);
         let db = Db::open_in_memory().unwrap();
         assert!(get_bool(&db, AUTO_MARK_READ).unwrap());
+        assert!(get_bool(&db, COLLECT_SENT_CONTACTS).unwrap());
         assert_eq!(get_delay_secs(&db, MARK_READ_DELAY_SECS), 0);
         set_delay_secs(&db, MARK_READ_DELAY_SECS, 10).unwrap();
         assert_eq!(get_delay_secs(&db, MARK_READ_DELAY_SECS), 10);

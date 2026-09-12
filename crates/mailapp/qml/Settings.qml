@@ -94,6 +94,7 @@ Dialog {
         plainTwinBox.checked = settingsBridge.compose_include_plain
         readBox.checked = settingsBridge.auto_mark_read
         delayBox.currentIndex = delayIndex(settingsBridge.mark_read_delay_secs)
+        contactsBox.checked = settingsBridge.collect_sent_contacts
     }
 
     ColumnLayout {
@@ -111,6 +112,12 @@ Dialog {
             Layout.fillWidth: true
             text: qsTr("Load remote images in HTML mail (not recommended)")
             onToggled: root.settingsBridge.load_remote_images = checked
+        }
+        AppCheckBox {
+            id: contactsBox
+            Layout.fillWidth: true
+            text: qsTr("Suggest recipients from sent mail")
+            onToggled: root.settingsBridge.collect_sent_contacts = checked
         }
 
         Rectangle {

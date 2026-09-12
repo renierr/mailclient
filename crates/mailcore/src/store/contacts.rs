@@ -24,7 +24,9 @@ pub fn seen(db: &Db, address: &str, name: Option<&str>) -> Result<()> {
 
 /// Top matches for `prefix` (address or name), most-seen first.
 pub fn suggest(db: &Db, prefix: &str, limit: u64) -> Result<Vec<Contact>> {
-    let like = format!("{prefix}%");
+    // Escape SQLite LIKE metacharacters so typed addresses are literal.
+    let escaped = prefix.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let like = format!("{escaped}%");
     let mut stmt = db.conn().prepare(
         "select address, name, times_seen, last_seen_at from contacts
          where address like ?1 escape '\\' or name like ?1 escape '\\'
@@ -43,6 +45,19 @@ pub fn suggest(db: &Db, prefix: &str, limit: u64) -> Result<Vec<Contact>> {
     Ok(rows)
 }
 
+/// List known contacts, most frequently used first.
+pub fn list(db: &Db, limit: u64) -> Result<Vec<Contact>> {
+    suggest(db, "", limit)
+}
+
+/// Remove one auto-collected contact. It may be collected again after a later
+/// send while collection remains enabled.
+pub fn delete(db: &Db, address: &str) -> Result<()> {
+    db.conn()
+        .execute("delete from contacts where address = ?1", [address])?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -57,5 +72,7 @@ mod tests {
         assert_eq!(s.len(), 1);
         assert_eq!(s[0].times_seen, 2);
         assert_eq!(suggest(&db, "", 5).unwrap().len(), 2);
+        delete(&db, "bob@example.com").unwrap();
+        assert_eq!(list(&db, 5).unwrap().len(), 1);
     }
 }

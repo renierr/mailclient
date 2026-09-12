@@ -17,7 +17,7 @@ use lettre::{Message, SmtpTransport, Transport};
 use crate::db::Db;
 use crate::error::{Result, StoreError};
 use crate::models::{Account, FolderRole};
-use crate::store::{folders, queue, settings};
+use crate::store::{contacts, folders, queue, settings};
 use crate::sync::imap::ImapSync;
 use crate::sync::traits::MailSender;
 
@@ -590,6 +590,13 @@ impl MailSender for SmtpSender {
             Ok(response) => {
                 log::info!("smtp: sent to {:?}: {response:?}", req.to);
                 queue::mark_sent(db, queue_id)?;
+                if settings::get_bool(db, settings::COLLECT_SENT_CONTACTS).unwrap_or(true) {
+                    for mailbox in email.envelope().to() {
+                        if let Err(e) = contacts::seen(db, &mailbox.to_string(), None) {
+                            log::warn!("contacts: could not collect recipient: {e}");
+                        }
+                    }
+                }
                 self.save_sent_copy(db, account_id, req, &email.formatted());
                 Ok(())
             }

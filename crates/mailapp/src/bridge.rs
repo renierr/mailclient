@@ -69,6 +69,15 @@ pub mod qobject {
         #[qinvokable]
         fn account_form(&self, id: i64) -> QString;
 
+        /// Known sent-mail recipients as JSON, ranked by use. `prefix` matches
+        /// an address or name; an empty prefix lists all contacts.
+        #[qinvokable]
+        fn contacts_json(&self, prefix: &QString) -> QString;
+
+        /// Remove one auto-collected recipient. Returns `""` or an error.
+        #[qinvokable]
+        fn delete_contact(&self, address: &QString) -> QString;
+
         /// Run a full IMAP sync for the current account (blocking).
         /// Selective + windowed: the folder LIST is always cheap, INBOX syncs
         /// the newest 200 mails fully, every other folder only refreshes flags
@@ -220,6 +229,7 @@ pub mod qobject {
         #[qproperty(bool, compose_include_plain)]
         #[qproperty(bool, auto_mark_read)]
         #[qproperty(i32, mark_read_delay_secs)]
+        #[qproperty(bool, collect_sent_contacts)]
         #[namespace = "mailclient"]
         type SettingsBridge = super::SettingsBridgeRust;
 
@@ -487,6 +497,35 @@ fn guard_sync(label: &str, f: impl FnOnce() -> Result<String, String>) -> Result
 }
 
 impl qobject::Bridge {
+    pub fn contacts_json(&self, prefix: &QString) -> QString {
+        let result = open_db().and_then(|db| {
+            let prefix = prefix.to_string();
+            let contacts = if prefix.trim().is_empty() {
+                mailcore::store::contacts::list(&db, 200)
+            } else {
+                mailcore::store::contacts::suggest(&db, &prefix, 10)
+            };
+            contacts
+                .map(|contacts| serde_json::to_string(&contacts).unwrap_or_else(|_| "[]".to_string()))
+                .map_err(|e| e.to_string())
+        });
+        qstring(&result.unwrap_or_else(|e| {
+            log::warn!("contacts: cannot load suggestions: {e}");
+            "[]".to_string()
+        }))
+    }
+
+    pub fn delete_contact(&self, address: &QString) -> QString {
+        let address = address.to_string();
+        let result = open_db().and_then(|db| {
+            mailcore::store::contacts::delete(&db, address.trim()).map_err(|e| e.to_string())
+        });
+        match result {
+            Ok(()) => qstring(""),
+            Err(e) => qstring(&e),
+        }
+    }
+
     /// Health check callable from QML.
     pub fn ping(&self, message: &QString) -> QString {
         let text = message.to_string();
@@ -1437,6 +1476,7 @@ pub struct SettingsBridgeRust {
     compose_include_plain: bool,
     auto_mark_read: bool,
     mark_read_delay_secs: i32,
+    collect_sent_contacts: bool,
 }
 
 impl Default for SettingsBridgeRust {
@@ -1448,6 +1488,7 @@ impl Default for SettingsBridgeRust {
             compose_include_plain: true,
             auto_mark_read: true,
             mark_read_delay_secs: 0,
+            collect_sent_contacts: true,
         }
     }
 }
@@ -1496,6 +1537,13 @@ impl qobject::SettingsBridge {
                     &db,
                     mailcore::store::settings::MARK_READ_DELAY_SECS,
                 ) as i32);
+            self.as_mut().set_collect_sent_contacts(
+                mailcore::store::settings::get_bool(
+                    &db,
+                    mailcore::store::settings::COLLECT_SENT_CONTACTS,
+                )
+                .unwrap_or(true),
+            );
         }
     }
 
@@ -1511,6 +1559,7 @@ impl qobject::SettingsBridge {
             let include_plain = *self.compose_include_plain();
             let auto_read = *self.auto_mark_read();
             let delay = *self.mark_read_delay_secs() as i64;
+            let collect_contacts = *self.collect_sent_contacts();
             if let Err(e) = mailcore::store::settings::set_bool(
                 &db,
                 mailcore::store::settings::SENT_COPY_ENABLED,
@@ -1552,6 +1601,13 @@ impl qobject::SettingsBridge {
                 delay,
             ) {
                 log::warn!("settings: cannot save mark-read delay: {e}");
+            }
+            if let Err(e) = mailcore::store::settings::set_bool(
+                &db,
+                mailcore::store::settings::COLLECT_SENT_CONTACTS,
+                collect_contacts,
+            ) {
+                log::warn!("settings: cannot save sent-contact collection: {e}");
             }
         }
     }

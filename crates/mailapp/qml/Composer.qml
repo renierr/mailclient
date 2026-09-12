@@ -34,6 +34,8 @@ Dialog {
     property string accountEmail: ""
     property string accountFromName: ""
     property string sendFormat: "auto"
+    property var backend
+    property bool collectContacts: true
     property bool sourceMode: false
 
     // Cc/Bcc rows stay collapsed until toggled (or non-empty).
@@ -359,11 +361,13 @@ Dialog {
                 color: Theme.textMuted
                 font.pixelSize: Theme.fontSmall
             }
-            AppTextField {
+            RecipientField {
                 id: toField
                 Layout.fillWidth: true
+                backend: root.backend
+                enabledSuggestions: root.collectContacts
                 placeholderText: qsTr("name@example.com, … (or anything — Bcc can carry the real addresses)")
-                onTextChanged: root.dirty = true
+                onEdited: root.dirty = true
             }
             Row {
                 spacing: 2
@@ -393,13 +397,15 @@ Dialog {
                 font.pixelSize: Theme.fontSmall
                 visible: root.showCc || ccField.text !== ""
             }
-            AppTextField {
+            RecipientField {
                 id: ccField
                 Layout.fillWidth: true
                 Layout.columnSpan: 2
                 visible: root.showCc || ccField.text !== ""
+                backend: root.backend
+                enabledSuggestions: root.collectContacts
                 placeholderText: qsTr("optional, comma separated")
-                onTextChanged: root.dirty = true
+                onEdited: root.dirty = true
             }
 
             Label {
@@ -408,13 +414,15 @@ Dialog {
                 font.pixelSize: Theme.fontSmall
                 visible: root.showBcc || bccField.text !== ""
             }
-            AppTextField {
+            RecipientField {
                 id: bccField
                 Layout.fillWidth: true
                 Layout.columnSpan: 2
                 visible: root.showBcc || bccField.text !== ""
+                backend: root.backend
+                enabledSuggestions: root.collectContacts
                 placeholderText: qsTr("optional, hidden recipients")
-                onTextChanged: root.dirty = true
+                onEdited: root.dirty = true
             }
 
             Label {
