@@ -106,9 +106,31 @@ Dialog {
             root.close()
     }
 
+    function escapeHtml(t) {
+        return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    }
+
+    // Plain-text quote as `>` citations: renders in every client and keeps
+    // Auto sends as text/plain unless the user adds real formatting.
     function plainToHtmlQuote(t) {
-        var esc = t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-        return "<blockquote>" + esc.replace(/\n/g, "<br>") + "</blockquote>"
+        var lines = root.escapeHtml(t).split("\n")
+        for (var i = 0; i < lines.length; i++)
+            lines[i] = "&gt; " + lines[i]
+        return "<p>" + lines.join("<br>") + "</p>"
+    }
+
+    // Quote in the format the original arrived in: HTML mail gets a styled
+    // <blockquote> of its HTML body, plain mail gets `>` citations of its
+    // text. The toolbar Quote button still inserts a styled blockquote on
+    // explicit request. Bodies come pre-sanitized from the Rust feed and are
+    // sanitized again on send.
+    function quoteBody(message, headerText) {
+        var wasHtml = message.is_html === true
+        var html = message.body_html !== undefined ? message.body_html : ""
+        if (wasHtml && html !== "")
+            return "<p></p><p>" + root.escapeHtml(headerText) + "</p><blockquote>" + html + "</blockquote>"
+        var q = message.body_text !== undefined ? message.body_text : (message.snippet || "")
+        return "<p></p>" + root.plainToHtmlQuote(headerText + "\n" + q)
     }
 
     function resetHeaders() {
@@ -141,9 +163,8 @@ Dialog {
         if (message !== undefined) {
             toField.text = message.from || ""
             subjectField.text = "Re: " + (message.subject || "")
-            var q = message.body_text !== undefined ? message.body_text : (message.snippet || "")
-            root.setBody("<p></p>" + root.plainToHtmlQuote(
-                "On " + (message.date || "") + ", " + (message.from || "") + " wrote:\n" + q))
+            root.setBody(root.quoteBody(message,
+                "On " + (message.date || "") + ", " + (message.from || "") + " wrote:"))
         }
         root.markClean()
         open()
@@ -154,10 +175,19 @@ Dialog {
         root.resetHeaders()
         if (message !== undefined) {
             subjectField.text = "Fwd: " + (message.subject || "")
-            var q = message.body_text !== undefined ? message.body_text : (message.snippet || "")
-            root.setBody("<p></p><p>— Forwarded message —<br>From: "
-                + (message.from || "") + "<br>Date: " + (message.date || "") + "<br>Subject: "
-                + (message.subject || "") + "</p>" + root.plainToHtmlQuote(q))
+            var wasHtml = message.is_html === true
+            var html = message.body_html !== undefined ? message.body_html : ""
+            if (wasHtml && html !== "") {
+                root.setBody("<p></p><p>— Forwarded message —<br>From: "
+                    + root.escapeHtml(message.from || "") + "<br>Date: "
+                    + root.escapeHtml(message.date || "") + "<br>Subject: "
+                    + root.escapeHtml(message.subject || "") + "</p><blockquote>" + html + "</blockquote>")
+            } else {
+                var q = message.body_text !== undefined ? message.body_text : (message.snippet || "")
+                root.setBody("<p></p>" + root.plainToHtmlQuote("— Forwarded message —\nFrom: "
+                    + (message.from || "") + "\nDate: " + (message.date || "") + "\nSubject: "
+                    + (message.subject || "") + "\n\n" + q))
+            }
         }
         root.markClean()
         open()

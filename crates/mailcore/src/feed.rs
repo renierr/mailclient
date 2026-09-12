@@ -222,6 +222,33 @@ pub fn attachments_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
     Ok(serde_json::to_string(&files)?)
 }
 
+/// Header details for one message (the reader's "Headers" dialog):
+/// `{from, to, cc, date, subject, message_id, reply_to}`. `date` is the full
+/// local timestamp (`2026-09-12 13:50`), falling back to the stored raw value
+/// when unparseable. Empty/absent fields become `""`/`[]` for QML.
+pub fn headers_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
+    let m = messages::get_by_uid(db, folder_id, uid)?;
+    let date = match m.date.as_deref() {
+        Some(raw) => match chrono::DateTime::parse_from_rfc3339(raw) {
+            Ok(dt) => dt
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string(),
+            Err(_) => raw.to_string(),
+        },
+        None => String::new(),
+    };
+    Ok(serde_json::to_string(&json!({
+        "from": m.from_addr.unwrap_or_default(),
+        "to": m.to_addrs,
+        "cc": m.cc_addrs,
+        "date": date,
+        "subject": m.subject.unwrap_or_default(),
+        "message_id": m.message_id_header.unwrap_or_default(),
+        "reply_to": m.reply_to.unwrap_or_default(),
+    }))?)
+}
+
 /// First page of a folder (default list view).
 pub fn messages_json(db: &Db, folder_id: i64) -> Result<String> {
     messages_json_paged(db, folder_id, FEED_LIMIT, 0)
@@ -314,6 +341,31 @@ mod tests {
         let only: serde_json::Value =
             serde_json::from_str(&attachments_json(&db, f, 71).unwrap()).unwrap();
         assert_eq!(only[0]["filename"], "doc.pdf");
+    }
+
+    #[test]
+    fn headers_dialog_carries_addresses_and_ids() {
+        let (db, acc, f) = setup();
+        let mut m = msg_store::sample_new(acc, f, 9);
+        m.cc_addrs = vec!["cc@example.com".to_string()];
+        m.reply_to = Some("reply@example.com".to_string());
+        msg_store::upsert(&db, &m).unwrap();
+        let h: serde_json::Value = serde_json::from_str(&headers_json(&db, f, 9).unwrap()).unwrap();
+        assert_eq!(h["from"], "alice@example.com");
+        assert_eq!(h["to"][0], "bob@example.com");
+        assert_eq!(h["cc"][0], "cc@example.com");
+        assert_eq!(h["subject"], "Hello");
+        assert_eq!(h["message_id"], "<9@example.com>");
+        assert_eq!(h["reply_to"], "reply@example.com");
+        // Full local timestamp (`YYYY-MM-DD HH:MM`), not the compact list
+        // date — shape-checked instead of exact: TZ shifts the clock.
+        let date = h["date"].as_str().unwrap();
+        assert_eq!(date.len(), 16, "unexpected date shape: {date:?}");
+        assert!(
+            date.starts_with("2026-09-06")
+                || date.starts_with("2026-09-07")
+                || date.starts_with("2026-09-08")
+        );
     }
 
     #[test]

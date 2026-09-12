@@ -144,6 +144,34 @@ Rectangle {
             root.statusMessage(url)
     }
 
+    // Header details for the Headers dialog (Roundcube-style "Kopfzeilen"):
+    // fetched on demand, never part of the feed rows.
+    property var headersInfo: ({})
+
+    function joinAddrs(v) {
+        if (v === undefined || v === null)
+            return ""
+        if (typeof v === "string")
+            return v
+        if (v.length === undefined)
+            return ""
+        var out = []
+        for (var i = 0; i < v.length; i++)
+            out.push(v[i])
+        return out.join(", ")
+    }
+
+    function openHeaders() {
+        if (!root.backend || !root.backend.message_headers_json)
+            return
+        try {
+            root.headersInfo = JSON.parse(root.backend.message_headers_json(root.messageUid))
+        } catch (e) {
+            root.headersInfo = ({})
+        }
+        headersDialog.open()
+    }
+
     // Trusted wrapper added AFTER Rust sanitizing (so layout CSS is ours).
     // Colours come from the theme so HTML mail matches the app in dark mode.
     function wrapDoc(inner) {
@@ -446,6 +474,11 @@ Rectangle {
             text: qsTr("Move to… (M)")
             onTriggered: root.moveRequested()
         }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Show headers…")
+            onTriggered: root.openHeaders()
+        }
     }
 
     // --- empty state ------------------------------------------------------
@@ -488,6 +521,122 @@ Rectangle {
             if (root.backend && root.backend.save_all_attachments)
                 root.statusMessage(
                     root.backend.save_all_attachments(root.messageUid, selectedFolder.toString()))
+        }
+    }
+
+    // --- headers dialog ---------------------------------------------------
+    Dialog {
+        id: headersDialog
+        title: qsTr("Headers")
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(parent ? parent.width - 120 : 520, 520)
+        padding: Theme.lg
+
+        background: Rectangle {
+            color: Theme.bg
+            radius: Theme.radiusLg
+            border.width: 1
+            border.color: Theme.border
+        }
+
+        footer: RowLayout {
+            spacing: Theme.sm
+            Item { Layout.fillWidth: true }
+            AppButton {
+                Layout.rightMargin: Theme.lg
+                Layout.bottomMargin: Theme.md
+                text: qsTr("Close")
+                onClicked: headersDialog.close()
+            }
+        }
+
+        GridLayout {
+            width: parent.width
+            columns: 2
+            columnSpacing: Theme.md
+            rowSpacing: Theme.xs
+
+            Label { text: qsTr("From"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+            Label {
+                Layout.fillWidth: true
+                text: root.headersInfo.from || ""
+                color: Theme.text
+                font.pixelSize: Theme.fontSmall
+                wrapMode: Text.WrapAnywhere
+                textFormat: Text.PlainText
+            }
+            Label { text: qsTr("To"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+            Label {
+                Layout.fillWidth: true
+                text: root.joinAddrs(root.headersInfo.to)
+                color: Theme.text
+                font.pixelSize: Theme.fontSmall
+                wrapMode: Text.WrapAnywhere
+                textFormat: Text.PlainText
+            }
+            Label {
+                text: qsTr("Cc")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+                visible: root.joinAddrs(root.headersInfo.cc) !== ""
+            }
+            Label {
+                Layout.fillWidth: true
+                text: root.joinAddrs(root.headersInfo.cc)
+                color: Theme.text
+                font.pixelSize: Theme.fontSmall
+                wrapMode: Text.WrapAnywhere
+                textFormat: Text.PlainText
+                visible: text !== ""
+            }
+            Label { text: qsTr("Date"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+            Label {
+                Layout.fillWidth: true
+                text: root.headersInfo.date || ""
+                color: Theme.text
+                font.pixelSize: Theme.fontSmall
+                textFormat: Text.PlainText
+            }
+            Label { text: qsTr("Subject"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+            Label {
+                Layout.fillWidth: true
+                text: root.headersInfo.subject || ""
+                color: Theme.text
+                font.pixelSize: Theme.fontSmall
+                wrapMode: Text.Wrap
+                textFormat: Text.PlainText
+            }
+            Label {
+                text: qsTr("Message-ID")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+                visible: (root.headersInfo.message_id || "") !== ""
+            }
+            Label {
+                Layout.fillWidth: true
+                text: root.headersInfo.message_id || ""
+                color: Theme.text
+                font.pixelSize: Theme.fontSmall
+                wrapMode: Text.WrapAnywhere
+                textFormat: Text.PlainText
+                visible: text !== ""
+            }
+            Label {
+                text: qsTr("Reply-To")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+                visible: (root.headersInfo.reply_to || "") !== ""
+            }
+            Label {
+                Layout.fillWidth: true
+                text: root.headersInfo.reply_to || ""
+                color: Theme.text
+                font.pixelSize: Theme.fontSmall
+                wrapMode: Text.WrapAnywhere
+                textFormat: Text.PlainText
+                visible: text !== ""
+            }
         }
     }
 }

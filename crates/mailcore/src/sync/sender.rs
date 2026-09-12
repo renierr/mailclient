@@ -633,6 +633,11 @@ mod tests {
         assert!(needs_html_formatting(&sanitize_for_send(
             "<blockquote>quoted</blockquote>"
         )));
+        // A `>`-citation reply draft (what the composer emits for plain
+        // mail) carries no formatting: Auto keeps it text/plain.
+        assert!(!needs_html_formatting(&sanitize_for_send(
+            "<p></p><p>&gt; quoted<br>&gt; more</p>"
+        )));
     }
 
     #[test]

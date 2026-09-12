@@ -121,6 +121,12 @@ pub mod qobject {
         #[qinvokable]
         fn attachments_json(&self, uid: i32) -> QString;
 
+        /// Header details for one message in the current folder as JSON
+        /// (`{from, to, cc, date, subject, message_id, reply_to}`) for the
+        /// reader's Headers dialog. Returns `"{}"` if unknown.
+        #[qinvokable]
+        fn message_headers_json(&self, uid: i32) -> QString;
+
         /// Copy one attachment to a temp file and return its `file://` URL
         /// so QML can open it with the system viewer (`Qt.openUrlExternally`).
         /// Downloads the bytes first when they are not cached yet (explicit
@@ -942,6 +948,18 @@ impl qobject::Bridge {
         }
         feed::attachments_json(&db, folder_id, uid as u32)
             .map_or_else(|_| qstring("[]"), |j| qstring(&j))
+    }
+
+    pub fn message_headers_json(&self, uid: i32) -> QString {
+        let Ok(db) = open_db() else {
+            return qstring("{}");
+        };
+        let folder_id = *self.current_folder_id();
+        if folder_id < 0 || uid < 0 {
+            return qstring("{}");
+        }
+        feed::headers_json(&db, folder_id, uid as u32)
+            .map_or_else(|_| qstring("{}"), |j| qstring(&j))
     }
 
     pub fn open_attachment(&self, attachment_id: i32) -> QString {

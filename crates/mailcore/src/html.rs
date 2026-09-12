@@ -118,6 +118,10 @@ pub fn decode_entities(s: &str) -> String {
                     "&amp;" | "&AMP;" => Some('&'),
                     "&quot;" => Some('"'),
                     "&apos;" | "&#39;" | "&#x27;" | "&#X27;" => Some('\''),
+                    // Non-breaking space: without this the serializer
+                    // re-escapes the `&` and recipients literally read
+                    // "&nbsp;" (`&amp;nbsp;` on the wire).
+                    "&nbsp;" | "&NBSP;" => Some('\u{a0}'),
                     "&#34;" | "&#x22;" | "&#X22;" => Some('"'),
                     "&#60;" | "&#x3C;" | "&#x3c;" => Some('<'),
                     "&#62;" | "&#x3E;" | "&#x3e;" => Some('>'),
@@ -902,5 +906,18 @@ mod tests {
     fn looks_like_html_ignores_stray() {
         assert!(!looks_like_html("I <3 you 5 > 3"));
         assert!(looks_like_html("<p>hi</p>"));
+    }
+
+    #[test]
+    fn nbsp_survives_send_pipeline() {
+        // The WYSIWYG editor emits `&nbsp;`; it must reach the recipient as
+        // a real non-breaking space, never as literal "&nbsp;" text
+        // (`&amp;nbsp;` on the wire) in either the HTML or the plain twin.
+        assert_eq!(decode_entities("a&nbsp;b"), "a\u{a0}b");
+        let s = sanitize_for_send("<p>a&nbsp;&nbsp;b</p>");
+        assert!(s.contains('\u{a0}'), "nbsp lost: {s:?}");
+        assert!(!s.contains("&amp;nbsp;"), "nbsp leaked: {s:?}");
+        assert!(!s.contains("&nbsp;"), "nbsp leaked: {s:?}");
+        assert_eq!(html_to_text("<p>a&nbsp;b</p>"), "a\u{a0}b");
     }
 }
