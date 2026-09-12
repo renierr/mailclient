@@ -30,6 +30,7 @@ Dialog {
 
     signal statusMessage(string text)
     signal sendRequested(string payload)
+    signal saveDraftRequested(string payload)
 
     property string accountEmail: ""
     property string accountFromName: ""
@@ -37,6 +38,8 @@ Dialog {
     property var backend
     property bool collectContacts: true
     property bool sourceMode: false
+    // UID of the server draft being edited; -1 means a new draft.
+    property int draftUid: -1
 
     // Cc/Bcc rows stay collapsed until toggled (or non-empty).
     property bool showCc: false
@@ -147,6 +150,7 @@ Dialog {
         root.showCc = false
         root.showBcc = false
         root.attachments = []
+        root.draftUid = -1
     }
 
     function setBody(html) {
@@ -194,6 +198,25 @@ Dialog {
                     + (message.subject || "") + "\n\n" + q))
             }
         }
+        root.markClean()
+        open()
+    }
+
+    function openForDraft(draft) {
+        root.sourceMode = false
+        root.resetHeaders()
+        root.draftUid = draft.draft_uid === undefined ? -1 : draft.draft_uid
+        var from = draft.from || root.accountEmail
+        var at = from.indexOf("@")
+        fromLocal.text = at < 0 ? from : from.substring(0, at)
+        toField.text = draft.to || ""
+        ccField.text = draft.cc || ""
+        bccField.text = draft.bcc || ""
+        root.showCc = ccField.text !== ""
+        root.showBcc = bccField.text !== ""
+        subjectField.text = draft.subject || ""
+        root.attachments = draft.attachments || []
+        root.setBody(draft.body || "")
         root.markClean()
         open()
     }
@@ -257,7 +280,8 @@ Dialog {
             subject: subjectField.text,
             body: html,
             body_html: html,
-            attachments: paths
+            attachments: paths,
+            draft_uid: root.draftUid
         })
     }
 
@@ -278,6 +302,16 @@ Dialog {
         } else {
             bodyEditor.fetchHtml(function (html) {
                 root.sendRequested(root.payloadFor(html))
+            })
+        }
+    }
+
+    function requestSaveDraft() {
+        if (root.sourceMode) {
+            root.saveDraftRequested(root.payloadFor(sourceArea.text))
+        } else {
+            bodyEditor.fetchHtml(function (html) {
+                root.saveDraftRequested(root.payloadFor(html))
             })
         }
     }
@@ -659,11 +693,7 @@ Dialog {
             }
             AppButton {
                 text: qsTr("Save draft")
-                onClicked: {
-                    root.statusMessage(qsTr("Drafts land with the send path in M2"))
-                    root.markClean()
-                    root.close()
-                }
+                onClicked: root.requestSaveDraft()
             }
             AppButton {
                 text: qsTr("Send")

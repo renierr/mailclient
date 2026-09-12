@@ -349,6 +349,15 @@ impl ImapSync {
         Ok(())
     }
 
+    /// APPEND raw MIME bytes as a server-side draft. Drafts are deliberately
+    /// not marked seen: the `\Draft` flag is what makes providers keep them
+    /// out of normal send flows.
+    pub fn append_draft(&mut self, folder_path: &str, raw: &[u8]) -> Result<()> {
+        self.session()?
+            .append_with_flags(folder_path, raw, &[Flag::Draft])?;
+        Ok(())
+    }
+
     /// Move one message to the account's Trash folder -- what "delete" means
     /// in a mail client, with two exceptions that destroy immediately:
     ///

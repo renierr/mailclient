@@ -217,6 +217,15 @@ pub mod qobject {
         /// explicit send consent.
         #[qinvokable]
         fn send_mail(self: Pin<&mut Self>, form: &QString) -> QString;
+
+        /// Append or replace an IMAP `\Draft` message from a Composer form.
+        #[qinvokable]
+        fn save_draft(self: Pin<&mut Self>, form: &QString) -> QString;
+
+        /// Full Composer form for a draft in the current Drafts folder.
+        /// Opening a draft explicitly downloads and materializes its files.
+        #[qinvokable]
+        fn draft_form(self: Pin<&mut Self>, uid: i32) -> QString;
     }
 
     extern "RustQt" {
@@ -252,7 +261,7 @@ use mailcore::sync::imap::{
     ArchiveOutcome, ImapSync, MoveOutcome, TrashOutcome, FULL_SYNC_WINDOW, OLDER_BATCH,
     QUICK_SYNC_WINDOW,
 };
-use mailcore::sync::sender::{SendFormat, SendPolicy, SendRequest, SmtpSender};
+use mailcore::sync::sender::{format_draft, SendFormat, SendPolicy, SendRequest, SmtpSender};
 use mailcore::sync::traits::{MailSender, SyncProvider};
 use mailcore::{auth, feed};
 
@@ -342,12 +351,16 @@ fn resolve_save_path(
 /// Make sure a message's file bytes are cached, downloading them now on
 /// explicit user request. Background sync stores names/sizes only, so this
 /// is the single place attachment bytes cross the network. Returns the
-/// number of files downloaded (0 = already cached). Inline parts need no
-/// bytes (they render from the body), so they never trigger a fetch.
-fn ensure_attachment_data(db: &mailcore::Db, message_id: i64) -> Result<u64, String> {
+/// number of files downloaded (0 = already cached). Draft opening includes
+/// inline parts because Composer must preserve them on replacement.
+fn ensure_attachment_data(
+    db: &mailcore::Db,
+    message_id: i64,
+    include_inline: bool,
+) -> Result<u64, String> {
     let files = messages::list_attachments(db, message_id).map_err(|e| e.to_string())?;
     let mut missing = false;
-    for a in files.iter().filter(|a| !a.is_inline) {
+    for a in files.iter().filter(|a| include_inline || !a.is_inline) {
         let has = messages::attachment_has_data(db, a.id).map_err(|e| e.to_string())?;
         if !has {
             missing = true;
@@ -366,6 +379,51 @@ fn ensure_attachment_data(db: &mailcore::Db, message_id: i64) -> Result<u64, Str
         .map_err(|e| e.to_string())?;
     imap.disconnect();
     Ok(n)
+}
+
+/// Materialize one cached attachment for Composer. The file name keeps the
+/// original extension for MIME guessing. Each invocation owns a 0700 temp
+/// directory, avoiding shared-temp name collisions.
+fn draft_attachment_path(db: &mailcore::Db, attachment_id: i64) -> Result<String, String> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
+    let attachment = messages::get_attachment(db, attachment_id).map_err(|e| e.to_string())?;
+    let base = std::env::temp_dir();
+    let unique = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
+    let dir = base.join(format!("mailclient-draft-{}-{unique}", std::process::id()));
+    std::fs::create_dir(&dir).map_err(|e| format!("cannot create temp folder: {e}"))?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+        .map_err(|e| format!("cannot secure temp folder: {e}"))?;
+    let name = format!(
+        "{}-{}-{}",
+        attachment.message_id,
+        attachment.id,
+        safe_filename(attachment.filename.as_deref(), attachment.id)
+    );
+    let dest = dir.join(name);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&dest)
+        .map_err(|e| format!("cannot create draft attachment: {e}"))?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&dest, std::os::unix::fs::PermissionsExt::from_mode(0o600))
+        .map_err(|e| format!("cannot secure draft attachment: {e}"))?;
+    let bytes = match attachment.data {
+        Some(bytes) if !bytes.is_empty() => bytes,
+        _ => {
+            let source = attachment
+                .storage_path
+                .ok_or_else(|| "draft attachment has no cached data".to_string())?;
+            std::fs::read(source).map_err(|e| format!("cannot read draft attachment: {e}"))?
+        }
+    };
+    file.write_all(&bytes)
+        .map_err(|e| format!("cannot write draft attachment: {e}"))?;
+    Ok(file_url(&dest))
 }
 
 /// Backing Rust struct for the `Bridge` QObject.
@@ -506,7 +564,9 @@ impl qobject::Bridge {
                 mailcore::store::contacts::suggest(&db, &prefix, 10)
             };
             contacts
-                .map(|contacts| serde_json::to_string(&contacts).unwrap_or_else(|_| "[]".to_string()))
+                .map(|contacts| {
+                    serde_json::to_string(&contacts).unwrap_or_else(|_| "[]".to_string())
+                })
                 .map_err(|e| e.to_string())
         });
         qstring(&result.unwrap_or_else(|e| {
@@ -1022,7 +1082,7 @@ impl qobject::Bridge {
             let parent =
                 messages::get_attachment(&db, attachment_id as i64).map_err(|e| e.to_string())?;
             // Open implies download: fetch bytes when not cached yet.
-            ensure_attachment_data(&db, parent.message_id)?;
+            ensure_attachment_data(&db, parent.message_id, false)?;
             let a =
                 messages::get_attachment(&db, attachment_id as i64).map_err(|e| e.to_string())?;
             let dir = std::env::temp_dir().join("mailclient-attachments");
@@ -1053,7 +1113,7 @@ impl qobject::Bridge {
             let db = open_db()?;
             let parent =
                 messages::get_attachment(&db, attachment_id as i64).map_err(|e| e.to_string())?;
-            ensure_attachment_data(&db, parent.message_id)?;
+            ensure_attachment_data(&db, parent.message_id, false)?;
             let dest = resolve_save_path(&db, attachment_id as i64, &path.to_string())?;
             messages::save_attachment_to_path(&db, attachment_id as i64, &dest)
                 .map_err(|e| e.to_string())?;
@@ -1076,7 +1136,7 @@ impl qobject::Bridge {
             let msg = messages::get_by_uid(&db, folder_id, uid as u32)
                 .map_err(|_| "unknown message".to_string())?;
             // Download on explicit request only — then save from the cache.
-            ensure_attachment_data(&db, msg.id)?;
+            ensure_attachment_data(&db, msg.id, false)?;
             let files = messages::list_attachments(&db, msg.id)
                 .map_err(|e| e.to_string())?
                 .into_iter()
@@ -1399,6 +1459,7 @@ impl qobject::Bridge {
                 .collect(),
             _ => Vec::new(),
         };
+        let draft_uid = v.get("draft_uid").and_then(|x| x.as_i64()).unwrap_or(-1) as i32;
         // Guarded: any panic becomes a status message, never SIGABRT.
         let result = guard_sync("Send", || {
             let db = open_db()?;
@@ -1442,6 +1503,27 @@ impl qobject::Bridge {
             sender
                 .send_raw(&db, acc.id, &req)
                 .map_err(|e| e.to_string())?;
+            if draft_uid >= 0 {
+                let draft_folder = folders::list_by_account(&db, acc.id)
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .find(|f| f.role == mailcore::models::FolderRole::Drafts)
+                    .ok_or_else(|| {
+                        "sent, but no Drafts folder is available to remove the source draft"
+                            .to_string()
+                    })?;
+                let source = messages::get_by_uid(&db, draft_folder.id, draft_uid as u32)
+                    .map_err(|_| "sent, but the source draft no longer exists".to_string())?;
+                if !source.is_draft {
+                    return Err("sent, but the source message is not a draft".to_string());
+                }
+                let mut imap = imap_session(&acc)?;
+                let remove = imap
+                    .delete_message(&db, source.id)
+                    .map_err(|e| e.to_string());
+                imap.disconnect();
+                remove.map_err(|e| format!("sent, but could not remove source draft: {e}"))?;
+            }
             // Refresh after send: the SMTP + APPEND already happened, so
             // pull the Sent copy (if enabled) best-effort — offline or
             // server hiccup must never fail a successful send.
@@ -1465,6 +1547,155 @@ impl qobject::Bridge {
             Ok(s) => qstring(&s),
             Err(e) => qstring(&e),
         }
+    }
+
+    pub fn save_draft(mut self: Pin<&mut Self>, form: &QString) -> QString {
+        let v: serde_json::Value = match serde_json::from_str(&form.to_string()) {
+            Ok(v) => v,
+            Err(_) => return qstring("invalid draft form"),
+        };
+        let str_field = |k: &str| {
+            v.get(k)
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        };
+        let split_addresses = |key: &str| {
+            str_field(key)
+                .split([',', ';'])
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+        };
+        let from_raw = str_field("from");
+        let from = (!from_raw.is_empty()).then_some(from_raw.as_str());
+        let from_name_raw = str_field("from_name");
+        let from_name = (!from_name_raw.is_empty()).then_some(from_name_raw.as_str());
+        let body = str_field("body");
+        let body_html_raw = str_field("body_html");
+        let body_html = (!body_html_raw.is_empty()).then_some(body_html_raw.as_str());
+        let attachments = match v.get("attachments") {
+            Some(serde_json::Value::Array(items)) => items
+                .iter()
+                .filter_map(|x| x.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+            _ => Vec::new(),
+        };
+        let source_uid = v.get("draft_uid").and_then(|x| x.as_i64()).unwrap_or(-1) as i32;
+        let result = guard_sync("Save draft", || {
+            let db = open_db()?;
+            let acc = current_account(&db, *self.current_account_id())?;
+            let drafts = folders::list_by_account(&db, acc.id)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .find(|f| f.role == mailcore::models::FolderRole::Drafts)
+                .ok_or_else(|| "no server Drafts folder found; sync folders first".to_string())?;
+            if source_uid >= 0 {
+                let source = messages::get_by_uid(&db, drafts.id, source_uid as u32)
+                    .map_err(|_| "source draft no longer exists".to_string())?;
+                if !source.is_draft {
+                    return Err("source message is not a draft".to_string());
+                }
+            }
+            let to = split_addresses("to");
+            let cc = split_addresses("cc");
+            let bcc = split_addresses("bcc");
+            let subject = str_field("subject");
+            let req = SendRequest {
+                to: &to,
+                cc: &cc,
+                bcc: &bcc,
+                from,
+                from_name,
+                subject: &subject,
+                body_text: &body,
+                body_html,
+                attachments: &attachments,
+                format: SendFormat::Multipart,
+                include_plain: true,
+                policy: &SendPolicy::Unrestricted,
+                password: "",
+                imap_password: None,
+            };
+            let raw = format_draft(&acc, &req).map_err(|e| e.to_string())?;
+            let secrets = auth::load_account_secrets(&acc.auth_vault_key)
+                .map_err(|e| format!("no password in keyring: {e}"))?;
+            let mut imap = ImapSync::new(&acc);
+            imap.connect(&secrets.imap_password)
+                .map_err(|e| e.to_string())?;
+            // APPEND first: a failed replacement never destroys the existing draft.
+            imap.append_draft(&drafts.path, &raw)
+                .map_err(|e| e.to_string())?;
+            let remove_error = if source_uid >= 0 {
+                let source = messages::get_by_uid(&db, drafts.id, source_uid as u32)
+                    .map_err(|_| "source draft no longer exists".to_string())?;
+                imap.delete_message(&db, source.id)
+                    .err()
+                    .map(|e| e.to_string())
+            } else {
+                None
+            };
+            let sync = imap.sync_folder_window(&db, drafts.id, Some(FULL_SYNC_WINDOW));
+            imap.disconnect();
+            sync.map_err(|e| e.to_string())?;
+            let current_folder_id = *self.current_folder_id();
+            push_feeds(&mut self, &db, acc.id, current_folder_id);
+            match remove_error {
+                Some(e) => Err(format!(
+                    "draft saved, but could not remove source draft: {e}"
+                )),
+                None => Ok(String::new()),
+            }
+        });
+        match result {
+            Ok(s) => qstring(&s),
+            Err(e) => qstring(&e),
+        }
+    }
+
+    pub fn draft_form(self: Pin<&mut Self>, uid: i32) -> QString {
+        let result = guard_sync("Open draft", || {
+            let db = open_db()?;
+            let folder_id = *self.current_folder_id();
+            let folder = folders::get(&db, folder_id).map_err(|_| "unknown folder".to_string())?;
+            let message = messages::get_by_uid(&db, folder_id, uid as u32)
+                .map_err(|_| "draft is no longer available".to_string())?;
+            if folder.role != mailcore::models::FolderRole::Drafts || !message.is_draft {
+                return Err("message is not a draft".to_string());
+            }
+            // Selecting a draft is the explicit action that allows attachment
+            // bytes to cross IMAP; ordinary sync remains metadata-only.
+            ensure_attachment_data(&db, message.id, true)?;
+            let attachments = messages::list_attachments(&db, message.id)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|a| {
+                    let path = draft_attachment_path(&db, a.id)?;
+                    Ok(serde_json::json!({
+                        "path": path,
+                        "name": safe_filename(a.filename.as_deref(), a.id),
+                    }))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(serde_json::json!({
+                "draft_uid": message.uid,
+                "from": message.from_addr.unwrap_or_default(),
+                "to": message.to_addrs.join(", "),
+                "cc": message.cc_addrs.join(", "),
+                "bcc": message.bcc_addrs.join(", "),
+                "subject": message.subject.unwrap_or_default(),
+                "body": message.body_html.or(message.body_text).unwrap_or_default(),
+                "attachments": attachments,
+            })
+            .to_string())
+        });
+        qstring(&result.unwrap_or_else(|e| {
+            log::warn!("draft open failed: {e}");
+            "{}".to_string()
+        }))
     }
 }
 

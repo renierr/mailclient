@@ -317,6 +317,39 @@ pub fn load_outgoing_attachments(paths: &[String]) -> Result<Vec<(String, String
     Ok(out)
 }
 
+/// Build the MIME message stored by IMAP as a draft. This does no SMTP work,
+/// recipient-policy check, queueing, or Sent-folder filing.
+pub fn format_draft(account: &Account, req: &SendRequest<'_>) -> Result<Vec<u8>> {
+    let from_addr = req
+        .from
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&account.email_address);
+    let from_name = req.from_name.map(str::trim).filter(|s| !s.is_empty());
+    let from = match from_name {
+        Some(name) => lettre::message::Mailbox::new(Some(name.to_string()), from_addr.parse()?),
+        None => from_addr.parse()?,
+    };
+    // Drafts always preserve rich text when present, independently of the
+    // user's send preference; that preference is applied only on Send.
+    let (plain, html) = resolve_bodies(req.body_text, req.body_html, SendFormat::Multipart);
+    let files = load_outgoing_attachments(req.attachments)?;
+    let to = valid_mailboxes(req.to);
+    let to_group = to.is_empty().then(|| to_group_name(&req.to.join(" ")));
+    Ok(assemble_message(
+        from,
+        req.subject,
+        to,
+        to_group.as_deref(),
+        req.cc,
+        req.bcc,
+        SendFormat::Multipart,
+        plain,
+        html,
+        &files,
+    )?
+    .formatted())
+}
+
 /// SMTP submission endpoint derived from an account.
 #[derive(Debug, Clone)]
 pub struct SmtpEndpoint {
@@ -697,6 +730,34 @@ mod tests {
     }
 
     #[test]
+    fn formatting_a_draft_does_not_submit_or_queue_it() {
+        let account = test_account();
+        let to = vec!["you@example.com".to_string()];
+        let cc = Vec::new();
+        let bcc = Vec::new();
+        let files = Vec::new();
+        let request = SendRequest {
+            to: &to,
+            cc: &cc,
+            bcc: &bcc,
+            from: None,
+            from_name: None,
+            subject: "unfinished",
+            body_text: "<p>still writing</p>",
+            body_html: Some("<p>still writing</p>"),
+            attachments: &files,
+            format: SendFormat::Auto,
+            include_plain: true,
+            policy: &SendPolicy::TestAllowlist(Vec::new()),
+            password: "",
+            imap_password: None,
+        };
+        let raw = String::from_utf8(format_draft(&account, &request).unwrap()).unwrap();
+        assert!(raw.contains("Subject: unfinished"));
+        assert!(raw.contains("still writing"));
+    }
+
+    #[test]
     fn policy_blocks_non_allowlisted_recipients() {
         let policy = SendPolicy::TestAllowlist(vec!["allowed@example.com".to_string()]);
         assert!(policy.check(&["allowed@example.com"]).is_ok());
@@ -914,9 +975,18 @@ mod tests {
 
     #[test]
     fn sender_domain_must_match_the_account_domain() {
-        assert!(sender_domain_is_aligned("alias@example.com", "me@example.com"));
-        assert!(sender_domain_is_aligned("alias@EXAMPLE.COM", "me@example.com"));
-        assert!(!sender_domain_is_aligned("alias@other.example", "me@example.com"));
+        assert!(sender_domain_is_aligned(
+            "alias@example.com",
+            "me@example.com"
+        ));
+        assert!(sender_domain_is_aligned(
+            "alias@EXAMPLE.COM",
+            "me@example.com"
+        ));
+        assert!(!sender_domain_is_aligned(
+            "alias@other.example",
+            "me@example.com"
+        ));
         assert!(!sender_domain_is_aligned("alias", "me@example.com"));
         assert!(!sender_domain_is_aligned("alias@example.com", "me"));
     }

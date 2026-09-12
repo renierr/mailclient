@@ -132,6 +132,18 @@ ApplicationWindow {
     function openMessage(uid) {
         if (uid < 0 || uid === root.currentUid)
             return  // already open: re-clicking a row must not reload anything
+        for (var i = 0; i < folderModel.count; i++) {
+            if (folderModel.get(i).name === root.currentFolder
+                    && folderModel.get(i).role === "drafts") {
+                var draft = JSON.parse(backend.draft_form(uid))
+                if (draft.draft_uid === undefined) {
+                    root.statusText = qsTr("Draft is no longer available")
+                } else {
+                    composer.openForDraft(draft)
+                }
+                return
+            }
+        }
         root.currentUid = uid
         markReadTimer.stop()
         if (!appSettings.auto_mark_read) {
@@ -579,6 +591,34 @@ ApplicationWindow {
                 reloadFolders()
                 reloadMessages()
                 root.statusText = qsTr("Sent")
+            } else if (r.indexOf("sent, but") === 0) {
+                // SMTP already accepted the message. Closing prevents a retry
+                // from sending a duplicate while keeping the source draft for recovery.
+                composer.markClean()
+                composer.close()
+                reloadFolders()
+                reloadMessages()
+                root.statusText = r
+            } else {
+                root.statusText = r
+            }
+        }
+        onSaveDraftRequested: payload => {
+            var r = backend.save_draft(payload)
+            if (r === "") {
+                composer.markClean()
+                composer.close()
+                reloadFolders()
+                reloadMessages()
+                root.statusText = qsTr("Draft saved")
+            } else if (r.indexOf("draft saved, but") === 0) {
+                // A replacement was appended but its old source survived.
+                // Close so retrying cannot append another duplicate.
+                composer.markClean()
+                composer.close()
+                reloadFolders()
+                reloadMessages()
+                root.statusText = r
             } else {
                 root.statusText = r
             }
