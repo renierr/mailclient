@@ -132,6 +132,8 @@ pub struct Message {
     pub snippet: Option<String>,
     pub body_text: Option<String>,
     pub body_html: Option<String>,
+    /// Original RFC 5322 header block, for the reader's technical headers view.
+    pub raw_headers: Option<String>,
     pub is_read: bool,
     pub is_starred: bool,
     pub is_draft: bool,
@@ -159,6 +161,8 @@ pub struct NewMessage {
     pub snippet: Option<String>,
     pub body_text: Option<String>,
     pub body_html: Option<String>,
+    /// Original RFC 5322 header block, for the reader's technical headers view.
+    pub raw_headers: Option<String>,
     pub is_read: bool,
     pub is_starred: bool,
     pub is_draft: bool,

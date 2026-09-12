@@ -239,14 +239,41 @@ pub fn headers_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
         None => String::new(),
     };
     Ok(serde_json::to_string(&json!({
-        "from": m.from_addr.unwrap_or_default(),
-        "to": m.to_addrs,
-        "cc": m.cc_addrs,
+        "from": rfc_header(&m.raw_headers, "From").unwrap_or_else(|| m.from_addr.unwrap_or_default()),
+        "to": rfc_header(&m.raw_headers, "To").unwrap_or_else(|| m.to_addrs.join(", ")),
+        "cc": rfc_header(&m.raw_headers, "Cc").unwrap_or_else(|| m.cc_addrs.join(", ")),
         "date": date,
         "subject": m.subject.unwrap_or_default(),
         "message_id": m.message_id_header.unwrap_or_default(),
         "reply_to": m.reply_to.unwrap_or_default(),
+        "raw": m.raw_headers.unwrap_or_default(),
     }))?)
+}
+
+/// Extract and unfold one RFC 5322 header from the stored header block.
+/// Keeps display names and group syntax (`freunde:;`) lost by address parsing.
+fn rfc_header(raw: &Option<String>, wanted: &str) -> Option<String> {
+    let raw = raw.as_deref()?;
+    let mut value: Option<String> = None;
+    for line in raw.lines() {
+        if line.starts_with(' ') || line.starts_with('\t') {
+            if let Some(v) = value.as_mut() {
+                v.push(' ');
+                v.push_str(line.trim());
+            }
+            continue;
+        }
+        if let Some((name, v)) = line.split_once(':') {
+            if name.eq_ignore_ascii_case(wanted) {
+                value = Some(v.trim().to_string());
+                continue;
+            }
+        }
+        if value.is_some() {
+            break;
+        }
+    }
+    value
 }
 
 /// First page of a folder (default list view).
@@ -353,8 +380,8 @@ mod tests {
         msg_store::upsert(&db, &m).unwrap();
         let h: serde_json::Value = serde_json::from_str(&headers_json(&db, f, 9).unwrap()).unwrap();
         assert_eq!(h["from"], "alice@example.com");
-        assert_eq!(h["to"][0], "bob@example.com");
-        assert_eq!(h["cc"][0], "cc@example.com");
+        assert_eq!(h["to"], "bob@example.com");
+        assert_eq!(h["cc"], "cc@example.com");
         assert_eq!(h["subject"], "Hello");
         assert_eq!(h["message_id"], "<9@example.com>");
         assert_eq!(h["reply_to"], "reply@example.com");

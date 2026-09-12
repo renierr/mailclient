@@ -11,7 +11,7 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
     let to: String = row.get(8)?;
     let cc: String = row.get(9)?;
     let bcc: String = row.get(10)?;
-    let kw: String = row.get(17)?;
+    let kw: String = row.get(18)?;
     Ok(Message {
         id: row.get(0)?,
         account_id: row.get(1)?,
@@ -29,20 +29,21 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
         snippet: row.get(13)?,
         body_text: row.get(14)?,
         body_html: row.get(15)?,
-        is_read: opt_bool(row.get::<_, i64>(16)?),
-        is_starred: opt_bool(row.get::<_, i64>(18)?),
-        is_draft: opt_bool(row.get::<_, i64>(19)?),
-        has_attachments: opt_bool(row.get::<_, i64>(20)?),
+        raw_headers: row.get(16)?,
+        is_read: opt_bool(row.get::<_, i64>(17)?),
+        is_starred: opt_bool(row.get::<_, i64>(19)?),
+        is_draft: opt_bool(row.get::<_, i64>(20)?),
+        has_attachments: opt_bool(row.get::<_, i64>(21)?),
         keywords: json_vec(&kw).unwrap_or_default(),
-        size: row.get::<_, i64>(21)? as u64,
-        downloaded_full: opt_bool(row.get::<_, i64>(22)?),
+        size: row.get::<_, i64>(22)? as u64,
+        downloaded_full: opt_bool(row.get::<_, i64>(23)?),
     })
 }
 
 // Column order must match row_to_message indices.
 const COLS: &str = "id, account_id, folder_id, uid, message_id_header, thread_id,
     subject, from_addr, to_addrs, cc_addrs, bcc_addrs, reply_to, date, snippet,
-    body_text, body_html, is_read, keywords, is_starred, is_draft,
+     body_text, body_html, raw_headers, is_read, keywords, is_starred, is_draft,
     has_attachments, size, downloaded_full";
 
 /// Insert a message, or replace it if the same `(account, folder, uid)` exists.
@@ -51,11 +52,11 @@ pub fn upsert(db: &Db, m: &NewMessage) -> Result<i64> {
     db.conn().execute(
         "insert into messages (account_id, folder_id, uid, message_id_header,
             thread_id, subject, from_addr, to_addrs, cc_addrs, bcc_addrs,
-            reply_to, date, snippet, body_text, body_html, is_read, keywords,
+             reply_to, date, snippet, body_text, body_html, raw_headers, is_read, keywords,
             is_starred, is_draft, has_attachments, size, downloaded_full,
             created_at, updated_at)
          values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-            ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?23)
+             ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?24)
          on conflict (account_id, folder_id, uid) do update set
             message_id_header = excluded.message_id_header,
             thread_id = excluded.thread_id,
@@ -68,7 +69,8 @@ pub fn upsert(db: &Db, m: &NewMessage) -> Result<i64> {
             date = excluded.date,
             snippet = excluded.snippet,
             body_text = excluded.body_text,
-            body_html = excluded.body_html,
+             body_html = excluded.body_html,
+             raw_headers = excluded.raw_headers,
             is_read = excluded.is_read,
             keywords = excluded.keywords,
             is_starred = excluded.is_starred,
@@ -93,6 +95,7 @@ pub fn upsert(db: &Db, m: &NewMessage) -> Result<i64> {
             m.snippet,
             m.body_text,
             m.body_html,
+            m.raw_headers,
             i64::from(m.is_read),
             serde_json::to_string(&m.keywords)?,
             i64::from(m.is_starred),
@@ -431,6 +434,7 @@ pub fn sample_new(account_id: i64, folder_id: i64, uid: u32) -> NewMessage {
         snippet: Some("Hello Bob".to_string()),
         body_text: Some("Hello Bob, how are you?".to_string()),
         body_html: None,
+        raw_headers: None,
         is_read: false,
         is_starred: false,
         is_draft: false,

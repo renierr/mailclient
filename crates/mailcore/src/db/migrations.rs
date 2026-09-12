@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -80,6 +80,14 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         if let Err(e) = conn
             .execute_batch("alter table accounts add column from_name text not null default '';")
         {
+            let msg = e.to_string().to_ascii_lowercase();
+            if !(msg.contains("duplicate column") || msg.contains("already exists")) {
+                return Err(e.into());
+            }
+        }
+    }
+    if current < 6 {
+        if let Err(e) = conn.execute_batch("alter table messages add column raw_headers text;") {
             let msg = e.to_string().to_ascii_lowercase();
             if !(msg.contains("duplicate column") || msg.contains("already exists")) {
                 return Err(e.into());

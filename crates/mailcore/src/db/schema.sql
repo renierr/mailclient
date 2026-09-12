@@ -64,6 +64,7 @@ create table if not exists messages (
     snippet            text,
     body_text          text,
     body_html          text,
+    raw_headers        text,
     is_read            integer not null default 0,
     is_starred         integer not null default 0,
     -- 1 = local flag change not yet pushed to the server. Set on every local

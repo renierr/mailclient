@@ -638,5 +638,33 @@ Rectangle {
                 visible: text !== ""
             }
         }
+
+        ColumnLayout {
+            width: parent.width
+            spacing: Theme.xs
+            AppButton {
+                text: rawHeaders.visible ? qsTr("Hide complete headers") : qsTr("Show complete headers")
+                onClicked: rawHeaders.visible = !rawHeaders.visible
+            }
+            ScrollView {
+                id: rawHeaders
+                Layout.fillWidth: true
+                Layout.preferredHeight: visible ? 220 : 0
+                visible: false
+                clip: true
+                TextArea {
+                    width: rawHeaders.availableWidth
+                    text: root.headersInfo.raw || qsTr("Complete headers are unavailable until this message is downloaded again.")
+                    readOnly: true
+                    selectByMouse: true
+                    wrapMode: TextArea.WrapAnywhere
+                    textFormat: TextArea.PlainText
+                    color: Theme.text
+                    font.family: "monospace"
+                    font.pixelSize: Theme.fontTiny
+                    background: Rectangle { color: Theme.bgAlt; radius: Theme.radius }
+                }
+            }
+        }
     }
 }

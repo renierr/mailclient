@@ -1071,6 +1071,14 @@ fn parse_to_new(
 
     let files = extract_attachments(&parsed, with_bytes);
     let has_attachments = parsed.attachment_count() > 0 || !files.is_empty();
+    // Preserve exactly the RFC 5322 header block for the technical reader
+    // view. It is bounded by the first blank line and never includes bodies.
+    let header_end = raw
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .or_else(|| raw.windows(2).position(|w| w == b"\n\n"))
+        .unwrap_or(raw.len());
+    let raw_headers = String::from_utf8_lossy(&raw[..header_end]).to_string();
 
     Ok((
         NewMessage {
@@ -1098,6 +1106,7 @@ fn parse_to_new(
             snippet,
             body_text,
             body_html: parsed.body_html(0).map(|c| c.into_owned()),
+            raw_headers: (!raw_headers.is_empty()).then_some(raw_headers),
             is_read,
             is_starred,
             is_draft,
