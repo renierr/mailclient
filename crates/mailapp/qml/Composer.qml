@@ -50,7 +50,8 @@ Dialog {
     property bool dirty: false
 
     // The domain is fixed to the account: only the local part is editable,
-    // since sending as another domain fails SPF/DMARC anyway.
+    // since sending as another domain breaks SPF and domain-aligned
+    // DKIM/DMARC authentication.
     readonly property string accountDomain: {
         var at = root.accountEmail.indexOf("@")
         return at < 0 ? "" : root.accountEmail.substring(at)

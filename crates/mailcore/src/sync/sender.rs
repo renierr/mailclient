@@ -393,6 +393,20 @@ pub fn valid_mailboxes(raw: &[String]) -> Vec<lettre::message::Mailbox> {
     raw.iter().filter_map(|s| s.parse().ok()).collect()
 }
 
+/// Whether the visible sender stays within the configured account domain.
+#[must_use]
+pub fn sender_domain_is_aligned(from: &str, account_email: &str) -> bool {
+    let Some((_, from_domain)) = from.rsplit_once('@') else {
+        return false;
+    };
+    let Some((_, account_domain)) = account_email.rsplit_once('@') else {
+        return false;
+    };
+    !from_domain.is_empty()
+        && !account_domain.is_empty()
+        && from_domain.eq_ignore_ascii_case(account_domain)
+}
+
 /// Group display name for a BCC-only `To:` header (`Friends:;`): RFC 5322
 /// `display-name` without specials that would break parsing, ASCII only.
 /// Anything else (blank, punctuation-heavy, non-ASCII) falls back to the
@@ -510,11 +524,23 @@ impl MailSender for SmtpSender {
         let rcpt_refs: Vec<&str> = rcpts.iter().map(String::as_str).collect();
         req.policy.check(&rcpt_refs)?;
 
-        let queue_id = queue::enqueue(db, account_id, None)?;
         let from_addr: &str = req.from.filter(|s| !s.is_empty()).unwrap_or(&self.from);
         if !from_addr.contains('@') {
             return Err(StoreError::InvalidInput(format!(
                 "invalid sender address: {from_addr}"
+            )));
+        }
+        if !self.from.contains('@') {
+            return Err(StoreError::InvalidInput(
+                "account email address has no domain".to_string(),
+            ));
+        }
+        // SPF, DKIM, and DMARC must align with the visible From domain. SMTP
+        // providers sign after submission, so never allow a caller to bypass
+        // the composer's same-domain sender restriction.
+        if !sender_domain_is_aligned(from_addr, &self.from) {
+            return Err(StoreError::InvalidInput(format!(
+                "sender domain must match the account domain to preserve SPF/DKIM/DMARC alignment"
             )));
         }
         // Display name from the composer, else the account default — empty
@@ -559,6 +585,7 @@ impl MailSender for SmtpSender {
             &files,
         )?;
 
+        let queue_id = queue::enqueue(db, account_id, None)?;
         match self.transport(req.password)?.send(&email) {
             Ok(response) => {
                 log::info!("smtp: sent to {:?}: {response:?}", req.to);
@@ -876,6 +903,15 @@ mod tests {
             raw.contains("From: \"John Doe\" <me@example.com>"),
             "bad From: {raw:?}"
         );
+    }
+
+    #[test]
+    fn sender_domain_must_match_the_account_domain() {
+        assert!(sender_domain_is_aligned("alias@example.com", "me@example.com"));
+        assert!(sender_domain_is_aligned("alias@EXAMPLE.COM", "me@example.com"));
+        assert!(!sender_domain_is_aligned("alias@other.example", "me@example.com"));
+        assert!(!sender_domain_is_aligned("alias", "me@example.com"));
+        assert!(!sender_domain_is_aligned("alias@example.com", "me"));
     }
 
     #[test]

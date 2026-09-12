@@ -80,3 +80,26 @@ dist/              gitignored build output
 
 DB lives at `~/.local/share/mailclient/mailclient.sqlite`
 (override with `MAILCLIENT_DB`); passwords live in the OS keyring, never in git.
+
+## Deliverability: DKIM and DMARC
+
+Mailclient submits mail to the SMTP server configured for the account; it does
+not hold or use a DKIM private key. Configure the FEBAS SMTP submission server
+for the same domain as the account email address and have FEBAS sign outgoing
+mail there. Keeping the private key on the provider server prevents it from
+being exposed on the desktop machine.
+
+The composer and sending backend only permit a `From:` address in the account
+domain. This preserves SPF and DKIM domain alignment for DMARC. Mailclient also
+uses that domain in its SMTP `EHLO` name to avoid dotless-hostname spam signals.
+
+After saving the account with FEBAS's supplied SMTP host, port, encryption, and
+login, send a message to Gmail and use **Show original** to confirm all of:
+
+- `SPF: PASS`
+- `DKIM: PASS` with `d=your-domain.example`
+- `DMARC: PASS`
+
+If DKIM is absent, fails, or has FEBAS's domain in `d=`, contact FEBAS: the
+provider must install and use the private key for your domain. Your published
+DMARC DNS record applies automatically and needs no client-side configuration.
