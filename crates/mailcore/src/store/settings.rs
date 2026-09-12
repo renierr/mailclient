@@ -12,9 +12,13 @@ use crate::error::Result;
 pub const SENT_COPY_ENABLED: &str = "sent_copy_enabled";
 /// Load remote images in HTML mail (default: off — privacy).
 pub const LOAD_REMOTE_IMAGES: &str = "load_remote_images";
-/// Outgoing format: `plain` | `multipart` (default, resilient) | `html`.
-/// Unknown/empty values fall back to `multipart`.
+/// Outgoing format: `auto` (default, smart) | `plain` | `multipart` | `html`.
+/// Unknown/empty values fall back to `auto`.
 pub const COMPOSE_SEND_FORMAT: &str = "compose_send_format";
+/// Always include a plain-text twin next to HTML (`1`/`0`, default: on).
+/// Applies when the effective shape would be HTML-only (Auto with formatting,
+/// or explicit HTML): on sends `multipart/alternative` instead.
+pub const COMPOSE_INCLUDE_PLAIN: &str = "compose_include_plain";
 /// Automatically mark a message read when viewed (default: on).
 pub const AUTO_MARK_READ: &str = "auto_mark_read";
 /// Delay in seconds before an opened message counts as read (default: `0` =
@@ -27,7 +31,8 @@ pub fn defaults(key: &str) -> Option<&'static str> {
     match key {
         SENT_COPY_ENABLED => Some("1"),
         LOAD_REMOTE_IMAGES => Some("0"),
-        COMPOSE_SEND_FORMAT => Some("multipart"),
+        COMPOSE_SEND_FORMAT => Some("auto"),
+        COMPOSE_INCLUDE_PLAIN => Some("1"),
         AUTO_MARK_READ => Some("1"),
         MARK_READ_DELAY_SECS => Some("0"),
         _ => None,
@@ -68,13 +73,14 @@ pub fn set_bool(db: &Db, key: &str, value: bool) -> Result<()> {
     set(db, key, if value { "1" } else { "0" })
 }
 
-/// Outgoing send format, resilient: unknown values become `multipart`.
+/// Outgoing send format, resilient: unknown values become `auto`.
 #[must_use]
 pub fn normalize_send_format(raw: &str) -> &'static str {
     match raw.trim().to_ascii_lowercase().as_str() {
         "plain" => "plain",
+        "multipart" => "multipart",
         "html" => "html",
-        _ => "multipart",
+        _ => "auto",
     }
 }
 
@@ -82,9 +88,7 @@ pub fn normalize_send_format(raw: &str) -> &'static str {
 pub fn get_send_format(db: &Db) -> String {
     match get(db, COMPOSE_SEND_FORMAT) {
         Ok(Some(v)) => normalize_send_format(&v).to_string(),
-        _ => defaults(COMPOSE_SEND_FORMAT)
-            .unwrap_or("multipart")
-            .to_string(),
+        _ => defaults(COMPOSE_SEND_FORMAT).unwrap_or("auto").to_string(),
     }
 }
 
@@ -125,15 +129,18 @@ mod tests {
     #[test]
     fn send_format_resilient() {
         assert_eq!(normalize_send_format("plain"), "plain");
+        assert_eq!(normalize_send_format("multipart"), "multipart");
         assert_eq!(normalize_send_format(" HTML "), "html");
-        assert_eq!(normalize_send_format("weird"), "multipart");
-        assert_eq!(normalize_send_format(""), "multipart");
+        assert_eq!(normalize_send_format("auto"), "auto");
+        assert_eq!(normalize_send_format("weird"), "auto");
+        assert_eq!(normalize_send_format(""), "auto");
         let db = Db::open_in_memory().unwrap();
-        assert_eq!(get_send_format(&db), "multipart");
+        assert_eq!(get_send_format(&db), "auto");
+        assert!(get_bool(&db, COMPOSE_INCLUDE_PLAIN).unwrap());
         set(&db, COMPOSE_SEND_FORMAT, "plain").unwrap();
         assert_eq!(get_send_format(&db), "plain");
         set(&db, COMPOSE_SEND_FORMAT, "nonsense").unwrap();
-        assert_eq!(get_send_format(&db), "multipart");
+        assert_eq!(get_send_format(&db), "auto");
     }
 
     #[test]

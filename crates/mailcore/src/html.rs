@@ -654,6 +654,81 @@ pub fn looks_like_html(s: &str) -> bool {
     false
 }
 
+/// Whether sanitized composer HTML carries formatting that plain text cannot
+/// express — the Auto send-format signal. Plain structure (`p`, `div`, `br`,
+/// bare `span`, document wrappers) does NOT count: the WYSIWYG editor emits
+/// those even for unformatted typing, and they round-trip through
+/// `html_to_text` losslessly.
+#[must_use]
+pub fn needs_html_formatting(html: &str) -> bool {
+    // Formatting-bearing tags. `span` only counts with attributes (a bare
+    // `<span>` carries no styling); every other tag here always formats.
+    const TAGS: &[&str] = &[
+        "b",
+        "strong",
+        "i",
+        "em",
+        "u",
+        "ins",
+        "s",
+        "strike",
+        "del",
+        "a",
+        "ul",
+        "ol",
+        "li",
+        "blockquote",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "img",
+        "table",
+        "pre",
+        "code",
+        "sub",
+        "sup",
+        "font",
+        "hr",
+        "dl",
+        "dt",
+        "dd",
+        "span",
+    ];
+    let low = html.to_ascii_lowercase();
+    let bytes = low.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        if j < bytes.len() && bytes[j] == b'/' {
+            j += 1;
+        }
+        let start = j;
+        while j < bytes.len() && (bytes[j].is_ascii_alphanumeric()) {
+            j += 1;
+        }
+        let name = &low[start..j];
+        // Tag boundary: `<b>`, `<b …>`, `<b/>` — but not `<blockquote` when
+        // checking `b`, since the name scan already consumed the full name.
+        let boundary = j < bytes.len()
+            && (bytes[j] == b'>' || bytes[j] == b'/' || bytes[j].is_ascii_whitespace());
+        if boundary && TAGS.contains(&name) {
+            // Bare `<span>` is structural noise; styled spans format.
+            if name != "span" || (j < bytes.len() && bytes[j] != b'>') {
+                return true;
+            }
+        }
+        i = j.max(i + 1);
+    }
+    false
+}
+
 /// Strip tags → plain text (reply quotes, plain fallback).
 pub fn html_to_text(html: &str) -> String {
     let bytes = html.as_bytes();

@@ -191,13 +191,14 @@ pub mod qobject {
         fn purge_message(self: Pin<&mut Self>, uid: i32) -> QString;
 
         /// Send a message from a JSON form
-        /// (`{from,to,subject,body,body_html?,attachments?}`; `body` holds composer rich
-        /// HTML source, `body_html` is an optional explicit override,
-        /// `attachments` an optional list of local file paths / `file://` URLs
-        /// from the composer FileDialog).
+        /// (`{from,to,cc?,bcc?,subject,body,body_html?,attachments?}`; `body`
+        /// holds composer rich HTML source, `body_html` is an optional
+        /// explicit override, `attachments` an optional list of local file
+        /// paths / `file://` URLs from the composer FileDialog).
         /// The effective MIME shape comes from the `compose_send_format`
-        /// setting (`plain`|`multipart`|`html`, resilient default
-        /// `multipart`). Interactive user action = explicit send consent.
+        /// setting (`auto`|`plain`|`multipart`|`html`, resilient default
+        /// `auto`) plus `compose_include_plain`. Interactive user action =
+        /// explicit send consent.
         #[qinvokable]
         fn send_mail(self: Pin<&mut Self>, form: &QString) -> QString;
     }
@@ -209,6 +210,7 @@ pub mod qobject {
         #[qproperty(bool, sent_copy_enabled)]
         #[qproperty(bool, load_remote_images)]
         #[qproperty(QString, compose_send_format)]
+        #[qproperty(bool, compose_include_plain)]
         #[qproperty(bool, auto_mark_read)]
         #[qproperty(i32, mark_read_delay_secs)]
         #[namespace = "mailclient"]
@@ -1297,6 +1299,11 @@ impl qobject::Bridge {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
+        let bcc: Vec<String> = str_field("bcc")
+            .split([',', ';'])
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
         // Composer FileDialog paths (`attachments: [...]`, plain paths or
         // `file://` URLs). A legacy comma-separated string is also accepted.
         let attachments: Vec<String> = match v.get("attachments") {
@@ -1322,17 +1329,24 @@ impl qobject::Bridge {
                 .map_err(|e| format!("no password in keyring: {e}"))?;
             let mut sender = SmtpSender::new(&acc);
             // Interactive Send click = explicit user consent (see SendPolicy docs).
-            // Resilient: unknown setting values fall back to multipart.
+            // Resilient: unknown setting values fall back to auto.
             let format = SendFormat::parse(&mailcore::store::settings::get_send_format(&db));
+            let include_plain = mailcore::store::settings::get_bool(
+                &db,
+                mailcore::store::settings::COMPOSE_INCLUDE_PLAIN,
+            )
+            .unwrap_or(true);
             let req = SendRequest {
                 to: &to,
                 cc: &cc,
+                bcc: &bcc,
                 from,
                 subject: &subject,
                 body_text: &body,
                 body_html: body_html.as_deref(),
                 attachments: &attachments,
                 format,
+                include_plain,
                 policy: &SendPolicy::Unrestricted,
                 password: &secrets.smtp_password,
                 imap_password: Some(&secrets.imap_password),
@@ -1371,6 +1385,7 @@ pub struct SettingsBridgeRust {
     sent_copy_enabled: bool,
     load_remote_images: bool,
     compose_send_format: QString,
+    compose_include_plain: bool,
     auto_mark_read: bool,
     mark_read_delay_secs: i32,
 }
@@ -1380,7 +1395,8 @@ impl Default for SettingsBridgeRust {
         Self {
             sent_copy_enabled: true,
             load_remote_images: false,
-            compose_send_format: qstring("multipart"),
+            compose_send_format: qstring("auto"),
+            compose_include_plain: true,
             auto_mark_read: true,
             mark_read_delay_secs: 0,
         }
@@ -1415,6 +1431,13 @@ impl qobject::SettingsBridge {
             );
             self.as_mut()
                 .set_compose_send_format(qstring(&mailcore::store::settings::get_send_format(&db)));
+            self.as_mut().set_compose_include_plain(
+                mailcore::store::settings::get_bool(
+                    &db,
+                    mailcore::store::settings::COMPOSE_INCLUDE_PLAIN,
+                )
+                .unwrap_or(true),
+            );
             self.as_mut().set_auto_mark_read(
                 mailcore::store::settings::get_bool(&db, mailcore::store::settings::AUTO_MARK_READ)
                     .unwrap_or(true),
@@ -1436,6 +1459,7 @@ impl qobject::SettingsBridge {
                 &self.compose_send_format().to_string(),
             )
             .to_string();
+            let include_plain = *self.compose_include_plain();
             let auto_read = *self.auto_mark_read();
             let delay = *self.mark_read_delay_secs() as i64;
             if let Err(e) = mailcore::store::settings::set_bool(
@@ -1458,6 +1482,13 @@ impl qobject::SettingsBridge {
                 &format,
             ) {
                 log::warn!("settings: cannot save send-format: {e}");
+            }
+            if let Err(e) = mailcore::store::settings::set_bool(
+                &db,
+                mailcore::store::settings::COMPOSE_INCLUDE_PLAIN,
+                include_plain,
+            ) {
+                log::warn!("settings: cannot save include-plain: {e}");
             }
             if let Err(e) = mailcore::store::settings::set_bool(
                 &db,

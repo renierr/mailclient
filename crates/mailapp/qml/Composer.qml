@@ -15,8 +15,9 @@ import "components"
 // sanitizer keeps — Qt's rich-text TextArea emitted inline styles that were
 // stripped on send, so formatting silently never arrived.
 //
-// Rust (`resolve_bodies` + the `compose_send_format` setting) derives the
-// plain/multipart shape and sanitizes the HTML.
+// Rust (`resolve_bodies` + the `compose_send_format`/`compose_include_plain`
+// settings) derives the plain/multipart shape and sanitizes the HTML:
+// Auto sends text/plain unless the body carries real formatting.
 Dialog {
     id: root
     title: qsTr("Compose")
@@ -31,8 +32,12 @@ Dialog {
     signal sendRequested(string payload)
 
     property string accountEmail: ""
-    property string sendFormat: "multipart"
+    property string sendFormat: "auto"
     property bool sourceMode: false
+
+    // Cc/Bcc rows stay collapsed until toggled (or non-empty).
+    property bool showCc: false
+    property bool showBcc: false
 
     // Outgoing files picked via FileDialog: [{path, name}]. Paths (plain or
     // `file://` URLs) travel in the send payload; Rust reads the bytes at
@@ -80,7 +85,7 @@ Dialog {
             anchors.verticalCenter: parent.verticalCenter
             anchors.right: parent.right
             anchors.rightMargin: Theme.lg
-            text: qsTr("Send as: %1").arg(root.sendFormat)
+            text: root.sendFormat === "auto" ? qsTr("Send as: Auto") : qsTr("Send as: %1").arg(root.sendFormat)
             color: Theme.textMuted
             font.pixelSize: Theme.fontTiny
         }
@@ -110,7 +115,10 @@ Dialog {
         fromLocal.text = root.accountLocalPart
         toField.text = ""
         ccField.text = ""
+        bccField.text = ""
         subjectField.text = ""
+        root.showCc = false
+        root.showBcc = false
         root.attachments = []
     }
 
@@ -209,6 +217,7 @@ Dialog {
             from: root.effectiveFrom,
             to: toField.text,
             cc: ccField.text,
+            bcc: bccField.text,
             subject: subjectField.text,
             body: html,
             body_html: html,
@@ -237,9 +246,11 @@ Dialog {
         spacing: Theme.sm
 
         // --- headers ------------------------------------------------------
+        // One row each for From / To / Subject; Cc and Bcc hide behind
+        // toggles beside the To field until needed.
         GridLayout {
             Layout.fillWidth: true
-            columns: 2
+            columns: 3
             columnSpacing: Theme.sm
             rowSpacing: Theme.xs
 
@@ -252,6 +263,7 @@ Dialog {
             // Local part editable, domain locked to the account.
             Rectangle {
                 Layout.fillWidth: true
+                Layout.columnSpan: 2
                 implicitHeight: 32
                 radius: Theme.radius
                 color: Theme.bg
@@ -299,16 +311,55 @@ Dialog {
                 placeholderText: qsTr("name@example.com, second@example.com")
                 onTextChanged: root.dirty = true
             }
+            Row {
+                spacing: 2
+                IconButton {
+                    text: "Cc"
+                    fontSize: Theme.fontSmall
+                    implicitWidth: 36
+                    implicitHeight: 32
+                    active: root.showCc || ccField.text !== ""
+                    tooltip: qsTr("Show Cc field")
+                    onClicked: root.showCc = !root.showCc
+                }
+                IconButton {
+                    text: qsTr("Bcc")
+                    fontSize: Theme.fontSmall
+                    implicitWidth: 40
+                    implicitHeight: 32
+                    active: root.showBcc || bccField.text !== ""
+                    tooltip: qsTr("Show Bcc field")
+                    onClicked: root.showBcc = !root.showBcc
+                }
+            }
 
             Label {
                 text: qsTr("Cc")
                 color: Theme.textMuted
                 font.pixelSize: Theme.fontSmall
+                visible: root.showCc || ccField.text !== ""
             }
             AppTextField {
                 id: ccField
                 Layout.fillWidth: true
+                Layout.columnSpan: 2
+                visible: root.showCc || ccField.text !== ""
                 placeholderText: qsTr("optional, comma separated")
+                onTextChanged: root.dirty = true
+            }
+
+            Label {
+                text: qsTr("Bcc")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+                visible: root.showBcc || bccField.text !== ""
+            }
+            AppTextField {
+                id: bccField
+                Layout.fillWidth: true
+                Layout.columnSpan: 2
+                visible: root.showBcc || bccField.text !== ""
+                placeholderText: qsTr("optional, hidden recipients")
                 onTextChanged: root.dirty = true
             }
 
@@ -320,6 +371,7 @@ Dialog {
             AppTextField {
                 id: subjectField
                 Layout.fillWidth: true
+                Layout.columnSpan: 2
                 onTextChanged: root.dirty = true
             }
         }

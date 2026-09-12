@@ -140,6 +140,7 @@ fn main() -> Result<(), String> {
                 &SendRequest {
                     to: std::slice::from_ref(&to),
                     cc: &[],
+                    bcc: &[],
                     from: None,
                     subject: "Mailclient M1 test",
                     body_text:
@@ -147,6 +148,7 @@ fn main() -> Result<(), String> {
                     body_html: None,
                     attachments: &[],
                     format: SendFormat::Plain,
+                    include_plain: true,
                     policy: &policy,
                     password: &smtp_pass,
                     imap_password: Some(&imap_pass),

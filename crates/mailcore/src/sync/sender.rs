@@ -67,32 +67,53 @@ impl SendPolicy {
 /// Outgoing body format (user setting `compose_send_format`, resilient).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SendFormat {
+    /// Smart default: plain text unless the body carries formatting, in
+    /// which case HTML (plus a plain twin when `include_plain` is on).
+    Auto,
     /// `text/plain` only — safest, always readable.
     Plain,
-    /// `multipart/alternative` plain + html — default, resilient.
+    /// `multipart/alternative` plain + html — resilient.
     Multipart,
-    /// `text/html` only.
+    /// `text/html` only (plus a plain twin when `include_plain` is on).
     Html,
 }
 
 impl SendFormat {
-    /// Parse user setting; unknown/empty → `Multipart`.
+    /// Parse user setting; unknown/empty → `Auto`.
     #[must_use]
     pub fn parse(raw: &str) -> Self {
         match crate::store::settings::normalize_send_format(raw) {
             "plain" => Self::Plain,
+            "multipart" => Self::Multipart,
             "html" => Self::Html,
-            _ => Self::Multipart,
+            _ => Self::Auto,
         }
     }
 
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Auto => "auto",
             Self::Plain => "plain",
             Self::Multipart => "multipart",
             Self::Html => "html",
         }
+    }
+}
+
+/// Resolve the wanted format into a concrete wire shape (never `Auto`).
+///
+/// - `Plain` / `Multipart` pass through untouched.
+/// - `Html` gains a plain twin (`Multipart`) when `include_plain` is on.
+/// - `Auto`: plain text when the body has no formatting, otherwise HTML
+///   (with a plain twin when `include_plain` is on).
+#[must_use]
+pub fn effective_format(wanted: SendFormat, needs_html: bool, include_plain: bool) -> SendFormat {
+    match wanted {
+        SendFormat::Auto if !needs_html => SendFormat::Plain,
+        SendFormat::Auto | SendFormat::Html if include_plain => SendFormat::Multipart,
+        SendFormat::Auto | SendFormat::Html => SendFormat::Html,
+        concrete => concrete,
     }
 }
 
@@ -107,6 +128,8 @@ pub struct SendRequest<'a> {
     pub to: &'a [String],
     /// Cc recipients (also policy-checked).
     pub cc: &'a [String],
+    /// Bcc recipients (also policy-checked, never in the headers).
+    pub bcc: &'a [String],
     /// Sender identity. `None` = account email. Any other address is used
     /// verbatim (server may reject logins that must match the username).
     pub from: Option<&'a str>,
@@ -119,8 +142,11 @@ pub struct SendRequest<'a> {
     /// Local file paths to attach (composer FileDialog output). Filenames
     /// default to the path basename, MIME types are guessed by extension.
     pub attachments: &'a [String],
-    /// User-chosen format (see [`SendFormat`]).
+    /// User-chosen format (see [`SendFormat`]); `Auto` is resolved per
+    /// message from the body content.
     pub format: SendFormat,
+    /// Attach a plain-text twin next to HTML (`compose_include_plain`).
+    pub include_plain: bool,
     pub policy: &'a SendPolicy,
     /// SMTP password (keyring or test env), never stored.
     pub password: &'a str,
@@ -137,6 +163,8 @@ pub struct SendRequest<'a> {
 ///   tags in plain mode.
 /// - Outgoing HTML is sanitized via [`crate::html::sanitize_for_send`].
 /// - Missing sides are derived so `multipart` never has an empty part.
+/// - `Auto` is resolved by the caller ([`effective_format`]); passed through
+///   here it behaves like `Multipart` (never panics, never empty).
 pub fn resolve_bodies(
     body_text: &str,
     body_html: Option<&str>,
@@ -180,7 +208,7 @@ pub fn resolve_bodies(
             };
             (crate::html::html_to_text(&html), Some(html))
         }
-        SendFormat::Multipart => {
+        SendFormat::Multipart | SendFormat::Auto => {
             let has_explicit = explicit_html.is_some();
             let html = if let Some(h) = explicit_html {
                 h
@@ -351,6 +379,7 @@ impl MailSender for SmtpSender {
     fn send_raw(&mut self, db: &Db, account_id: i64, req: &SendRequest<'_>) -> Result<()> {
         let mut all: Vec<&str> = req.to.iter().map(String::as_str).collect();
         all.extend(req.cc.iter().map(String::as_str));
+        all.extend(req.bcc.iter().map(String::as_str));
         req.policy.check(&all)?;
 
         let queue_id = queue::enqueue(db, account_id, None)?;
@@ -367,12 +396,32 @@ impl MailSender for SmtpSender {
         for c in req.cc {
             builder = builder.cc(c.parse()?);
         }
-        let (plain, html) = resolve_bodies(req.body_text, req.body_html, req.format);
+        for b in req.bcc {
+            builder = builder.bcc(b.parse()?);
+        }
+        // Auto resolves per message: formatting present → HTML (with a plain
+        // twin when enabled), otherwise plain text.
+        let html_src = req
+            .body_html
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                if crate::html::looks_like_html(req.body_text) {
+                    Some(req.body_text)
+                } else {
+                    None
+                }
+            });
+        let needs_html = html_src
+            .map(|h| crate::html::needs_html_formatting(&crate::html::sanitize_for_send(h)))
+            .unwrap_or(false);
+        let format = effective_format(req.format, needs_html, req.include_plain);
+        let (plain, html) = resolve_bodies(req.body_text, req.body_html, format);
         let files = load_outgoing_attachments(req.attachments)?;
         let email = if files.is_empty() {
-            match (req.format, html) {
+            match (format, html) {
                 (SendFormat::Plain, _) => builder.header(ContentType::TEXT_PLAIN).body(plain)?,
-                (_, Some(h)) if req.format == SendFormat::Html => {
+                (_, Some(h)) if format == SendFormat::Html => {
                     builder.header(ContentType::TEXT_HTML).body(h)?
                 }
                 (_, Some(h)) => builder
@@ -380,24 +429,18 @@ impl MailSender for SmtpSender {
                 (_, None) => builder.header(ContentType::TEXT_PLAIN).body(plain)?,
             }
         } else {
-            // Body first (alternative plain+html, or single part), then one
-            // `SinglePart` per file inside a `multipart/mixed` envelope.
-            let body_part = match (req.format, html) {
-                (SendFormat::Plain, _) => {
-                    lettre::message::MultiPart::alternative_plain_html(plain.clone(), plain)
-                }
-                (_, Some(h)) if req.format == SendFormat::Html => {
-                    lettre::message::MultiPart::alternative_plain_html(
-                        crate::html::html_to_text(&h),
-                        h,
-                    )
-                }
+            // Body first (single part or alternative), then one `SinglePart`
+            // per file inside a `multipart/mixed` envelope.
+            let body = match (format, html) {
+                (SendFormat::Plain, _) => lettre::message::MultiPart::mixed()
+                    .singlepart(lettre::message::SinglePart::plain(plain)),
+                (_, Some(h)) if format == SendFormat::Html => lettre::message::MultiPart::mixed()
+                    .singlepart(lettre::message::SinglePart::html(h)),
                 (_, Some(h)) => lettre::message::MultiPart::alternative_plain_html(plain, h),
-                (_, None) => {
-                    lettre::message::MultiPart::alternative_plain_html(plain.clone(), plain)
-                }
+                (_, None) => lettre::message::MultiPart::mixed()
+                    .singlepart(lettre::message::SinglePart::plain(plain)),
             };
-            let mut mixed = lettre::message::MultiPart::mixed().multipart(body_part);
+            let mut mixed = lettre::message::MultiPart::mixed().multipart(body);
             for (filename, mime, bytes) in &files {
                 let ctype = ContentType::parse(mime).unwrap_or_else(|_| {
                     ContentType::parse("application/octet-stream").expect("static mime parses")
@@ -545,8 +588,51 @@ mod tests {
         // Outgoing scripts are stripped even for the sender's own HTML.
         let (_, evil) = resolve_bodies("<p>t</p><script>alert(1)</script>", None, SendFormat::Html);
         assert!(!evil.unwrap().contains("script"));
-        // Unknown format string falls back to multipart, never panics.
-        assert_eq!(SendFormat::parse("nonsense"), SendFormat::Multipart);
+        // Unknown format string falls back to auto, never panics.
+        assert_eq!(SendFormat::parse("nonsense"), SendFormat::Auto);
+        assert_eq!(SendFormat::parse(""), SendFormat::Auto);
+    }
+
+    #[test]
+    fn auto_format_picks_shape_from_content() {
+        use SendFormat::{Auto, Html, Multipart, Plain};
+        // Plain typing (even wrapped in editor structure) sends text/plain.
+        assert_eq!(effective_format(Auto, false, true), Plain);
+        assert_eq!(effective_format(Auto, false, false), Plain);
+        // Formatting sends multipart by default, html-only on opt-out.
+        assert_eq!(effective_format(Auto, true, true), Multipart);
+        assert_eq!(effective_format(Auto, true, false), Html);
+        // Explicit choices pass through; html gains a twin on opt-in.
+        assert_eq!(effective_format(Plain, true, true), Plain);
+        assert_eq!(effective_format(Multipart, false, false), Multipart);
+        assert_eq!(effective_format(Html, true, true), Multipart);
+        assert_eq!(effective_format(Html, true, false), Html);
+    }
+
+    #[test]
+    fn needs_html_only_for_real_formatting() {
+        use crate::html::{needs_html_formatting, sanitize_for_send};
+        // Editor structure around plain typing: no HTML needed.
+        assert!(!needs_html_formatting(&sanitize_for_send("<p>hello</p>")));
+        assert!(!needs_html_formatting(&sanitize_for_send(
+            "<div>one</div><div>two<br></div>"
+        )));
+        assert!(!needs_html_formatting(&sanitize_for_send(
+            "plain &amp; simple"
+        )));
+        // Real formatting needs HTML.
+        assert!(needs_html_formatting(&sanitize_for_send(
+            "<p>hello <b>bold</b></p>"
+        )));
+        assert!(needs_html_formatting(&sanitize_for_send(
+            "<p>see <a href=\"https://x.example\">this</a></p>"
+        )));
+        assert!(needs_html_formatting(&sanitize_for_send(
+            "<ul><li>one</li></ul>"
+        )));
+        assert!(needs_html_formatting(&sanitize_for_send(
+            "<blockquote>quoted</blockquote>"
+        )));
     }
 
     #[test]

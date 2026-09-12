@@ -68,10 +68,12 @@ Dialog {
 
     function formatIndex(v) {
         if (v === "plain")
-            return 0
-        if (v === "html")
+            return 1
+        if (v === "multipart")
             return 2
-        return 1
+        if (v === "html")
+            return 3
+        return 0
     }
 
     function delayIndex(secs) {
@@ -89,6 +91,7 @@ Dialog {
         copyBox.checked = settingsBridge.sent_copy_enabled
         imagesBox.checked = settingsBridge.load_remote_images
         formatBox.currentIndex = formatIndex(settingsBridge.compose_send_format)
+        plainTwinBox.checked = settingsBridge.compose_include_plain
         readBox.checked = settingsBridge.auto_mark_read
         delayBox.currentIndex = delayIndex(settingsBridge.mark_read_delay_secs)
     }
@@ -162,18 +165,24 @@ Dialog {
         AppComboBox {
             id: formatBox
             Layout.fillWidth: true
-            model: [qsTr("Plain text (safest)"), qsTr("Multipart plain + HTML (recommended)"), qsTr("HTML only")]
+            model: [qsTr("Automatic (recommended)"), qsTr("Plain text (safest)"), qsTr("Multipart plain + HTML"), qsTr("HTML only")]
             onActivated: index => {
-                var v = ["plain", "multipart", "html"][index]
+                var v = ["auto", "plain", "multipart", "html"][index]
                 root.settingsBridge.compose_send_format = v
             }
+        }
+        AppCheckBox {
+            id: plainTwinBox
+            Layout.fillWidth: true
+            text: qsTr("Always include a plain-text version alongside HTML")
+            onToggled: root.settingsBridge.compose_include_plain = checked
         }
         Label {
             Layout.fillWidth: true
             wrapMode: Text.Wrap
             color: Theme.textMuted
             font.pixelSize: Theme.fontSmall
-            text: qsTr("Multipart sends plain + HTML so every client reads it; plain strips formatting; HTML-only may look broken in old clients.")
+            text: qsTr("Automatic sends plain text unless the message uses formatting (bold, links, lists, quotes); attachments always travel as multipart. The plain-text twin keeps every client readable.")
         }
 
         Rectangle {
