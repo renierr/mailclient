@@ -141,7 +141,8 @@ pub fn message_html(db: &Db, folder_id: i64, uid: u32, allow_remote: bool) -> Re
     Ok(body_html)
 }
 /// `[{uid, subject, from, date, snippet, unread, starred, body_text,
-/// body_html, is_html, has_remote_images, body}]`, newest first.
+/// body_html, is_html, has_remote_images, has_attachments, attachments,
+/// body}]`, newest first.
 /// - `body_html` is **sanitized** (scripts/handlers/remote-img gated by the
 ///   `load_remote_images` setting); never trust the stored raw HTML in QML.
 /// - Inline `cid:`/`data:` images are part of the mail and always kept —
@@ -163,6 +164,22 @@ pub fn messages_json_paged(db: &Db, folder_id: i64, limit: u64, offset: u64) -> 
         } else {
             plain.clone()
         };
+        // Attachment metadata only (bytes never enter the feed — see
+        // `attachments_json` + `Bridge::save_attachment` for the bytes path).
+        let files: Vec<serde_json::Value> = messages::list_attachments(db, m.id)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| {
+                json!({
+                    "id": a.id,
+                    "filename": a.filename,
+                    "mime_type": a.mime_type,
+                    "size": a.size,
+                    "content_id": a.content_id,
+                    "is_inline": a.is_inline,
+                })
+            })
+            .collect();
         arr.push(json!({
             "uid": m.uid,
             "subject": m.subject.as_deref().unwrap_or("(no subject)"),
@@ -171,6 +188,8 @@ pub fn messages_json_paged(db: &Db, folder_id: i64, limit: u64, offset: u64) -> 
             "snippet": m.snippet.as_deref().unwrap_or(""),
             "unread": !m.is_read,
             "starred": m.is_starred,
+            "has_attachments": m.has_attachments || !files.is_empty(),
+            "attachments": files,
             "body_text": plain,
             "body_html": body_html,
             "is_html": is_html,
@@ -179,6 +198,28 @@ pub fn messages_json_paged(db: &Db, folder_id: i64, limit: u64, offset: u64) -> 
         }));
     }
     Ok(serde_json::to_string(&arr)?)
+}
+
+/// Attachment metadata for one message (`[{id, filename, mime_type, size,
+/// content_id, is_inline}]`, no bytes). Used by the reader pane and the
+/// save dialog; bytes leave Rust only via `save_attachment_to_path`.
+pub fn attachments_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
+    let m = messages::get_by_uid(db, folder_id, uid)?;
+    let files: Vec<serde_json::Value> = messages::list_attachments(db, m.id)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|a| {
+            json!({
+                "id": a.id,
+                "filename": a.filename,
+                "mime_type": a.mime_type,
+                "size": a.size,
+                "content_id": a.content_id,
+                "is_inline": a.is_inline,
+            })
+        })
+        .collect();
+    Ok(serde_json::to_string(&files)?)
 }
 
 /// First page of a folder (default list view).
@@ -237,6 +278,42 @@ mod tests {
         assert_eq!(msgs[0]["body"], "<b>hi</b>");
         assert!(msgs[0]["is_html"].as_bool().unwrap());
         assert_eq!(msgs[0]["body_html"], "<b>hi</b>");
+        // No files on this message: flag off, empty list.
+        assert!(!msgs[0]["has_attachments"].as_bool().unwrap());
+        assert_eq!(msgs[0]["attachments"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn feed_carries_attachment_metadata_without_bytes() {
+        use crate::models::NewAttachment;
+        let (db, acc, f) = setup();
+        let mut m = msg_store::sample_new(acc, f, 71);
+        m.has_attachments = true;
+        let id = msg_store::upsert(&db, &m).unwrap();
+        msg_store::add_attachment(
+            &db,
+            id,
+            &NewAttachment {
+                filename: Some("doc.pdf".to_string()),
+                mime_type: Some("application/pdf".to_string()),
+                content_id: None,
+                size: 4,
+                data: Some(b"%PDF".to_vec()),
+                is_inline: false,
+            },
+        )
+        .unwrap();
+        let msgs: serde_json::Value =
+            serde_json::from_str(&messages_json(&db, f).unwrap()).unwrap();
+        let row = &msgs[0];
+        assert!(row["has_attachments"].as_bool().unwrap());
+        assert_eq!(row["attachments"][0]["filename"], "doc.pdf");
+        assert_eq!(row["attachments"][0]["size"], 4);
+        // Bytes never leak into JSON.
+        assert!(row["attachments"][0].get("data").is_none());
+        let only: serde_json::Value =
+            serde_json::from_str(&attachments_json(&db, f, 71).unwrap()).unwrap();
+        assert_eq!(only[0]["filename"], "doc.pdf");
     }
 
     #[test]

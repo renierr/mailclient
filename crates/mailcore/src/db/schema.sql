@@ -110,6 +110,9 @@ create trigger if not exists trg_messages_au after update on messages begin
 end;
 
 -- ------------------------------------------------------------- attachments
+-- Attachment bytes live in `data` (BLOB) so a message + its files back up
+-- and travel with the single SQLite file (offline-first). `storage_path` is
+-- a legacy disk-spillover pointer (unused by new code, kept for old DBs).
 create table if not exists attachments (
     id           integer primary key autoincrement,
     message_id   integer not null references messages (id) on delete cascade,
@@ -118,6 +121,8 @@ create table if not exists attachments (
     size         integer not null default 0,
     content_id   text,
     storage_path text,
+    data         blob,
+    is_inline    integer not null default 0,
     created_at   text not null
 );
 create index if not exists idx_attachments_message on attachments (message_id);

@@ -25,7 +25,7 @@ Bay                                               ▲
 
 See `AGENT.md` for agent rules, dependency policy, and Definition of Done.
 
-## 3. SQLite Schema (v1, see `crates/mailcore/src/db/schema.sql`)
+## 3. SQLite Schema (v4, see `crates/mailcore/src/db/schema.sql`)
 
 | Table | Purpose | Key columns |
 |---|---|---|
@@ -34,7 +34,7 @@ See `AGENT.md` for agent rules, dependency policy, and Definition of Done.
 | `folders` | IMAP folder tree per account | `id`, `account_id→accounts`, `path`, `delimiter`, `role` (inbox/sent/drafts/trash/junk/archive/custom), `uid_validity`, `uid_next`, `subscribed`, `last_sync_at` |
 | `messages` | cached headers + bodies | `id`, `account_id`, `folder_id→folders`, `uid`, `message_id_header`, `thread_id`, `subject`, `from_addr`, `to_addrs/cc/bcc/reply_to` (JSON), `date`, `snippet`, `body_text`, `body_html`, `flags` (`is_read/is_starred/is_draft/has_attachments`, `keywords` JSON), `size`, `downloaded_full`, UNIQUE `(account_id, folder_id, uid)` |
 | `messages_fts` | FTS5 full-text index | `message_id→messages`, `subject`, `from_addr`, `body_text` |
-| `attachments` | attachment metadata (blobs on disk under `attachments/`) | `id`, `message_id→messages`, `filename`, `mime_type`, `size`, `content_id`, `storage_path` |
+| `attachments` | attachment names/sizes synced, bytes on explicit request only (SQLite BLOB cache, v4) | `id`, `message_id→messages`, `filename`, `mime_type`, `size`, `content_id`, `data` (BLOB, `NULL` until downloaded), `is_inline`, `storage_path` (legacy, unused) |
 | `contacts` | autocomplete (built from mail) | `address` PK, `name`, `times_seen`, `last_seen_at` |
 | `send_queue` | outbox for reliable sending | `id`, `account_id`, `message_id→messages`, `status` (queued/sending/sent/failed), `last_error`, `retries`, `created_at`, `updated_at` |
 | `settings` | user preferences (v2) | `key` PK, `value` (`sent_copy_enabled=1`, `load_remote_images=0`, `auto_mark_read=1`, `mark_read_delay_secs=0`) |
@@ -47,15 +47,15 @@ Secrets live in the OS keyring keyed by `accounts.auth_vault_key`, never in SQLi
 |---|---|---|
 | 0 | Repo scaffold: workspace, `mailcore` schema + CRUD, `mailapp` cxx-qt skeleton, QML shell, `./dev.sh`/`./build.sh`/`scripts/install-local.sh`, `dist/` bundle | ✅ done |
 | 1 | Real IMAP sync + app wiring: account setup (keyring), LIST/SELECT/FETCH, UIDVALIDITY handling, flag push/delete, send + Sent-copy, live folder/message feeds in QML | ✅ done (verified live against test account) |
-| 2 | Composer polish: drafts, attachments, full rich-text editor (toolbar wraps selection today) | 🔶 partial (rich HTML compose + source view + Cc + send-format setting done; drafts/attachments still M2) |
+| 2 | Composer polish: drafts, attachments, full rich-text editor (toolbar wraps selection today) | 🔶 partial (rich HTML compose + source view + Cc + send-format setting + attachments done; drafts still M2) |
 | 3 | Reader/search: FTS search UI, remote-image handling polish | 🔶 partial (safe sanitized HTML reader + remote-block banner + show-once done; FTS UI still M3) |
 | 4 | Contacts, threading, notifications, settings UI extras | ⬜ planned |
 | 5 | Polish: background IDLE/polling sync, offline/error states, onboarding, `.desktop`/icons, Windows feasibility | ⬜ planned (sync is manual ⟳ for now; IDLE not yet) |
 
 Current state detail:
-- `mailcore`: SQLite schema v2 (incl. FTS5 + `settings` table with migration), typed stores (accounts/folders/messages/queue/contacts/settings incl. `compose_send_format`), `html` sanitizer (std-only tokenize→clean→serialise, remote/private-host gating, entity-aware), IMAP sync (SPECIAL-USE role mapping, windowed UID FETCH + MIME parsing — INBOX newest 200, others newest 50 auto / 200 on open — UIDVALIDITY resync, expunge, flag refresh/push, server-side delete, Sent-copy APPEND), SMTP send with `SendPolicy` + `SendFormat` (plain/multipart/html, resilient fallback, Cc, sanitized outgoing), keyring auth, safe JSON feeds (`body_text`/`body_html` sanitized/`is_html`/`has_remote_images` + legacy `body`, plus on-demand `message_html` for Show-once). 32 unit tests green.
-- `mailapp`: `Bridge` (accounts, selective sync + per-folder `sync_folder_now` + `load_older_messages` paging, folder LIST refresh + `subscribed` visibility, select/read/star/delete/send/archive/move with Cc + format-aware bodies, on-demand `message_html`, paged JSON feeds) + `SettingsBridge` (`sent_copy_enabled`, `load_remote_images`, `compose_send_format`, `auto_mark_read`, `mark_read_delay_secs`), embedded `Mailclient` QML module with filesystem override.
-- `qml`: live 3-pane UI — real folders/messages, working sync/send/reply/forward/star/delete/archive, account setup with ports+encryption, settings dialog (incl. send-format picker), IMAP folder manager (LIST refresh, show/hide per folder, create folders, cached/unread counts). Reader: PlainText for plain (no more HTML-code display), sanitized WebEngine + blocked-images banner + working show-once (inline `cid:`/`data:` always load, remote gated + re-sanitized on demand). List pages newest-first with a "Show older messages" button (one 200-mail server batch per press). Startup auto-sync, folder-open fill, post-send Sent refresh. Composer: WYSIWYG + HTML-source toggle, list/quote/link/clear, Cc wired, reply/forward quote from `body_text`. No mocks remain (search box + drafts still point at M2/M3).
+- `mailcore`: SQLite schema v4 (incl. FTS5 + `settings` table with migration, `messages.flags_dirty` v3, `attachments.data` BLOB + `is_inline` v4), typed stores (accounts/folders/messages/queue/contacts/settings incl. `compose_send_format`), `html` sanitizer (std-only tokenize→clean→serialise, remote/private-host gating, entity-aware), IMAP sync (SPECIAL-USE role mapping, windowed UID FETCH + MIME parsing — INBOX newest 200, others newest 50 auto / 200 on open — UIDVALIDITY resync, expunge, flag refresh/push, server-side delete, Sent-copy APPEND, attachment names/sizes extracted with 25 MiB/file + 50-file caps — bytes never auto-download, only `fetch_attachments` on explicit Save/Download spends bandwidth), SMTP send with `SendPolicy` + `SendFormat` (plain/multipart/html, resilient fallback, Cc, sanitized outgoing, `multipart/mixed` file attachments with extension-guessed MIME), keyring auth, safe JSON feeds (`body_text`/`body_html` sanitized/`is_html`/`has_remote_images` + legacy `body`, plus on-demand `message_html` for Show-once; message rows carry `has_attachments` + attachment metadata, never bytes). 49 unit tests green.
+- `mailapp`: `Bridge` (accounts, selective sync + per-folder `sync_folder_now` + `load_older_messages` paging, folder LIST refresh + `subscribed` visibility, select/read/star/delete/send/archive/move with Cc + format-aware bodies + composer file attachments, on-demand `message_html`, attachment download/save/save-all to disk, paged JSON feeds) + `SettingsBridge` (`sent_copy_enabled`, `load_remote_images`, `compose_send_format`, `auto_mark_read`, `mark_read_delay_secs`), embedded `Mailclient` QML module with filesystem override.
+- `qml`: live 3-pane UI — real folders/messages, working sync/send/reply/forward/star/delete/archive, account setup with ports+encryption, settings dialog (incl. send-format picker), IMAP folder manager (LIST refresh, show/hide per folder, create folders, cached/unread counts). Reader: PlainText for plain (no more HTML-code display), sanitized WebEngine + blocked-images banner + working show-once (inline `cid:`/`data:` always load, remote gated + re-sanitized on demand), attachment bar with Download (explicit prefetch for offline use) + per-file Save + Save-all (bytes download on first request, then cache as SQLite BLOBs → disk via save dialogs). List shows 📎 for mails with files and pages newest-first with a "Show older messages" button (one 200-mail server batch per press). Startup auto-sync, folder-open fill, post-send Sent refresh. Composer: WYSIWYG + HTML-source toggle, list/quote/link/clear, Cc wired, file attachments (picker chips, sent as `multipart/mixed`), reply/forward quote from `body_text`. No mocks remain (search box + drafts still point at M2/M3).
 - Verified live: 5 folders mapped, messages synced, test mail delivered + filed to Sent.
 - QML is a responsive 3-pane shell (sidebar / list / reader + composer dialog + account setup dialog) with mock data so `qml6 qml/Main.qml` runs without Rust.
 
@@ -81,9 +81,13 @@ Manual ⟳ plus auto-refresh on startup, folder open, and after send.
   folders never auto-sync all mail, they fill (newest 200) when opened via
   `sync_folder_now`. Delete means Trash, except spam (destroyed outright,
   junk never touches Trash) and Trash itself (deleting there is permanent);
-  one-click archive moves to Archive (auto-created server-side when missing).
-  Expunge diffing is always full (local, no network);
-  UIDVALIDITY resync on change.
+   one-click archive moves to Archive (auto-created server-side when missing).
+   Expunge diffing is always full (local, no network);
+   UIDVALIDITY resync on change. Attachment bytes are never fetched during
+   sync — only names/sizes land in SQLite, so ⟳ stays cheap no matter how
+   large the files are. A file downloads exactly once, on explicit user
+   request (Download / Save / Save-all in the reader), then caches as a BLOB
+   for offline use; resyncs never wipe downloaded bytes.
 - **Scaling (massive mailboxes)**: per-folder network is bounded by the window
   (one SEARCH + ≤200 flag FETCH + ≤200 RFC822 FETCH), not by mailbox size.
   Planned next: larger chunks → CONDSTORE/QRESYNC deltas → IDLE push + polling.

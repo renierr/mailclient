@@ -164,7 +164,8 @@ pub struct NewMessage {
     pub downloaded_full: bool,
 }
 
-/// Attachment metadata (bytes live on disk, see `storage_path`).
+/// Attachment with bytes stored in SQLite (`data` BLOB). `storage_path` is a
+/// legacy disk pointer (old rows only, never written by new code).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Attachment {
     pub id: i64,
@@ -174,6 +175,24 @@ pub struct Attachment {
     pub size: u64,
     pub content_id: Option<String>,
     pub storage_path: Option<String>,
+    /// Raw bytes. Skipped in JSON feeds — fetch via `get_attachment` / save
+    /// path instead of serializing blobs into the QML feed.
+    #[serde(skip_serializing, default)]
+    pub data: Option<Vec<u8>>,
+    pub is_inline: bool,
+}
+
+/// Fields needed to store one attachment. `data=None` is metadata only
+/// (names/sizes synced, bytes fetched on explicit user request);
+/// `Some(bytes)` is the full row after an on-demand download.
+#[derive(Debug, Clone)]
+pub struct NewAttachment {
+    pub filename: Option<String>,
+    pub mime_type: Option<String>,
+    pub content_id: Option<String>,
+    pub size: u64,
+    pub data: Option<Vec<u8>>,
+    pub is_inline: bool,
 }
 
 /// Known contact for autocomplete.

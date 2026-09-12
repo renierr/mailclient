@@ -81,7 +81,8 @@ Rectangle {
             date: m.date,
             snippet: m.snippet,
             unread: m.unread,
-            starred: m.starred
+            starred: m.starred,
+            has_attachments: m.has_attachments === true
         }
     }
 
@@ -267,7 +268,14 @@ Rectangle {
                                 font.pixelSize: Theme.fontBase
                                 font.bold: row.model.unread
                                 elide: Text.ElideRight
-                                width: parent.width - 66
+                                width: parent.width - 66 - (row.model.has_attachments ? 18 : 0)
+                            }
+                            Label {
+                                text: row.model.has_attachments ? "📎" : ""
+                                color: Theme.textMuted
+                                font.pixelSize: Theme.fontTiny
+                                width: row.model.has_attachments ? 14 : 0
+                                visible: row.model.has_attachments
                             }
                             Label {
                                 text: row.model.date

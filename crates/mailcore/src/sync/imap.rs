@@ -12,7 +12,7 @@ use native_tls::{TlsConnector, TlsStream};
 
 use crate::db::Db;
 use crate::error::{Result, StoreError};
-use crate::models::{Folder, FolderRole, Message, NewMessage};
+use crate::models::{Folder, FolderRole, Message, NewAttachment, NewMessage};
 use crate::store::{accounts, folders, messages};
 use crate::sync::traits::{SyncProvider, SyncReport};
 
@@ -33,6 +33,13 @@ pub const QUICK_SYNC_WINDOW: usize = 50;
 /// One "load older" batch: how many older mails a single button press pulls.
 /// Matches the feed page so each press visibly grows the list by one page.
 pub const OLDER_BATCH: usize = 200;
+
+/// Max bytes stored per attachment (25 MiB). Larger parts are skipped with a
+/// warning so one huge file cannot blow up the offline SQLite cache; the
+/// message itself still syncs and `has_attachments` stays true.
+pub const MAX_ATTACHMENT_BYTES: usize = 25 * 1024 * 1024;
+/// Max attachments stored per message (header + body safety bound).
+pub const MAX_ATTACHMENTS_PER_MESSAGE: usize = 50;
 
 /// Resolved IMAP endpoint for one account.
 #[derive(Debug, Clone)]
@@ -590,8 +597,12 @@ impl ImapSync {
                     continue;
                 }
                 let raw = msg.body().unwrap_or_default();
-                let parsed = parse_to_new(account.id, folder_id, uid, msg.flags(), raw)?;
-                messages::upsert(db, &parsed)?;
+                let (parsed, files) =
+                    parse_to_new(account.id, folder_id, uid, msg.flags(), raw, false)?;
+                let id = messages::upsert(db, &parsed)?;
+                // Metadata only: attachment bytes stay on the server until the
+                // user explicitly downloads a file.
+                store_attachment_meta(db, id, files);
                 fetched += 1;
             }
         }
@@ -690,8 +701,11 @@ impl ImapSync {
                     continue;
                 }
                 let raw = msg.body().unwrap_or_default();
-                let parsed = parse_to_new(account.id, folder_id, uid, msg.flags(), raw)?;
-                messages::upsert(db, &parsed)?;
+                let (parsed, files) =
+                    parse_to_new(account.id, folder_id, uid, msg.flags(), raw, false)?;
+                let id = messages::upsert(db, &parsed)?;
+                // Metadata only — see the windowed sync above.
+                store_attachment_meta(db, id, files);
                 fetched += 1;
             }
         }
@@ -702,6 +716,38 @@ impl ImapSync {
             expunged: 0,
             folders: 0,
         })
+    }
+
+    /// Download one message's attachments on explicit user request (Save /
+    /// Download click). Re-fetches the full RFC822 body, stores every part
+    /// with bytes, and refreshes only the `has_attachments` flag — read/star
+    /// state is never touched. Returns the number of stored files.
+    pub fn fetch_attachments(&mut self, db: &Db, message_id: i64) -> Result<u64> {
+        let message = messages::get(db, message_id)?;
+        let folder = folders::get(db, message.folder_id)?;
+        let account = accounts::get(db, folder.account_id)?;
+        let session = self.session()?;
+        session.select(&folder.path)?;
+        let fetched = session.uid_fetch(message.uid.to_string(), "(UID FLAGS RFC822)")?;
+        let mut stored = 0u64;
+        let mut seen = false;
+        for msg in fetched.iter() {
+            let raw = msg.body().unwrap_or_default();
+            let (_, files) =
+                parse_to_new(account.id, folder.id, message.uid, msg.flags(), raw, true)?;
+            stored = files.len() as u64;
+            store_attachments(db, message_id, files);
+            seen = true;
+        }
+        if !seen {
+            return Err(StoreError::InvalidInput(format!(
+                "message uid {} no longer on server",
+                message.uid
+            )));
+        }
+        messages::set_has_attachments(db, message_id, stored > 0)?;
+        log::info!("imap: downloaded {stored} attachment(s) for message {message_id}");
+        Ok(stored)
     }
 
     fn session(&mut self) -> Result<&mut TlsSession> {
@@ -984,14 +1030,17 @@ fn flag_state(flags: &[Flag]) -> (bool, bool, bool) {
     (read, starred, draft)
 }
 
-/// Parse a raw RFC822 message into a storable [`NewMessage`].
+/// Parse a raw RFC822 message into a storable [`NewMessage`] plus its
+/// attachments. `with_bytes=true` copies part bytes (on-demand download);
+/// `false` stores names/sizes only (background sync never pays for bytes).
 fn parse_to_new(
     account_id: i64,
     folder_id: i64,
     uid: u32,
     flags: &[Flag],
     raw: &[u8],
-) -> Result<NewMessage> {
+    with_bytes: bool,
+) -> Result<(NewMessage, Vec<NewAttachment>)> {
     let parsed = mail_parser::MessageParser::default()
         .parse(raw)
         .ok_or_else(|| StoreError::InvalidInput(format!("cannot parse message uid {uid}")))?;
@@ -1020,39 +1069,156 @@ fn parse_to_new(
                 .map(str::to_string)
         });
 
-    Ok(NewMessage {
-        account_id,
-        folder_id,
-        uid,
-        message_id_header: parsed.message_id().map(str::to_string),
-        thread_id,
-        subject: parsed.subject().map(str::to_string),
-        from_addr: parsed
-            .from()
-            .and_then(|a| a.first())
-            .and_then(|a| a.address.as_ref().map(|s| s.to_string()))
-            .or_else(|| {
-                parsed
-                    .header("From")
-                    .and_then(|h| h.as_text())
-                    .map(str::to_string)
-            }),
-        to_addrs: addr_list(parsed.to()),
-        cc_addrs: addr_list(parsed.cc()),
-        bcc_addrs: addr_list(parsed.bcc()),
-        reply_to: None,
-        date,
-        snippet,
-        body_text,
-        body_html: parsed.body_html(0).map(|c| c.into_owned()),
-        is_read,
-        is_starred,
-        is_draft,
-        has_attachments: parsed.attachment_count() > 0,
-        keywords: Vec::new(),
-        size: raw.len() as u64,
-        downloaded_full: true,
-    })
+    let files = extract_attachments(&parsed, with_bytes);
+    let has_attachments = parsed.attachment_count() > 0 || !files.is_empty();
+
+    Ok((
+        NewMessage {
+            account_id,
+            folder_id,
+            uid,
+            message_id_header: parsed.message_id().map(str::to_string),
+            thread_id,
+            subject: parsed.subject().map(str::to_string),
+            from_addr: parsed
+                .from()
+                .and_then(|a| a.first())
+                .and_then(|a| a.address.as_ref().map(|s| s.to_string()))
+                .or_else(|| {
+                    parsed
+                        .header("From")
+                        .and_then(|h| h.as_text())
+                        .map(str::to_string)
+                }),
+            to_addrs: addr_list(parsed.to()),
+            cc_addrs: addr_list(parsed.cc()),
+            bcc_addrs: addr_list(parsed.bcc()),
+            reply_to: None,
+            date,
+            snippet,
+            body_text,
+            body_html: parsed.body_html(0).map(|c| c.into_owned()),
+            is_read,
+            is_starred,
+            is_draft,
+            has_attachments,
+            keywords: Vec::new(),
+            size: raw.len() as u64,
+            downloaded_full: true,
+        },
+        files,
+    ))
+}
+
+/// Pull attachment parts out of a parsed message.
+///
+/// Inline `cid:` images come along too (`is_inline=true`) — the reader keeps
+/// showing them from the HTML, and the attachment bar lists only the real
+/// files. Oversized parts are skipped (see [`MAX_ATTACHMENT_BYTES`]).
+/// With `with_bytes=false` only names/sizes are kept (`data=None`): this is
+/// what background sync stores, so no attachment bytes cross the network
+/// until the user explicitly asks for a file.
+fn extract_attachments(parsed: &mail_parser::Message<'_>, with_bytes: bool) -> Vec<NewAttachment> {
+    use mail_parser::{MimeHeaders, PartType};
+    let mut out = Vec::new();
+    for part in parsed.attachments().take(MAX_ATTACHMENTS_PER_MESSAGE) {
+        let len = match &part.body {
+            PartType::Binary(b) | PartType::InlineBinary(b) => b.len(),
+            PartType::Text(t) | PartType::Html(t) => t.len(),
+            PartType::Message(nested) => nested.raw_message.len(),
+            PartType::Multipart(_) => 0,
+        };
+        if len > MAX_ATTACHMENT_BYTES {
+            log::warn!(
+                "imap: skipping oversized attachment ({} bytes, name {:?})",
+                len,
+                part.attachment_name()
+            );
+            continue;
+        }
+        // Empty parts carry nothing worth storing (e.g. a zero-length
+        // alternative body the parser classified as an attachment).
+        if len == 0 {
+            continue;
+        }
+        // Bytes are copied only on explicit request; background sync keeps
+        // names/sizes so the download decision stays with the user.
+        let data: Option<Vec<u8>> = if with_bytes {
+            match &part.body {
+                PartType::Binary(b) | PartType::InlineBinary(b) => Some(b.to_vec()),
+                PartType::Text(t) | PartType::Html(t) => Some(t.as_bytes().to_vec()),
+                PartType::Message(nested) => Some(nested.raw_message.to_vec()),
+                PartType::Multipart(_) => None,
+            }
+        } else {
+            None
+        };
+        if with_bytes && data.as_ref().is_none_or(|b| b.is_empty()) {
+            continue;
+        };
+        let mime_type = part.content_type().map(|ct| match &ct.c_subtype {
+            Some(sub) => format!(
+                "{}/{}",
+                ct.c_type.to_ascii_lowercase(),
+                sub.to_ascii_lowercase()
+            ),
+            None => ct.c_type.to_ascii_lowercase(),
+        });
+        let is_inline = matches!(part.body, PartType::InlineBinary(_));
+        out.push(NewAttachment {
+            filename: part.attachment_name().map(str::to_string),
+            mime_type,
+            content_id: part.content_id().map(str::to_string),
+            size: len as u64,
+            data,
+            is_inline,
+        });
+    }
+    out
+}
+
+/// Replace a message's attachments with a freshly parsed full set (the
+/// on-demand download path). Failures are logged, never fatal.
+fn store_attachments(db: &Db, message_id: i64, files: Vec<NewAttachment>) {
+    if let Err(e) = messages::delete_attachments_for_message(db, message_id) {
+        log::warn!("imap: cannot clear attachments for {message_id}: {e}");
+        return;
+    }
+    for f in &files {
+        if f.data.as_ref().is_none_or(|b| b.is_empty()) {
+            log::warn!("imap: skipping attachment without bytes {:?}", f.filename);
+            continue;
+        }
+        if let Err(e) = messages::add_attachment(db, message_id, f) {
+            log::warn!("imap: cannot store attachment {:?}: {e}", f.filename);
+        }
+    }
+}
+
+/// Store attachment metadata (names/sizes, no bytes) for a freshly synced
+/// message — unless rows already exist, in which case an earlier on-demand
+/// download's bytes must survive the resync untouched.
+fn store_attachment_meta(db: &Db, message_id: i64, files: Vec<NewAttachment>) {
+    if files.is_empty() {
+        return;
+    }
+    match messages::list_attachments(db, message_id) {
+        Ok(existing) if !existing.is_empty() => return,
+        Err(e) => {
+            log::warn!("imap: cannot list attachments for {message_id}: {e}");
+            return;
+        }
+        _ => {}
+    }
+    for f in &files {
+        let meta = NewAttachment {
+            data: None,
+            ..f.clone()
+        };
+        if let Err(e) = messages::add_attachment(db, message_id, &meta) {
+            log::warn!("imap: cannot store attachment {:?}: {e}", f.filename);
+        }
+    }
 }
 
 fn addr_list(a: Option<&mail_parser::Address>) -> Vec<String> {
@@ -1205,5 +1371,91 @@ mod tests {
             Namespaces::default()
         );
         assert_eq!(parse_namespace_response(b""), Namespaces::default());
+    }
+
+    #[test]
+    fn parse_extracts_attachment_bytes() {
+        // multipart/mixed with a text body + one base64 file.
+        let raw = b"From: alice@example.com\r\n\
+            To: bob@example.com\r\n\
+            Subject: files\r\n\
+            Message-ID: <a1@example.com>\r\n\
+            Date: Mon, 07 Sep 2026 10:00:00 +0000\r\n\
+            Content-Type: multipart/mixed; boundary=\"B\"\r\n\
+            \r\n\
+            --B\r\n\
+            Content-Type: text/plain\r\n\
+            \r\n\
+            see attached\r\n\
+            --B\r\n\
+            Content-Type: application/pdf; name=\"doc.pdf\"\r\n\
+            Content-Disposition: attachment; filename=\"doc.pdf\"\r\n\
+            Content-Transfer-Encoding: base64\r\n\
+            \r\n\
+            aGVsbG8td29ybGQ=\r\n\
+            --B--\r\n";
+        let (msg, files) = parse_to_new(1, 1, 42, &[], raw, true).unwrap();
+        assert!(msg.has_attachments);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].filename.as_deref(), Some("doc.pdf"));
+        assert_eq!(files[0].mime_type.as_deref(), Some("application/pdf"));
+        assert_eq!(files[0].size, 11);
+        assert_eq!(files[0].data.as_deref(), Some(b"hello-world".as_slice()));
+        assert!(!files[0].is_inline);
+    }
+
+    #[test]
+    fn parse_skips_empty_parts_but_keeps_flag() {
+        // A zero-length attachment part carries nothing to store, but the
+        // message still had an attachment on the wire.
+        let raw = b"From: alice@example.com\r\n\
+            To: bob@example.com\r\n\
+            Subject: empty\r\n\
+            Message-ID: <a2@example.com>\r\n\
+            Date: Mon, 07 Sep 2026 10:00:00 +0000\r\n\
+            Content-Type: multipart/mixed; boundary=\"B\"\r\n\
+            \r\n\
+            --B\r\n\
+            Content-Type: text/plain\r\n\
+            \r\n\
+            body\r\n\
+            --B\r\n\
+            Content-Type: application/octet-stream; name=\"empty.bin\"\r\n\
+            Content-Disposition: attachment; filename=\"empty.bin\"\r\n\
+            \r\n\
+            --B--\r\n";
+        let (msg, files) = parse_to_new(1, 1, 43, &[], raw, true).unwrap();
+        assert!(msg.has_attachments);
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn parse_meta_mode_keeps_names_without_bytes() {
+        // Background sync: the same wire bytes yield names/sizes but no
+        // payload, so nothing downloads until the user asks for a file.
+        let raw = b"From: alice@example.com\r\n\
+            To: bob@example.com\r\n\
+            Subject: files\r\n\
+            Message-ID: <a3@example.com>\r\n\
+            Date: Mon, 07 Sep 2026 10:00:00 +0000\r\n\
+            Content-Type: multipart/mixed; boundary=\"B\"\r\n\
+            \r\n\
+            --B\r\n\
+            Content-Type: text/plain\r\n\
+            \r\n\
+            see attached\r\n\
+            --B\r\n\
+            Content-Type: application/pdf; name=\"doc.pdf\"\r\n\
+            Content-Disposition: attachment; filename=\"doc.pdf\"\r\n\
+            Content-Transfer-Encoding: base64\r\n\
+            \r\n\
+            aGVsbG8td29ybGQ=\r\n\
+            --B--\r\n";
+        let (msg, files) = parse_to_new(1, 1, 44, &[], raw, false).unwrap();
+        assert!(msg.has_attachments);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].filename.as_deref(), Some("doc.pdf"));
+        assert_eq!(files[0].size, 11);
+        assert!(files[0].data.is_none());
     }
 }

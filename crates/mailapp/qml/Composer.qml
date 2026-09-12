@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 
 import Mailclient
 import "components"
@@ -32,6 +33,11 @@ Dialog {
     property string accountEmail: ""
     property string sendFormat: "multipart"
     property bool sourceMode: false
+
+    // Outgoing files picked via FileDialog: [{path, name}]. Paths (plain or
+    // `file://` URLs) travel in the send payload; Rust reads the bytes at
+    // send time, so no binary crosses the QML bridge.
+    property var attachments: []
 
     // Flaw F5: Cancel used to throw the draft away silently. Everything the
     // user types sets this, and closing then asks first.
@@ -105,6 +111,7 @@ Dialog {
         toField.text = ""
         ccField.text = ""
         subjectField.text = ""
+        root.attachments = []
     }
 
     function setBody(html) {
@@ -161,14 +168,51 @@ Dialog {
         }
     }
 
+    function baseName(url) {
+        var s = url.toString()
+        var i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"))
+        var name = i < 0 ? s : s.substring(i + 1)
+        try { name = decodeURIComponent(name) } catch (e) {}
+        return name === "" ? s : name
+    }
+
+    function addAttachments(urls) {
+        var next = root.attachments.slice()
+        for (var i = 0; i < urls.length; i++) {
+            var u = urls[i].toString()
+            var known = false
+            for (var j = 0; j < next.length; j++) {
+                if (next[j].path === u) {
+                    known = true
+                    break
+                }
+            }
+            if (!known)
+                next.push({ path: u, name: root.baseName(u) })
+        }
+        root.attachments = next
+        root.dirty = true
+    }
+
+    function removeAttachment(index) {
+        var next = root.attachments.slice()
+        next.splice(index, 1)
+        root.attachments = next
+        root.dirty = true
+    }
+
     function payloadFor(html) {
+        var paths = []
+        for (var i = 0; i < root.attachments.length; i++)
+            paths.push(root.attachments[i].path)
         return JSON.stringify({
             from: root.effectiveFrom,
             to: toField.text,
             cc: ccField.text,
             subject: subjectField.text,
             body: html,
-            body_html: html
+            body_html: html,
+            attachments: paths
         })
     }
 
@@ -280,6 +324,80 @@ Dialog {
             }
         }
 
+        // --- attachments ----------------------------------------------------
+        Rectangle {
+            Layout.fillWidth: true
+            implicitHeight: attachRow.implicitHeight + Theme.sm * 2
+            visible: root.attachments.length > 0
+            radius: Theme.radius
+            color: Theme.bgAlt
+            border.width: 1
+            border.color: Theme.border
+
+            RowLayout {
+                id: attachRow
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Theme.sm
+                spacing: Theme.xs
+
+                Label {
+                    text: "📎"
+                }
+                Label {
+                    text: qsTr("%n file(s)", "", root.attachments.length)
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.fontSmall
+                }
+                // Chips wrap via Flow (names can be long).
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: Theme.xs
+                    Repeater {
+                        model: root.attachments
+                        Rectangle {
+                            id: chipBox
+                            height: 26
+                            width: chipRow.implicitWidth + Theme.sm * 2
+                            radius: 13
+                            color: Theme.bgRaised
+                            border.width: 1
+                            border.color: Theme.border
+                            required property var modelData
+                            required property int index
+                            Row {
+                                id: chipRow
+                                anchors.centerIn: parent
+                                spacing: 4
+                                Label {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: chipBox.modelData.name
+                                    color: Theme.text
+                                    font.pixelSize: Theme.fontSmall
+                                    elide: Text.ElideMiddle
+                                    width: Math.min(implicitWidth, 180)
+                                }
+                                IconButton {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 20
+                                    height: 20
+                                    fontSize: Theme.fontSmall
+                                    text: "✕"
+                                    tooltip: qsTr("Remove")
+                                    onClicked: root.removeAttachment(chipBox.index)
+                                }
+                            }
+                        }
+                    }
+                }
+                AppButton {
+                    text: qsTr("Add")
+                    onClicked: attachDialog.open()
+                }
+            }
+        }
+
         // --- formatting toolbar -------------------------------------------
         Rectangle {
             Layout.fillWidth: true
@@ -351,6 +469,11 @@ Dialog {
                     tooltip: qsTr("Clear formatting")
                     enabled: !root.sourceMode
                     onClicked: bodyEditor.exec("removeFormat")
+                }
+                IconButton {
+                    text: "📎"
+                    tooltip: qsTr("Attach files")
+                    onClicked: attachDialog.open()
                 }
 
                 Item { Layout.fillWidth: true }
@@ -435,6 +558,14 @@ Dialog {
                 onClicked: root.requestSend()
             }
         }
+    }
+
+    // --- file picker ------------------------------------------------------
+    FileDialog {
+        id: attachDialog
+        title: qsTr("Attach files")
+        fileMode: FileDialog.OpenFiles
+        onAccepted: root.addAttachments(selectedFiles)
     }
 
     // --- link insertion ---------------------------------------------------

@@ -145,6 +145,7 @@ fn main() -> Result<(), String> {
                     body_text:
                         "Hello from the mailclient M1 sync harness. If you read this, SMTP works.",
                     body_html: None,
+                    attachments: &[],
                     format: SendFormat::Plain,
                     policy: &policy,
                     password: &smtp_pass,

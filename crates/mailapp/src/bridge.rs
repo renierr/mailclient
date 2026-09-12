@@ -114,6 +114,32 @@ pub mod qobject {
         #[qinvokable]
         fn message_html(&self, uid: i32, allow_remote: bool) -> QString;
 
+        /// Attachment metadata for one message in the current folder as JSON
+        /// (`[{id, filename, mime_type, size, content_id, is_inline}]`, no
+        /// bytes). Mirrors the `attachments` array already in the feed; use
+        /// this when the feed row is stale. Returns `"[]"` if unknown.
+        #[qinvokable]
+        fn attachments_json(&self, uid: i32) -> QString;
+
+        /// Download one message's attachments now (explicit user request).
+        /// Background sync stores names/sizes only, so this is the single
+        /// path that spends bandwidth on file bytes. Returns e.g. `"Downloaded
+        /// 2 attachment(s)"`, `"Attachments already downloaded"`, or an error
+        /// (offline, gone from server).
+        #[qinvokable]
+        fn download_attachments(self: Pin<&mut Self>, uid: i32) -> QString;
+
+        /// Write one attachment's bytes to `path` (plain path or `file://`
+        /// URL from a save dialog). A directory target appends the attachment
+        /// filename automatically. Returns `"Saved to <path>"` or an error.
+        #[qinvokable]
+        fn save_attachment(&self, attachment_id: i32, path: &QString) -> QString;
+
+        /// Write every non-inline attachment of a message into `dir`.
+        /// Returns e.g. `"Saved 3 attachments"` or an error message.
+        #[qinvokable]
+        fn save_all_attachments(&self, uid: i32, dir: &QString) -> QString;
+
         /// Select a folder by path and refresh the message feed.
         #[qinvokable]
         fn select_folder(self: Pin<&mut Self>, path: &QString) -> QString;
@@ -165,8 +191,10 @@ pub mod qobject {
         fn purge_message(self: Pin<&mut Self>, uid: i32) -> QString;
 
         /// Send a message from a JSON form
-        /// (`{from,to,subject,body,body_html?}`; `body` holds composer rich
-        /// HTML source, `body_html` is an optional explicit override).
+        /// (`{from,to,subject,body,body_html?,attachments?}`; `body` holds composer rich
+        /// HTML source, `body_html` is an optional explicit override,
+        /// `attachments` an optional list of local file paths / `file://` URLs
+        /// from the composer FileDialog).
         /// The effective MIME shape comes from the `compose_send_format`
         /// setting (`plain`|`multipart`|`html`, resilient default
         /// `multipart`). Interactive user action = explicit send consent.
@@ -215,6 +243,89 @@ fn qstring(s: &str) -> QString {
 
 fn open_db() -> Result<mailcore::Db, String> {
     mailcore::Db::open(&mailcore::default_db_path()).map_err(|e| e.to_string())
+}
+
+/// Strip a `file://` URL prefix from save-dialog output into a plain path.
+fn dir_to_path(raw: &str) -> std::path::PathBuf {
+    let t = raw.trim();
+    let stripped = t.strip_prefix("file://").unwrap_or(t);
+    std::path::PathBuf::from(stripped)
+}
+
+/// Filename safe for the filesystem: keeps the basename, replaces path
+/// separators, falls back to `attachment-<id>.bin`.
+fn safe_filename(name: Option<&str>, id: i64) -> String {
+    let base = name
+        .unwrap_or("")
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .trim();
+    if base.is_empty() {
+        return format!("attachment-{id}.bin");
+    }
+    base.replace(['/', '\\', '\0'], "_")
+}
+
+/// `photo.pdf` + 1 → `photo(1).pdf` (save-all collision avoidance).
+fn numbered_filename(name: &str, n: u32) -> String {
+    match name.rfind('.') {
+        Some(i) if i > 0 => format!("{}({n}).{}", &name[..i], &name[i + 1..]),
+        _ => format!("{name}({n})"),
+    }
+}
+
+/// Resolve the save-dialog target for one attachment: `file://` tolerant,
+/// directories auto-append the attachment filename, parents created.
+fn resolve_save_path(
+    db: &mailcore::Db,
+    attachment_id: i64,
+    raw: &str,
+) -> Result<std::path::PathBuf, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("choose where to save".to_string());
+    }
+    let mut p = dir_to_path(trimmed);
+    if p.is_dir() || trimmed.ends_with('/') {
+        let a = messages::get_attachment(db, attachment_id).map_err(|e| e.to_string())?;
+        p.push(safe_filename(a.filename.as_deref(), attachment_id));
+    }
+    if let Some(parent) = p.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("cannot create folder: {e}"))?;
+        }
+    }
+    Ok(p)
+}
+
+/// Make sure a message's file bytes are cached, downloading them now on
+/// explicit user request. Background sync stores names/sizes only, so this
+/// is the single place attachment bytes cross the network. Returns the
+/// number of files downloaded (0 = already cached). Inline parts need no
+/// bytes (they render from the body), so they never trigger a fetch.
+fn ensure_attachment_data(db: &mailcore::Db, message_id: i64) -> Result<u64, String> {
+    let files = messages::list_attachments(db, message_id).map_err(|e| e.to_string())?;
+    let mut missing = false;
+    for a in files.iter().filter(|a| !a.is_inline) {
+        let has = messages::attachment_has_data(db, a.id).map_err(|e| e.to_string())?;
+        if !has {
+            missing = true;
+            break;
+        }
+    }
+    if !missing {
+        return Ok(0);
+    }
+    let msg = messages::get(db, message_id).map_err(|e| e.to_string())?;
+    let folder = folders::get(db, msg.folder_id).map_err(|e| e.to_string())?;
+    let acc = accounts::get(db, folder.account_id).map_err(|e| e.to_string())?;
+    let mut imap = imap_session(&acc)?;
+    let n = imap
+        .fetch_attachments(db, message_id)
+        .map_err(|e| e.to_string())?;
+    imap.disconnect();
+    Ok(n)
 }
 
 /// Backing Rust struct for the `Bridge` QObject.
@@ -798,6 +909,118 @@ impl qobject::Bridge {
             .map_or_else(|_| qstring(""), |h| qstring(&h))
     }
 
+    pub fn attachments_json(&self, uid: i32) -> QString {
+        let Ok(db) = open_db() else {
+            return qstring("[]");
+        };
+        let folder_id = *self.current_folder_id();
+        if folder_id < 0 || uid < 0 {
+            return qstring("[]");
+        }
+        feed::attachments_json(&db, folder_id, uid as u32)
+            .map_or_else(|_| qstring("[]"), |j| qstring(&j))
+    }
+
+    pub fn download_attachments(mut self: Pin<&mut Self>, uid: i32) -> QString {
+        // Guarded: any panic becomes a status message, never SIGABRT.
+        let folder_id = *self.current_folder_id();
+        let result = guard_sync("Download", || {
+            let db = open_db()?;
+            if folder_id < 0 || uid < 0 {
+                return Err("no message selected".to_string());
+            }
+            let msg = messages::get_by_uid(&db, folder_id, uid as u32)
+                .map_err(|_| "unknown message".to_string())?;
+            match ensure_attachment_data(&db, msg.id)? {
+                0 => Ok("Attachments already downloaded".to_string()),
+                n => {
+                    push_feeds(&mut self, &db, msg.account_id, folder_id);
+                    Ok(format!("Downloaded {n} attachment(s)"))
+                }
+            }
+        });
+        match result {
+            Ok(s) => qstring(&s),
+            Err(e) => qstring(&e),
+        }
+    }
+
+    pub fn save_attachment(&self, attachment_id: i32, path: &QString) -> QString {
+        if attachment_id < 0 {
+            return qstring("unknown attachment");
+        }
+        // Guarded: ensuring bytes may hit the network on first save.
+        let result = guard_sync("Save", || {
+            let db = open_db()?;
+            let parent =
+                messages::get_attachment(&db, attachment_id as i64).map_err(|e| e.to_string())?;
+            ensure_attachment_data(&db, parent.message_id)?;
+            let dest = resolve_save_path(&db, attachment_id as i64, &path.to_string())?;
+            messages::save_attachment_to_path(&db, attachment_id as i64, &dest)
+                .map_err(|e| e.to_string())?;
+            Ok(format!("Saved to {}", dest.display()))
+        });
+        match result {
+            Ok(s) => qstring(&s),
+            Err(e) => qstring(&e),
+        }
+    }
+
+    pub fn save_all_attachments(&self, uid: i32, dir: &QString) -> QString {
+        // Guarded: ensuring bytes may hit the network on first save.
+        let folder_id = *self.current_folder_id();
+        let result = guard_sync("Save", || {
+            let db = open_db()?;
+            if folder_id < 0 || uid < 0 {
+                return Err("no message selected".to_string());
+            }
+            let msg = messages::get_by_uid(&db, folder_id, uid as u32)
+                .map_err(|_| "unknown message".to_string())?;
+            // Download on explicit request only — then save from the cache.
+            ensure_attachment_data(&db, msg.id)?;
+            let files = messages::list_attachments(&db, msg.id)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .filter(|a| !a.is_inline)
+                .collect::<Vec<_>>();
+            if files.is_empty() {
+                return Err("no attachments to save".to_string());
+            }
+            let mut base = dir_to_path(&dir.to_string());
+            std::fs::create_dir_all(&base).map_err(|e| format!("cannot create folder: {e}"))?;
+            let mut saved = 0u32;
+            for a in &files {
+                let name = safe_filename(a.filename.as_deref(), a.id);
+                base.push(&name);
+                // Never overwrite: photo(1).pdf, photo(2).pdf, …
+                let mut n = 1;
+                while base.exists() {
+                    base.pop();
+                    base.push(numbered_filename(&name, n));
+                    n += 1;
+                }
+                match messages::save_attachment_to_path(&db, a.id, &base) {
+                    Ok(_) => saved += 1,
+                    Err(e) => {
+                        log::warn!("save-all: {} failed: {e}", a.id);
+                        base.pop();
+                        continue;
+                    }
+                }
+                base.pop();
+            }
+            if saved == 0 {
+                Err("could not save attachments".to_string())
+            } else {
+                Ok(format!("Saved {saved} attachment(s)"))
+            }
+        });
+        match result {
+            Ok(s) => qstring(&s),
+            Err(e) => qstring(&e),
+        }
+    }
+
     pub fn select_folder(mut self: Pin<&mut Self>, path: &QString) -> QString {
         let db = match open_db() {
             Ok(d) => d,
@@ -1045,6 +1268,22 @@ impl qobject::Bridge {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
+        // Composer FileDialog paths (`attachments: [...]`, plain paths or
+        // `file://` URLs). A legacy comma-separated string is also accepted.
+        let attachments: Vec<String> = match v.get("attachments") {
+            Some(serde_json::Value::Array(arr)) => arr
+                .iter()
+                .filter_map(|x| x.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+            Some(serde_json::Value::String(s)) => s
+                .split(['\n', ';'])
+                .map(|x| x.trim().to_string())
+                .filter(|x| !x.is_empty())
+                .collect(),
+            _ => Vec::new(),
+        };
         // Guarded: any panic becomes a status message, never SIGABRT.
         let result = guard_sync("Send", || {
             let db = open_db()?;
@@ -1063,6 +1302,7 @@ impl qobject::Bridge {
                 subject: &subject,
                 body_text: &body,
                 body_html: body_html.as_deref(),
+                attachments: &attachments,
                 format,
                 policy: &SendPolicy::Unrestricted,
                 password: &secrets.smtp_password,

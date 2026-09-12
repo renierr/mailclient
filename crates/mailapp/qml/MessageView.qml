@@ -2,6 +2,8 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtWebEngine
+import QtQuick.Dialogs
+import QtCore
 
 import Mailclient
 import "components"
@@ -87,6 +89,48 @@ Rectangle {
 
     function effectiveAutoLoad() {
         return root.loadRemoteImages || root.allowRemoteOnce
+    }
+
+    // Non-inline files from the Rust feed (bytes stay in SQLite until saved).
+    readonly property var fileAttachments: {
+        if (root.message === undefined || root.message === null
+                || root.message.attachments === undefined)
+            return []
+        var out = []
+        for (var i = 0; i < root.message.attachments.length; i++) {
+            if (root.message.attachments[i].is_inline !== true)
+                out.push(root.message.attachments[i])
+        }
+        return out
+    }
+
+    function formatSize(n) {
+        if (n === undefined || n === null)
+            return ""
+        if (n < 1024)
+            return qsTr("%1 B").arg(n)
+        if (n < 1024 * 1024)
+            return qsTr("%1 KB").arg((n / 1024).toFixed(1))
+        return qsTr("%1 MB").arg((n / (1024 * 1024)).toFixed(1))
+    }
+
+    function displayName(a) {
+        return a.filename || qsTr("attachment-%1.bin").arg(a.id)
+    }
+
+    function saveOne(a) {
+        if (!root.backend || !root.backend.save_attachment)
+            return
+        saveOneDialog.attachmentId = a.id
+        var base = StandardPaths.writableLocation(StandardPaths.DownloadLocation)
+        saveOneDialog.selectedFile = "file://" + base + "/" + root.displayName(a)
+        saveOneDialog.open()
+    }
+
+    function saveAll() {
+        if (!root.backend || !root.backend.save_all_attachments)
+            return
+        saveAllDialog.open()
     }
 
     // Trusted wrapper added AFTER Rust sanitizing (so layout CSS is ours).
@@ -246,6 +290,87 @@ Rectangle {
             }
         }
 
+        // --- attachments --------------------------------------------------
+        // Names/sizes sync with the mail; bytes stay on the server until the
+        // user explicitly downloads or saves a file (offline-first).
+        // Inline images are part of the body and not listed here.
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.margins: Theme.md
+            Layout.bottomMargin: 0
+            implicitHeight: attachCol.implicitHeight + Theme.sm * 2
+            visible: root.fileAttachments.length > 0
+            radius: Theme.radius
+            color: Theme.bgAlt
+            border.width: 1
+            border.color: Theme.border
+
+            ColumnLayout {
+                id: attachCol
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Theme.sm
+                spacing: Theme.xs
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.sm
+                    Label {
+                        text: "📎"
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: qsTr("%n attachment(s)", "", root.fileAttachments.length)
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSmall
+                        font.bold: true
+                        elide: Text.ElideRight
+                    }
+                    AppButton {
+                        text: qsTr("Download")
+                        tooltip: qsTr("Download files now for offline use")
+                        onClicked: {
+                            if (root.backend && root.backend.download_attachments)
+                                root.statusMessage(
+                                    root.backend.download_attachments(root.messageUid))
+                        }
+                    }
+                    AppButton {
+                        text: qsTr("Save all")
+                        visible: root.fileAttachments.length > 1
+                        onClicked: root.saveAll()
+                    }
+                }
+
+                Repeater {
+                    model: root.fileAttachments
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.sm
+                        id: fileRow
+                        required property var modelData
+                        Label {
+                            Layout.fillWidth: true
+                            text: root.displayName(fileRow.modelData)
+                            color: Theme.text
+                            font.pixelSize: Theme.fontSmall
+                            elide: Text.ElideRight
+                        }
+                        Label {
+                            text: root.formatSize(fileRow.modelData.size)
+                            color: Theme.textMuted
+                            font.pixelSize: Theme.fontTiny
+                        }
+                        AppButton {
+                            text: qsTr("Save")
+                            onClicked: root.saveOne(fileRow.modelData)
+                        }
+                    }
+                }
+            }
+        }
+
         // --- body: plain ---------------------------------------------------
         // Flat Flickable + Text rather than ScrollView + TextEdit: the old
         // TextEdit had no height inside the ScrollView and rendered nothing
@@ -323,6 +448,29 @@ Rectangle {
             text: qsTr("Select a message to read it")
             color: Theme.textMuted
             font.pixelSize: Theme.fontBase
+        }
+    }
+
+    // --- save dialogs -----------------------------------------------------
+    FileDialog {
+        id: saveOneDialog
+        title: qsTr("Save attachment")
+        fileMode: FileDialog.SaveFile
+        property int attachmentId: -1
+        onAccepted: {
+            if (root.backend && root.backend.save_attachment)
+                root.statusMessage(
+                    root.backend.save_attachment(attachmentId, selectedFile.toString()))
+        }
+    }
+
+    FolderDialog {
+        id: saveAllDialog
+        title: qsTr("Save all attachments")
+        onAccepted: {
+            if (root.backend && root.backend.save_all_attachments)
+                root.statusMessage(
+                    root.backend.save_all_attachments(root.messageUid, selectedFolder.toString()))
         }
     }
 }
