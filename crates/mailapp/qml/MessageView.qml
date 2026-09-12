@@ -329,7 +329,6 @@ Rectangle {
                     }
                     AppButton {
                         text: qsTr("Download")
-                        tooltip: qsTr("Download files now for offline use")
                         onClicked: {
                             if (root.backend && root.backend.download_attachments)
                                 root.statusMessage(
