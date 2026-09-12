@@ -121,13 +121,13 @@ pub mod qobject {
         #[qinvokable]
         fn attachments_json(&self, uid: i32) -> QString;
 
-        /// Download one message's attachments now (explicit user request).
-        /// Background sync stores names/sizes only, so this is the single
-        /// path that spends bandwidth on file bytes. Returns e.g. `"Downloaded
-        /// 2 attachment(s)"`, `"Attachments already downloaded"`, or an error
-        /// (offline, gone from server).
+        /// Copy one attachment to a temp file and return its `file://` URL
+        /// so QML can open it with the system viewer (`Qt.openUrlExternally`).
+        /// Downloads the bytes first when they are not cached yet (explicit
+        /// user request — background sync stores names/sizes only). Returns
+        /// an error message instead of a URL on failure.
         #[qinvokable]
-        fn download_attachments(self: Pin<&mut Self>, uid: i32) -> QString;
+        fn open_attachment(&self, attachment_id: i32) -> QString;
 
         /// Write one attachment's bytes to `path` (plain path or `file://`
         /// URL from a save dialog). A directory target appends the attachment
@@ -250,6 +250,27 @@ fn dir_to_path(raw: &str) -> std::path::PathBuf {
     let t = raw.trim();
     let stripped = t.strip_prefix("file://").unwrap_or(t);
     std::path::PathBuf::from(stripped)
+}
+
+/// Absolute path → `file://` URL for `Qt.openUrlExternally`. Percent-encodes
+/// everything but `/` and unreserved characters so spaces, `#` and non-ASCII
+/// names survive the QML string→QUrl conversion.
+fn file_url(path: &std::path::Path) -> String {
+    let s = path.to_string_lossy().replace('\\', "/");
+    let mut out = String::with_capacity(s.len() + 7);
+    out.push_str("file://");
+    // A bare `C:/…` would parse as host `C:` — anchor it as an empty host.
+    if !(s.starts_with('/') || s.starts_with("file:")) {
+        out.push('/');
+    }
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"/-._~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 /// Filename safe for the filesystem: keeps the basename, replaces path
@@ -921,23 +942,31 @@ impl qobject::Bridge {
             .map_or_else(|_| qstring("[]"), |j| qstring(&j))
     }
 
-    pub fn download_attachments(mut self: Pin<&mut Self>, uid: i32) -> QString {
-        // Guarded: any panic becomes a status message, never SIGABRT.
-        let folder_id = *self.current_folder_id();
-        let result = guard_sync("Download", || {
+    pub fn open_attachment(&self, attachment_id: i32) -> QString {
+        if attachment_id < 0 {
+            return qstring("unknown attachment");
+        }
+        // Guarded: ensuring bytes may hit the network on first open.
+        let result = guard_sync("Open", || {
             let db = open_db()?;
-            if folder_id < 0 || uid < 0 {
-                return Err("no message selected".to_string());
-            }
-            let msg = messages::get_by_uid(&db, folder_id, uid as u32)
-                .map_err(|_| "unknown message".to_string())?;
-            match ensure_attachment_data(&db, msg.id)? {
-                0 => Ok("Attachments already downloaded".to_string()),
-                n => {
-                    push_feeds(&mut self, &db, msg.account_id, folder_id);
-                    Ok(format!("Downloaded {n} attachment(s)"))
-                }
-            }
+            let parent =
+                messages::get_attachment(&db, attachment_id as i64).map_err(|e| e.to_string())?;
+            // Open implies download: fetch bytes when not cached yet.
+            ensure_attachment_data(&db, parent.message_id)?;
+            let a =
+                messages::get_attachment(&db, attachment_id as i64).map_err(|e| e.to_string())?;
+            let dir = std::env::temp_dir().join("mailclient-attachments");
+            std::fs::create_dir_all(&dir).map_err(|e| format!("cannot use temp folder: {e}"))?;
+            let name = format!(
+                "{}-{}-{}",
+                parent.message_id,
+                attachment_id,
+                safe_filename(a.filename.as_deref(), attachment_id as i64)
+            );
+            let dest = dir.join(name);
+            messages::save_attachment_to_path(&db, attachment_id as i64, &dest)
+                .map_err(|e| e.to_string())?;
+            Ok(file_url(&dest))
         });
         match result {
             Ok(s) => qstring(&s),

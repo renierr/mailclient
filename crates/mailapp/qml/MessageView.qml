@@ -133,6 +133,17 @@ Rectangle {
         saveAllDialog.open()
     }
 
+    // Open in the system viewer — downloads first when not cached yet.
+    function openOne(a) {
+        if (!root.backend || !root.backend.open_attachment)
+            return
+        var url = root.backend.open_attachment(a.id)
+        if (url.indexOf("file://") === 0)
+            Qt.openUrlExternally(url)
+        else
+            root.statusMessage(url)
+    }
+
     // Trusted wrapper added AFTER Rust sanitizing (so layout CSS is ours).
     // Colours come from the theme so HTML mail matches the app in dark mode.
     function wrapDoc(inner) {
@@ -222,11 +233,6 @@ Rectangle {
                         onClicked: root.replyRequested()
                     }
                     IconButton {
-                        text: "↩↩"
-                        tooltip: qsTr("Reply all")
-                        onClicked: root.replyAllRequested()
-                    }
-                    IconButton {
                         text: "→"
                         tooltip: qsTr("Forward (F)")
                         onClicked: root.forwardRequested()
@@ -238,20 +244,15 @@ Rectangle {
                         onClicked: root.starRequested()
                     }
                     IconButton {
-                        text: "🗄"
-                        tooltip: qsTr("Archive (A)")
-                        onClicked: root.archiveRequested()
-                    }
-                    IconButton {
-                        text: "📁"
-                        tooltip: qsTr("Move to… (M)")
-                        onClicked: root.moveRequested()
-                    }
-                    IconButton {
                         text: "🗑"
                         tooltip: qsTr("Delete (Del)")
                         contentColor: Theme.danger
                         onClicked: root.deleteRequested()
+                    }
+                    IconButton {
+                        text: "⋯"
+                        tooltip: qsTr("More actions")
+                        onClicked: moreMenu.popup()
                     }
                 }
             }
@@ -292,7 +293,9 @@ Rectangle {
 
         // --- attachments --------------------------------------------------
         // Names/sizes sync with the mail; bytes stay on the server until the
-        // user explicitly downloads or saves a file (offline-first).
+        // user explicitly opens or saves a file (offline-first). Opening
+        // downloads into a temp copy for the system viewer; saving downloads
+        // too when the bytes are not cached yet.
         // Inline images are part of the body and not listed here.
         Rectangle {
             Layout.fillWidth: true
@@ -328,14 +331,6 @@ Rectangle {
                         elide: Text.ElideRight
                     }
                     AppButton {
-                        text: qsTr("Download")
-                        onClicked: {
-                            if (root.backend && root.backend.download_attachments)
-                                root.statusMessage(
-                                    root.backend.download_attachments(root.messageUid))
-                        }
-                    }
-                    AppButton {
                         text: qsTr("Save all")
                         visible: root.fileAttachments.length > 1
                         onClicked: root.saveAll()
@@ -360,6 +355,10 @@ Rectangle {
                             text: root.formatSize(fileRow.modelData.size)
                             color: Theme.textMuted
                             font.pixelSize: Theme.fontTiny
+                        }
+                        AppButton {
+                            text: qsTr("Open")
+                            onClicked: root.openOne(fileRow.modelData)
                         }
                         AppButton {
                             text: qsTr("Save")
@@ -427,6 +426,25 @@ Rectangle {
             settings.autoLoadImages: true
             settings.localContentCanAccessRemoteUrls: root.effectiveAutoLoad()
             settings.pluginsEnabled: false
+        }
+    }
+
+    // --- overflow menu ----------------------------------------------------
+    // Less-common actions live here; shortcuts (R/F/A/M/…) still work.
+    AppMenu {
+        id: moreMenu
+
+        MenuItem {
+            text: qsTr("Reply all")
+            onTriggered: root.replyAllRequested()
+        }
+        MenuItem {
+            text: qsTr("Archive (A)")
+            onTriggered: root.archiveRequested()
+        }
+        MenuItem {
+            text: qsTr("Move to… (M)")
+            onTriggered: root.moveRequested()
         }
     }
 
