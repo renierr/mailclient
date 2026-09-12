@@ -531,6 +531,7 @@ Rectangle {
         modal: true
         anchors.centerIn: parent
         width: Math.min(parent ? parent.width - 120 : 520, 520)
+        height: Math.min(parent ? parent.height - 80 : 560, 560)
         padding: Theme.lg
 
         background: Rectangle {
@@ -551,37 +552,48 @@ Rectangle {
             }
         }
 
-        GridLayout {
-            width: parent.width
-            columns: 2
-            columnSpacing: Theme.md
-            rowSpacing: Theme.xs
+        // A Dialog has one content item. The old layout put GridLayout and
+        // ColumnLayout next to each other as siblings, so they overlapped and
+        // the expanded raw headers could not scroll.
+        contentItem: ScrollView {
+            clip: true
+            contentWidth: availableWidth
 
-            Label { text: qsTr("From"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
-            Label {
-                Layout.fillWidth: true
-                text: root.headersInfo.from || ""
-                color: Theme.text
-                font.pixelSize: Theme.fontSmall
-                wrapMode: Text.WrapAnywhere
-                textFormat: Text.PlainText
-            }
-            Label { text: qsTr("To"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
-            Label {
-                Layout.fillWidth: true
-                text: root.joinAddrs(root.headersInfo.to)
-                color: Theme.text
-                font.pixelSize: Theme.fontSmall
-                wrapMode: Text.WrapAnywhere
-                textFormat: Text.PlainText
-            }
-            Label {
+            ColumnLayout {
+                width: parent.availableWidth
+                spacing: Theme.md
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: 2
+                    columnSpacing: Theme.md
+                    rowSpacing: Theme.xs
+
+                    Label { text: qsTr("From"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.headersInfo.from || ""
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSmall
+                        wrapMode: Text.WrapAnywhere
+                        textFormat: Text.PlainText
+                    }
+                    Label { text: qsTr("To"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.joinAddrs(root.headersInfo.to)
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSmall
+                        wrapMode: Text.WrapAnywhere
+                        textFormat: Text.PlainText
+                    }
+                    Label {
                 text: qsTr("Cc")
                 color: Theme.textMuted
                 font.pixelSize: Theme.fontSmall
                 visible: root.joinAddrs(root.headersInfo.cc) !== ""
-            }
-            Label {
+                    }
+                    Label {
                 Layout.fillWidth: true
                 text: root.joinAddrs(root.headersInfo.cc)
                 color: Theme.text
@@ -589,31 +601,31 @@ Rectangle {
                 wrapMode: Text.WrapAnywhere
                 textFormat: Text.PlainText
                 visible: text !== ""
-            }
-            Label { text: qsTr("Date"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
-            Label {
+                    }
+                    Label { text: qsTr("Date"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+                    Label {
                 Layout.fillWidth: true
                 text: root.headersInfo.date || ""
                 color: Theme.text
                 font.pixelSize: Theme.fontSmall
                 textFormat: Text.PlainText
-            }
-            Label { text: qsTr("Subject"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
-            Label {
+                    }
+                    Label { text: qsTr("Subject"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+                    Label {
                 Layout.fillWidth: true
                 text: root.headersInfo.subject || ""
                 color: Theme.text
                 font.pixelSize: Theme.fontSmall
                 wrapMode: Text.Wrap
                 textFormat: Text.PlainText
-            }
-            Label {
+                    }
+                    Label {
                 text: qsTr("Message-ID")
                 color: Theme.textMuted
                 font.pixelSize: Theme.fontSmall
                 visible: (root.headersInfo.message_id || "") !== ""
-            }
-            Label {
+                    }
+                    Label {
                 Layout.fillWidth: true
                 text: root.headersInfo.message_id || ""
                 color: Theme.text
@@ -621,14 +633,14 @@ Rectangle {
                 wrapMode: Text.WrapAnywhere
                 textFormat: Text.PlainText
                 visible: text !== ""
-            }
-            Label {
+                    }
+                    Label {
                 text: qsTr("Reply-To")
                 color: Theme.textMuted
                 font.pixelSize: Theme.fontSmall
                 visible: (root.headersInfo.reply_to || "") !== ""
-            }
-            Label {
+                    }
+                    Label {
                 Layout.fillWidth: true
                 text: root.headersInfo.reply_to || ""
                 color: Theme.text
@@ -636,24 +648,40 @@ Rectangle {
                 wrapMode: Text.WrapAnywhere
                 textFormat: Text.PlainText
                 visible: text !== ""
-            }
-        }
+                    }
+                }
 
-        ColumnLayout {
-            width: parent.width
-            spacing: Theme.xs
-            AppButton {
-                text: rawHeaders.visible ? qsTr("Hide complete headers") : qsTr("Show complete headers")
-                onClicked: rawHeaders.visible = !rawHeaders.visible
-            }
-            ScrollView {
-                id: rawHeaders
-                Layout.fillWidth: true
-                Layout.preferredHeight: visible ? 220 : 0
-                visible: false
-                clip: true
+                Rectangle {
+                    Layout.fillWidth: true
+                    implicitHeight: disclosureRow.implicitHeight + Theme.xs * 2
+                    color: disclosureHover.hovered ? Theme.hover : "transparent"
+                    radius: Theme.radius
+
+                    RowLayout {
+                        id: disclosureRow
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: Theme.xs
+                        spacing: Theme.xs
+                        Label {
+                            text: rawHeaders.visible ? "⌄" : "›"
+                            color: Theme.textMuted
+                            font.pixelSize: Theme.fontMedium
+                        }
+                        Label {
+                            text: qsTr("Complete headers")
+                            color: Theme.text
+                            font.pixelSize: Theme.fontSmall
+                        }
+                    }
+                    HoverHandler { id: disclosureHover }
+                    TapHandler { onTapped: rawHeaders.visible = !rawHeaders.visible }
+                }
                 TextArea {
-                    width: rawHeaders.availableWidth
+                    id: rawHeaders
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: visible ? implicitHeight + Theme.md * 2 : 0
+                    visible: false
                     text: root.headersInfo.raw || qsTr("Complete headers are unavailable until this message is downloaded again.")
                     readOnly: true
                     selectByMouse: true
