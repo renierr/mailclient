@@ -561,6 +561,7 @@ ApplicationWindow {
     Composer {
         id: composer
         accountEmail: backend.current_account_email
+        accountFromName: backend.current_account_from_name
         sendFormat: appSettings.compose_send_format
         onStatusMessage: text => root.statusText = text
         onSendRequested: payload => {

@@ -63,6 +63,8 @@ pub struct Account {
     pub id: i64,
     pub name: String,
     pub email_address: String,
+    /// Sender display name for `From:` (`""` = address only).
+    pub from_name: String,
     pub imap_host: String,
     pub imap_port: u16,
     pub imap_security: String,
@@ -83,6 +85,8 @@ pub struct Account {
 pub struct NewAccount {
     pub name: String,
     pub email_address: String,
+    /// Sender display name for `From:` (`""` = address only).
+    pub from_name: String,
     pub imap_host: String,
     pub imap_port: u16,
     pub imap_security: String,

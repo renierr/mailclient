@@ -13,6 +13,7 @@ create table if not exists accounts (
     id                 integer primary key autoincrement,
     name               text not null,
     email_address      text not null,
+    from_name          text not null default '',
     imap_host          text not null,
     imap_port          integer not null default 993,
     imap_security      text not null default 'tls',

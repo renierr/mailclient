@@ -25,6 +25,7 @@ pub mod qobject {
         #[qproperty(i64, current_account_id)]
         #[qproperty(i64, current_folder_id)]
         #[qproperty(QString, current_account_email)]
+        #[qproperty(QString, current_account_from_name)]
         #[qproperty(QString, accounts_json)]
         #[qproperty(i32, message_limit)]
         #[qproperty(i32, messages_total)]
@@ -47,7 +48,7 @@ pub mod qobject {
         fn refresh_accounts(self: Pin<&mut Self>) -> QString;
 
         /// Create an account from a JSON form
-        /// (`{name,email,imap_host,imap_port,imap_sec,imap_user,password,
+        /// (`{name,email,from_name?,imap_host,imap_port,imap_sec,imap_user,password,
         /// smtp_host,smtp_port,smtp_sec,smtp_user,smtp_password}`); passwords go
         /// to the OS keyring (empty SMTP password = same as IMAP).
         /// Returns `""` or an error message.
@@ -197,7 +198,7 @@ pub mod qobject {
         fn purge_message(self: Pin<&mut Self>, uid: i32) -> QString;
 
         /// Send a message from a JSON form
-        /// (`{from,to,cc?,bcc?,subject,body,body_html?,attachments?}`; `body`
+        /// (`{from,from_name?,to,cc?,bcc?,subject,body,body_html?,attachments?}`; `body`
         /// holds composer rich HTML source, `body_html` is an optional
         /// explicit override, `attachments` an optional list of local file
         /// paths / `file://` URLs from the composer FileDialog).
@@ -366,6 +367,7 @@ pub struct BridgeRust {
     current_account_id: i64,
     current_folder_id: i64,
     current_account_email: QString,
+    current_account_from_name: QString,
     accounts_json: QString,
     message_limit: i32,
     messages_total: i32,
@@ -386,6 +388,7 @@ impl Default for BridgeRust {
             current_account_id: -1,
             current_folder_id: -1,
             current_account_email: qstring(""),
+            current_account_from_name: qstring(""),
             accounts_json: qstring("[]"),
             message_limit: DEFAULT_MESSAGE_LIMIT,
             messages_total: 0,
@@ -422,12 +425,18 @@ fn push_feeds(
     let email = accounts::get(db, account_id)
         .map(|a| a.email_address)
         .unwrap_or_default();
+    let from_name = accounts::get(db, account_id)
+        .map(|a| a.from_name)
+        .unwrap_or_default();
     bridge.as_mut().set_folders_json(qstring(&folders));
     bridge.as_mut().set_messages_json(qstring(&msgs));
     bridge.as_mut().set_messages_total(total);
     bridge.as_mut().set_current_account_id(account_id);
     bridge.as_mut().set_current_folder_id(folder_id);
     bridge.as_mut().set_current_account_email(qstring(&email));
+    bridge
+        .as_mut()
+        .set_current_account_from_name(qstring(&from_name));
     let accts = feed::accounts_json(db).unwrap_or_else(|_| "[]".to_string());
     bridge.as_mut().set_accounts_json(qstring(&accts));
 }
@@ -565,6 +574,7 @@ impl qobject::Bridge {
         let form_account = NewAccount {
             name: account_name,
             email_address: email.clone(),
+            from_name: str_field("from_name"),
             imap_host,
             imap_port: u16_field("imap_port", 993),
             imap_security: str_field("imap_sec"),
@@ -696,6 +706,7 @@ impl qobject::Bridge {
             "id": a.id,
             "name": a.name,
             "email": a.email_address,
+            "from_name": a.from_name,
             "imap_host": a.imap_host,
             "imap_port": a.imap_port.to_string(),
             "imap_sec": a.imap_security,
@@ -1293,6 +1304,14 @@ impl qobject::Bridge {
         } else {
             Some(from_raw.as_str())
         };
+        // Display name for `From:` — composer field first, else the account
+        // default (empty = address only).
+        let from_name_raw = str_field("from_name");
+        let from_name_composed: Option<String> = if from_name_raw.is_empty() {
+            None
+        } else {
+            Some(from_name_raw)
+        };
         let subject = str_field("subject");
         let body = str_field("body");
         // Optional explicit HTML override (new Composer sends both; old
@@ -1309,9 +1328,6 @@ impl qobject::Bridge {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        if to.is_empty() {
-            return qstring("add at least one recipient");
-        }
         let cc: Vec<String> = str_field("cc")
             .split([',', ';'])
             .map(|s| s.trim().to_string())
@@ -1322,6 +1338,12 @@ impl qobject::Bridge {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
+        // To may hold placeholder text or stay blank (BCC-only send) — only
+        // all-three-empty blocks here; unparseable To entries are filtered in
+        // `send_raw`, which errors when no real recipient remains.
+        if to.is_empty() && cc.is_empty() && bcc.is_empty() {
+            return qstring("add at least one recipient (To, Cc or Bcc)");
+        }
         // Composer FileDialog paths (`attachments: [...]`, plain paths or
         // `file://` URLs). A legacy comma-separated string is also accepted.
         let attachments: Vec<String> = match v.get("attachments") {
@@ -1354,11 +1376,20 @@ impl qobject::Bridge {
                 mailcore::store::settings::COMPOSE_INCLUDE_PLAIN,
             )
             .unwrap_or(true);
+            let from_name = from_name_composed.or_else(|| {
+                let n = acc.from_name.trim().to_string();
+                if n.is_empty() {
+                    None
+                } else {
+                    Some(n)
+                }
+            });
             let req = SendRequest {
                 to: &to,
                 cc: &cc,
                 bcc: &bcc,
                 from,
+                from_name: from_name.as_deref(),
                 subject: &subject,
                 body_text: &body,
                 body_html: body_html.as_deref(),

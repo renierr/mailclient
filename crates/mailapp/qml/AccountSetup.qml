@@ -74,6 +74,7 @@ Dialog {
         root.editId = id === undefined ? -1 : id
         nameField.text = f.name || ""
         emailField.text = f.email || ""
+        fromNameField.text = f.from_name || ""
         imapField.text = f.imap_host || ""
         imapPortField.text = f.imap_port || "993"
         imapSecBox.currentIndex = (f.imap_sec || "tls").toLowerCase() === "starttls" ? 1 : 0
@@ -139,6 +140,7 @@ Dialog {
         root.accountSubmit(JSON.stringify({
             name: nameField.text,
             email: emailField.text.trim(),
+            from_name: fromNameField.text.trim(),
             imap_host: imapField.text.trim(),
             imap_port: imapPortField.text,
             imap_sec: imapSecBox.currentText.toLowerCase(),
@@ -231,6 +233,13 @@ Dialog {
                 label: qsTr("Display name")
                 placeholderText: qsTr("Work")
                 hint: qsTr("Shown in the account list; defaults to the email address.")
+            }
+            FormField {
+                id: fromNameField
+                Layout.fillWidth: true
+                label: qsTr("Sender name")
+                placeholderText: qsTr("John Doe")
+                hint: qsTr("Shown as the sender (From:) on outgoing mail; empty sends the address only.")
             }
 
             // --- incoming ---------------------------------------------------

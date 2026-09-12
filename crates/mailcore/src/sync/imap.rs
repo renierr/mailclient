@@ -1243,6 +1243,7 @@ mod tests {
             id: 1,
             name: "n".to_string(),
             email_address: "e".to_string(),
+            from_name: String::new(),
             imap_host: "imap.x".to_string(),
             imap_port: 993,
             imap_security: "tls".to_string(),

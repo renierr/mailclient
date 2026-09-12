@@ -147,6 +147,7 @@ mod tests {
             &NewAccount {
                 name: "a".to_string(),
                 email_address: "a@x.y".to_string(),
+                from_name: String::new(),
                 imap_host: "h".to_string(),
                 imap_port: 993,
                 imap_security: "tls".to_string(),

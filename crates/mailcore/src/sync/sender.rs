@@ -11,6 +11,7 @@
 use lettre::message::header::ContentType;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::transport::smtp::client::{Tls, TlsParameters};
+use lettre::transport::smtp::extension::ClientId;
 use lettre::{Message, SmtpTransport, Transport};
 
 use crate::db::Db;
@@ -133,6 +134,9 @@ pub struct SendRequest<'a> {
     /// Sender identity. `None` = account email. Any other address is used
     /// verbatim (server may reject logins that must match the username).
     pub from: Option<&'a str>,
+    /// Sender display name for `From:` (`None`/empty = address only).
+    /// Defaults to the account's `from_name` when the composer sends none.
+    pub from_name: Option<&'a str>,
     pub subject: &'a str,
     /// Plain-text source. For composer rich text this may hold HTML source —
     /// [`resolve_bodies`] sorts that out resiliently.
@@ -360,6 +364,12 @@ impl SmtpSender {
         let tls_params = TlsParameters::new(host.clone())
             .map_err(|e| StoreError::InvalidInput(format!("tls setup failed: {e}")))?;
         let mut builder = SmtpTransport::relay(&host)?;
+        // EHLO with the sender domain instead of the bare machine hostname:
+        // a dotless `EHLO omarchy` trips HELO-based spam heuristics, while
+        // the (unavoidable) client IP is logged by the server either way.
+        if let Some(domain) = self.from.rsplit('@').next().filter(|d| d.contains('.')) {
+            builder = builder.hello_name(ClientId::Domain(domain.to_string()));
+        }
         builder = builder
             .port(port)
             .credentials(Credentials::new(
@@ -375,30 +385,145 @@ impl SmtpSender {
     }
 }
 
+/// Split the To field into real mailboxes: entries that parse become the
+/// `To` header, anything else (placeholder text for BCC-only sends) is
+/// ignored — the envelope comes from whichever of To/Cc/Bcc parsed.
+#[must_use]
+pub fn valid_mailboxes(raw: &[String]) -> Vec<lettre::message::Mailbox> {
+    raw.iter().filter_map(|s| s.parse().ok()).collect()
+}
+
+/// Group display name for a BCC-only `To:` header (`Friends:;`): RFC 5322
+/// `display-name` without specials that would break parsing, ASCII only.
+/// Anything else (blank, punctuation-heavy, non-ASCII) falls back to the
+/// standard `undisclosed-recipients` group — so recipients always see a
+/// proper To line instead of a missing header.
+#[must_use]
+pub fn to_group_name(text: &str) -> String {
+    let t = text.trim();
+    let ok = !t.is_empty()
+        && t.is_ascii()
+        && !t.starts_with(' ')
+        && !t.ends_with(' ')
+        && !t.contains("  ")
+        && t.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == ' ' || "!#$%&'*+-/=?^_`{|}~".contains(c));
+    if ok {
+        t.to_string()
+    } else {
+        "undisclosed-recipients".to_string()
+    }
+}
+
+/// Assemble the final [`Message`] from resolved parts (pure, no I/O):
+/// headers (incl. the `To:` group fallback), body shape, attachments.
+/// Tested directly — SMTP submission itself needs the network.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn assemble_message(
+    from: lettre::message::Mailbox,
+    subject: &str,
+    to_valid: Vec<lettre::message::Mailbox>,
+    to_group: Option<&str>,
+    cc: &[String],
+    bcc: &[String],
+    format: SendFormat,
+    plain: String,
+    html: Option<String>,
+    files: &[(String, String, Vec<u8>)],
+) -> Result<Message> {
+    let mut builder = Message::builder().from(from).subject(subject);
+    // No valid To address (blank or placeholder text on a BCC-only send):
+    // emit the RFC 5322 group (`To: Friends:;`, else the standard `To:
+    // undisclosed-recipients:;`) so recipients see a proper To line.
+    // Arbitrary text is NOT valid as addresses, but IS as a group name. The
+    // envelope still comes from Cc/Bcc (an unparseable To contributes
+    // nothing to it — lettre's header lookup skips it).
+    if to_valid.is_empty() {
+        if let Some(group) = to_group {
+            let value = format!("{group}:;");
+            builder = builder.raw_header(
+                lettre::message::header::HeaderValue::dangerous_new_pre_encoded(
+                    lettre::message::header::HeaderName::new_from_ascii_str("To"),
+                    value.clone(),
+                    value,
+                ),
+            );
+        }
+    }
+    for m in to_valid {
+        builder = builder.to(m);
+    }
+    for c in cc {
+        builder = builder.cc(c.parse()?);
+    }
+    for b in bcc {
+        builder = builder.bcc(b.parse()?);
+    }
+    Ok(if files.is_empty() {
+        match (format, html) {
+            (SendFormat::Plain, _) => builder.header(ContentType::TEXT_PLAIN).body(plain),
+            (_, Some(h)) if format == SendFormat::Html => {
+                builder.header(ContentType::TEXT_HTML).body(h)
+            }
+            (_, Some(h)) => {
+                builder.multipart(lettre::message::MultiPart::alternative_plain_html(plain, h))
+            }
+            (_, None) => builder.header(ContentType::TEXT_PLAIN).body(plain),
+        }
+    } else {
+        // Body first (single part or alternative), then one `SinglePart`
+        // per file inside a `multipart/mixed` envelope.
+        let body = match (format, html) {
+            (SendFormat::Plain, _) => lettre::message::MultiPart::mixed()
+                .singlepart(lettre::message::SinglePart::plain(plain)),
+            (_, Some(h)) if format == SendFormat::Html => {
+                lettre::message::MultiPart::mixed().singlepart(lettre::message::SinglePart::html(h))
+            }
+            (_, Some(h)) => lettre::message::MultiPart::alternative_plain_html(plain, h),
+            (_, None) => lettre::message::MultiPart::mixed()
+                .singlepart(lettre::message::SinglePart::plain(plain)),
+        };
+        let mut mixed = lettre::message::MultiPart::mixed().multipart(body);
+        for (filename, mime, bytes) in files {
+            let ctype = ContentType::parse(mime).unwrap_or_else(|_| {
+                ContentType::parse("application/octet-stream").expect("static mime parses")
+            });
+            mixed = mixed.singlepart(
+                lettre::message::Attachment::new(filename.clone()).body(bytes.clone(), ctype),
+            );
+        }
+        builder.multipart(mixed)
+    }?)
+}
+
 impl MailSender for SmtpSender {
     fn send_raw(&mut self, db: &Db, account_id: i64, req: &SendRequest<'_>) -> Result<()> {
-        let mut all: Vec<&str> = req.to.iter().map(String::as_str).collect();
-        all.extend(req.cc.iter().map(String::as_str));
-        all.extend(req.bcc.iter().map(String::as_str));
-        req.policy.check(&all)?;
+        let to_boxes = valid_mailboxes(req.to);
+        let mut rcpts: Vec<String> = to_boxes.iter().map(|m| m.email.to_string()).collect();
+        rcpts.extend(req.cc.iter().cloned());
+        rcpts.extend(req.bcc.iter().cloned());
+        if rcpts.is_empty() {
+            return Err(StoreError::InvalidInput(
+                "add at least one recipient (To, Cc or Bcc)".to_string(),
+            ));
+        }
+        let rcpt_refs: Vec<&str> = rcpts.iter().map(String::as_str).collect();
+        req.policy.check(&rcpt_refs)?;
 
         let queue_id = queue::enqueue(db, account_id, None)?;
-        let from: &str = req.from.filter(|s| !s.is_empty()).unwrap_or(&self.from);
-        if !from.contains('@') {
+        let from_addr: &str = req.from.filter(|s| !s.is_empty()).unwrap_or(&self.from);
+        if !from_addr.contains('@') {
             return Err(StoreError::InvalidInput(format!(
-                "invalid sender address: {from}"
+                "invalid sender address: {from_addr}"
             )));
         }
-        let mut builder = Message::builder().from(from.parse()?).subject(req.subject);
-        for t in req.to {
-            builder = builder.to(t.parse()?);
-        }
-        for c in req.cc {
-            builder = builder.cc(c.parse()?);
-        }
-        for b in req.bcc {
-            builder = builder.bcc(b.parse()?);
-        }
+        // Display name from the composer, else the account default — empty
+        // means address-only `From:`.
+        let from_name = req.from_name.map(str::trim).filter(|s| !s.is_empty());
+        let from_box = match from_name {
+            Some(name) => lettre::message::Mailbox::new(Some(name.to_string()), from_addr.parse()?),
+            None => from_addr.parse()?,
+        };
         // Auto resolves per message: formatting present → HTML (with a plain
         // twin when enabled), otherwise plain text.
         let html_src = req
@@ -418,39 +543,21 @@ impl MailSender for SmtpSender {
         let format = effective_format(req.format, needs_html, req.include_plain);
         let (plain, html) = resolve_bodies(req.body_text, req.body_html, format);
         let files = load_outgoing_attachments(req.attachments)?;
-        let email = if files.is_empty() {
-            match (format, html) {
-                (SendFormat::Plain, _) => builder.header(ContentType::TEXT_PLAIN).body(plain)?,
-                (_, Some(h)) if format == SendFormat::Html => {
-                    builder.header(ContentType::TEXT_HTML).body(h)?
-                }
-                (_, Some(h)) => builder
-                    .multipart(lettre::message::MultiPart::alternative_plain_html(plain, h))?,
-                (_, None) => builder.header(ContentType::TEXT_PLAIN).body(plain)?,
-            }
-        } else {
-            // Body first (single part or alternative), then one `SinglePart`
-            // per file inside a `multipart/mixed` envelope.
-            let body = match (format, html) {
-                (SendFormat::Plain, _) => lettre::message::MultiPart::mixed()
-                    .singlepart(lettre::message::SinglePart::plain(plain)),
-                (_, Some(h)) if format == SendFormat::Html => lettre::message::MultiPart::mixed()
-                    .singlepart(lettre::message::SinglePart::html(h)),
-                (_, Some(h)) => lettre::message::MultiPart::alternative_plain_html(plain, h),
-                (_, None) => lettre::message::MultiPart::mixed()
-                    .singlepart(lettre::message::SinglePart::plain(plain)),
-            };
-            let mut mixed = lettre::message::MultiPart::mixed().multipart(body);
-            for (filename, mime, bytes) in &files {
-                let ctype = ContentType::parse(mime).unwrap_or_else(|_| {
-                    ContentType::parse("application/octet-stream").expect("static mime parses")
-                });
-                mixed = mixed.singlepart(
-                    lettre::message::Attachment::new(filename.clone()).body(bytes.clone(), ctype),
-                );
-            }
-            builder.multipart(mixed)?
-        };
+        let to_group = to_boxes
+            .is_empty()
+            .then(|| to_group_name(&req.to.join(" ")));
+        let email = assemble_message(
+            from_box,
+            req.subject,
+            to_boxes,
+            to_group.as_deref(),
+            req.cc,
+            req.bcc,
+            format,
+            plain,
+            html,
+            &files,
+        )?;
 
         match self.transport(req.password)?.send(&email) {
             Ok(response) => {
@@ -532,6 +639,7 @@ mod tests {
             id: 1,
             name: "n".to_string(),
             email_address: "me@x.y".to_string(),
+            from_name: String::new(),
             imap_host: "i".to_string(),
             imap_port: 993,
             imap_security: "tls".to_string(),
@@ -669,6 +777,105 @@ mod tests {
                 assert!(!h.contains("color: red"), "style leaked for {format:?}");
             }
         }
+    }
+
+    #[test]
+    fn to_field_tolerates_placeholder_text() {
+        let s = |x: &str| x.to_string();
+        // Real addresses pass through; placeholder text is dropped so a
+        // BCC-only send carries no To header.
+        let boxes = valid_mailboxes(&[s("bob@example.com"), s("my friends"), s("")]);
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(boxes[0].email.to_string(), "bob@example.com");
+        assert!(valid_mailboxes(&[s("anything goes"), s("")]).is_empty());
+        assert!(valid_mailboxes(&[]).is_empty());
+    }
+
+    #[test]
+    fn to_group_name_carries_safe_text() {
+        // Plain placeholder text becomes the group display name…
+        assert_eq!(to_group_name("my friends"), "my friends");
+        assert_eq!(to_group_name("  Family  "), "Family");
+        // …anything else falls back to the standard group.
+        assert_eq!(to_group_name(""), "undisclosed-recipients");
+        assert_eq!(to_group_name("a@b.com, c@d.org"), "undisclosed-recipients");
+        assert_eq!(to_group_name("weird; text"), "undisclosed-recipients");
+        assert_eq!(to_group_name("Müller"), "undisclosed-recipients");
+        assert_eq!(to_group_name("a\r\nBcc: x@y"), "undisclosed-recipients");
+    }
+
+    #[test]
+    fn bcc_only_send_carries_group_to_and_bcc_envelope() {
+        use SendFormat::Plain;
+        let from: lettre::message::Mailbox = "me@example.com".parse().unwrap();
+        let bcc = vec!["hidden@example.com".to_string()];
+        // Placeholder text becomes the group name recipients see…
+        let m = assemble_message(
+            from.clone(),
+            "hi",
+            vec![],
+            Some("my friends"),
+            &[],
+            &bcc,
+            Plain,
+            "hello".to_string(),
+            None,
+            &[],
+        )
+        .unwrap();
+        let raw = String::from_utf8(m.formatted()).unwrap();
+        assert!(raw.contains("To: my friends:;"), "no group To: {raw:?}");
+        assert_eq!(
+            m.envelope().to(),
+            &[lettre::Address::new("hidden", "example.com").unwrap()]
+        );
+        // …blank To falls back to the standard group, envelope intact.
+        let m2 = assemble_message(
+            from,
+            "hi",
+            vec![],
+            Some("undisclosed-recipients"),
+            &[],
+            &bcc,
+            Plain,
+            "hello".to_string(),
+            None,
+            &[],
+        )
+        .unwrap();
+        let raw2 = String::from_utf8(m2.formatted()).unwrap();
+        assert!(
+            raw2.contains("To: undisclosed-recipients:;"),
+            "no fallback To: {raw2:?}"
+        );
+        assert_eq!(m2.envelope().to().len(), 1);
+    }
+
+    #[test]
+    fn from_name_renders_display_name() {
+        use SendFormat::Plain;
+        let named = lettre::message::Mailbox::new(
+            Some("John Doe".to_string()),
+            "me@example.com".parse().unwrap(),
+        );
+        let m = assemble_message(
+            named,
+            "hi",
+            valid_mailboxes(&["bob@example.com".to_string()]),
+            None,
+            &[],
+            &[],
+            Plain,
+            "hello".to_string(),
+            None,
+            &[],
+        )
+        .unwrap();
+        let raw = String::from_utf8(m.formatted()).unwrap();
+        assert!(
+            raw.contains("From: \"John Doe\" <me@example.com>"),
+            "bad From: {raw:?}"
+        );
     }
 
     #[test]

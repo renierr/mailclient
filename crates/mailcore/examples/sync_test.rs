@@ -73,6 +73,7 @@ fn main() -> Result<(), String> {
                 &NewAccount {
                     name: "Test".to_string(),
                     email_address: email.clone(),
+                    from_name: String::new(),
                     imap_host: imap_host.clone(),
                     imap_port,
                     imap_security: imap_security.clone(),
@@ -149,6 +150,7 @@ fn main() -> Result<(), String> {
                     attachments: &[],
                     format: SendFormat::Plain,
                     include_plain: true,
+                    from_name: None,
                     policy: &policy,
                     password: &smtp_pass,
                     imap_password: Some(&imap_pass),

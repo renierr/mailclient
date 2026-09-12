@@ -12,22 +12,23 @@ fn row_to_account(row: &rusqlite::Row<'_>) -> rusqlite::Result<Account> {
         id: row.get(0)?,
         name: row.get(1)?,
         email_address: row.get(2)?,
-        imap_host: row.get(3)?,
-        imap_port: row.get::<_, i64>(4)? as u16,
-        imap_security: row.get(5)?,
-        imap_username: row.get(6)?,
-        smtp_host: row.get(7)?,
-        smtp_port: row.get::<_, i64>(8)? as u16,
-        smtp_security: row.get(9)?,
-        smtp_username: row.get(10)?,
-        auth_vault_key: row.get(11)?,
-        check_interval_secs: row.get::<_, i64>(12)? as u64,
-        created_at: row.get(13)?,
-        updated_at: row.get(14)?,
+        from_name: row.get(3)?,
+        imap_host: row.get(4)?,
+        imap_port: row.get::<_, i64>(5)? as u16,
+        imap_security: row.get(6)?,
+        imap_username: row.get(7)?,
+        smtp_host: row.get(8)?,
+        smtp_port: row.get::<_, i64>(9)? as u16,
+        smtp_security: row.get(10)?,
+        smtp_username: row.get(11)?,
+        auth_vault_key: row.get(12)?,
+        check_interval_secs: row.get::<_, i64>(13)? as u64,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
     })
 }
 
-const COLS: &str = "id, name, email_address, imap_host, imap_port, imap_security,
+const COLS: &str = "id, name, email_address, from_name, imap_host, imap_port, imap_security,
     imap_username, smtp_host, smtp_port, smtp_security, smtp_username,
     auth_vault_key, check_interval_secs, created_at, updated_at";
 
@@ -35,13 +36,14 @@ const COLS: &str = "id, name, email_address, imap_host, imap_port, imap_security
 pub fn create(db: &Db, a: &NewAccount) -> Result<i64> {
     let ts = now();
     db.conn().execute(
-        "insert into accounts (name, email_address, imap_host, imap_port,
+        "insert into accounts (name, email_address, from_name, imap_host, imap_port,
             imap_security, imap_username, smtp_host, smtp_port, smtp_security,
             smtp_username, auth_vault_key, check_interval_secs, created_at, updated_at)
-         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             a.name,
             a.email_address,
+            a.from_name,
             a.imap_host,
             a.imap_port as i64,
             a.imap_security,
@@ -86,14 +88,15 @@ pub fn list(db: &Db) -> Result<Vec<Account>> {
 pub fn update_connection(db: &Db, id: i64, a: &NewAccount) -> Result<()> {
     let ts = super::now();
     let n = db.conn().execute(
-        "update accounts set name = ?1, email_address = ?2, imap_host = ?3,
-            imap_port = ?4, imap_security = ?5, imap_username = ?6,
-            smtp_host = ?7, smtp_port = ?8, smtp_security = ?9,
-            smtp_username = ?10, check_interval_secs = ?11, updated_at = ?12
-         where id = ?13",
+        "update accounts set name = ?1, email_address = ?2, from_name = ?3, imap_host = ?4,
+            imap_port = ?5, imap_security = ?6, imap_username = ?7,
+            smtp_host = ?8, smtp_port = ?9, smtp_security = ?10,
+            smtp_username = ?11, check_interval_secs = ?12, updated_at = ?13
+         where id = ?14",
         params![
             a.name,
             a.email_address,
+            a.from_name,
             a.imap_host,
             a.imap_port as i64,
             a.imap_security,
@@ -133,6 +136,7 @@ mod tests {
         NewAccount {
             name: "Work".to_string(),
             email_address: "user@example.com".to_string(),
+            from_name: "User Name".to_string(),
             imap_host: "imap.example.com".to_string(),
             imap_port: 993,
             imap_security: "tls".to_string(),
@@ -152,6 +156,7 @@ mod tests {
         let id = create(&db, &sample()).unwrap();
         let a = get(&db, id).unwrap();
         assert_eq!(a.email_address, "user@example.com");
+        assert_eq!(a.from_name, "User Name");
         assert_eq!(a.imap_port, 993);
         assert_eq!(list(&db).unwrap().len(), 1);
         delete(&db, id).unwrap();

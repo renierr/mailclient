@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -72,6 +72,19 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
             }
         }
         let _ = SCHEMA_V4;
+    }
+    if current < 5 {
+        // `accounts.from_name`: sender display name (`""` = address only).
+        // Same benign-duplicate tolerance as v4 (fresh v5 `schema.sql`
+        // installs carrying an older version stamp).
+        if let Err(e) = conn
+            .execute_batch("alter table accounts add column from_name text not null default '';")
+        {
+            let msg = e.to_string().to_ascii_lowercase();
+            if !(msg.contains("duplicate column") || msg.contains("already exists")) {
+                return Err(e.into());
+            }
+        }
     }
     // Future: `if current < 4 { migrate_v4(conn)?; }` etc.
     if current != SCHEMA_VERSION {

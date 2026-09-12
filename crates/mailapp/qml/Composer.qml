@@ -32,6 +32,7 @@ Dialog {
     signal sendRequested(string payload)
 
     property string accountEmail: ""
+    property string accountFromName: ""
     property string sendFormat: "auto"
     property bool sourceMode: false
 
@@ -135,6 +136,7 @@ Dialog {
 
     function resetHeaders() {
         fromLocal.text = root.accountLocalPart
+        fromName.text = root.accountFromName
         toField.text = ""
         ccField.text = ""
         bccField.text = ""
@@ -245,6 +247,7 @@ Dialog {
             paths.push(root.attachments[i].path)
         return JSON.stringify({
             from: root.effectiveFrom,
+            from_name: fromName.text.trim(),
             to: toField.text,
             cc: ccField.text,
             bcc: bccField.text,
@@ -255,11 +258,16 @@ Dialog {
         })
     }
 
+    // To accepts placeholder text or stays blank: the real recipients may
+    // live in Cc/Bcc alone. Only all-three-empty blocks the send.
+    readonly property bool hasRecipients:
+        toField.text.trim() !== "" || ccField.text.trim() !== "" || bccField.text.trim() !== ""
+
     // Reading the document back is asynchronous, so Send finishes inside the
     // callback rather than returning a payload.
     function requestSend() {
-        if (toField.text.trim() === "") {
-            root.statusMessage(qsTr("Add at least one recipient"))
+        if (!root.hasRecipients) {
+            root.statusMessage(qsTr("Add at least one recipient (To, Cc or Bcc)"))
             return
         }
         if (root.sourceMode) {
@@ -290,10 +298,24 @@ Dialog {
                 font.pixelSize: Theme.fontSmall
                 Layout.preferredWidth: 52
             }
-            // Local part editable, domain locked to the account.
-            Rectangle {
+            // Sender name (per-account default, editable per mail) beside the
+            // address: local part editable, domain locked to the account.
+            RowLayout {
                 Layout.fillWidth: true
                 Layout.columnSpan: 2
+                spacing: Theme.sm
+
+                AppTextField {
+                    id: fromName
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: 140
+                    text: root.accountFromName
+                    placeholderText: qsTr("Name")
+                    onTextChanged: root.dirty = true
+                }
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredWidth: 200
                 implicitHeight: 32
                 radius: Theme.radius
                 color: Theme.bg
@@ -329,6 +351,7 @@ Dialog {
                     }
                 }
             }
+            }
 
             Label {
                 text: qsTr("To")
@@ -338,7 +361,7 @@ Dialog {
             AppTextField {
                 id: toField
                 Layout.fillWidth: true
-                placeholderText: qsTr("name@example.com, second@example.com")
+                placeholderText: qsTr("name@example.com, … (or anything — Bcc can carry the real addresses)")
                 onTextChanged: root.dirty = true
             }
             Row {
@@ -636,7 +659,7 @@ Dialog {
             AppButton {
                 text: qsTr("Send")
                 intent: "primary"
-                enabled: toField.text.trim() !== ""
+                enabled: root.hasRecipients
                 onClicked: root.requestSend()
             }
         }
