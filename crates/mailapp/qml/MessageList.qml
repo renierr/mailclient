@@ -68,7 +68,7 @@ Rectangle {
 
     readonly property bool canLoadOlder: root.filterText === ""
         && root.messages.length > 0
-        && (root.serverTotal === 0 || root.serverTotal > root.totalCount)
+        && (root.serverTotal < 0 || root.serverTotal > root.totalCount)
 
     // Row actions rebuild the feed, which destroys the delegates. Emitting
     // straight from a delegate's click handler therefore deletes the item
@@ -771,14 +771,16 @@ Rectangle {
                 Label {
                     id: olderStatus
                     anchors.verticalCenter: parent.verticalCenter
-                    width: parent.width - loadOlderButton.width - parent.spacing
+                    width: parent.width - (loadOlderButton.visible ? loadOlderButton.width + parent.spacing : 0)
                     elide: Text.ElideRight
                     text: {
                         if (root.messages.length === 0)
                             return qsTr("No cached messages")
-                        if (root.serverTotal === 0)
+                        if (root.serverTotal < 0)
                             return qsTr("Cached %1 (server not checked)").arg(root.totalCount)
-                        return qsTr("Cached %1 of %2").arg(root.totalCount).arg(root.serverTotal)
+                        if (root.serverTotal > root.totalCount)
+                            return qsTr("Cached %1 of %2").arg(root.totalCount).arg(root.serverTotal)
+                        return qsTr("All %1 messages loaded").arg(root.totalCount)
                     }
                     color: Theme.textMuted
                     font.pixelSize: Theme.fontSmall
@@ -788,7 +790,9 @@ Rectangle {
                     id: loadOlderButton
                     anchors.verticalCenter: parent.verticalCenter
                     visible: root.canLoadOlder
-                    text: root.busy ? qsTr("Loading…") : qsTr("Load older")
+                    text: root.busy
+                          ? qsTr("Loading…")
+                          : (root.serverTotal < 0 ? qsTr("Check server") : qsTr("Load older"))
                     enabled: !root.busy
                     onClicked: root.loadOlderRequested()
                 }

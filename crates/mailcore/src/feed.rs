@@ -228,7 +228,8 @@ pub fn messages_list_json_paged(
 ) -> Result<String> {
     let field = settings::get_sort_field(db);
     let descending = settings::get_sort_descending(db);
-    let rows = messages::list_by_folder_sorted(db, folder_id, limit, offset, &field, descending)?;
+    let rows =
+        messages::list_compact_by_folder_sorted(db, folder_id, limit, offset, &field, descending)?;
     Ok(serde_json::to_string(
         &rows
             .into_iter()

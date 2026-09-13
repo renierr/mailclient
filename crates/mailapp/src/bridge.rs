@@ -552,8 +552,8 @@ fn push_feeds(
         let server_total = folders::get(db, folder_id)
             .ok()
             .and_then(|folder| folder.server_total)
-            .unwrap_or(total as u64)
-            .min(i32::MAX as u64) as i32;
+            .map(|s| s.min(i32::MAX as u64) as i32)
+            .unwrap_or(-1);
         let msgs = feed::messages_list_json_paged(db, folder_id, total as u64, 0)
             .unwrap_or_else(|_| "[]".to_string());
         (msgs, total, server_total)

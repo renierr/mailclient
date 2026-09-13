@@ -52,7 +52,7 @@ QtObject {
             rows = []
 
         // Drop rows that are gone. Back to front, so indices stay valid.
-        var wanted = {}
+        var wanted = Object.create(null)
         for (i = 0; i < rows.length; i++)
             wanted[rows[i][key]] = true
         for (i = model.count - 1; i >= 0; i--) {
@@ -60,15 +60,38 @@ QtObject {
                 model.remove(i)
         }
 
+        // Fast path: if the model is empty (e.g. folder switch or first paint),
+        // append directly without scanning.
+        if (model.count === 0) {
+            for (i = 0; i < rows.length; i++)
+                model.append(rows[i])
+            return
+        }
+
+        // Build index lookup map for remaining rows: O(1) instead of O(N) linear scan
+        var indexMap = Object.create(null)
+        for (i = 0; i < model.count; i++)
+            indexMap[model.get(i)[key]] = i
+
         // Walk the wanted order: insert what is missing, move what moved,
         // update what stayed.
         for (i = 0; i < rows.length; i++) {
-            var at = util.indexOfKey(model, key, rows[i][key])
-            if (at === -1) {
+            var kVal = rows[i][key]
+            var at = indexMap[kVal]
+            if (at === undefined) {
                 model.insert(i, rows[i])
+                // Rebuild map when positions shift from insert
+                indexMap = Object.create(null)
+                for (var j = 0; j < model.count; j++)
+                    indexMap[model.get(j)[key]] = j
             } else {
-                if (at !== i)
+                if (at !== i) {
                     model.move(at, i, 1)
+                    // Rebuild map when positions shift from move
+                    indexMap = Object.create(null)
+                    for (var m = 0; m < model.count; m++)
+                        indexMap[model.get(m)[key]] = m
+                }
                 util.updateRow(model, i, rows[i])
             }
         }

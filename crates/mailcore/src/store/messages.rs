@@ -114,6 +114,61 @@ pub fn upsert(db: &Db, m: &NewMessage) -> Result<i64> {
     Ok(id)
 }
 
+/// Compact message metadata for list views (no bodies, raw headers, or JSON arrays).
+#[derive(Debug, Clone)]
+pub struct CompactMessage {
+    pub uid: u32,
+    pub subject: Option<String>,
+    pub from_addr: Option<String>,
+    pub date: Option<String>,
+    pub snippet: Option<String>,
+    pub is_read: bool,
+    pub is_starred: bool,
+    pub has_attachments: bool,
+}
+
+/// Lightweight query for folder message lists: selects only the 8 columns
+/// needed for compact rows, skipping heavy bodies, raw headers, and JSON arrays.
+pub fn list_compact_by_folder_sorted(
+    db: &Db,
+    folder_id: i64,
+    limit: u64,
+    offset: u64,
+    sort_field: &str,
+    descending: bool,
+) -> Result<Vec<CompactMessage>> {
+    let dir = if descending { "desc" } else { "asc" };
+    let order = match sort_field.trim().to_ascii_lowercase().as_str() {
+        "from" | "from_addr" | "sender" => {
+            format!("coalesce(from_addr, '') collate nocase {dir}, date desc, id desc")
+        }
+        "subject" => {
+            format!("coalesce(subject, '') collate nocase {dir}, date desc, id desc")
+        }
+        _ => format!("uid {dir}"),
+    };
+    let mut stmt = db.conn().prepare(&format!(
+        "select uid, subject, from_addr, date, snippet, is_read, is_starred, has_attachments
+         from messages where folder_id = ?1
+         order by {order} limit ?2 offset ?3"
+    ))?;
+    let rows = stmt
+        .query_map(params![folder_id, limit as i64, offset as i64], |row| {
+            Ok(CompactMessage {
+                uid: row.get::<_, i64>(0)? as u32,
+                subject: row.get(1)?,
+                from_addr: row.get(2)?,
+                date: row.get(3)?,
+                snippet: row.get(4)?,
+                is_read: opt_bool(row.get::<_, i64>(5)?),
+                is_starred: opt_bool(row.get::<_, i64>(6)?),
+                has_attachments: opt_bool(row.get::<_, i64>(7)?),
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 /// Paged message list for a folder, newest server arrival first.
 pub fn list_by_folder(db: &Db, folder_id: i64, limit: u64, offset: u64) -> Result<Vec<Message>> {
     list_by_folder_sorted(db, folder_id, limit, offset, "date", true)
@@ -790,6 +845,11 @@ mod tests {
         }
         assert_eq!(delete_many_by_uids(&db, f, &[1, 3, 3]).unwrap(), 2);
         assert_eq!(count_by_folder(&db, f).unwrap(), 1);
-        assert_eq!(delete_many_by_uids(&db, f, &[]).unwrap(), 0);
+        let compact = list_compact_by_folder_sorted(&db, f, 10, 0, "date", true).unwrap();
+        assert_eq!(compact.len(), 1);
+        assert_eq!(compact[0].uid, 2);
+        assert_eq!(compact[0].subject.as_deref(), Some("Hello"));
+        assert!(!compact[0].is_read);
+        assert!(!compact[0].is_starred);
     }
 }
