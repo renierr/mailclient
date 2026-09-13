@@ -266,6 +266,12 @@ pub mod qobject {
         /// Opening a draft explicitly downloads and materializes its files.
         #[qinvokable]
         fn draft_form(self: Pin<&mut Self>, uid: i32) -> QString;
+
+        /// Drop all pooled IMAP sessions (app quit). No LOGOUT round-trip,
+        /// so quit never blocks on a dead connection — closing the sockets
+        /// reaps the server-side sessions, like any network drop.
+        #[qinvokable]
+        fn disconnect_all(&self);
     }
 
     extern "RustQt" {
@@ -301,6 +307,8 @@ pub mod qobject {
 }
 
 use core::pin::Pin;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 use cxx_qt_lib::QString;
 use mailcore::models::NewAccount;
@@ -421,12 +429,10 @@ fn ensure_attachment_data(
     let msg = messages::get(db, message_id).map_err(|e| e.to_string())?;
     let folder = folders::get(db, msg.folder_id).map_err(|e| e.to_string())?;
     let acc = accounts::get(db, folder.account_id).map_err(|e| e.to_string())?;
-    let mut imap = imap_session(&acc)?;
-    let n = imap
-        .fetch_attachments(db, message_id)
-        .map_err(|e| e.to_string())?;
-    imap.disconnect();
-    Ok(n)
+    with_imap(&acc, |imap| {
+        imap.fetch_attachments(db, message_id)
+            .map_err(|e| e.to_string())
+    })
 }
 
 /// Materialize one cached attachment for Composer. The file name keeps the
@@ -626,13 +632,83 @@ fn current_account(db: &mailcore::Db, wanted: i64) -> Result<mailcore::models::A
 }
 
 /// Connect an IMAP session using the keyring secret.
-fn imap_session(account: &mailcore::models::Account) -> Result<ImapSync, String> {
-    let secrets = auth::load_account_secrets(&account.auth_vault_key)
-        .map_err(|e| format!("no password in keyring: {e}"))?;
-    let mut imap = ImapSync::new(account);
-    imap.connect(&secrets.imap_password)
-        .map_err(|e| e.to_string())?;
-    Ok(imap)
+fn imap_pool() -> std::sync::MutexGuard<'static, HashMap<i64, ImapSync>> {
+    use std::sync::OnceLock;
+    /// One live IMAP session per account, reused across actions while its
+    /// NOOP answers. Previously every action paid a fresh TCP + TLS + LOGIN;
+    /// now only the first action (or the first after a drop) does.
+    /// Process-global rather than a `BridgeRust` field: bridge invokables
+    /// only expose `Pin<&mut Self>`, which cannot hand out the `&mut`
+    /// HashMap a checkout needs, while a module pool keeps every call site
+    /// a two-line change. All invokables run on the Qt GUI thread, so the
+    /// mutex is uncontended in practice; `into_inner` on poison keeps a
+    /// panicking action from bricking later ones.
+    static POOL: OnceLock<Mutex<HashMap<i64, ImapSync>>> = OnceLock::new();
+    POOL.get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+/// Check out the pooled session for `account`: reuse while healthy, else
+/// drop it and connect fresh. The fresh connect re-reads the keyring, so a
+/// changed password heals automatically on the next action.
+fn pooled_session<'a>(
+    pool: &'a mut HashMap<i64, ImapSync>,
+    account: &mailcore::models::Account,
+) -> Result<&'a mut ImapSync, String> {
+    let id = account.id;
+    let reusable = pool.get_mut(&id).map(|s| s.is_healthy()).unwrap_or(false);
+    if reusable {
+        log::debug!("imap: reusing pooled session for account {id}");
+    } else {
+        if pool.remove(&id).is_some() {
+            log::info!("imap: pooled session for account {id} went stale, reconnecting");
+        }
+        let secrets = auth::load_account_secrets(&account.auth_vault_key)
+            .map_err(|e| format!("no password in keyring: {e}"))?;
+        let mut fresh = ImapSync::new(account);
+        fresh
+            .connect(&secrets.imap_password)
+            .map_err(|e| e.to_string())?;
+        pool.insert(id, fresh);
+    }
+    Ok(pool.get_mut(&id).expect("session just pooled"))
+}
+
+/// Run `op` on the account's pooled session. Any failure evicts the session
+/// so the next action reconnects fresh — a failed op may leave the stream
+/// desynced, and the old connect-per-action code never reused a session
+/// past one op either. Same failure guarantee, without the handshake.
+fn with_imap<T>(
+    account: &mailcore::models::Account,
+    op: impl FnOnce(&mut ImapSync) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut pool = imap_pool();
+    let session = pooled_session(&mut pool, account)?;
+    let id = account.id;
+    let result = op(session);
+    if result.is_err() {
+        pool.remove(&id);
+    }
+    result
+}
+
+/// Drop one account's pooled session (account edited or deleted).
+fn evict_imap_session(account_id: i64) {
+    if imap_pool().remove(&account_id).is_some() {
+        log::info!("imap: evicted pooled session for account {account_id}");
+    }
+}
+
+/// Drop every pooled session (app quit). Deliberately no LOGOUT round-trip:
+/// a stale pooled connection (laptop slept, server rebooted) would block
+/// quit on the BYE wait with no read timeout — closing the sockets reaps
+/// the server-side sessions just as well, exactly like a network drop.
+fn drop_all_imap_sessions() {
+    let n = imap_pool().drain().count();
+    if n > 0 {
+        log::info!("imap: dropped {n} pooled session(s) on quit");
+    }
 }
 
 /// Run a fallible sync action, converting a Rust panic into an error string.
@@ -798,6 +874,9 @@ impl qobject::Bridge {
                 if let Err(e) = accounts::update_connection(&db, existing.id, &form_account) {
                     return qstring(&e.to_string());
                 }
+                // Host/user/password may have changed: drop the pooled
+                // session so the next action connects with the new values.
+                evict_imap_session(existing.id);
                 // Blank password on an edit = keep the stored secret; the
                 // dialog never shows it, so re-typing must not be required.
                 if !password.is_empty() {
@@ -871,6 +950,8 @@ impl qobject::Bridge {
         if let Err(e) = accounts::delete(&db, id) {
             return qstring(&e.to_string());
         }
+        // The account is gone: don't keep a live session for it.
+        evict_imap_session(id);
         // Fall back to whichever account remains, if any.
         match accounts::list(&db).unwrap_or_default().first() {
             Some(next) => {
@@ -928,44 +1009,45 @@ impl qobject::Bridge {
         let wanted = *self.current_account_id();
         let result = guard_sync("Sync", || {
             let acc = current_account(&db, wanted)?;
-            let mut imap = imap_session(&acc)?;
-            // Push locally queued read/star changes first, so the fetch below
-            // cannot overwrite them with stale server flags.
             let mut pushed = 0u64;
-            for m in messages::list_flags_dirty(&db, acc.id).unwrap_or_default() {
-                if imap.push_flags(&db, &m).is_ok() {
-                    let _ = messages::clear_flags_dirty(&db, m.id);
-                    pushed += 1;
-                }
-            }
-            let folders = imap.sync_folders(&db, acc.id).map_err(|e| e.to_string())?;
-            // Selective: INBOX gets the full window (newest 200 full bodies),
-            // every other *visible* folder only flags + newest 50. Hidden
-            // (unsubscribed) folders are LISTed so they stay manageable, but
-            // their bodies are skipped — open one explicitly and it syncs.
-            // Custom folders never auto-sync all mail — they fill on demand.
             let mut fetched = 0u64;
             let mut expunged = 0u64;
             let mut quick = 0usize;
             let mut skipped = 0usize;
-            for f in &folders {
-                if !f.subscribed {
-                    skipped += 1;
-                    continue;
+            let folders = with_imap(&acc, |imap| {
+                // Push locally queued read/star changes first, so the fetch below
+                // cannot overwrite them with stale server flags.
+                for m in messages::list_flags_dirty(&db, acc.id).unwrap_or_default() {
+                    if imap.push_flags(&db, &m).is_ok() {
+                        let _ = messages::clear_flags_dirty(&db, m.id);
+                        pushed += 1;
+                    }
                 }
-                let window = if f.role == mailcore::models::FolderRole::Inbox {
-                    Some(FULL_SYNC_WINDOW)
-                } else {
-                    quick += 1;
-                    Some(QUICK_SYNC_WINDOW)
-                };
-                let r = imap
-                    .sync_folder_window(&db, f.id, window)
-                    .map_err(|e| e.to_string())?;
-                fetched += r.fetched;
-                expunged += r.expunged;
-            }
-            imap.disconnect();
+                let folders = imap.sync_folders(&db, acc.id).map_err(|e| e.to_string())?;
+                // Selective: INBOX gets the full window (newest 200 full bodies),
+                // every other *visible* folder only flags + newest 50. Hidden
+                // (unsubscribed) folders are LISTed so they stay manageable, but
+                // their bodies are skipped — open one explicitly and it syncs.
+                // Custom folders never auto-sync all mail — they fill on demand.
+                for f in &folders {
+                    if !f.subscribed {
+                        skipped += 1;
+                        continue;
+                    }
+                    let window = if f.role == mailcore::models::FolderRole::Inbox {
+                        Some(FULL_SYNC_WINDOW)
+                    } else {
+                        quick += 1;
+                        Some(QUICK_SYNC_WINDOW)
+                    };
+                    let r = imap
+                        .sync_folder_window(&db, f.id, window)
+                        .map_err(|e| e.to_string())?;
+                    fetched += r.fetched;
+                    expunged += r.expunged;
+                }
+                Ok(folders)
+            })?;
             // Keep selection if it still exists, else inbox, else first.
             let all = folders::list_by_account(&db, acc.id).map_err(|e| e.to_string())?;
             let current = *self.current_folder_id();
@@ -1018,16 +1100,15 @@ impl qobject::Bridge {
                 folders::get_by_path(&db, acc.id, &path.to_string()).map_err(|e| e.to_string())?;
             // Flush pending flag pushes first so this folder's fetch cannot
             // revert a just-tapped read/star.
-            let mut imap = imap_session(&acc)?;
-            for m in messages::list_flags_dirty(&db, acc.id).unwrap_or_default() {
-                if imap.push_flags(&db, &m).is_ok() {
-                    let _ = messages::clear_flags_dirty(&db, m.id);
+            let r = with_imap(&acc, |imap| {
+                for m in messages::list_flags_dirty(&db, acc.id).unwrap_or_default() {
+                    if imap.push_flags(&db, &m).is_ok() {
+                        let _ = messages::clear_flags_dirty(&db, m.id);
+                    }
                 }
-            }
-            let r = imap
-                .sync_folder_window(&db, folder.id, Some(FULL_SYNC_WINDOW))
-                .map_err(|e| e.to_string())?;
-            imap.disconnect();
+                imap.sync_folder_window(&db, folder.id, Some(FULL_SYNC_WINDOW))
+                    .map_err(|e| e.to_string())
+            })?;
             // Stay on the synced folder.
             push_feeds(&mut self, &db, acc.id, folder.id);
             Ok(format!(
@@ -1058,11 +1139,10 @@ impl qobject::Bridge {
             if folder.account_id != acc.id {
                 return Err("folder does not belong to this account".to_string());
             }
-            let mut imap = imap_session(&acc)?;
-            let r = imap
-                .sync_older(&db, folder_id, OLDER_BATCH)
-                .map_err(|e| e.to_string())?;
-            imap.disconnect();
+            let r = with_imap(&acc, |imap| {
+                imap.sync_older(&db, folder_id, OLDER_BATCH)
+                    .map_err(|e| e.to_string())
+            })?;
             if r.fetched > 0 {
                 let grown = (*self.message_limit() + r.fetched as i32).min(MAX_MESSAGE_LIMIT);
                 self.as_mut().set_message_limit(grown);
@@ -1088,9 +1168,9 @@ impl qobject::Bridge {
         let wanted = *self.current_account_id();
         let result = guard_sync("Sync", || {
             let acc = current_account(&db, wanted)?;
-            let mut imap = imap_session(&acc)?;
-            let list = imap.sync_folders(&db, acc.id).map_err(|e| e.to_string())?;
-            imap.disconnect();
+            let list = with_imap(&acc, |imap| {
+                imap.sync_folders(&db, acc.id).map_err(|e| e.to_string())
+            })?;
             let current = *self.current_folder_id();
             let still_there = list.iter().any(|f| f.id == current);
             let folder_id = if still_there {
@@ -1360,10 +1440,9 @@ impl qobject::Bridge {
             let msg =
                 messages::get_by_uid(&db, folder_id, uid as u32).map_err(|_| String::new())?;
             let acc = accounts::get(&db, acc_id).map_err(|e| e.to_string())?;
-            let mut imap = imap_session(&acc)?;
-            let r = imap.trash_message(&db, msg.id).map_err(|e| e.to_string());
-            imap.disconnect();
-            let outcome = r?;
+            let outcome = with_imap(&acc, |imap| {
+                imap.trash_message(&db, msg.id).map_err(|e| e.to_string())
+            })?;
             push_feeds(&mut self, &db, acc_id, folder_id);
             // Reported, not silent: "deleted permanently" is a different promise
             // from "moved to Trash" and the user needs to know which happened.
@@ -1386,10 +1465,9 @@ impl qobject::Bridge {
             let msg =
                 messages::get_by_uid(&db, folder_id, uid as u32).map_err(|_| String::new())?;
             let acc = accounts::get(&db, acc_id).map_err(|e| e.to_string())?;
-            let mut imap = imap_session(&acc)?;
-            let r = imap.archive_message(&db, msg.id).map_err(|e| e.to_string());
-            imap.disconnect();
-            let outcome = r?;
+            let outcome = with_imap(&acc, |imap| {
+                imap.archive_message(&db, msg.id).map_err(|e| e.to_string())
+            })?;
             push_feeds(&mut self, &db, acc_id, folder_id);
             Ok(match outcome {
                 ArchiveOutcome::Moved(path) => format!("Archived to {path}"),
@@ -1412,12 +1490,10 @@ impl qobject::Bridge {
             let acc = current_account(&db, wanted)?;
             let msg = messages::get_by_uid(&db, current, uid as u32).map_err(|_| String::new())?;
             let dest = folders::get_by_path(&db, acc.id, &path).map_err(|e| e.to_string())?;
-            let mut imap = imap_session(&acc)?;
-            let r = imap
-                .move_to_folder(&db, msg.id, dest.id)
-                .map_err(|e| e.to_string());
-            imap.disconnect();
-            let outcome = r?;
+            let outcome = with_imap(&acc, |imap| {
+                imap.move_to_folder(&db, msg.id, dest.id)
+                    .map_err(|e| e.to_string())
+            })?;
             push_feeds(&mut self, &db, acc.id, current);
             Ok(match outcome {
                 MoveOutcome::Moved(path) => format!("Moved to {path}"),
@@ -1451,13 +1527,13 @@ impl qobject::Bridge {
                 push_feeds(&mut self, &db, acc.id, current);
                 return Ok("Folder already exists".to_string());
             }
-            let mut imap = imap_session(&acc)?;
-            let folder = imap
-                .create_folder_path(&db, acc.id, &normalized, &delimiter)
-                .map_err(|e| e.to_string())?;
-            imap.disconnect();
+            let folder = with_imap(&acc, |imap| {
+                imap.create_folder_path(&db, acc.id, &normalized, &delimiter)
+                    .map_err(|e| e.to_string())
+                    .map(|f| f.path)
+            })?;
             push_feeds(&mut self, &db, acc.id, current);
-            Ok(format!("Created {}", folder.path))
+            Ok(format!("Created {folder}"))
         });
         match result {
             Ok(s) => qstring(&s),
@@ -1473,10 +1549,9 @@ impl qobject::Bridge {
             let msg =
                 messages::get_by_uid(&db, folder_id, uid as u32).map_err(|_| String::new())?;
             let acc = accounts::get(&db, acc_id).map_err(|e| e.to_string())?;
-            let mut imap = imap_session(&acc)?;
-            let r = imap.delete_message(&db, msg.id).map_err(|e| e.to_string());
-            imap.disconnect();
-            r?;
+            with_imap(&acc, |imap| {
+                imap.delete_message(&db, msg.id).map_err(|e| e.to_string())
+            })?;
             push_feeds(&mut self, &db, acc_id, folder_id);
             Ok("Deleted permanently".to_string())
         });
@@ -1578,40 +1653,38 @@ impl qobject::Bridge {
             if folder.account_id != acc.id {
                 return Err("folder does not belong to this account".to_string());
             }
-            let mut imap = imap_session(&acc)?;
             // Junk never touches Trash; Trash deletes are permanent — same
             // rule as the single-message path, applied once per folder.
-            if folder.role == mailcore::models::FolderRole::Junk {
-                let n = imap
-                    .purge_uids(&db, folder_id, &uids)
-                    .map_err(|e| e.to_string())?;
-                imap.disconnect();
-                push_feeds(&mut self, &db, acc_id, folder_id);
-                return Ok(format!("Deleted {n} permanently"));
-            }
-            let trash = folders::list_by_account(&db, acc.id)
-                .map_err(|e| e.to_string())?
-                .into_iter()
-                .find(|f| f.role == mailcore::models::FolderRole::Trash);
-            match trash.filter(|t| t.id != folder.id) {
-                Some(t) => {
-                    let n = imap
-                        .move_uids_to(&db, folder_id, &uids, &t.path)
-                        .map_err(|e| e.to_string())?;
-                    let path = t.path.clone();
-                    imap.disconnect();
-                    push_feeds(&mut self, &db, acc_id, folder_id);
-                    Ok(format!("Moved {n} to {path}"))
+            let summary = if folder.role == mailcore::models::FolderRole::Junk {
+                let n = with_imap(&acc, |imap| {
+                    imap.purge_uids(&db, folder_id, &uids)
+                        .map_err(|e| e.to_string())
+                })?;
+                format!("Deleted {n} permanently")
+            } else {
+                let trash = folders::list_by_account(&db, acc.id)
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .find(|f| f.role == mailcore::models::FolderRole::Trash);
+                match trash.filter(|t| t.id != folder.id) {
+                    Some(t) => {
+                        let n = with_imap(&acc, |imap| {
+                            imap.move_uids_to(&db, folder_id, &uids, &t.path)
+                                .map_err(|e| e.to_string())
+                        })?;
+                        format!("Moved {n} to {}", t.path)
+                    }
+                    None => {
+                        let n = with_imap(&acc, |imap| {
+                            imap.purge_uids(&db, folder_id, &uids)
+                                .map_err(|e| e.to_string())
+                        })?;
+                        format!("Deleted {n} permanently")
+                    }
                 }
-                None => {
-                    let n = imap
-                        .purge_uids(&db, folder_id, &uids)
-                        .map_err(|e| e.to_string())?;
-                    imap.disconnect();
-                    push_feeds(&mut self, &db, acc_id, folder_id);
-                    Ok(format!("Deleted {n} permanently"))
-                }
-            }
+            };
+            push_feeds(&mut self, &db, acc_id, folder_id);
+            Ok(summary)
         });
         match result {
             Ok(s) => qstring(&s),
@@ -1629,34 +1702,33 @@ impl qobject::Bridge {
             let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
             let folder = folders::get(&db, folder_id).map_err(|e| e.to_string())?;
             let acc = accounts::get(&db, acc_id).map_err(|e| e.to_string())?;
-            let mut imap = imap_session(&acc)?;
-            let archive = match folders::list_by_account(&db, acc.id)
-                .map_err(|e| e.to_string())?
-                .into_iter()
-                .find(|f| f.role == mailcore::models::FolderRole::Archive)
-            {
-                Some(a) => a,
-                None => {
-                    let delim = folders::list_by_account(&db, acc.id)
-                        .unwrap_or_default()
-                        .first()
-                        .map(|f| f.delimiter.clone())
-                        .unwrap_or_else(|| "/".to_string());
-                    imap.create_folder_path(&db, acc.id, "Archive", &delim)
-                        .map_err(|e| e.to_string())?
+            let summary = with_imap(&acc, |imap| {
+                let archive = match folders::list_by_account(&db, acc.id)
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .find(|f| f.role == mailcore::models::FolderRole::Archive)
+                {
+                    Some(a) => a,
+                    None => {
+                        let delim = folders::list_by_account(&db, acc.id)
+                            .unwrap_or_default()
+                            .first()
+                            .map(|f| f.delimiter.clone())
+                            .unwrap_or_else(|| "/".to_string());
+                        imap.create_folder_path(&db, acc.id, "Archive", &delim)
+                            .map_err(|e| e.to_string())?
+                    }
+                };
+                if archive.id == folder.id {
+                    return Ok("Already in Archive".to_string());
                 }
-            };
-            if archive.id == folder.id {
-                imap.disconnect();
-                return Ok("Already in Archive".to_string());
-            }
-            let n = imap
-                .move_uids_to(&db, folder_id, &uids, &archive.path)
-                .map_err(|e| e.to_string())?;
-            let path = archive.path.clone();
-            imap.disconnect();
+                let n = imap
+                    .move_uids_to(&db, folder_id, &uids, &archive.path)
+                    .map_err(|e| e.to_string())?;
+                Ok(format!("Archived {n} to {}", archive.path))
+            })?;
             push_feeds(&mut self, &db, acc_id, folder_id);
-            Ok(format!("Archived {n} to {path}"))
+            Ok(summary)
         });
         match result {
             Ok(s) => qstring(&s),
@@ -1684,14 +1756,12 @@ impl qobject::Bridge {
             if folder.account_id != acc.id {
                 return Err("folder does not belong to this account".to_string());
             }
-            let mut imap = imap_session(&acc)?;
-            let n = imap
-                .move_uids_to(&db, current, &uids, &dest.path)
-                .map_err(|e| e.to_string())?;
-            let dest_path = dest.path.clone();
-            imap.disconnect();
+            let n = with_imap(&acc, |imap| {
+                imap.move_uids_to(&db, current, &uids, &dest.path)
+                    .map_err(|e| e.to_string())
+            })?;
             push_feeds(&mut self, &db, acc.id, current);
-            Ok(format!("Moved {n} to {dest_path}"))
+            Ok(format!("Moved {n} to {}", dest.path))
         });
         match result {
             Ok(s) => qstring(&s),
@@ -1708,11 +1778,10 @@ impl qobject::Bridge {
             let db = open_db()?;
             let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
             let acc = accounts::get(&db, acc_id).map_err(|e| e.to_string())?;
-            let mut imap = imap_session(&acc)?;
-            let n = imap
-                .purge_uids(&db, folder_id, &uids)
-                .map_err(|e| e.to_string())?;
-            imap.disconnect();
+            let n = with_imap(&acc, |imap| {
+                imap.purge_uids(&db, folder_id, &uids)
+                    .map_err(|e| e.to_string())
+            })?;
             push_feeds(&mut self, &db, acc_id, folder_id);
             Ok(format!("Deleted {n} permanently"))
         });
@@ -1859,12 +1928,11 @@ impl qobject::Bridge {
                 if !source.is_draft {
                     return Err("sent, but the source message is not a draft".to_string());
                 }
-                let mut imap = imap_session(&acc)?;
-                let remove = imap
-                    .delete_message(&db, source.id)
-                    .map_err(|e| e.to_string());
-                imap.disconnect();
-                remove.map_err(|e| format!("sent, but could not remove source draft: {e}"))?;
+                with_imap(&acc, |imap| {
+                    imap.delete_message(&db, source.id)
+                        .map_err(|e| e.to_string())
+                })
+                .map_err(|e| format!("sent, but could not remove source draft: {e}"))?;
             }
             // Refresh after send: the SMTP + APPEND already happened, so
             // pull the Sent copy (if enabled) best-effort — offline or
@@ -1876,10 +1944,11 @@ impl qobject::Bridge {
                 .map(|f| f.id)
                 .ok_or(())
             {
-                if let Ok(mut imap) = imap_session(&acc) {
-                    let _ = imap.sync_folder_window(&db, sent, Some(QUICK_SYNC_WINDOW));
-                    imap.disconnect();
-                }
+                // Pooled session, failure still ignored (best effort).
+                let _ = with_imap(&acc, |imap| {
+                    imap.sync_folder_window(&db, sent, Some(QUICK_SYNC_WINDOW))
+                        .map_err(|e| e.to_string())
+                });
             }
             let folder_id = *self.current_folder_id();
             push_feeds(&mut self, &db, acc.id, folder_id);
@@ -1966,32 +2035,34 @@ impl qobject::Bridge {
                 request_mdn: false,
             };
             let raw = format_draft(&acc, &req).map_err(|e| e.to_string())?;
-            let secrets = auth::load_account_secrets(&acc.auth_vault_key)
-                .map_err(|e| format!("no password in keyring: {e}"))?;
-            let mut imap = ImapSync::new(&acc);
-            imap.connect(&secrets.imap_password)
-                .map_err(|e| e.to_string())?;
-            // APPEND first: a failed replacement never destroys the existing draft.
-            imap.append_draft(&drafts.path, &raw)
-                .map_err(|e| e.to_string())?;
-            let remove_error = if source_uid >= 0 {
-                let source = messages::get_by_uid(&db, drafts.id, source_uid as u32)
-                    .map_err(|_| "source draft no longer exists".to_string())?;
-                imap.delete_message(&db, source.id)
-                    .err()
-                    .map(|e| e.to_string())
-            } else {
-                None
-            };
-            let sync = imap.sync_folder_window(&db, drafts.id, Some(FULL_SYNC_WINDOW));
-            imap.disconnect();
-            sync.map_err(|e| e.to_string())?;
+            let remove_error = with_imap(&acc, |imap| {
+                // APPEND first: a failed replacement never destroys the existing draft.
+                imap.append_draft(&drafts.path, &raw)
+                    .map_err(|e| e.to_string())?;
+                let remove_error = if source_uid >= 0 {
+                    let source = messages::get_by_uid(&db, drafts.id, source_uid as u32)
+                        .map_err(|_| "source draft no longer exists".to_string())?;
+                    imap.delete_message(&db, source.id)
+                        .err()
+                        .map(|e| e.to_string())
+                } else {
+                    None
+                };
+                imap.sync_folder_window(&db, drafts.id, Some(FULL_SYNC_WINDOW))
+                    .map_err(|e| e.to_string())?;
+                Ok(remove_error)
+            })?;
             let current_folder_id = *self.current_folder_id();
             push_feeds(&mut self, &db, acc.id, current_folder_id);
             match remove_error {
-                Some(e) => Err(format!(
-                    "draft saved, but could not remove source draft: {e}"
-                )),
+                Some(e) => {
+                    // The replacement landed but the source-delete failed —
+                    // don't trust this stream for the next action either.
+                    evict_imap_session(acc.id);
+                    Err(format!(
+                        "draft saved, but could not remove source draft: {e}"
+                    ))
+                }
                 None => Ok(String::new()),
             }
         });
@@ -1999,6 +2070,10 @@ impl qobject::Bridge {
             Ok(s) => qstring(&s),
             Err(e) => qstring(&e),
         }
+    }
+
+    pub fn disconnect_all(&self) {
+        drop_all_imap_sessions();
     }
 
     pub fn draft_form(self: Pin<&mut Self>, uid: i32) -> QString {

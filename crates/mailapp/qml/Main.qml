@@ -24,6 +24,10 @@ ApplicationWindow {
     title: qsTr("Mailclient")
     color: Theme.bg
 
+    // Pooled IMAP sessions stay logged in between actions — drop them on
+    // quit (no LOGOUT round-trip, so this never blocks on a dead line).
+    onClosing: backend.disconnect_all()
+
     // Inherited by every control in the window. The wrapped components in
     // components/ paint themselves from Theme, but ScrollBar, ToolTip, text
     // selection and dialog overlays are drawn by the style -- without a

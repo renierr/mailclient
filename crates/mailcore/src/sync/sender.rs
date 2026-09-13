@@ -591,9 +591,10 @@ impl MailSender for SmtpSender {
         // providers sign after submission, so never allow a caller to bypass
         // the composer's same-domain sender restriction.
         if !sender_domain_is_aligned(from_addr, &self.from) {
-            return Err(StoreError::InvalidInput(format!(
+            return Err(StoreError::InvalidInput(
                 "sender domain must match the account domain to preserve SPF/DKIM/DMARC alignment"
-            )));
+                    .to_string(),
+            ));
         }
         // Display name from the composer, else the account default — empty
         // means address-only `From:`.
@@ -645,7 +646,7 @@ impl MailSender for SmtpSender {
                 queue::mark_sent(db, queue_id)?;
                 if settings::get_bool(db, settings::COLLECT_SENT_CONTACTS).unwrap_or(true) {
                     for mailbox in email.envelope().to() {
-                        if let Err(e) = contacts::seen(db, &mailbox.to_string(), None) {
+                        if let Err(e) = contacts::seen(db, mailbox.as_ref(), None) {
                             log::warn!("contacts: could not collect recipient: {e}");
                         }
                     }

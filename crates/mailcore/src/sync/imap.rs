@@ -308,6 +308,16 @@ impl ImapSync {
         self.connect(&password)
     }
 
+    /// Liveness probe for pooled sessions: one NOOP round-trip. `false` =
+    /// dead, half-closed, or never connected — the caller should drop this
+    /// session and connect fresh rather than send real work into it.
+    pub fn is_healthy(&mut self) -> bool {
+        match self.session.as_mut() {
+            Some(s) => s.noop().is_ok(),
+            None => false,
+        }
+    }
+
     /// Ask the server for its namespaces (best effort — many servers don't
     /// implement RFC 2342, and groupware like Tobit David hides branches the
     /// login isn't entitled to; either way we just get fewer prefixes).
@@ -1355,6 +1365,31 @@ mod tests {
         let ep = endpoint_for(&a);
         assert_eq!(ep.addr, "imap.x:993");
         assert!(ep.implicit_tls);
+    }
+
+    #[test]
+    fn fresh_session_is_not_healthy() {
+        // Offline: never dials out — a never-connected session has nothing
+        // to NOOP against.
+        let a = crate::models::Account {
+            id: 1,
+            name: "n".to_string(),
+            email_address: "e".to_string(),
+            from_name: String::new(),
+            imap_host: "imap.x".to_string(),
+            imap_port: 993,
+            imap_security: "tls".to_string(),
+            imap_username: "u".to_string(),
+            smtp_host: "s".to_string(),
+            smtp_port: 465,
+            smtp_security: "tls".to_string(),
+            smtp_username: "u".to_string(),
+            auth_vault_key: "k".to_string(),
+            check_interval_secs: 300,
+            created_at: "t".to_string(),
+            updated_at: "t".to_string(),
+        };
+        assert!(!ImapSync::new(&a).is_healthy());
     }
 
     #[test]
