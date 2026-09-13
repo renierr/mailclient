@@ -793,11 +793,13 @@ impl qobject::Bridge {
             Err(e) => return qstring(&e.to_string()),
         };
         self.as_mut().set_account_count(list.len() as i32);
-        let Some(acc) = ({
-            let wanted = *self.current_account_id();
-            list.into_iter().find(|a| a.id == wanted)
-        })
-        .or_else(|| accounts::list(&db).ok().and_then(|l| l.into_iter().next())) else {
+        let wanted =
+            settings::get_last_active_account_id(&db).unwrap_or(*self.current_account_id());
+        let Some(acc) = list
+            .into_iter()
+            .find(|a| a.id == wanted)
+            .or_else(|| accounts::list(&db).ok().and_then(|l| l.into_iter().next()))
+        else {
             push_feeds(&mut self, &db, -1, -1);
             return qstring("no account — add one first");
         };
@@ -814,6 +816,7 @@ impl qobject::Bridge {
         // Fresh account context: restart paging from the first page.
         self.as_mut().set_message_limit(DEFAULT_MESSAGE_LIMIT);
         push_feeds(&mut self, &db, acc.id, folder_id);
+        let _ = settings::set_last_active_account_id(&db, acc.id);
         qstring("")
     }
 
@@ -917,6 +920,9 @@ impl qobject::Bridge {
             }
         };
         push_feeds(&mut self, &db, id, -1);
+        if let Err(e) = settings::set_last_active_account_id(&db, id) {
+            return qstring(&e.to_string());
+        }
         self.as_mut()
             .set_account_count(accounts::list(&db).map(|l| l.len() as i32).unwrap_or(1));
         qstring("")
@@ -939,6 +945,9 @@ impl qobject::Bridge {
             .unwrap_or(-1);
         self.as_mut().set_message_limit(DEFAULT_MESSAGE_LIMIT);
         push_feeds(&mut self, &db, acc.id, folder_id);
+        if let Err(e) = settings::set_last_active_account_id(&db, acc.id) {
+            return qstring(&e.to_string());
+        }
         qstring("")
     }
 
@@ -972,10 +981,12 @@ impl qobject::Bridge {
                 let next_id = next.id;
                 self.as_mut().set_message_limit(DEFAULT_MESSAGE_LIMIT);
                 push_feeds(&mut self, &db, next_id, folder_id);
+                let _ = settings::set_last_active_account_id(&db, next_id);
             }
             None => {
                 push_feeds(&mut self, &db, -1, -1);
                 self.as_mut().set_current_account_email(qstring(""));
+                let _ = settings::set_last_active_account_id(&db, 0);
             }
         }
         self.as_mut()

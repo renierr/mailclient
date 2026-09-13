@@ -448,6 +448,13 @@ ApplicationWindow {
             reloadFolders()
             reloadMessages()
             root.statusText = qsTr("Account: %1").arg(backend.current_account_email)
+            // Render the selected account's cache before the synchronous
+            // account-scoped refresh begins. `sync_now` only ever uses
+            // `current_account_id`, so inactive accounts are never loaded.
+            Qt.callLater(function () {
+                if (!root.busy && backend.current_account_id === id)
+                    root.syncNow()
+            })
         } else {
             root.statusText = r
         }

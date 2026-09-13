@@ -57,6 +57,9 @@ pub const REQUEST_MDN: &str = "request_mdn";
 /// Interface scale factor (`1` = 100%, default). Snapped to the supported
 /// steps `1` | `1.1` | `1.25` | `1.5`; unknown values fall back to `1`.
 pub const UI_SCALE: &str = "ui_scale";
+/// Last account selected in the UI. Absent/invalid values deliberately leave
+/// startup selection to the normal first-account fallback.
+pub const LAST_ACTIVE_ACCOUNT_ID: &str = "last_active_account_id";
 
 /// Built-in default for a known key, if any.
 #[must_use]
@@ -116,6 +119,20 @@ pub fn set(db: &Db, key: &str, value: &str) -> Result<()> {
 /// Store a boolean value (`1`/`0`).
 pub fn set_bool(db: &Db, key: &str, value: bool) -> Result<()> {
     set(db, key, if value { "1" } else { "0" })
+}
+
+/// Last selected account ID, if it is a valid positive SQLite row ID.
+pub fn get_last_active_account_id(db: &Db) -> Option<i64> {
+    get(db, LAST_ACTIVE_ACCOUNT_ID)
+        .ok()
+        .flatten()
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|id| *id > 0)
+}
+
+/// Persist the account the user is actively viewing.
+pub fn set_last_active_account_id(db: &Db, account_id: i64) -> Result<()> {
+    set(db, LAST_ACTIVE_ACCOUNT_ID, &account_id.max(0).to_string())
 }
 
 /// Outgoing send format, resilient: unknown values become `auto`.
@@ -382,6 +399,18 @@ mod tests {
             Some("true")
         );
         assert_eq!(get(&db, "missing").unwrap(), None);
+    }
+
+    #[test]
+    fn last_active_account_id_is_resilient_and_persisted() {
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(get_last_active_account_id(&db), None);
+        set_last_active_account_id(&db, 42).unwrap();
+        assert_eq!(get_last_active_account_id(&db), Some(42));
+        set(&db, LAST_ACTIVE_ACCOUNT_ID, "nonsense").unwrap();
+        assert_eq!(get_last_active_account_id(&db), None);
+        set(&db, LAST_ACTIVE_ACCOUNT_ID, "-1").unwrap();
+        assert_eq!(get_last_active_account_id(&db), None);
     }
 
     #[test]

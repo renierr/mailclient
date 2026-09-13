@@ -1119,7 +1119,7 @@ dependencies = [
 
 [[package]]
 name = "mailapp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cxx",
  "cxx-qt",
@@ -1134,7 +1134,7 @@ dependencies = [
 
 [[package]]
 name = "mailcore"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "directories",
