@@ -157,6 +157,9 @@ pub struct SendRequest<'a> {
     /// IMAP password for filing the Sent copy (if `sent_copy_enabled`).
     /// `None` skips the copy with a warning; the send still succeeds.
     pub imap_password: Option<&'a str>,
+    /// Ask for a read receipt (`Disposition-Notification-To`, RFC 3798).
+    /// Recipients may ignore it; it only asks.
+    pub request_mdn: bool,
 }
 
 /// Split composer input into `(plain, Option<html>)` for the send format.
@@ -346,6 +349,7 @@ pub fn format_draft(account: &Account, req: &SendRequest<'_>) -> Result<Vec<u8>>
         plain,
         html,
         &files,
+        req.request_mdn,
     )?
     .formatted())
 }
@@ -477,8 +481,23 @@ pub(crate) fn assemble_message(
     plain: String,
     html: Option<String>,
     files: &[(String, String, Vec<u8>)],
+    request_mdn: bool,
 ) -> Result<Message> {
-    let mut builder = Message::builder().from(from).subject(subject);
+    let mut builder = Message::builder().from(from.clone()).subject(subject);
+    // Read receipt request (RFC 3798): the address receipts go back to is
+    // the visible sender. Recipients may ignore it; it only asks.
+    if request_mdn {
+        let value = from.email.to_string();
+        builder = builder.raw_header(
+            lettre::message::header::HeaderValue::dangerous_new_pre_encoded(
+                lettre::message::header::HeaderName::new_from_ascii_str(
+                    "Disposition-Notification-To",
+                ),
+                value.clone(),
+                value,
+            ),
+        );
+    }
     // No valid To address (blank or placeholder text on a BCC-only send):
     // emit the RFC 5322 group (`To: Friends:;`, else the standard `To:
     // undisclosed-recipients:;`) so recipients see a proper To line.
@@ -616,6 +635,7 @@ impl MailSender for SmtpSender {
             plain,
             html,
             &files,
+            req.request_mdn,
         )?;
 
         let queue_id = queue::enqueue(db, account_id, None)?;
@@ -751,6 +771,7 @@ mod tests {
             policy: &SendPolicy::TestAllowlist(Vec::new()),
             password: "",
             imap_password: None,
+            request_mdn: false,
         };
         let raw = String::from_utf8(format_draft(&account, &request).unwrap()).unwrap();
         assert!(raw.contains("Subject: unfinished"));
@@ -916,6 +937,7 @@ mod tests {
             "hello".to_string(),
             None,
             &[],
+            false,
         )
         .unwrap();
         let raw = String::from_utf8(m.formatted()).unwrap();
@@ -936,6 +958,7 @@ mod tests {
             "hello".to_string(),
             None,
             &[],
+            false,
         )
         .unwrap();
         let raw2 = String::from_utf8(m2.formatted()).unwrap();
@@ -964,12 +987,45 @@ mod tests {
             "hello".to_string(),
             None,
             &[],
+            false,
         )
         .unwrap();
         let raw = String::from_utf8(m.formatted()).unwrap();
         assert!(
             raw.contains("From: \"John Doe\" <me@example.com>"),
             "bad From: {raw:?}"
+        );
+    }
+
+    #[test]
+    fn read_receipt_request_adds_mdn_header() {
+        use SendFormat::Plain;
+        let from: lettre::message::Mailbox = "me@example.com".parse().unwrap();
+        let call = |mdn: bool| {
+            assemble_message(
+                from.clone(),
+                "hi",
+                valid_mailboxes(&["bob@example.com".to_string()]),
+                None,
+                &[],
+                &[],
+                Plain,
+                "hello".to_string(),
+                None,
+                &[],
+                mdn,
+            )
+            .unwrap()
+        };
+        let raw = String::from_utf8(call(true).formatted()).unwrap();
+        assert!(
+            raw.contains("Disposition-Notification-To: me@example.com"),
+            "no MDN header: {raw:?}"
+        );
+        let raw_off = String::from_utf8(call(false).formatted()).unwrap();
+        assert!(
+            !raw_off.contains("Disposition-Notification-To"),
+            "MDN leaked in: {raw_off:?}"
         );
     }
 

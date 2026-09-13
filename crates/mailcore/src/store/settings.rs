@@ -33,6 +33,27 @@ pub const MESSAGE_SORT_FIELD: &str = "message_sort_field";
 /// Message list sort direction (`1` = descending/newest-first, default;
 /// `0` = ascending).
 pub const MESSAGE_SORT_DESC: &str = "message_sort_desc";
+/// Ask before moving mail to Trash, single and bulk (default: on).
+/// Purge (permanent delete) always asks, independently of this.
+pub const CONFIRM_DELETE: &str = "confirm_delete";
+/// Message list density: `comfortable` (default) | `compact`.
+/// Unknown/empty values fall back to `comfortable`.
+pub const LIST_DENSITY: &str = "list_density";
+/// Plain-text reader size: `small` | `normal` (default) | `large`.
+/// Unknown/empty values fall back to `normal`.
+pub const READER_FONT_SIZE: &str = "reader_font_size";
+/// Automatic mail check, in minutes (`0` = manually only, default).
+/// Clamped to 0..1440; the UI offers fixed steps.
+pub const SYNC_INTERVAL_MINUTES: &str = "sync_interval_minutes";
+/// Append the signature to new mail, replies and forwards (default: off).
+pub const SIGNATURE_ENABLED: &str = "signature_enabled";
+/// Plain-text signature body (default: empty).
+pub const SIGNATURE_TEXT: &str = "signature_text";
+/// Place the reply below the quote instead of above it (default: off).
+pub const REPLY_BELOW_QUOTE: &str = "reply_below_quote";
+/// Request a read receipt (`Disposition-Notification-To`, default: off).
+/// Recipients may ignore it; it only asks.
+pub const REQUEST_MDN: &str = "request_mdn";
 
 /// Built-in default for a known key, if any.
 #[must_use]
@@ -47,6 +68,14 @@ pub fn defaults(key: &str) -> Option<&'static str> {
         COLLECT_SENT_CONTACTS => Some("1"),
         MESSAGE_SORT_FIELD => Some("date"),
         MESSAGE_SORT_DESC => Some("1"),
+        CONFIRM_DELETE => Some("1"),
+        LIST_DENSITY => Some("comfortable"),
+        READER_FONT_SIZE => Some("normal"),
+        SYNC_INTERVAL_MINUTES => Some("0"),
+        SIGNATURE_ENABLED => Some("0"),
+        SIGNATURE_TEXT => Some(""),
+        REPLY_BELOW_QUOTE => Some("0"),
+        REQUEST_MDN => Some("0"),
         _ => None,
     }
 }
@@ -168,6 +197,83 @@ pub fn set_sort(db: &Db, field: &str, descending: bool) -> Result<()> {
     set_bool(db, MESSAGE_SORT_DESC, descending)
 }
 
+/// Validated list density: `comfortable` | `compact`.
+#[must_use]
+pub fn normalize_density(raw: &str) -> &'static str {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "compact" => "compact",
+        _ => "comfortable",
+    }
+}
+
+/// Current list density, resilient to unknown stored values.
+pub fn get_density(db: &Db) -> String {
+    match get(db, LIST_DENSITY) {
+        Ok(Some(v)) => normalize_density(&v).to_string(),
+        _ => defaults(LIST_DENSITY).unwrap_or("comfortable").to_string(),
+    }
+}
+
+/// Validated reader size: `small` | `normal` | `large`.
+#[must_use]
+pub fn normalize_reader_font(raw: &str) -> &'static str {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "small" => "small",
+        "large" => "large",
+        _ => "normal",
+    }
+}
+
+/// Current reader size, resilient to unknown stored values.
+pub fn get_reader_font(db: &Db) -> String {
+    match get(db, READER_FONT_SIZE) {
+        Ok(Some(v)) => normalize_reader_font(&v).to_string(),
+        _ => defaults(READER_FONT_SIZE).unwrap_or("normal").to_string(),
+    }
+}
+
+/// Clamp an auto-check interval into the sane range (minutes, 0 = manual).
+#[must_use]
+pub fn normalize_sync_interval(raw: i64) -> i64 {
+    raw.clamp(0, 1440)
+}
+
+/// Automatic mail-check interval in minutes (`0` = manually only).
+/// Unset/unparseable values fall back to the built-in default.
+pub fn get_sync_interval(db: &Db) -> i64 {
+    match get(db, SYNC_INTERVAL_MINUTES) {
+        Ok(Some(v)) => v
+            .trim()
+            .parse::<i64>()
+            .map(normalize_sync_interval)
+            .unwrap_or_else(|_| {
+                defaults(SYNC_INTERVAL_MINUTES)
+                    .and_then(|d| d.parse::<i64>().ok())
+                    .unwrap_or(0)
+            }),
+        _ => defaults(SYNC_INTERVAL_MINUTES)
+            .and_then(|d| d.parse::<i64>().ok())
+            .unwrap_or(0),
+    }
+}
+
+/// Store an auto-check interval (normalized first).
+pub fn set_sync_interval(db: &Db, value: i64) -> Result<()> {
+    set(
+        db,
+        SYNC_INTERVAL_MINUTES,
+        &normalize_sync_interval(value).to_string(),
+    )
+}
+
+/// Plain-text signature body (`""` when unset).
+pub fn get_signature_text(db: &Db) -> String {
+    match get(db, SIGNATURE_TEXT) {
+        Ok(Some(v)) => v,
+        _ => String::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,5 +347,35 @@ mod tests {
         assert!(!get_sort_descending(&db));
         set(&db, MESSAGE_SORT_FIELD, "nonsense").unwrap();
         assert_eq!(get_sort_field(&db), "date");
+    }
+
+    #[test]
+    fn mailbox_and_compose_prefs_resilient() {
+        assert_eq!(normalize_density("compact"), "compact");
+        assert_eq!(normalize_density(" COMFORTABLE "), "comfortable");
+        assert_eq!(normalize_density("cozy"), "comfortable");
+        assert_eq!(normalize_reader_font("small"), "small");
+        assert_eq!(normalize_reader_font("LARGE"), "large");
+        assert_eq!(normalize_reader_font("huge"), "normal");
+        assert_eq!(normalize_sync_interval(-5), 0);
+        assert_eq!(normalize_sync_interval(15), 15);
+        assert_eq!(normalize_sync_interval(99999), 1440);
+        let db = Db::open_in_memory().unwrap();
+        assert!(get_bool(&db, CONFIRM_DELETE).unwrap());
+        assert_eq!(get_density(&db), "comfortable");
+        assert_eq!(get_reader_font(&db), "normal");
+        assert_eq!(get_sync_interval(&db), 0);
+        assert_eq!(get_signature_text(&db), "");
+        assert!(!get_bool(&db, SIGNATURE_ENABLED).unwrap());
+        assert!(!get_bool(&db, REPLY_BELOW_QUOTE).unwrap());
+        assert!(!get_bool(&db, REQUEST_MDN).unwrap());
+        set(&db, LIST_DENSITY, "weird").unwrap();
+        assert_eq!(get_density(&db), "comfortable");
+        set_sync_interval(&db, 15).unwrap();
+        assert_eq!(get_sync_interval(&db), 15);
+        set(&db, SYNC_INTERVAL_MINUTES, "nonsense").unwrap();
+        assert_eq!(get_sync_interval(&db), 0);
+        set(&db, SIGNATURE_TEXT, "Kind regards").unwrap();
+        assert_eq!(get_signature_text(&db), "Kind regards");
     }
 }

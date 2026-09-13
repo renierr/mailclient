@@ -46,6 +46,9 @@ Rectangle {
     property bool selectionMode: false
     property string sortField: "date"
     property bool sortDescending: true
+    // "comfortable" (default) | "compact": compact tightens rows and hides
+    // the preview line. Bound to the `list_density` setting via Main.
+    property string density: "comfortable"
 
     signal messageSelected(int uid)
     signal starToggled(int uid)
@@ -559,7 +562,7 @@ Rectangle {
             delegate: Item {
                 id: row
                 width: list.width
-                height: Theme.listItemHeight
+                height: root.density === "compact" ? 58 : Theme.listItemHeight
 
                 required property int index
                 required property var model
@@ -721,6 +724,7 @@ Rectangle {
                             width: parent.width
                         }
                         Label {
+                            visible: root.density !== "compact"
                             text: row.model.snippet
                             color: Theme.textMuted
                             font.pixelSize: Theme.fontSmall

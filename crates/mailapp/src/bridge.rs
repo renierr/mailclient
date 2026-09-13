@@ -279,6 +279,14 @@ pub mod qobject {
         #[qproperty(bool, auto_mark_read)]
         #[qproperty(i32, mark_read_delay_secs)]
         #[qproperty(bool, collect_sent_contacts)]
+        #[qproperty(bool, confirm_delete)]
+        #[qproperty(QString, list_density)]
+        #[qproperty(QString, reader_font_size)]
+        #[qproperty(i32, sync_interval_minutes)]
+        #[qproperty(bool, signature_enabled)]
+        #[qproperty(QString, signature_text)]
+        #[qproperty(bool, reply_below_quote)]
+        #[qproperty(bool, request_mdn)]
         #[namespace = "mailclient"]
         type SettingsBridge = super::SettingsBridgeRust;
 
@@ -1806,6 +1814,9 @@ impl qobject::Bridge {
                 mailcore::store::settings::COMPOSE_INCLUDE_PLAIN,
             )
             .unwrap_or(true);
+            let request_mdn =
+                mailcore::store::settings::get_bool(&db, mailcore::store::settings::REQUEST_MDN)
+                    .unwrap_or(false);
             let from_name = from_name_composed.or_else(|| {
                 let n = acc.from_name.trim().to_string();
                 if n.is_empty() {
@@ -1829,6 +1840,7 @@ impl qobject::Bridge {
                 policy: &SendPolicy::Unrestricted,
                 password: &secrets.smtp_password,
                 imap_password: Some(&secrets.imap_password),
+                request_mdn,
             };
             sender
                 .send_raw(&db, acc.id, &req)
@@ -1949,6 +1961,9 @@ impl qobject::Bridge {
                 policy: &SendPolicy::Unrestricted,
                 password: "",
                 imap_password: None,
+                // Drafts never carry the receipt request; the live
+                // `request_mdn` setting applies at Send time instead.
+                request_mdn: false,
             };
             let raw = format_draft(&acc, &req).map_err(|e| e.to_string())?;
             let secrets = auth::load_account_secrets(&acc.auth_vault_key)
@@ -2038,6 +2053,14 @@ pub struct SettingsBridgeRust {
     auto_mark_read: bool,
     mark_read_delay_secs: i32,
     collect_sent_contacts: bool,
+    confirm_delete: bool,
+    list_density: QString,
+    reader_font_size: QString,
+    sync_interval_minutes: i32,
+    signature_enabled: bool,
+    signature_text: QString,
+    reply_below_quote: bool,
+    request_mdn: bool,
 }
 
 impl Default for SettingsBridgeRust {
@@ -2050,6 +2073,14 @@ impl Default for SettingsBridgeRust {
             auto_mark_read: true,
             mark_read_delay_secs: 0,
             collect_sent_contacts: true,
+            confirm_delete: true,
+            list_density: qstring("comfortable"),
+            reader_font_size: qstring("normal"),
+            sync_interval_minutes: 0,
+            signature_enabled: false,
+            signature_text: qstring(""),
+            reply_below_quote: false,
+            request_mdn: false,
         }
     }
 }
@@ -2105,6 +2136,37 @@ impl qobject::SettingsBridge {
                 )
                 .unwrap_or(true),
             );
+            self.as_mut().set_confirm_delete(
+                mailcore::store::settings::get_bool(&db, mailcore::store::settings::CONFIRM_DELETE)
+                    .unwrap_or(true),
+            );
+            self.as_mut()
+                .set_list_density(qstring(&mailcore::store::settings::get_density(&db)));
+            self.as_mut()
+                .set_reader_font_size(qstring(&mailcore::store::settings::get_reader_font(&db)));
+            self.as_mut().set_sync_interval_minutes(
+                mailcore::store::settings::get_sync_interval(&db) as i32,
+            );
+            self.as_mut().set_signature_enabled(
+                mailcore::store::settings::get_bool(
+                    &db,
+                    mailcore::store::settings::SIGNATURE_ENABLED,
+                )
+                .unwrap_or(false),
+            );
+            self.as_mut()
+                .set_signature_text(qstring(&mailcore::store::settings::get_signature_text(&db)));
+            self.as_mut().set_reply_below_quote(
+                mailcore::store::settings::get_bool(
+                    &db,
+                    mailcore::store::settings::REPLY_BELOW_QUOTE,
+                )
+                .unwrap_or(false),
+            );
+            self.as_mut().set_request_mdn(
+                mailcore::store::settings::get_bool(&db, mailcore::store::settings::REQUEST_MDN)
+                    .unwrap_or(false),
+            );
         }
     }
 
@@ -2121,6 +2183,19 @@ impl qobject::SettingsBridge {
             let auto_read = *self.auto_mark_read();
             let delay = *self.mark_read_delay_secs() as i64;
             let collect_contacts = *self.collect_sent_contacts();
+            let confirm_delete = *self.confirm_delete();
+            let density =
+                mailcore::store::settings::normalize_density(&self.list_density().to_string())
+                    .to_string();
+            let reader_font = mailcore::store::settings::normalize_reader_font(
+                &self.reader_font_size().to_string(),
+            )
+            .to_string();
+            let sync_interval = *self.sync_interval_minutes() as i64;
+            let signature_enabled = *self.signature_enabled();
+            let signature_text = self.signature_text().to_string();
+            let reply_below_quote = *self.reply_below_quote();
+            let request_mdn = *self.request_mdn();
             if let Err(e) = mailcore::store::settings::set_bool(
                 &db,
                 mailcore::store::settings::SENT_COPY_ENABLED,
@@ -2169,6 +2244,58 @@ impl qobject::SettingsBridge {
                 collect_contacts,
             ) {
                 log::warn!("settings: cannot save sent-contact collection: {e}");
+            }
+            if let Err(e) = mailcore::store::settings::set_bool(
+                &db,
+                mailcore::store::settings::CONFIRM_DELETE,
+                confirm_delete,
+            ) {
+                log::warn!("settings: cannot save confirm-delete: {e}");
+            }
+            if let Err(e) = mailcore::store::settings::set(
+                &db,
+                mailcore::store::settings::LIST_DENSITY,
+                &density,
+            ) {
+                log::warn!("settings: cannot save list density: {e}");
+            }
+            if let Err(e) = mailcore::store::settings::set(
+                &db,
+                mailcore::store::settings::READER_FONT_SIZE,
+                &reader_font,
+            ) {
+                log::warn!("settings: cannot save reader font size: {e}");
+            }
+            if let Err(e) = mailcore::store::settings::set_sync_interval(&db, sync_interval) {
+                log::warn!("settings: cannot save sync interval: {e}");
+            }
+            if let Err(e) = mailcore::store::settings::set_bool(
+                &db,
+                mailcore::store::settings::SIGNATURE_ENABLED,
+                signature_enabled,
+            ) {
+                log::warn!("settings: cannot save signature toggle: {e}");
+            }
+            if let Err(e) = mailcore::store::settings::set(
+                &db,
+                mailcore::store::settings::SIGNATURE_TEXT,
+                &signature_text,
+            ) {
+                log::warn!("settings: cannot save signature text: {e}");
+            }
+            if let Err(e) = mailcore::store::settings::set_bool(
+                &db,
+                mailcore::store::settings::REPLY_BELOW_QUOTE,
+                reply_below_quote,
+            ) {
+                log::warn!("settings: cannot save reply position: {e}");
+            }
+            if let Err(e) = mailcore::store::settings::set_bool(
+                &db,
+                mailcore::store::settings::REQUEST_MDN,
+                request_mdn,
+            ) {
+                log::warn!("settings: cannot save receipt request: {e}");
             }
         }
     }

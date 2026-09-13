@@ -154,6 +154,7 @@ fn main() -> Result<(), String> {
                     policy: &policy,
                     password: &smtp_pass,
                     imap_password: Some(&imap_pass),
+                    request_mdn: false,
                 },
             )
             .map_err(|e| e.to_string())?;

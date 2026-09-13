@@ -26,6 +26,9 @@ Rectangle {
 
     property var message
     property bool loadRemoteImages: false
+    // "small" | "normal" (default) | "large": plain-text body size, bound to
+    // the `reader_font_size` setting via Main. HTML mail brings its own sizes.
+    property string readerFont: "normal"
     // Rust Bridge, for the on-demand "Show once" re-sanitize. Set by Main.
     property var backend
     property string remoteHtml: ""
@@ -553,7 +556,9 @@ Rectangle {
                 readOnly: true
                 selectByMouse: true
                 color: Theme.text
-                font.pixelSize: Theme.fontBase + 1
+                font.pixelSize: root.readerFont === "small" ? Theme.fontSmall
+                              : root.readerFont === "large" ? Theme.fontMedium + 3
+                              : Theme.fontBase + 1
             }
         }
 

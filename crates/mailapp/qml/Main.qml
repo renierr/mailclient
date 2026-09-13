@@ -211,7 +211,22 @@ ApplicationWindow {
     // Moves to Trash — except spam (destroyed outright, junk never touches
     // Trash) and Trash itself (deleting there is permanent). The bridge
     // reports which it did because "moved" and "destroyed" differ.
+    // Goes through the delete-confirm gate first (setting `confirm_delete`).
     function deleteMessage(uid) {
+        if (uid < 0)
+            return
+        if (!appSettings.confirm_delete) {
+            root.doDelete(uid)
+            return
+        }
+        var m = root.messageByUid(uid)
+        deleteConfirm.uid = uid
+        deleteConfirm.uids = []
+        deleteConfirm.subject = m !== undefined ? m.subject : ""
+        deleteConfirm.open()
+    }
+
+    function doDelete(uid) {
         if (uid < 0)
             return
         var r = backend.delete_message(uid)
@@ -322,6 +337,19 @@ ApplicationWindow {
     function bulkDelete(uids) {
         if (!uids || uids.length === 0)
             return
+        if (!appSettings.confirm_delete) {
+            root.doBulkDelete(uids)
+            return
+        }
+        deleteConfirm.uid = -1
+        deleteConfirm.uids = uids.slice()
+        deleteConfirm.subject = ""
+        deleteConfirm.open()
+    }
+
+    function doBulkDelete(uids) {
+        if (!uids || uids.length === 0)
+            return
         var r = backend.delete_many(JSON.stringify(uids))
         root.dropPreviewIfGone(uids)
         reloadFolders()
@@ -414,6 +442,19 @@ ApplicationWindow {
         onTriggered: {
             if (markReadTimer.uid >= 0 && markReadTimer.uid === root.currentUid)
                 root.markAsRead(markReadTimer.uid)
+        }
+    }
+
+    // Automatic mail check: only while idle (never mid-action), manual-only
+    // when the interval is 0. Bound to the setting, so Save applies it live.
+    Timer {
+        id: autoSyncTimer
+        interval: Math.max(1, appSettings.sync_interval_minutes) * 60000
+        running: appSettings.sync_interval_minutes > 0
+        repeat: true
+        onTriggered: {
+            if (!root.busy && backend.account_count > 0)
+                root.syncNow()
         }
     }
 
@@ -594,6 +635,7 @@ ApplicationWindow {
             busy: root.busy
             sortField: backend.sort_field
             sortDescending: backend.sort_descending
+            density: appSettings.list_density
             onMessageSelected: uid => root.openMessage(uid)
             onStarToggled: uid => root.toggleStar(uid)
             onArchiveRequested: uid => root.archiveMessage(uid)
@@ -620,6 +662,7 @@ ApplicationWindow {
             SplitView.fillWidth: true
             SplitView.minimumWidth: 260
             loadRemoteImages: appSettings.load_remote_images
+            readerFont: appSettings.reader_font_size
             backend: backend
             message: root.messageByUid(root.currentUid)
             onReplyRequested: composer.openForReply(root.messageByUid(root.currentUid))
@@ -680,6 +723,9 @@ ApplicationWindow {
         sendFormat: appSettings.compose_send_format
         backend: backend
         collectContacts: appSettings.collect_sent_contacts
+        signatureEnabled: appSettings.signature_enabled
+        signatureText: appSettings.signature_text
+        replyBelowQuote: appSettings.reply_below_quote
         onStatusMessage: text => root.statusText = text
         onSendRequested: payload => {
             var r = backend.send_mail(payload)
@@ -824,6 +870,69 @@ ApplicationWindow {
         }
     }
 
+    // Trash is reversible (unlike purge), so this uses the primary intent —
+    // the danger styling stays reserved for permanent destruction.
+    Dialog {
+        id: deleteConfirm
+        title: qsTr("Move to Trash?")
+        modal: true
+        anchors.centerIn: parent
+        width: 420
+        padding: Theme.lg
+
+        property int uid: -1
+        property var uids: []
+        property string subject: ""
+
+        background: Rectangle {
+            color: Theme.bg
+            radius: Theme.radiusLg
+            border.width: 1
+            border.color: Theme.border
+        }
+
+        footer: RowLayout {
+            spacing: Theme.sm
+            Item { Layout.fillWidth: true }
+            AppButton {
+                text: qsTr("Cancel")
+                onClicked: deleteConfirm.close()
+            }
+            AppButton {
+                Layout.rightMargin: Theme.lg
+                Layout.bottomMargin: Theme.md
+                Layout.topMargin: Theme.sm
+                text: qsTr("Move to Trash")
+                intent: "primary"
+                onClicked: {
+                    var targets = deleteConfirm.uids && deleteConfirm.uids.length > 0
+                        ? deleteConfirm.uids.slice()
+                        : [deleteConfirm.uid]
+                    var bulk = deleteConfirm.uids && deleteConfirm.uids.length > 0
+                    deleteConfirm.close()
+                    // Out of the click handler: deleting rebuilds the feed.
+                    Qt.callLater(function () {
+                        if (bulk)
+                            root.doBulkDelete(targets)
+                        else
+                            root.doDelete(targets[0])
+                    })
+                }
+            }
+        }
+
+        Label {
+            width: parent.width
+            wrapMode: Text.Wrap
+            color: Theme.text
+            font.pixelSize: Theme.fontBase
+            text: deleteConfirm.uids && deleteConfirm.uids.length > 0
+                  ? qsTr("%n message(s) will be moved to Trash.", "", deleteConfirm.uids.length)
+                  : qsTr("“%1” will be moved to Trash.")
+                    .arg(deleteConfirm.subject)
+        }
+    }
+
     Dialog {
         id: purgeConfirm
         title: qsTr("Delete permanently?")
@@ -888,6 +997,7 @@ ApplicationWindow {
     Settings {
         id: settingsDialog
         settingsBridge: appSettings
+        backend: backend
         dbPath: backend.db_path
         onStatusMessage: text => {
             // The image setting changes what the feed sanitizes to, so the
