@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -94,7 +94,14 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
             }
         }
     }
-    // Future: `if current < 4 { migrate_v4(conn)?; }` etc.
+    if current < 7 {
+        if let Err(e) = conn.execute_batch("alter table folders add column server_total integer;") {
+            let msg = e.to_string().to_ascii_lowercase();
+            if !(msg.contains("duplicate column") || msg.contains("already exists")) {
+                return Err(e.into());
+            }
+        }
+    }
     if current != SCHEMA_VERSION {
         conn.execute(
             "update schema_meta set value = ?1 where key = 'version'",

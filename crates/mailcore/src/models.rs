@@ -109,6 +109,8 @@ pub struct Folder {
     pub role: FolderRole,
     pub uid_validity: Option<u32>,
     pub uid_next: Option<u32>,
+    /// Message count last reported by the server during a successful SELECT.
+    pub server_total: Option<u64>,
     pub subscribed: bool,
     pub last_sync_at: Option<String>,
 }

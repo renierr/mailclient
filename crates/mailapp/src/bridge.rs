@@ -29,6 +29,7 @@ pub mod qobject {
         #[qproperty(QString, accounts_json)]
         #[qproperty(i32, message_limit)]
         #[qproperty(i32, messages_total)]
+        #[qproperty(i32, messages_server_total)]
         #[qproperty(QString, sort_field)]
         #[qproperty(bool, sort_descending)]
         #[namespace = "mailclient"]
@@ -499,13 +500,14 @@ pub struct BridgeRust {
     accounts_json: QString,
     message_limit: i32,
     messages_total: i32,
+    messages_server_total: i32,
     sort_field: QString,
     sort_descending: bool,
 }
 
-/// First-page size for a freshly opened folder (matches feed + sync window).
+/// Initial older-load batch size; cached messages are always rendered in full.
 const DEFAULT_MESSAGE_LIMIT: i32 = 200;
-/// Hard cap so "load older" cannot grow the JSON feed without bound.
+/// Hard cap for bulk operations and the legacy paging property.
 const MAX_MESSAGE_LIMIT: i32 = 2000;
 
 impl Default for BridgeRust {
@@ -522,22 +524,19 @@ impl Default for BridgeRust {
             accounts_json: qstring("[]"),
             message_limit: DEFAULT_MESSAGE_LIMIT,
             messages_total: 0,
+            messages_server_total: 0,
             sort_field: qstring("date"),
             sort_descending: true,
         }
     }
 }
 
-/// Clamp a feed limit into the safe range.
-fn clamp_limit(n: i32) -> u64 {
-    (n.clamp(50, MAX_MESSAGE_LIMIT)) as u64
-}
-
 /// Push fresh JSON feeds for `(account_id, folder_id)` into the properties.
 ///
-/// The message feed is paged by `message_limit` (grows via "load older");
-/// `messages_total` reports the cached DB total so QML knows whether more
-/// rows exist locally or a server backfill is needed. The feed ordering comes
+/// The message feed always contains the full local cache. `messages_total`
+/// reports the cached DB total; `messages_server_total` is the latest count
+/// reported by IMAP so QML can distinguish an incomplete cache from a fully
+/// downloaded folder. The feed ordering comes
 /// from the `message_sort_*` settings; the matching `sort_field` /
 /// `sort_descending` properties are refreshed here too so QML sort controls
 /// always show what the feed actually used.
@@ -548,14 +547,18 @@ fn push_feeds(
     folder_id: i64,
 ) {
     let folders = feed::folders_json(db, account_id).unwrap_or_else(|_| "[]".to_string());
-    let limit = clamp_limit(*bridge.message_limit());
-    let (msgs, total) = if folder_id >= 0 {
+    let (msgs, total, server_total) = if folder_id >= 0 {
         let total = messages::count_by_folder(db, folder_id).unwrap_or(0) as i32;
-        let msgs = feed::messages_list_json_paged(db, folder_id, limit, 0)
+        let server_total = folders::get(db, folder_id)
+            .ok()
+            .and_then(|folder| folder.server_total)
+            .unwrap_or(total as u64)
+            .min(i32::MAX as u64) as i32;
+        let msgs = feed::messages_list_json_paged(db, folder_id, total as u64, 0)
             .unwrap_or_else(|_| "[]".to_string());
-        (msgs, total)
+        (msgs, total, server_total)
     } else {
-        ("[]".to_string(), 0)
+        ("[]".to_string(), 0, 0)
     };
     let email = accounts::get(db, account_id)
         .map(|a| a.email_address)
@@ -566,6 +569,7 @@ fn push_feeds(
     bridge.as_mut().set_folders_json(qstring(&folders));
     bridge.as_mut().set_messages_json(qstring(&msgs));
     bridge.as_mut().set_messages_total(total);
+    bridge.as_mut().set_messages_server_total(server_total);
     bridge.as_mut().set_current_account_id(account_id);
     bridge.as_mut().set_current_folder_id(folder_id);
     bridge.as_mut().set_current_account_email(qstring(&email));
@@ -1163,8 +1167,7 @@ impl qobject::Bridge {
                     .map_err(|e| e.to_string())
             })?;
             if r.fetched > 0 {
-                let grown = (*self.message_limit() + r.fetched as i32).min(MAX_MESSAGE_LIMIT);
-                self.as_mut().set_message_limit(grown);
+                self.as_mut().set_message_limit(DEFAULT_MESSAGE_LIMIT);
             }
             push_feeds(&mut self, &db, acc.id, folder_id);
             if r.fetched > 0 {

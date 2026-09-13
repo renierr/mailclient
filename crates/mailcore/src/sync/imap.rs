@@ -742,7 +742,7 @@ impl ImapSync {
 
         let validity = mb.uid_validity.unwrap_or(folder.uid_validity.unwrap_or(0));
         let uid_next = mb.uid_next.unwrap_or(folder.uid_next.unwrap_or(0));
-        folders::set_sync_state(db, folder_id, validity, uid_next)?;
+        folders::set_sync_state(db, folder_id, validity, uid_next, server_uids.len() as u64)?;
 
         Ok(SyncReport {
             fetched,
@@ -783,12 +783,11 @@ impl ImapSync {
             let r = self.sync_folder_window(db, folder_id, Some(FULL_SYNC_WINDOW))?;
             return Ok(r);
         };
+        let server_uids: HashSet<u32> = session.uid_search("ALL")?;
         if min_local <= 1 {
-            folders::set_sync_state(db, folder_id, validity, uid_next)?;
+            folders::set_sync_state(db, folder_id, validity, uid_next, server_uids.len() as u64)?;
             return Ok(SyncReport::default());
         }
-
-        let server_uids: HashSet<u32> = session.uid_search("ALL")?;
         let local_uids: HashSet<u32> = messages::list_uids(db, folder_id)?.into_iter().collect();
         // Older than everything we have, newest-first within the batch so the
         // list extends contiguously backwards.
@@ -823,7 +822,7 @@ impl ImapSync {
                 fetched += 1;
             }
         }
-        folders::set_sync_state(db, folder_id, validity, uid_next)?;
+        folders::set_sync_state(db, folder_id, validity, uid_next, server_uids.len() as u64)?;
         log::info!("imap: {} older batch: +{fetched}", folder.path);
         Ok(SyncReport {
             fetched,

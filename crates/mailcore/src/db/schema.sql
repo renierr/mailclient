@@ -38,6 +38,7 @@ create table if not exists folders (
     role          text not null default 'custom',
     uid_validity  integer,
     uid_next      integer,
+    server_total  integer,
     subscribed    integer not null default 1,
     last_sync_at  text,
     created_at    text not null,

@@ -29,10 +29,10 @@ Rectangle {
     property int currentUid: -1
     property string folderName: ""
     property string filterText: ""
-    // Paging: `limit` is the backend page size (grows via "load older"),
-    // `totalCount` the cached DB total for the folder. The footer shows when
-    // the page is full and unfiltered — i.e. the server may hold more.
+    // `totalCount` is the local cache count; `serverTotal` is the count seen
+    // during the last successful IMAP sync. All cached messages are displayed.
     property int totalCount: 0
+    property int serverTotal: 0
     property int limit: 200
     property bool busy: false
 
@@ -68,7 +68,7 @@ Rectangle {
 
     readonly property bool canLoadOlder: root.filterText === ""
         && root.messages.length > 0
-        && root.messages.length >= root.limit
+        && (root.serverTotal === 0 || root.serverTotal > root.totalCount)
 
     // Row actions rebuild the feed, which destroys the delegates. Emitting
     // straight from a delegate's click handler therefore deletes the item
@@ -749,14 +749,13 @@ Rectangle {
             }
         }
 
-        // Paging footer: one batch (200) per press, fetched from the server
-        // below the oldest cached UID, then appended to the feed. Hidden for
-        // small folders and while filtering (the filter only sees loaded mail).
+        // One batch (200) per press, fetched below the oldest cached UID.
+        // Only shown when the last server count proves older mail remains.
         Rectangle {
             id: loadOlderBar
             width: parent.width
-            implicitHeight: root.canLoadOlder ? 56 : 0
-            visible: root.canLoadOlder
+            implicitHeight: root.filterText === "" && root.messages.length > 0 ? 56 : 0
+            visible: implicitHeight > 0
             color: Theme.bgAlt
             clip: true
             Rectangle {
@@ -767,18 +766,29 @@ Rectangle {
             }
             Row {
                 anchors.centerIn: parent
+                width: parent.width - Theme.md * 2
                 spacing: Theme.sm
                 Label {
+                    id: olderStatus
                     anchors.verticalCenter: parent.verticalCenter
-                    text: root.totalCount > root.messages.length
-                          ? qsTr("%1 of %2 shown").arg(root.messages.length).arg(root.totalCount)
-                          : qsTr("%1 shown").arg(root.messages.length)
+                    width: parent.width - loadOlderButton.width - parent.spacing
+                    elide: Text.ElideRight
+                    text: {
+                        if (root.messages.length === 0)
+                            return qsTr("No cached messages")
+                        if (root.serverTotal === 0)
+                            return qsTr("Cached %1 (server not checked)").arg(root.totalCount)
+                        return qsTr("Cached %1 of %2").arg(root.totalCount).arg(root.serverTotal)
+                    }
                     color: Theme.textMuted
                     font.pixelSize: Theme.fontSmall
+                    maximumLineCount: 1
                 }
                 AppButton {
+                    id: loadOlderButton
                     anchors.verticalCenter: parent.verticalCenter
-                    text: root.busy ? qsTr("Loading…") : qsTr("Show older messages")
+                    visible: root.canLoadOlder
+                    text: root.busy ? qsTr("Loading…") : qsTr("Load older")
                     enabled: !root.busy
                     onClicked: root.loadOlderRequested()
                 }

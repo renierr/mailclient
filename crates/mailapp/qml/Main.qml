@@ -695,6 +695,7 @@ ApplicationWindow {
             folderName: root.currentFolder
             filterText: searchField.text
             totalCount: backend.messages_total
+            serverTotal: backend.messages_server_total
             limit: backend.message_limit
             busy: root.busy
             sortField: backend.sort_field
