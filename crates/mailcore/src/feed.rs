@@ -217,6 +217,72 @@ pub fn messages_json_paged_sorted(
     Ok(serde_json::to_string(&arr)?)
 }
 
+/// Compact rows for the mailbox list. Bodies and attachment records are loaded
+/// only for the selected message; serializing and sanitizing them for every row
+/// made a cached 200-message folder switch noticeably stall the UI.
+pub fn messages_list_json_paged(
+    db: &Db,
+    folder_id: i64,
+    limit: u64,
+    offset: u64,
+) -> Result<String> {
+    let field = settings::get_sort_field(db);
+    let descending = settings::get_sort_descending(db);
+    let rows = messages::list_by_folder_sorted(db, folder_id, limit, offset, &field, descending)?;
+    Ok(serde_json::to_string(
+        &rows
+            .into_iter()
+            .map(|m| {
+                json!({
+                    "uid": m.uid,
+                    "subject": m.subject.unwrap_or_else(|| "(no subject)".to_string()),
+                    "from": m.from_addr.unwrap_or_else(|| "?".to_string()),
+                    "date": short_date(m.date.as_deref()),
+                    "snippet": m.snippet.unwrap_or_default(),
+                    "unread": !m.is_read,
+                    "starred": m.is_starred,
+                    "has_attachments": m.has_attachments,
+                })
+            })
+            .collect::<Vec<_>>(),
+    )?)
+}
+
+/// Full reader payload for one message, produced on demand after selection.
+pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
+    let allow_remote = settings::get_bool(db, settings::LOAD_REMOTE_IMAGES).unwrap_or(false);
+    let m = messages::get_by_uid(db, folder_id, uid)?;
+    let (body_html, had_remote, is_html, plain) =
+        sanitized_bodies(m.body_html.as_deref(), m.body_text.as_deref(), allow_remote);
+    let legacy_body = if is_html {
+        body_html.clone()
+    } else {
+        plain.clone()
+    };
+    let files: Vec<serde_json::Value> = messages::list_attachments(db, m.id)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|a| {
+            json!({
+                "id": a.id, "filename": a.filename, "mime_type": a.mime_type,
+                "size": a.size, "content_id": a.content_id, "is_inline": a.is_inline,
+            })
+        })
+        .collect();
+    Ok(serde_json::to_string(&json!({
+        "uid": m.uid,
+        "subject": m.subject.as_deref().unwrap_or("(no subject)"),
+        "from": m.from_addr.as_deref().unwrap_or("?"),
+        "date": short_date(m.date.as_deref()),
+        "snippet": m.snippet.as_deref().unwrap_or(""),
+        "unread": !m.is_read, "starred": m.is_starred,
+        "has_attachments": m.has_attachments || !files.is_empty(),
+        "attachments": files, "body_text": plain, "body_html": body_html,
+        "is_html": is_html, "has_remote_images": had_remote && is_html,
+        "body": legacy_body,
+    }))?)
+}
+
 /// Attachment metadata for one message (`[{id, filename, mime_type, size,
 /// content_id, is_inline}]`, no bytes). Used by the reader pane and the
 /// save dialog; bytes leave Rust only via `save_attachment_to_path`.
@@ -386,6 +452,25 @@ mod tests {
         let only: serde_json::Value =
             serde_json::from_str(&attachments_json(&db, f, 71).unwrap()).unwrap();
         assert_eq!(only[0]["filename"], "doc.pdf");
+    }
+
+    #[test]
+    fn compact_list_omits_bodies_but_reader_payload_has_them() {
+        let (db, acc, f) = setup();
+        let mut m = msg_store::sample_new(acc, f, 72);
+        m.body_html = Some("<b>reader only</b>".to_string());
+        msg_store::upsert(&db, &m).unwrap();
+
+        let list: serde_json::Value =
+            serde_json::from_str(&messages_list_json_paged(&db, f, 10, 0).unwrap()).unwrap();
+        assert_eq!(list[0]["uid"], 72);
+        assert!(list[0].get("body_html").is_none());
+        assert!(list[0].get("attachments").is_none());
+
+        let reader: serde_json::Value =
+            serde_json::from_str(&message_json(&db, f, 72).unwrap()).unwrap();
+        assert_eq!(reader["body_html"], "<b>reader only</b>");
+        assert!(reader["is_html"].as_bool().unwrap());
     }
 
     #[test]

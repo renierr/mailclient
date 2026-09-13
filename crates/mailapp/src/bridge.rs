@@ -126,6 +126,11 @@ pub mod qobject {
         #[qinvokable]
         fn message_html(&self, uid: i32, allow_remote: bool) -> QString;
 
+        /// Full reader payload for one selected message. Mailbox navigation
+        /// uses compact rows so it never processes 200 message bodies at once.
+        #[qinvokable]
+        fn message_json(&self, uid: i32) -> QString;
+
         /// Attachment metadata for one message in the current folder as JSON
         /// (`[{id, filename, mime_type, size, content_id, is_inline}]`, no
         /// bytes). Mirrors the `attachments` array already in the feed; use
@@ -546,8 +551,8 @@ fn push_feeds(
     let limit = clamp_limit(*bridge.message_limit());
     let (msgs, total) = if folder_id >= 0 {
         let total = messages::count_by_folder(db, folder_id).unwrap_or(0) as i32;
-        let msgs =
-            feed::messages_json_paged(db, folder_id, limit, 0).unwrap_or_else(|_| "[]".to_string());
+        let msgs = feed::messages_list_json_paged(db, folder_id, limit, 0)
+            .unwrap_or_else(|_| "[]".to_string());
         (msgs, total)
     } else {
         ("[]".to_string(), 0)
@@ -1231,6 +1236,18 @@ impl qobject::Bridge {
         }
         feed::message_html(&db, folder_id, uid as u32, allow_remote)
             .map_or_else(|_| qstring(""), |h| qstring(&h))
+    }
+
+    pub fn message_json(&self, uid: i32) -> QString {
+        let Ok(db) = open_db() else {
+            return qstring("{}");
+        };
+        let folder_id = *self.current_folder_id();
+        if folder_id < 0 || uid < 0 {
+            return qstring("{}");
+        }
+        feed::message_json(&db, folder_id, uid as u32)
+            .map_or_else(|_| qstring("{}"), |json| qstring(&json))
     }
 
     pub fn attachments_json(&self, uid: i32) -> QString {

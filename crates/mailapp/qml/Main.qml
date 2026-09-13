@@ -78,6 +78,9 @@ ApplicationWindow {
     // reload cleared the model -- the segfault on repeated clicks. Plain
     // objects are snapshots and stay valid.
     property var messageRows: []
+    // Compact list rows are cheap to swap between folders. The selected mail's
+    // body and attachment records are fetched separately, on demand.
+    property var currentMessage: undefined
 
     // --- feed plumbing ----------------------------------------------------
 
@@ -111,6 +114,10 @@ ApplicationWindow {
         // Drop the selection only if that message really is gone.
         if (root.messageByUid(root.currentUid) === undefined)
             root.currentUid = -1
+        if (root.currentUid >= 0)
+            root.currentMessage = JSON.parse(backend.message_json(root.currentUid))
+        else
+            root.currentMessage = undefined
     }
 
     function reloadAccounts() {
@@ -157,6 +164,7 @@ ApplicationWindow {
             }
         }
         root.currentUid = uid
+        root.currentMessage = JSON.parse(backend.message_json(uid))
         markReadTimer.stop()
         if (!appSettings.auto_mark_read) {
             return  // stay unread until the user says otherwise
@@ -258,8 +266,10 @@ ApplicationWindow {
         if (uid < 0)
             return
         var r = backend.delete_message(uid)
-        if (root.currentUid === uid)
+        if (root.currentUid === uid) {
             root.currentUid = -1
+            root.currentMessage = undefined
+        }
         reloadFolders()
         reloadMessages()
         root.statusText = r === "" ? qsTr("Deleted") : r
@@ -691,10 +701,10 @@ ApplicationWindow {
             loadRemoteImages: appSettings.load_remote_images
             readerFont: appSettings.reader_font_size
             backend: backend
-            message: root.messageByUid(root.currentUid)
-            onReplyRequested: composer.openForReply(root.messageByUid(root.currentUid))
-            onReplyAllRequested: composer.openForReply(root.messageByUid(root.currentUid))
-            onForwardRequested: composer.openForForward(root.messageByUid(root.currentUid))
+            message: root.currentMessage
+            onReplyRequested: composer.openForReply(root.currentMessage)
+            onReplyAllRequested: composer.openForReply(root.currentMessage)
+            onForwardRequested: composer.openForForward(root.currentMessage)
             onStarRequested: root.toggleStar(root.currentUid)
             onArchiveRequested: root.archiveMessage(root.currentUid)
             onMoveRequested: root.openMove(root.currentUid)
