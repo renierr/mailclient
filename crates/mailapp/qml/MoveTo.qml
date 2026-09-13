@@ -8,13 +8,13 @@ import "components"
 // Move-to picker: choose any visible folder (subfolders indented by depth)
 // as the destination for one message or a bulk selection. Only subscribed
 // folders are listed — unhide the rest in the Folders manager first.
-Dialog {
+AppDialog {
     id: root
     title: qsTr("Move to…")
-    modal: true
-    anchors.centerIn: parent
-    width: Math.min(parent ? parent.width - 80 : 480, 480)
-    height: Math.min(parent ? parent.height - 120 : 520, 520)
+    preferredWidth: 480
+    preferredHeight: 520
+    minWidth: 360
+    minHeight: 320
     padding: Theme.lg
 
     property var folders
@@ -53,38 +53,11 @@ Dialog {
         return parts[parts.length - 1]
     }
 
-    background: Rectangle {
-        color: Theme.bg
-        radius: Theme.radiusLg
-        border.width: 1
-        border.color: Theme.border
-    }
-
-    header: Rectangle {
-        implicitHeight: 48
-        color: "transparent"
-        Label {
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.left: parent.left
-            anchors.leftMargin: Theme.lg
-            text: root.title
-            color: Theme.text
-            font.pixelSize: Theme.fontMedium
-            font.bold: true
-        }
-        Rectangle {
-            anchors.bottom: parent.bottom
-            width: parent.width
-            height: 1
-            color: Theme.border
-        }
-    }
-
     footer: RowLayout {
         spacing: Theme.sm
         Item { Layout.fillWidth: true }
         AppButton {
-            Layout.rightMargin: Theme.lg
+            Layout.rightMargin: Theme.lg + 8
             Layout.bottomMargin: Theme.md
             text: qsTr("Cancel")
             onClicked: root.close()

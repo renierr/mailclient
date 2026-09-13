@@ -11,13 +11,13 @@ import "components"
 // LIST, no message bodies). Each row toggles sidebar visibility
 // (`visibilityToggled` flips the `subscribed` flag — display-only, the cache
 // stays and auto-sync skips hidden folders). Opening a row jumps to it.
-Dialog {
+AppDialog {
     id: root
     title: qsTr("IMAP folders")
-    modal: true
-    anchors.centerIn: parent
-    width: Math.min(parent ? parent.width - 80 : 560, 560)
-    height: Math.min(parent ? parent.height - 120 : 520, 520)
+    preferredWidth: 560
+    preferredHeight: 520
+    minWidth: 400
+    minHeight: 320
     padding: Theme.lg
 
     property var folders
@@ -55,33 +55,6 @@ Dialog {
         }
     }
 
-    background: Rectangle {
-        color: Theme.bg
-        radius: Theme.radiusLg
-        border.width: 1
-        border.color: Theme.border
-    }
-
-    header: Rectangle {
-        implicitHeight: 48
-        color: "transparent"
-        Label {
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.left: parent.left
-            anchors.leftMargin: Theme.lg
-            text: root.title
-            color: Theme.text
-            font.pixelSize: Theme.fontMedium
-            font.bold: true
-        }
-        Rectangle {
-            anchors.bottom: parent.bottom
-            width: parent.width
-            height: 1
-            color: Theme.border
-        }
-    }
-
     footer: RowLayout {
         spacing: Theme.sm
         AppButton {
@@ -93,7 +66,7 @@ Dialog {
         }
         Item { Layout.fillWidth: true }
         AppButton {
-            Layout.rightMargin: Theme.lg
+            Layout.rightMargin: Theme.lg + 8
             Layout.bottomMargin: Theme.md
             text: qsTr("Close")
             onClicked: root.close()

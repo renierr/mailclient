@@ -9,13 +9,13 @@ import "components"
 //
 // Before this existed a mistyped account could only be added, never removed —
 // exactly how a duplicate ends up in the sidebar with no way out.
-Dialog {
+AppDialog {
     id: root
     title: qsTr("Accounts")
-    modal: true
-    anchors.centerIn: parent
-    width: Math.min(parent ? parent.width - 80 : 560, 560)
-    height: Math.min(parent ? parent.height - 120 : 460, 460)
+    preferredWidth: 560
+    preferredHeight: 460
+    minWidth: 400
+    minHeight: 300
     padding: Theme.lg
 
     property var accounts
@@ -39,33 +39,6 @@ Dialog {
     property int pendingDeleteId: -1
     property string pendingDeleteEmail: ""
 
-    background: Rectangle {
-        color: Theme.bg
-        radius: Theme.radiusLg
-        border.width: 1
-        border.color: Theme.border
-    }
-
-    header: Rectangle {
-        implicitHeight: 48
-        color: "transparent"
-        Label {
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.left: parent.left
-            anchors.leftMargin: Theme.lg
-            text: root.title
-            color: Theme.text
-            font.pixelSize: Theme.fontMedium
-            font.bold: true
-        }
-        Rectangle {
-            anchors.bottom: parent.bottom
-            width: parent.width
-            height: 1
-            color: Theme.border
-        }
-    }
-
     footer: RowLayout {
         spacing: Theme.sm
         AppButton {
@@ -76,7 +49,7 @@ Dialog {
         }
         Item { Layout.fillWidth: true }
         AppButton {
-            Layout.rightMargin: Theme.lg
+            Layout.rightMargin: Theme.lg + 8
             Layout.bottomMargin: Theme.md
             text: qsTr("Close")
             onClicked: root.close()
@@ -119,10 +92,15 @@ Dialog {
 
                 ColumnLayout {
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 0
                     spacing: 0
                     RowLayout {
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 0
                         spacing: Theme.sm
                         Label {
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
                             text: accountRow.model.email
                             color: Theme.text
                             font.pixelSize: Theme.fontBase

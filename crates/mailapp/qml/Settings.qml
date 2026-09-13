@@ -10,13 +10,13 @@ import "components"
 // Explicit sync on open/save: controls bind to LOCAL copies, Save commits
 // them to the shared SettingsBridge (+ sort via Bridge) and persists — so
 // Cancel truly reverts instead of leaving half-applied in-memory state.
-Dialog {
+AppDialog {
     id: root
     title: qsTr("Settings")
-    modal: true
-    width: Math.min(parent ? parent.width - 40 : 780, 780)
-    height: Math.min(parent ? parent.height - 60 : 620, 620)
-    anchors.centerIn: parent
+    preferredWidth: 800
+    preferredHeight: 640
+    minWidth: 560
+    minHeight: 400
     padding: Theme.lg
 
     signal statusMessage(string text)
@@ -93,33 +93,6 @@ Dialog {
         Layout.topMargin: Theme.sm
     }
 
-    background: Rectangle {
-        color: Theme.bg
-        radius: Theme.radiusLg
-        border.width: 1
-        border.color: Theme.border
-    }
-
-    header: Rectangle {
-        implicitHeight: 48
-        color: "transparent"
-        Label {
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.left: parent.left
-            anchors.leftMargin: Theme.lg
-            text: root.title
-            color: Theme.text
-            font.pixelSize: Theme.fontMedium
-            font.bold: true
-        }
-        Rectangle {
-            anchors.bottom: parent.bottom
-            width: parent.width
-            height: 1
-            color: Theme.border
-        }
-    }
-
     footer: RowLayout {
         spacing: Theme.sm
         Item { Layout.fillWidth: true }
@@ -128,7 +101,7 @@ Dialog {
             onClicked: root.reject()
         }
         AppButton {
-            Layout.rightMargin: Theme.lg
+            Layout.rightMargin: Theme.lg + 8
             Layout.bottomMargin: Theme.md
             Layout.topMargin: Theme.sm
             text: qsTr("Save")

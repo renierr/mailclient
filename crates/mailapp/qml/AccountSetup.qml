@@ -7,12 +7,12 @@ import "components"
 
 // Add / edit account. Submit goes to the Rust bridge, which persists to SQLite
 // + the OS keyring. Re-saving a known email address updates it in place.
-Dialog {
+AppDialog {
     id: root
-    modal: true
-    anchors.centerIn: parent
-    width: Math.min(parent ? parent.width - 80 : 560, 560)
-    height: Math.min(parent ? parent.height - 60 : 640, 640)
+    preferredWidth: 560
+    preferredHeight: 640
+    minWidth: 420
+    minHeight: 400
     padding: Theme.lg
     closePolicy: Popup.NoAutoClose
 
@@ -21,47 +21,13 @@ Dialog {
     property bool editing: editId >= 0
 
     title: editing ? qsTr("Edit account") : qsTr("Add account")
+    subtitle: editing ? qsTr("Leave the password blank to keep the stored one")
+                      : qsTr("Passwords are stored in the OS keyring, never in the database")
 
     signal statusMessage(string text)
     signal accountSubmit(string payload)
 
-    background: Rectangle {
-        color: Theme.bg
-        radius: Theme.radiusLg
-        border.width: 1
-        border.color: Theme.border
-    }
 
-    header: Rectangle {
-        implicitHeight: 52
-        color: "transparent"
-        ColumnLayout {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.leftMargin: Theme.lg
-            anchors.rightMargin: Theme.lg
-            spacing: 0
-            Label {
-                text: root.title
-                color: Theme.text
-                font.pixelSize: Theme.fontMedium
-                font.bold: true
-            }
-            Label {
-                text: root.editing ? qsTr("Leave the password blank to keep the stored one")
-                                   : qsTr("Passwords are stored in the OS keyring, never in the database")
-                color: Theme.textMuted
-                font.pixelSize: Theme.fontTiny
-            }
-        }
-        Rectangle {
-            anchors.bottom: parent.bottom
-            width: parent.width
-            height: 1
-            color: Theme.border
-        }
-    }
 
     // Empty for a new account, prefilled from `Bridge.account_form` for an edit.
     function loadForm(json, id) {
@@ -185,7 +151,7 @@ Dialog {
         RowLayout {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.lg
-            Layout.rightMargin: Theme.lg
+            Layout.rightMargin: Theme.lg + 8
             Layout.bottomMargin: Theme.md
             spacing: Theme.sm
             Item { Layout.fillWidth: true }
