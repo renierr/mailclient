@@ -55,6 +55,8 @@ ApplicationWindow {
     property bool readerFullscreen: false
 
     function toggleReaderFullscreen() {
+        if (!root.readerFullscreen && (root.currentUid < 0 || root.currentMessage === undefined))
+            return
         root.readerFullscreen = !root.readerFullscreen
     }
 
@@ -657,8 +659,6 @@ ApplicationWindow {
     }
 
     SplitView {
-        visible: !root.readerFullscreen
-        enabled: !root.readerFullscreen
         anchors.fill: parent
 
         handle: Rectangle {
@@ -668,6 +668,8 @@ ApplicationWindow {
 
         Sidebar {
             id: sidebar
+            visible: !root.readerFullscreen
+            enabled: !root.readerFullscreen
             SplitView.preferredWidth: 250
             SplitView.minimumWidth: 160
             folders: folderModel
@@ -684,6 +686,8 @@ ApplicationWindow {
 
         MessageList {
             id: messageList
+            visible: !root.readerFullscreen
+            enabled: !root.readerFullscreen
             SplitView.preferredWidth: 360
             SplitView.minimumWidth: 240
             messages: root.messageRows
@@ -722,7 +726,7 @@ ApplicationWindow {
             id: messageView
             SplitView.fillWidth: true
             SplitView.minimumWidth: 260
-            visible: !root.readerFullscreen
+            visible: true
             isFullscreen: root.readerFullscreen
             loadRemoteImages: appSettings.load_remote_images
             readerFont: appSettings.reader_font_size
@@ -738,27 +742,6 @@ ApplicationWindow {
             onFullscreenRequested: root.toggleReaderFullscreen()
             onStatusMessage: text => root.statusText = text
         }
-    }
-
-    MessageView {
-        id: fullscreenMessageView
-        anchors.fill: parent
-        visible: root.readerFullscreen
-        enabled: root.readerFullscreen
-        isFullscreen: true
-        loadRemoteImages: appSettings.load_remote_images
-        readerFont: appSettings.reader_font_size
-        backend: backend
-        message: root.currentMessage
-        onReplyRequested: composer.openForReply(root.currentMessage)
-        onReplyAllRequested: composer.openForReply(root.currentMessage)
-        onForwardRequested: composer.openForForward(root.currentMessage)
-        onStarRequested: root.toggleStar(root.currentUid)
-        onArchiveRequested: root.archiveMessage(root.currentUid)
-        onMoveRequested: root.openMove(root.currentUid)
-        onDeleteRequested: root.deleteMessage(root.currentUid)
-        onFullscreenRequested: root.toggleReaderFullscreen()
-        onStatusMessage: text => root.statusText = text
     }
 
     footer: Rectangle {
