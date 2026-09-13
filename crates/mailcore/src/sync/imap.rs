@@ -519,6 +519,83 @@ impl ImapSync {
         Ok(())
     }
 
+    /// Bulk move cached UIDs of one folder into `dest_path` with a single
+    /// SELECT + one UID MOVE (or COPY + `\Deleted` + EXPUNGE fallback), then
+    /// drop the local source rows. Returns moved rows. `dest_path` must differ
+    /// from the source folder's path (callers report "already here").
+    pub fn move_uids_to(
+        &mut self,
+        db: &Db,
+        folder_id: i64,
+        uids: &[u32],
+        dest_path: &str,
+    ) -> Result<u64> {
+        let mut clean: Vec<u32> = uids.to_vec();
+        clean.sort_unstable();
+        clean.dedup();
+        if clean.is_empty() {
+            return Ok(0);
+        }
+        let folder = folders::get(db, folder_id)?;
+        if folder.path == dest_path {
+            return Ok(0);
+        }
+        let set = clean
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let has_move = self
+            .session()?
+            .capabilities()
+            .map(|caps| caps.has_str("MOVE"))
+            .unwrap_or(false);
+        let session = self.session()?;
+        session.select(&folder.path)?;
+        if has_move {
+            session.uid_mv(&set, dest_path)?;
+        } else {
+            session.uid_copy(&set, dest_path)?;
+            session.uid_store(&set, "+FLAGS (\\Deleted)")?;
+            session.expunge()?;
+        }
+        let mut moved = 0u64;
+        for uid in &clean {
+            if messages::delete_by_uid(db, folder_id, *uid)? {
+                moved += 1;
+            }
+        }
+        Ok(moved)
+    }
+
+    /// Bulk permanent destroy of cached UIDs in one folder: a single SELECT +
+    /// one UID STORE + EXPUNGE, then local deletes. Returns destroyed rows.
+    pub fn purge_uids(&mut self, db: &Db, folder_id: i64, uids: &[u32]) -> Result<u64> {
+        let mut clean: Vec<u32> = uids.to_vec();
+        clean.sort_unstable();
+        clean.dedup();
+        if clean.is_empty() {
+            return Ok(0);
+        }
+        let folder = folders::get(db, folder_id)?;
+        let set = clean
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let session = self.session()?;
+        session.select(&folder.path)?;
+        session.uid_store(&set, "+FLAGS (\\Deleted)")?;
+        session.expunge()?;
+        let mut gone = 0u64;
+        for uid in &clean {
+            if messages::delete_by_uid(db, folder_id, *uid)? {
+                gone += 1;
+            }
+        }
+        Ok(gone)
+    }
+
     /// Windowed folder sync: only the newest `window` server UIDs cost
     /// network (flag refresh + full RFC822 fetch). Expunge diffing is local
     /// and always full. `None` = all UIDs (used only by explicit tests —

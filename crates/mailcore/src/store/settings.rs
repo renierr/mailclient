@@ -27,6 +27,12 @@ pub const MARK_READ_DELAY_SECS: &str = "mark_read_delay_secs";
 /// Collect recipients of successfully sent mail for address suggestions
 /// (default: on).
 pub const COLLECT_SENT_CONTACTS: &str = "collect_sent_contacts";
+/// Message list sort field: `date` (default) | `from` | `subject`.
+/// Unknown/empty values fall back to `date`.
+pub const MESSAGE_SORT_FIELD: &str = "message_sort_field";
+/// Message list sort direction (`1` = descending/newest-first, default;
+/// `0` = ascending).
+pub const MESSAGE_SORT_DESC: &str = "message_sort_desc";
 
 /// Built-in default for a known key, if any.
 #[must_use]
@@ -39,6 +45,8 @@ pub fn defaults(key: &str) -> Option<&'static str> {
         AUTO_MARK_READ => Some("1"),
         MARK_READ_DELAY_SECS => Some("0"),
         COLLECT_SENT_CONTACTS => Some("1"),
+        MESSAGE_SORT_FIELD => Some("date"),
+        MESSAGE_SORT_DESC => Some("1"),
         _ => None,
     }
 }
@@ -126,6 +134,40 @@ pub fn set_delay_secs(db: &Db, key: &str, value: i64) -> Result<()> {
     set(db, key, &normalize_delay_secs(value).to_string())
 }
 
+/// Validated message-list sort field: `date` | `from` | `subject`.
+/// Unknown/empty values fall back to `date` (Roundcube offers the same three
+/// primary orderings).
+#[must_use]
+pub fn normalize_sort_field(raw: &str) -> &'static str {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "from" | "from_addr" | "sender" => "from",
+        "subject" => "subject",
+        _ => "date",
+    }
+}
+
+/// Current message-list sort field, resilient to unknown stored values.
+pub fn get_sort_field(db: &Db) -> String {
+    match get(db, MESSAGE_SORT_FIELD) {
+        Ok(Some(v)) => normalize_sort_field(&v).to_string(),
+        _ => defaults(MESSAGE_SORT_FIELD).unwrap_or("date").to_string(),
+    }
+}
+
+/// Current message-list sort direction: `true` = descending (newest/Z-A first).
+pub fn get_sort_descending(db: &Db) -> bool {
+    match get(db, MESSAGE_SORT_DESC) {
+        Ok(Some(v)) => !(v == "0" || v.eq_ignore_ascii_case("false")),
+        _ => true,
+    }
+}
+
+/// Persist the message-list sort (`field` is normalized first).
+pub fn set_sort(db: &Db, field: &str, descending: bool) -> Result<()> {
+    set(db, MESSAGE_SORT_FIELD, normalize_sort_field(field))?;
+    set_bool(db, MESSAGE_SORT_DESC, descending)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,5 +223,23 @@ mod tests {
             Some("true")
         );
         assert_eq!(get(&db, "missing").unwrap(), None);
+    }
+
+    #[test]
+    fn message_sort_resilient_and_persisted() {
+        assert_eq!(normalize_sort_field("date"), "date");
+        assert_eq!(normalize_sort_field(" From "), "from");
+        assert_eq!(normalize_sort_field("sender"), "from");
+        assert_eq!(normalize_sort_field("SUBJECT"), "subject");
+        assert_eq!(normalize_sort_field("size"), "date");
+        assert_eq!(normalize_sort_field(""), "date");
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(get_sort_field(&db), "date");
+        assert!(get_sort_descending(&db));
+        set_sort(&db, "subject", false).unwrap();
+        assert_eq!(get_sort_field(&db), "subject");
+        assert!(!get_sort_descending(&db));
+        set(&db, MESSAGE_SORT_FIELD, "nonsense").unwrap();
+        assert_eq!(get_sort_field(&db), "date");
     }
 }

@@ -29,6 +29,8 @@ pub mod qobject {
         #[qproperty(QString, accounts_json)]
         #[qproperty(i32, message_limit)]
         #[qproperty(i32, messages_total)]
+        #[qproperty(QString, sort_field)]
+        #[qproperty(bool, sort_descending)]
         #[namespace = "mailclient"]
         type Bridge = super::BridgeRust;
 
@@ -206,6 +208,44 @@ pub mod qobject {
         #[qinvokable]
         fn purge_message(self: Pin<&mut Self>, uid: i32) -> QString;
 
+        /// Message-list ordering (`field` = `date`|`from`|`subject`, resilient;
+        /// `descending` = newest/Z-A first). Persisted to the settings store
+        /// and applied to the feed on return. Returns `""` or an error.
+        #[qinvokable]
+        fn set_sort(self: Pin<&mut Self>, field: &QString, descending: bool) -> QString;
+
+        /// Bulk mark read/unread for `uids_json` (JSON array of UIDs in the
+        /// current folder). Local-only, queued like `mark_read`. Returns e.g.
+        /// `"Marked 5 as read"` or an error (`"no messages selected"` when empty).
+        #[qinvokable]
+        fn mark_read_many(self: Pin<&mut Self>, uids_json: &QString, read: bool) -> QString;
+
+        /// Bulk star/unstar for `uids_json` (JSON array of UIDs). Local-only,
+        /// queued. Returns e.g. `"Starred 5"` or an error.
+        #[qinvokable]
+        fn set_star_many(self: Pin<&mut Self>, uids_json: &QString, starred: bool) -> QString;
+
+        /// Bulk delete (Trash semantics per folder, like `delete_message` but
+        /// one IMAP session for the whole set). Returns e.g. `"Moved 5 to
+        /// Trash"` or `"Deleted 5 permanently"`.
+        #[qinvokable]
+        fn delete_many(self: Pin<&mut Self>, uids_json: &QString) -> QString;
+
+        /// Bulk archive to the Archive folder (created on demand). Returns
+        /// e.g. `"Archived 5"` or `"Already in Archive"`.
+        #[qinvokable]
+        fn archive_many(self: Pin<&mut Self>, uids_json: &QString) -> QString;
+
+        /// Bulk move to any same-account folder (one IMAP session). Returns
+        /// e.g. `"Moved 5 to <folder>"` or `"Already here"`.
+        #[qinvokable]
+        fn move_many(self: Pin<&mut Self>, uids_json: &QString, path: &QString) -> QString;
+
+        /// Bulk permanent destroy (`\Deleted` + expunge, one IMAP session).
+        /// Returns e.g. `"Deleted 5 permanently"`.
+        #[qinvokable]
+        fn purge_many(self: Pin<&mut Self>, uids_json: &QString) -> QString;
+
         /// Send a message from a JSON form
         /// (`{from,from_name?,to,cc?,bcc?,subject,body,body_html?,attachments?}`; `body`
         /// holds composer rich HTML source, `body_html` is an optional
@@ -256,7 +296,7 @@ use core::pin::Pin;
 
 use cxx_qt_lib::QString;
 use mailcore::models::NewAccount;
-use mailcore::store::{accounts, folders, messages};
+use mailcore::store::{accounts, folders, messages, settings};
 use mailcore::sync::imap::{
     ArchiveOutcome, ImapSync, MoveOutcome, TrashOutcome, FULL_SYNC_WINDOW, OLDER_BATCH,
     QUICK_SYNC_WINDOW,
@@ -439,6 +479,8 @@ pub struct BridgeRust {
     accounts_json: QString,
     message_limit: i32,
     messages_total: i32,
+    sort_field: QString,
+    sort_descending: bool,
 }
 
 /// First-page size for a freshly opened folder (matches feed + sync window).
@@ -460,6 +502,8 @@ impl Default for BridgeRust {
             accounts_json: qstring("[]"),
             message_limit: DEFAULT_MESSAGE_LIMIT,
             messages_total: 0,
+            sort_field: qstring("date"),
+            sort_descending: true,
         }
     }
 }
@@ -473,7 +517,10 @@ fn clamp_limit(n: i32) -> u64 {
 ///
 /// The message feed is paged by `message_limit` (grows via "load older");
 /// `messages_total` reports the cached DB total so QML knows whether more
-/// rows exist locally or a server backfill is needed.
+/// rows exist locally or a server backfill is needed. The feed ordering comes
+/// from the `message_sort_*` settings; the matching `sort_field` /
+/// `sort_descending` properties are refreshed here too so QML sort controls
+/// always show what the feed actually used.
 fn push_feeds(
     bridge: &mut Pin<&mut qobject::Bridge>,
     db: &mailcore::Db,
@@ -507,6 +554,53 @@ fn push_feeds(
         .set_current_account_from_name(qstring(&from_name));
     let accts = feed::accounts_json(db).unwrap_or_else(|_| "[]".to_string());
     bridge.as_mut().set_accounts_json(qstring(&accts));
+    // Keep the QML-bound sort state aligned with what the feed just used.
+    sync_sort_props(bridge, db);
+}
+
+/// Mirror the persisted `message_sort_*` settings into the QML-bindable
+/// `sort_field` / `sort_descending` properties.
+fn sync_sort_props(bridge: &mut Pin<&mut qobject::Bridge>, db: &mailcore::Db) {
+    bridge
+        .as_mut()
+        .set_sort_field(qstring(&settings::get_sort_field(db)));
+    bridge
+        .as_mut()
+        .set_sort_descending(settings::get_sort_descending(db));
+}
+
+/// Parse a bulk UID argument (JSON array of numbers from QML) into a
+/// deduplicated, sorted UID list. Caps at `MAX_MESSAGE_LIMIT` so one click
+/// cannot build an unbounded IMAP sequence set.
+fn parse_uids_json(raw: &str) -> Result<Vec<u32>, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(raw).map_err(|_| "invalid selection".to_string())?;
+    let arr = v
+        .as_array()
+        .ok_or_else(|| "invalid selection".to_string())?;
+    if arr.is_empty() {
+        return Err("no messages selected".to_string());
+    }
+    if arr.len() > MAX_MESSAGE_LIMIT as usize {
+        return Err(format!(
+            "too many messages selected (max {})",
+            MAX_MESSAGE_LIMIT
+        ));
+    }
+    let mut out = Vec::with_capacity(arr.len());
+    for x in arr {
+        let uid = x.as_u64().ok_or_else(|| "invalid selection".to_string())? as u32;
+        if uid == 0 {
+            return Err("invalid selection".to_string());
+        }
+        out.push(uid);
+    }
+    out.sort_unstable();
+    out.dedup();
+    if out.is_empty() {
+        return Err("no messages selected".to_string());
+    }
+    Ok(out)
 }
 
 /// Resolve the current account: stored id if still present, else the first.
@@ -1377,6 +1471,242 @@ impl qobject::Bridge {
             r?;
             push_feeds(&mut self, &db, acc_id, folder_id);
             Ok("Deleted permanently".to_string())
+        });
+        match result {
+            Ok(s) => qstring(&s),
+            Err(e) => qstring(&e),
+        }
+    }
+
+    pub fn set_sort(mut self: Pin<&mut Self>, field: &QString, descending: bool) -> QString {
+        let db = match open_db() {
+            Ok(d) => d,
+            Err(e) => return qstring(&e),
+        };
+        let normalized = settings::normalize_sort_field(&field.to_string()).to_string();
+        if let Err(e) = settings::set_sort(&db, &normalized, descending) {
+            return qstring(&e.to_string());
+        }
+        let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+        // push_feeds re-reads the settings for the feed and syncs the props.
+        push_feeds(&mut self, &db, acc_id, folder_id);
+        qstring("")
+    }
+
+    pub fn mark_read_many(mut self: Pin<&mut Self>, uids_json: &QString, read: bool) -> QString {
+        let uids = match parse_uids_json(&uids_json.to_string()) {
+            Ok(u) => u,
+            Err(e) => return qstring(&e),
+        };
+        let db = match open_db() {
+            Ok(d) => d,
+            Err(e) => return qstring(&e),
+        };
+        let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+        if folder_id < 0 {
+            return qstring("no folder selected");
+        }
+        match messages::set_read_many_by_uids(&db, folder_id, &uids, read) {
+            Ok(n) => {
+                push_feeds(&mut self, &db, acc_id, folder_id);
+                if n == 0 {
+                    qstring("No messages changed")
+                } else if n == 1 {
+                    qstring(if read {
+                        "Marked 1 as read"
+                    } else {
+                        "Marked 1 as unread"
+                    })
+                } else if read {
+                    qstring(&format!("Marked {n} as read"))
+                } else {
+                    qstring(&format!("Marked {n} as unread"))
+                }
+            }
+            Err(e) => qstring(&e.to_string()),
+        }
+    }
+
+    pub fn set_star_many(mut self: Pin<&mut Self>, uids_json: &QString, starred: bool) -> QString {
+        let uids = match parse_uids_json(&uids_json.to_string()) {
+            Ok(u) => u,
+            Err(e) => return qstring(&e),
+        };
+        let db = match open_db() {
+            Ok(d) => d,
+            Err(e) => return qstring(&e),
+        };
+        let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+        if folder_id < 0 {
+            return qstring("no folder selected");
+        }
+        match messages::set_star_many_by_uids(&db, folder_id, &uids, starred) {
+            Ok(n) => {
+                push_feeds(&mut self, &db, acc_id, folder_id);
+                if n == 0 {
+                    qstring("No messages changed")
+                } else if n == 1 {
+                    qstring(if starred { "Starred 1" } else { "Unstarred 1" })
+                } else if starred {
+                    qstring(&format!("Starred {n}"))
+                } else {
+                    qstring(&format!("Unstarred {n}"))
+                }
+            }
+            Err(e) => qstring(&e.to_string()),
+        }
+    }
+
+    pub fn delete_many(mut self: Pin<&mut Self>, uids_json: &QString) -> QString {
+        let uids = match parse_uids_json(&uids_json.to_string()) {
+            Ok(u) => u,
+            Err(e) => return qstring(&e),
+        };
+        let result = guard_sync("Delete", || {
+            let db = open_db()?;
+            let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+            let folder = folders::get(&db, folder_id).map_err(|e| e.to_string())?;
+            let acc = accounts::get(&db, acc_id).map_err(|e| e.to_string())?;
+            if folder.account_id != acc.id {
+                return Err("folder does not belong to this account".to_string());
+            }
+            let mut imap = imap_session(&acc)?;
+            // Junk never touches Trash; Trash deletes are permanent — same
+            // rule as the single-message path, applied once per folder.
+            if folder.role == mailcore::models::FolderRole::Junk {
+                let n = imap
+                    .purge_uids(&db, folder_id, &uids)
+                    .map_err(|e| e.to_string())?;
+                imap.disconnect();
+                push_feeds(&mut self, &db, acc_id, folder_id);
+                return Ok(format!("Deleted {n} permanently"));
+            }
+            let trash = folders::list_by_account(&db, acc.id)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .find(|f| f.role == mailcore::models::FolderRole::Trash);
+            match trash.filter(|t| t.id != folder.id) {
+                Some(t) => {
+                    let n = imap
+                        .move_uids_to(&db, folder_id, &uids, &t.path)
+                        .map_err(|e| e.to_string())?;
+                    let path = t.path.clone();
+                    imap.disconnect();
+                    push_feeds(&mut self, &db, acc_id, folder_id);
+                    Ok(format!("Moved {n} to {path}"))
+                }
+                None => {
+                    let n = imap
+                        .purge_uids(&db, folder_id, &uids)
+                        .map_err(|e| e.to_string())?;
+                    imap.disconnect();
+                    push_feeds(&mut self, &db, acc_id, folder_id);
+                    Ok(format!("Deleted {n} permanently"))
+                }
+            }
+        });
+        match result {
+            Ok(s) => qstring(&s),
+            Err(e) => qstring(&e),
+        }
+    }
+
+    pub fn archive_many(mut self: Pin<&mut Self>, uids_json: &QString) -> QString {
+        let uids = match parse_uids_json(&uids_json.to_string()) {
+            Ok(u) => u,
+            Err(e) => return qstring(&e),
+        };
+        let result = guard_sync("Archive", || {
+            let db = open_db()?;
+            let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+            let folder = folders::get(&db, folder_id).map_err(|e| e.to_string())?;
+            let acc = accounts::get(&db, acc_id).map_err(|e| e.to_string())?;
+            let mut imap = imap_session(&acc)?;
+            let archive = match folders::list_by_account(&db, acc.id)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .find(|f| f.role == mailcore::models::FolderRole::Archive)
+            {
+                Some(a) => a,
+                None => {
+                    let delim = folders::list_by_account(&db, acc.id)
+                        .unwrap_or_default()
+                        .first()
+                        .map(|f| f.delimiter.clone())
+                        .unwrap_or_else(|| "/".to_string());
+                    imap.create_folder_path(&db, acc.id, "Archive", &delim)
+                        .map_err(|e| e.to_string())?
+                }
+            };
+            if archive.id == folder.id {
+                imap.disconnect();
+                return Ok("Already in Archive".to_string());
+            }
+            let n = imap
+                .move_uids_to(&db, folder_id, &uids, &archive.path)
+                .map_err(|e| e.to_string())?;
+            let path = archive.path.clone();
+            imap.disconnect();
+            push_feeds(&mut self, &db, acc_id, folder_id);
+            Ok(format!("Archived {n} to {path}"))
+        });
+        match result {
+            Ok(s) => qstring(&s),
+            Err(e) => qstring(&e),
+        }
+    }
+
+    pub fn move_many(mut self: Pin<&mut Self>, uids_json: &QString, path: &QString) -> QString {
+        let uids = match parse_uids_json(&uids_json.to_string()) {
+            Ok(u) => u,
+            Err(e) => return qstring(&e),
+        };
+        let wanted = *self.current_account_id();
+        let current = *self.current_folder_id();
+        let path = path.to_string();
+        let result = guard_sync("Move", || {
+            let db = open_db()?;
+            let acc = current_account(&db, wanted)?;
+            let dest = folders::get_by_path(&db, acc.id, &path).map_err(|e| e.to_string())?;
+            if dest.id == current {
+                return Ok("Already here".to_string());
+            }
+            // Sanity: source folder must belong to this account.
+            let folder = folders::get(&db, current).map_err(|e| e.to_string())?;
+            if folder.account_id != acc.id {
+                return Err("folder does not belong to this account".to_string());
+            }
+            let mut imap = imap_session(&acc)?;
+            let n = imap
+                .move_uids_to(&db, current, &uids, &dest.path)
+                .map_err(|e| e.to_string())?;
+            let dest_path = dest.path.clone();
+            imap.disconnect();
+            push_feeds(&mut self, &db, acc.id, current);
+            Ok(format!("Moved {n} to {dest_path}"))
+        });
+        match result {
+            Ok(s) => qstring(&s),
+            Err(e) => qstring(&e),
+        }
+    }
+
+    pub fn purge_many(mut self: Pin<&mut Self>, uids_json: &QString) -> QString {
+        let uids = match parse_uids_json(&uids_json.to_string()) {
+            Ok(u) => u,
+            Err(e) => return qstring(&e),
+        };
+        let result = guard_sync("Delete", || {
+            let db = open_db()?;
+            let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+            let acc = accounts::get(&db, acc_id).map_err(|e| e.to_string())?;
+            let mut imap = imap_session(&acc)?;
+            let n = imap
+                .purge_uids(&db, folder_id, &uids)
+                .map_err(|e| e.to_string())?;
+            imap.disconnect();
+            push_feeds(&mut self, &db, acc_id, folder_id);
+            Ok(format!("Deleted {n} permanently"))
         });
         match result {
             Ok(s) => qstring(&s),

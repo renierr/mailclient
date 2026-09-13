@@ -6,8 +6,8 @@ import Mailclient
 import "components"
 
 // Move-to picker: choose any visible folder (subfolders indented by depth)
-// as the destination for one message. Only subscribed folders are listed —
-// unhide the rest in the Folders manager first.
+// as the destination for one message or a bulk selection. Only subscribed
+// folders are listed — unhide the rest in the Folders manager first.
 Dialog {
     id: root
     title: qsTr("Move to…")
@@ -20,6 +20,7 @@ Dialog {
     property var folders
     property string currentFolder: ""
     property int uid: -1
+    property var uids: []
     property string subject: ""
 
     signal folderChosen(string path)
@@ -101,7 +102,9 @@ Dialog {
             maximumLineCount: 2
             color: Theme.textMuted
             font.pixelSize: Theme.fontSmall
-            text: root.subject !== "" ? qsTr("Move “%1” to:").arg(root.subject) : qsTr("Move to:")
+            text: root.uids && root.uids.length > 0
+                  ? qsTr("Move %n messages to:", "", root.uids.length)
+                  : root.subject !== "" ? qsTr("Move “%1” to:").arg(root.subject) : qsTr("Move to:")
         }
 
         ListView {

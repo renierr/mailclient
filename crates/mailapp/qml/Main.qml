@@ -240,7 +240,18 @@ ApplicationWindow {
             return
         var m = root.messageByUid(uid)
         moveDialog.uid = uid
+        moveDialog.uids = []
         moveDialog.subject = m !== undefined ? m.subject : ""
+        moveDialog.open()
+    }
+
+    // Bulk move picker: remembers the whole checkbox set.
+    function openBulkMove(uids) {
+        if (!uids || uids.length === 0)
+            return
+        moveDialog.uid = -1
+        moveDialog.uids = uids.slice()
+        moveDialog.subject = ""
         moveDialog.open()
     }
 
@@ -260,14 +271,91 @@ ApplicationWindow {
             return
         var m = root.messageByUid(uid)
         purgeConfirm.uid = uid
+        purgeConfirm.uids = []
         purgeConfirm.subject = m !== undefined ? m.subject : ""
         purgeConfirm.open()
+    }
+
+    function confirmBulkPurge(uids) {
+        if (!uids || uids.length === 0)
+            return
+        purgeConfirm.uid = -1
+        purgeConfirm.uids = uids.slice()
+        purgeConfirm.subject = ""
+        purgeConfirm.open()
+    }
+
+    // --- bulk selection actions (Roundcube-style, one backend call) --------
+
+    function dropPreviewIfGone(uids) {
+        if (root.currentUid >= 0 && uids.indexOf(root.currentUid) !== -1)
+            root.currentUid = -1
+    }
+
+    function bulkMarkRead(uids, read) {
+        if (!uids || uids.length === 0)
+            return
+        var r = backend.mark_read_many(JSON.stringify(uids), read)
+        reloadFolders()
+        reloadMessages()
+        root.statusText = r
+    }
+
+    function bulkStar(uids, starred) {
+        if (!uids || uids.length === 0)
+            return
+        var r = backend.set_star_many(JSON.stringify(uids), starred)
+        reloadMessages()
+        root.statusText = r
+    }
+
+    function bulkArchive(uids) {
+        if (!uids || uids.length === 0)
+            return
+        var r = backend.archive_many(JSON.stringify(uids))
+        root.dropPreviewIfGone(uids)
+        reloadFolders()
+        reloadMessages()
+        root.statusText = r
+    }
+
+    function bulkDelete(uids) {
+        if (!uids || uids.length === 0)
+            return
+        var r = backend.delete_many(JSON.stringify(uids))
+        root.dropPreviewIfGone(uids)
+        reloadFolders()
+        reloadMessages()
+        root.statusText = r
+    }
+
+    function bulkPurge(uids) {
+        if (!uids || uids.length === 0)
+            return
+        var r = backend.purge_many(JSON.stringify(uids))
+        root.dropPreviewIfGone(uids)
+        reloadFolders()
+        reloadMessages()
+        root.statusText = r
+    }
+
+    function changeSort(field, descending) {
+        var r = backend.set_sort(field, descending)
+        if (r !== "") {
+            root.statusText = r
+            return
+        }
+        reloadMessages()
+        var label = field === "from" ? qsTr("From") : field === "subject" ? qsTr("Subject") : qsTr("Date")
+        var dir = descending ? qsTr("descending") : qsTr("ascending")
+        root.statusText = qsTr("Sorted by %1 (%2)").arg(label).arg(dir)
     }
 
     function selectFolder(path) {
         var r = backend.select_folder(path)
         if (r === "") {
             markReadTimer.stop()
+            messageList.setSelectionMode(false)
             root.currentFolder = path
             root.currentUid = -1
             reloadMessages()
@@ -289,6 +377,7 @@ ApplicationWindow {
         var r = backend.select_account(id)
         if (r === "") {
             markReadTimer.stop()
+            messageList.setSelectionMode(false)
             root.currentUid = -1
             root.currentFolder = ""
             reloadAccounts()
@@ -503,6 +592,8 @@ ApplicationWindow {
             totalCount: backend.messages_total
             limit: backend.message_limit
             busy: root.busy
+            sortField: backend.sort_field
+            sortDescending: backend.sort_descending
             onMessageSelected: uid => root.openMessage(uid)
             onStarToggled: uid => root.toggleStar(uid)
             onArchiveRequested: uid => root.archiveMessage(uid)
@@ -515,6 +606,13 @@ ApplicationWindow {
             }
             onDeleteRequested: uid => root.deleteMessage(uid)
             onPurgeRequested: uid => root.confirmPurge(uid)
+            onBulkMarkReadRequested: (uids, read) => root.bulkMarkRead(uids, read)
+            onBulkStarRequested: (uids, starred) => root.bulkStar(uids, starred)
+            onBulkArchiveRequested: uids => root.bulkArchive(uids)
+            onBulkMoveRequested: uids => root.openBulkMove(uids)
+            onBulkDeleteRequested: uids => root.bulkDelete(uids)
+            onBulkPurgeRequested: uids => root.confirmBulkPurge(uids)
+            onSortRequested: (field, descending) => root.changeSort(field, descending)
         }
 
         MessageView {
@@ -703,13 +801,22 @@ ApplicationWindow {
         folders: folderModel
         currentFolder: root.currentFolder
         onFolderChosen: path => {
-            var target = moveDialog.uid
+            var targets = moveDialog.uids && moveDialog.uids.length > 0
+                ? moveDialog.uids.slice()
+                : [moveDialog.uid]
             moveDialog.close()
             // Out of the click handler: moving rebuilds the feed.
             Qt.callLater(function () {
-                var r = backend.move_message(target, path)
-                if (root.currentUid === target)
-                    root.currentUid = -1
+                var r
+                if (targets.length > 1 || (moveDialog.uids && moveDialog.uids.length > 0)) {
+                    r = backend.move_many(JSON.stringify(targets), path)
+                    root.dropPreviewIfGone(targets)
+                } else {
+                    var target = targets[0]
+                    r = backend.move_message(target, path)
+                    if (root.currentUid === target)
+                        root.currentUid = -1
+                }
                 reloadFolders()
                 reloadMessages()
                 root.statusText = r === "" ? qsTr("Moved") : r
@@ -726,6 +833,7 @@ ApplicationWindow {
         padding: Theme.lg
 
         property int uid: -1
+        property var uids: []
         property string subject: ""
 
         background: Rectangle {
@@ -749,10 +857,18 @@ ApplicationWindow {
                 text: qsTr("Delete permanently")
                 intent: "danger"
                 onClicked: {
-                    var target = purgeConfirm.uid
+                    var targets = purgeConfirm.uids && purgeConfirm.uids.length > 0
+                        ? purgeConfirm.uids.slice()
+                        : [purgeConfirm.uid]
+                    var bulk = purgeConfirm.uids && purgeConfirm.uids.length > 0
                     purgeConfirm.close()
                     // Out of the click handler: purging rebuilds the feed.
-                    Qt.callLater(root.purgeMessage, target)
+                    Qt.callLater(function () {
+                        if (bulk)
+                            root.bulkPurge(targets)
+                        else
+                            root.purgeMessage(targets[0])
+                    })
                 }
             }
         }
@@ -762,8 +878,10 @@ ApplicationWindow {
             wrapMode: Text.Wrap
             color: Theme.text
             font.pixelSize: Theme.fontBase
-            text: qsTr("“%1” will be destroyed on the server. This cannot be undone.")
-                  .arg(purgeConfirm.subject)
+            text: purgeConfirm.uids && purgeConfirm.uids.length > 0
+                  ? qsTr("%n messages will be destroyed on the server. This cannot be undone.", "", purgeConfirm.uids.length)
+                  : qsTr("“%1” will be destroyed on the server. This cannot be undone.")
+                    .arg(purgeConfirm.subject)
         }
     }
 

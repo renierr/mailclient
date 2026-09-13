@@ -142,7 +142,8 @@ pub fn message_html(db: &Db, folder_id: i64, uid: u32, allow_remote: bool) -> Re
 }
 /// `[{uid, subject, from, date, snippet, unread, starred, body_text,
 /// body_html, is_html, has_remote_images, has_attachments, attachments,
-/// body}]`, newest first.
+/// body}]`, in the user's sort order (see `message_sort_field` /
+/// `message_sort_desc` settings — date newest-first by default).
 /// - `body_html` is **sanitized** (scripts/handlers/remote-img gated by the
 ///   `load_remote_images` setting); never trust the stored raw HTML in QML.
 /// - Inline `cid:`/`data:` images are part of the mail and always kept —
@@ -150,13 +151,29 @@ pub fn message_html(db: &Db, folder_id: i64, uid: u32, allow_remote: bool) -> Re
 /// - `is_html` is decided in Rust (no QML `<`/`>` guessing).
 /// - `body` is kept for backward compat = sanitized html if any, else text.
 ///
-/// `limit`/`offset` page the local cache newest-first. The list grows via
+/// `limit`/`offset` page the local cache in sort order. The list grows via
 /// "load older": the bridge backfills the next server batch into SQLite
 /// first (`sync_older`), then raises `limit` so the new rows appear.
 pub fn messages_json_paged(db: &Db, folder_id: i64, limit: u64, offset: u64) -> Result<String> {
+    let field = settings::get_sort_field(db);
+    let descending = settings::get_sort_descending(db);
+    messages_json_paged_sorted(db, folder_id, limit, offset, &field, descending)
+}
+
+/// Same as [`messages_json_paged`] with an explicit ordering (used by tests
+/// and by callers that already resolved the settings).
+pub fn messages_json_paged_sorted(
+    db: &Db,
+    folder_id: i64,
+    limit: u64,
+    offset: u64,
+    sort_field: &str,
+    descending: bool,
+) -> Result<String> {
     let allow_remote = settings::get_bool(db, settings::LOAD_REMOTE_IMAGES).unwrap_or(false);
     let mut arr = Vec::new();
-    for m in messages::list_by_folder(db, folder_id, limit, offset)? {
+    for m in messages::list_by_folder_sorted(db, folder_id, limit, offset, sort_field, descending)?
+    {
         let (body_html, had_remote, is_html, plain) =
             sanitized_bodies(m.body_html.as_deref(), m.body_text.as_deref(), allow_remote);
         let legacy_body = if is_html {
@@ -502,6 +519,32 @@ mod tests {
             serde_json::from_str(&messages_json_paged(&db, f, 2, 2).unwrap()).unwrap();
         assert_eq!(page2.as_array().unwrap().len(), 1);
         assert_eq!(page2[0]["uid"], 31);
+    }
+
+    #[test]
+    fn sorted_feed_follows_settings_and_explicit_order() {
+        use crate::store::settings;
+        let (db, acc, f) = setup();
+        let mut a = msg_store::sample_new(acc, f, 41);
+        a.from_addr = Some("zeta@example.com".to_string());
+        a.subject = Some("Banana".to_string());
+        msg_store::upsert(&db, &a).unwrap();
+        let mut b = msg_store::sample_new(acc, f, 42);
+        b.from_addr = Some("alpha@example.com".to_string());
+        b.subject = Some("Apple".to_string());
+        msg_store::upsert(&db, &b).unwrap();
+        // Explicit ordering: subject A-Z puts uid 42 first.
+        let ordered: serde_json::Value = serde_json::from_str(
+            &messages_json_paged_sorted(&db, f, 10, 0, "subject", false).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(ordered[0]["uid"], 42);
+        assert_eq!(ordered[1]["uid"], 41);
+        // Stored settings drive the default paged feed.
+        settings::set_sort(&db, "subject", false).unwrap();
+        let via_settings: serde_json::Value =
+            serde_json::from_str(&messages_json_paged(&db, f, 10, 0).unwrap()).unwrap();
+        assert_eq!(via_settings[0]["uid"], 42);
     }
 
     #[test]

@@ -25,7 +25,10 @@ pub fn seen(db: &Db, address: &str, name: Option<&str>) -> Result<()> {
 /// Top matches for `prefix` (address or name), most-seen first.
 pub fn suggest(db: &Db, prefix: &str, limit: u64) -> Result<Vec<Contact>> {
     // Escape SQLite LIKE metacharacters so typed addresses are literal.
-    let escaped = prefix.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let escaped = prefix
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
     let like = format!("{escaped}%");
     let mut stmt = db.conn().prepare(
         "select address, name, times_seen, last_seen_at from contacts

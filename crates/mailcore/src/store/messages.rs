@@ -116,9 +116,36 @@ pub fn upsert(db: &Db, m: &NewMessage) -> Result<i64> {
 
 /// Paged message list for a folder, newest first.
 pub fn list_by_folder(db: &Db, folder_id: i64, limit: u64, offset: u64) -> Result<Vec<Message>> {
+    list_by_folder_sorted(db, folder_id, limit, offset, "date", true)
+}
+
+/// Paged message list for a folder with Roundcube-style ordering.
+///
+/// `sort_field` is allowlisted (`date` | `from` | `subject`, anything else =
+/// `date`) so the `ORDER BY` fragment is always safe to inline. `descending`
+/// flips the primary key; `from`/`subject` keep newest-first as the stable
+/// secondary order while `date` uses the row id as its tiebreaker.
+pub fn list_by_folder_sorted(
+    db: &Db,
+    folder_id: i64,
+    limit: u64,
+    offset: u64,
+    sort_field: &str,
+    descending: bool,
+) -> Result<Vec<Message>> {
+    let dir = if descending { "desc" } else { "asc" };
+    let order = match sort_field.trim().to_ascii_lowercase().as_str() {
+        "from" | "from_addr" | "sender" => {
+            format!("coalesce(from_addr, '') collate nocase {dir}, date desc, id desc")
+        }
+        "subject" => {
+            format!("coalesce(subject, '') collate nocase {dir}, date desc, id desc")
+        }
+        _ => format!("case when date is null then 1 else 0 end, date {dir}, id {dir}"),
+    };
     let mut stmt = db.conn().prepare(&format!(
         "select {COLS} from messages where folder_id = ?1
-         order by date desc, id desc limit ?2 offset ?3"
+         order by {order} limit ?2 offset ?3"
     ))?;
     let rows = stmt
         .query_map(
@@ -415,6 +442,81 @@ pub fn set_flags_by_uid(
     Ok(())
 }
 
+/// Deduplicated, sorted UIDs for a bulk statement (empty in = no-op).
+fn clean_uids(uids: &[u32]) -> Vec<i64> {
+    let mut v: Vec<i64> = uids.iter().map(|u| *u as i64).collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// Bulk mark read/unread for one folder (local-only, queued via
+/// `flags_dirty` like the single-click path). Only the read flag moves —
+/// starred state is preserved. Returns rows touched.
+pub fn set_read_many_by_uids(db: &Db, folder_id: i64, uids: &[u32], read: bool) -> Result<u64> {
+    let clean = clean_uids(uids);
+    if clean.is_empty() {
+        return Ok(0);
+    }
+    let placeholders = clean.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "update messages set is_read = ?1, flags_dirty = 1, updated_at = ?2
+         where folder_id = ?3 and uid in ({placeholders})"
+    );
+    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(clean.len() + 3);
+    args.push(Box::new(i64::from(read)));
+    args.push(Box::new(now()));
+    args.push(Box::new(folder_id));
+    for u in clean {
+        args.push(Box::new(u));
+    }
+    let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+    let n = db.conn().execute(&sql, refs.as_slice())?;
+    Ok(n as u64)
+}
+
+/// Bulk star/unstar for one folder (local-only, queued). Only the starred
+/// flag moves — read state is preserved. Returns rows touched.
+pub fn set_star_many_by_uids(db: &Db, folder_id: i64, uids: &[u32], starred: bool) -> Result<u64> {
+    let clean = clean_uids(uids);
+    if clean.is_empty() {
+        return Ok(0);
+    }
+    let placeholders = clean.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "update messages set is_starred = ?1, flags_dirty = 1, updated_at = ?2
+         where folder_id = ?3 and uid in ({placeholders})"
+    );
+    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(clean.len() + 3);
+    args.push(Box::new(i64::from(starred)));
+    args.push(Box::new(now()));
+    args.push(Box::new(folder_id));
+    for u in clean {
+        args.push(Box::new(u));
+    }
+    let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+    let n = db.conn().execute(&sql, refs.as_slice())?;
+    Ok(n as u64)
+}
+
+/// Bulk delete cached rows of one folder by UID. Returns rows removed.
+pub fn delete_many_by_uids(db: &Db, folder_id: i64, uids: &[u32]) -> Result<u64> {
+    let clean = clean_uids(uids);
+    if clean.is_empty() {
+        return Ok(0);
+    }
+    let placeholders = clean.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!("delete from messages where folder_id = ?1 and uid in ({placeholders})");
+    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(clean.len() + 1);
+    args.push(Box::new(folder_id));
+    for u in clean {
+        args.push(Box::new(u));
+    }
+    let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+    let n = db.conn().execute(&sql, refs.as_slice())?;
+    Ok(n as u64)
+}
+
 /// Helper used by tests.
 #[cfg(test)]
 pub fn sample_new(account_id: i64, folder_id: i64, uid: u32) -> NewMessage {
@@ -606,5 +708,83 @@ mod tests {
         // Only the flag flips on refresh — never read/star state.
         set_has_attachments(&db, id, true).unwrap();
         assert!(get(&db, id).unwrap().has_attachments);
+    }
+
+    #[test]
+    fn bulk_flag_updates_preserve_the_other_flag() {
+        let (db, acc, f) = setup();
+        for uid in [1u32, 2, 3] {
+            upsert(&db, &sample_new(acc, f, uid)).unwrap();
+        }
+        assert_eq!(
+            set_read_many_by_uids(&db, f, &[1, 2, 2, 1], true).unwrap(),
+            2
+        );
+        assert_eq!(count_unread(&db, f).unwrap(), 1);
+        // Unknown UIDs are ignored, empty is a no-op.
+        assert_eq!(set_read_many_by_uids(&db, f, &[99], true).unwrap(), 0);
+        assert_eq!(set_read_many_by_uids(&db, f, &[], true).unwrap(), 0);
+        // Starring keeps the read state untouched.
+        assert_eq!(set_star_many_by_uids(&db, f, &[1, 3], true).unwrap(), 2);
+        assert!(get_by_uid(&db, f, 1).unwrap().is_read);
+        assert!(get_by_uid(&db, f, 1).unwrap().is_starred);
+        assert!(!get_by_uid(&db, f, 2).unwrap().is_starred);
+        // Both bulk paths queue for the next server push.
+        assert_eq!(list_flags_dirty(&db, acc).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn sorted_listing_orders_by_field_and_direction() {
+        let (db, acc, f) = setup();
+        let mut a = sample_new(acc, f, 1);
+        a.from_addr = Some("zeta@example.com".to_string());
+        a.subject = Some("Banana".to_string());
+        a.date = Some("2026-09-01T10:00:00+00:00".to_string());
+        upsert(&db, &a).unwrap();
+        let mut b = sample_new(acc, f, 2);
+        b.from_addr = Some("alpha@example.com".to_string());
+        b.subject = Some("Apple".to_string());
+        b.date = Some("2026-09-03T10:00:00+00:00".to_string());
+        upsert(&db, &b).unwrap();
+        let mut c = sample_new(acc, f, 3);
+        c.from_addr = Some("mid@example.com".to_string());
+        c.subject = Some("Cherry".to_string());
+        c.date = Some("2026-09-02T10:00:00+00:00".to_string());
+        upsert(&db, &c).unwrap();
+
+        let uids =
+            |rows: Vec<crate::models::Message>| rows.into_iter().map(|m| m.uid).collect::<Vec<_>>();
+        assert_eq!(
+            uids(list_by_folder_sorted(&db, f, 10, 0, "date", true).unwrap()),
+            vec![2, 3, 1]
+        );
+        assert_eq!(
+            uids(list_by_folder_sorted(&db, f, 10, 0, "date", false).unwrap()),
+            vec![1, 3, 2]
+        );
+        assert_eq!(
+            uids(list_by_folder_sorted(&db, f, 10, 0, "from", true).unwrap()),
+            vec![1, 3, 2]
+        );
+        assert_eq!(
+            uids(list_by_folder_sorted(&db, f, 10, 0, "subject", false).unwrap()),
+            vec![2, 1, 3]
+        );
+        // Unknown fields fall back to date ordering.
+        assert_eq!(
+            uids(list_by_folder_sorted(&db, f, 10, 0, "size", true).unwrap()),
+            vec![2, 3, 1]
+        );
+    }
+
+    #[test]
+    fn bulk_delete_removes_only_the_folder_uids() {
+        let (db, acc, f) = setup();
+        for uid in [1u32, 2, 3] {
+            upsert(&db, &sample_new(acc, f, uid)).unwrap();
+        }
+        assert_eq!(delete_many_by_uids(&db, f, &[1, 3, 3]).unwrap(), 2);
+        assert_eq!(count_by_folder(&db, f).unwrap(), 1);
+        assert_eq!(delete_many_by_uids(&db, f, &[]).unwrap(), 0);
     }
 }
