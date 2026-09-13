@@ -22,11 +22,68 @@ Dialog {
     id: root
     title: qsTr("Compose")
     modal: true
-    width: Math.min(parent ? parent.width - 80 : 760, 760)
-    height: Math.min(parent ? parent.height - 60 : 640, 640)
-    anchors.centerIn: parent
+    parent: Overlay.overlay
     padding: Theme.lg
     closePolicy: Popup.NoAutoClose
+
+    readonly property int minWidth: 520
+    readonly property int minHeight: 360
+    readonly property int preferredW: 760
+    readonly property int preferredH: 640
+
+    property real wantW: preferredW
+    property real wantH: preferredH
+    property real wantX: 0
+    property real wantY: 0
+    property bool positioned: false
+
+    readonly property real hostW: parent ? parent.width : preferredW
+    readonly property real hostH: parent ? parent.height : preferredH
+    readonly property int gapX: hostW < 900 ? 16 : 48
+    readonly property int gapY: hostH < 700 ? 16 : 32
+    readonly property real maxW: Math.max(240, hostW - gapX)
+    readonly property real maxH: Math.max(200, hostH - gapY)
+
+    width: Math.min(Math.max(wantW, Math.min(minWidth, maxW)), maxW)
+    height: Math.min(Math.max(wantH, Math.min(minHeight, maxH)), maxH)
+    x: positioned ? Math.round(Math.max(0, Math.min(wantX, hostW - width)))
+                  : Math.round((hostW - width) / 2)
+    y: positioned ? Math.round(Math.max(0, Math.min(wantY, hostH - height)))
+                  : Math.round((hostH - height) / 2)
+
+    function applyDefaultGeometry() {
+        wantW = preferredW
+        wantH = preferredH
+        positioned = false
+    }
+
+    function applyResize(edges, sX, sY, sW, sH, dx, dy) {
+        var nx = sX
+        var ny = sY
+        var nw = sW
+        var nh = sH
+        var minW = Math.min(minWidth, maxW)
+        var minH = Math.min(minHeight, maxH)
+        if (edges & Qt.RightEdge)
+            nw = Math.min(Math.max(minW, sW + dx), hostW - nx)
+        if (edges & Qt.LeftEdge) {
+            nw = Math.min(Math.max(minW, sW - dx), sX + sW)
+            nx = sX + sW - nw
+        }
+        if (edges & Qt.BottomEdge)
+            nh = Math.min(Math.max(minH, sH + dy), hostH - ny)
+        if (edges & Qt.TopEdge) {
+            nh = Math.min(Math.max(minH, sH - dy), sY + sH)
+            ny = sY + sH - nh
+        }
+        positioned = true
+        wantX = nx
+        wantY = ny
+        wantW = nw
+        wantH = nh
+    }
+
+    onOpened: applyDefaultGeometry()
 
     signal statusMessage(string text)
     signal sendRequested(string payload)
@@ -105,6 +162,31 @@ Dialog {
             width: parent.width
             height: 1
             color: Theme.border
+        }
+
+        MouseArea {
+            id: dragArea
+            anchors.fill: parent
+            cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+            property real sMX
+            property real sMY
+            property real sX
+            property real sY
+            onPressed: function (mouse) {
+                var p = mapToItem(root.parent, mouse.x, mouse.y)
+                sMX = p.x
+                sMY = p.y
+                sX = root.x
+                sY = root.y
+                root.positioned = true
+            }
+            onPositionChanged: function (mouse) {
+                if (!pressed)
+                    return
+                var p = mapToItem(root.parent, mouse.x, mouse.y)
+                root.wantX = sX + p.x - sMX
+                root.wantY = sY + p.y - sMY
+            }
         }
     }
 
@@ -726,6 +808,60 @@ Dialog {
                 intent: "primary"
                 enabled: root.hasRecipients
                 onClicked: root.requestSend()
+            }
+            Item {
+                Layout.preferredWidth: 24
+                Layout.preferredHeight: Theme.controlHeight
+
+                Canvas {
+                    anchors.centerIn: parent
+                    width: 12
+                    height: 12
+                    onPaint: {
+                        var ctx = getContext("2d")
+                        ctx.clearRect(0, 0, width, height)
+                        ctx.strokeStyle = Theme.border
+                        ctx.lineWidth = 1.5
+                        for (var i = 0; i < 3; i++) {
+                            ctx.beginPath()
+                            ctx.moveTo(2 + i * 3, height - 1)
+                            ctx.lineTo(width - 1, 2 + i * 3)
+                            ctx.stroke()
+                        }
+                    }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    preventStealing: true
+                    cursorShape: Qt.SizeFDiagCursor
+                    property real sMX
+                    property real sMY
+                    property real sX
+                    property real sY
+                    property real sW
+                    property real sH
+                    onPressed: function (mouse) {
+                        var p = mapToItem(root.parent, mouse.x, mouse.y)
+                        sMX = p.x
+                        sMY = p.y
+                        sX = root.x
+                        sY = root.y
+                        sW = root.width
+                        sH = root.height
+                        // Resize from this corner without restoring the
+                        // centered fallback position.
+                        root.wantX = sX
+                        root.wantY = sY
+                    }
+                    onPositionChanged: function (mouse) {
+                        if (!pressed)
+                            return
+                        var p = mapToItem(root.parent, mouse.x, mouse.y)
+                        root.applyResize(Qt.RightEdge | Qt.BottomEdge,
+                            sX, sY, sW, sH, p.x - sMX, p.y - sMY)
+                    }
+                }
             }
         }
     }
