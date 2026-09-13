@@ -216,6 +216,21 @@ ApplicationWindow {
     // Trash) and Trash itself (deleting there is permanent). The bridge
     // reports which it did because "moved" and "destroyed" differ.
     // Goes through the delete-confirm gate first (setting `confirm_delete`).
+    // Whether delete destroys mirrors the backend `trash_message` rules:
+    // source folder Junk or Trash, or no Trash folder at all.
+    function deleteIsPermanent() {
+        var role = ""
+        var hasTrash = false
+        for (var i = 0; i < folderModel.count; i++) {
+            var r = folderModel.get(i).role
+            if (r === "trash")
+                hasTrash = true
+            if (folderModel.get(i).name === root.currentFolder)
+                role = r
+        }
+        return role === "junk" || role === "trash" || !hasTrash
+    }
+
     function deleteMessage(uid) {
         if (uid < 0)
             return
@@ -227,6 +242,7 @@ ApplicationWindow {
         deleteConfirm.uid = uid
         deleteConfirm.uids = []
         deleteConfirm.subject = m !== undefined ? m.subject : ""
+        deleteConfirm.permanent = root.deleteIsPermanent()
         deleteConfirm.open()
     }
 
@@ -348,6 +364,7 @@ ApplicationWindow {
         deleteConfirm.uid = -1
         deleteConfirm.uids = uids.slice()
         deleteConfirm.subject = ""
+        deleteConfirm.permanent = root.deleteIsPermanent()
         deleteConfirm.open()
     }
 
@@ -874,11 +891,12 @@ ApplicationWindow {
         }
     }
 
-    // Trash is reversible (unlike purge), so this uses the primary intent —
-    // the danger styling stays reserved for permanent destruction.
+    // Trash is reversible (unlike purge), so the move variant uses the
+    // primary intent — the danger styling stays reserved for permanent
+    // destruction (Trash/Junk source, or no Trash folder at all).
     Dialog {
         id: deleteConfirm
-        title: qsTr("Move to Trash?")
+        title: deleteConfirm.permanent ? qsTr("Delete permanently?") : qsTr("Move to Trash?")
         modal: true
         anchors.centerIn: parent
         width: 420
@@ -887,6 +905,7 @@ ApplicationWindow {
         property int uid: -1
         property var uids: []
         property string subject: ""
+        property bool permanent: false
 
         background: Rectangle {
             color: Theme.bg
@@ -906,8 +925,8 @@ ApplicationWindow {
                 Layout.rightMargin: Theme.lg
                 Layout.bottomMargin: Theme.md
                 Layout.topMargin: Theme.sm
-                text: qsTr("Move to Trash")
-                intent: "primary"
+                text: deleteConfirm.permanent ? qsTr("Delete permanently") : qsTr("Move to Trash")
+                intent: deleteConfirm.permanent ? "danger" : "primary"
                 onClicked: {
                     var targets = deleteConfirm.uids && deleteConfirm.uids.length > 0
                         ? deleteConfirm.uids.slice()
@@ -931,9 +950,14 @@ ApplicationWindow {
             color: Theme.text
             font.pixelSize: Theme.fontBase
             text: deleteConfirm.uids && deleteConfirm.uids.length > 0
-                  ? qsTr("%n message(s) will be moved to Trash.", "", deleteConfirm.uids.length)
-                  : qsTr("“%1” will be moved to Trash.")
-                    .arg(deleteConfirm.subject)
+                  ? (deleteConfirm.permanent
+                     ? qsTr("%n message(s) will be destroyed. This cannot be undone.", "", deleteConfirm.uids.length)
+                     : qsTr("%n message(s) will be moved to Trash.", "", deleteConfirm.uids.length))
+                  : (deleteConfirm.permanent
+                     ? qsTr("“%1” will be destroyed. This cannot be undone.")
+                       .arg(deleteConfirm.subject)
+                     : qsTr("“%1” will be moved to Trash.")
+                       .arg(deleteConfirm.subject))
         }
     }
 
