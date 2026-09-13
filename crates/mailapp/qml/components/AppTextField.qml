@@ -11,7 +11,7 @@ TextField {
 
     property bool invalid: false
 
-    implicitHeight: 32
+    implicitHeight: Theme.controlHeight
     color: Theme.text
     placeholderTextColor: Theme.textMuted
     font.pixelSize: Theme.fontBase

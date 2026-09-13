@@ -14,8 +14,8 @@ AbstractButton {
     property int fontSize: Theme.fontMedium
     property bool active: false
 
-    implicitWidth: 32
-    implicitHeight: 32
+    implicitWidth: Theme.controlHeight
+    implicitHeight: Theme.controlHeight
     hoverEnabled: true
     opacity: enabled ? 1 : 0.35
 

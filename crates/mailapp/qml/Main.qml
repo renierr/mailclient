@@ -61,6 +61,14 @@ ApplicationWindow {
         id: appSettings
     }
 
+    // Interface scale: the SettingsBridge owns the value, Theme owns the
+    // rendering — this keeps them in sync, live on every Save.
+    Binding {
+        target: Theme
+        property: "uiScale"
+        value: appSettings.ui_scale
+    }
+
     ListModel { id: folderModel }
     ListModel { id: accountModel }
 
@@ -556,13 +564,13 @@ ApplicationWindow {
                 id: searchField
                 Layout.fillWidth: true
                 Layout.maximumWidth: 460
-                implicitHeight: 32
+                implicitHeight: Theme.controlHeight
                 placeholderText: qsTr("Search sender, subject or snippet…")
                 color: Theme.text
                 placeholderTextColor: Theme.textMuted
                 font.pixelSize: Theme.fontBase
                 leftPadding: Theme.sm
-                rightPadding: clearSearch.visible ? 28 : Theme.sm
+                rightPadding: clearSearch.visible ? clearSearch.width + Theme.xs : Theme.sm
                 selectByMouse: true
 
                 background: Rectangle {
@@ -576,8 +584,8 @@ ApplicationWindow {
                     id: clearSearch
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 24
-                    height: 24
+                    width: Theme.miniButton
+                    height: Theme.miniButton
                     visible: searchField.text !== ""
                     text: "✕"
                     fontSize: Theme.fontSmall

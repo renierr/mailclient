@@ -293,6 +293,7 @@ pub mod qobject {
         #[qproperty(QString, signature_text)]
         #[qproperty(bool, reply_below_quote)]
         #[qproperty(bool, request_mdn)]
+        #[qproperty(f32, ui_scale)]
         #[namespace = "mailclient"]
         type SettingsBridge = super::SettingsBridgeRust;
 
@@ -2138,6 +2139,7 @@ pub struct SettingsBridgeRust {
     signature_text: QString,
     reply_below_quote: bool,
     request_mdn: bool,
+    ui_scale: f32,
 }
 
 impl Default for SettingsBridgeRust {
@@ -2158,6 +2160,7 @@ impl Default for SettingsBridgeRust {
             signature_text: qstring(""),
             reply_below_quote: false,
             request_mdn: false,
+            ui_scale: 1.0,
         }
     }
 }
@@ -2244,6 +2247,8 @@ impl qobject::SettingsBridge {
                 mailcore::store::settings::get_bool(&db, mailcore::store::settings::REQUEST_MDN)
                     .unwrap_or(false),
             );
+            self.as_mut()
+                .set_ui_scale(mailcore::store::settings::get_ui_scale(&db));
         }
     }
 
@@ -2273,6 +2278,7 @@ impl qobject::SettingsBridge {
             let signature_text = self.signature_text().to_string();
             let reply_below_quote = *self.reply_below_quote();
             let request_mdn = *self.request_mdn();
+            let ui_scale = *self.ui_scale();
             if let Err(e) = mailcore::store::settings::set_bool(
                 &db,
                 mailcore::store::settings::SENT_COPY_ENABLED,
@@ -2373,6 +2379,9 @@ impl qobject::SettingsBridge {
                 request_mdn,
             ) {
                 log::warn!("settings: cannot save receipt request: {e}");
+            }
+            if let Err(e) = mailcore::store::settings::set_ui_scale(&db, ui_scale) {
+                log::warn!("settings: cannot save interface scale: {e}");
             }
         }
     }

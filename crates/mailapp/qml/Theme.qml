@@ -16,6 +16,14 @@ QtObject {
     // Follows the desktop's light/dark preference; falls back to light.
     readonly property bool dark: Application.styleHints.colorScheme === Qt.Dark
 
+    // Interface scale (Settings → Interface). Qt already applies the
+    // compositor scale; this multiplies on top for users who want the app
+    // itself larger (desktop text-size settings don't reach Qt). Type,
+    // text-bearing heights and fixed control boxes scale — spacing, radii
+    // and dialog widths stay put so layouts never clip. Supported steps:
+    // 100% | 110% | 125% | 150% (see `normalize_ui_scale`).
+    property real uiScale: 1.0
+
     // --- surfaces ---------------------------------------------------------
     readonly property color bg: dark ? "#16181d" : "#ffffff"
     readonly property color bgAlt: dark ? "#1b1e24" : "#f7f8fa"
@@ -42,16 +50,23 @@ QtObject {
     readonly property int radius: 6
     readonly property int radiusLg: 10
 
-    readonly property int rowHeight: 34
-    readonly property int listItemHeight: 78
-    readonly property int toolbarHeight: 48
+    readonly property int rowHeight: Math.round(34 * uiScale)
+    readonly property int listItemHeight: Math.round(78 * uiScale)
+    readonly property int toolbarHeight: Math.round(48 * uiScale)
+
+    // Fixed control boxes holding scaled text (buttons, inputs, combos,
+    // icon buttons, checkboxes, pills). Everything text-bearing must read
+    // one of these instead of a literal, or 150% clips.
+    readonly property int controlHeight: Math.round(32 * uiScale)
+    readonly property int miniButton: Math.round(24 * uiScale)
+    readonly property int checkSize: Math.round(18 * uiScale)
 
     // --- type -------------------------------------------------------------
-    readonly property int fontTiny: 11
-    readonly property int fontSmall: 12
-    readonly property int fontBase: 13
-    readonly property int fontMedium: 15
-    readonly property int fontTitle: 20
+    readonly property int fontTiny: Math.round(11 * uiScale)
+    readonly property int fontSmall: Math.round(12 * uiScale)
+    readonly property int fontBase: Math.round(13 * uiScale)
+    readonly property int fontMedium: Math.round(15 * uiScale)
+    readonly property int fontTitle: Math.round(20 * uiScale)
 
     // Deterministic avatar colour per sender (same name, same colour).
     function avatarColor(seed) {

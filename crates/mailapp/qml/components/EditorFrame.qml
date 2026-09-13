@@ -36,7 +36,7 @@ Item {
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>"
         + "html,body{margin:0;padding:0;height:100%}"
         + "#e{box-sizing:border-box;min-height:100%;padding:12px 14px;outline:none;"
-        + "font-family:sans-serif;font-size:14px;line-height:1.55;"
+        + "font-family:sans-serif;font-size:" + Math.round(14 * Theme.uiScale) + "px;line-height:1.55;"
         + "color:" + Theme.text + ";background:" + Theme.bg + ";caret-color:" + Theme.accent + "}"
         + "#e:empty:before{content:attr(data-placeholder);color:" + Theme.textMuted + "}"
         + "blockquote{margin:8px 0;padding-left:12px;border-left:3px solid " + Theme.border

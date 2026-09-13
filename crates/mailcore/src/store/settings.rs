@@ -54,6 +54,9 @@ pub const REPLY_BELOW_QUOTE: &str = "reply_below_quote";
 /// Request a read receipt (`Disposition-Notification-To`, default: off).
 /// Recipients may ignore it; it only asks.
 pub const REQUEST_MDN: &str = "request_mdn";
+/// Interface scale factor (`1` = 100%, default). Snapped to the supported
+/// steps `1` | `1.1` | `1.25` | `1.5`; unknown values fall back to `1`.
+pub const UI_SCALE: &str = "ui_scale";
 
 /// Built-in default for a known key, if any.
 #[must_use]
@@ -76,6 +79,7 @@ pub fn defaults(key: &str) -> Option<&'static str> {
         SIGNATURE_TEXT => Some(""),
         REPLY_BELOW_QUOTE => Some("0"),
         REQUEST_MDN => Some("0"),
+        UI_SCALE => Some("1"),
         _ => None,
     }
 }
@@ -274,6 +278,55 @@ pub fn get_signature_text(db: &Db) -> String {
     }
 }
 
+/// Snap an interface scale into the supported steps
+/// (`1` | `1.1` | `1.25` | `1.5`). Everything above snaps back down —
+/// fixed control boxes are audited up to 150%.
+#[must_use]
+pub fn normalize_ui_scale(raw: f32) -> f32 {
+    if !raw.is_finite() {
+        return 1.0;
+    }
+    if raw < 1.05 {
+        1.0
+    } else if raw < 1.175 {
+        1.1
+    } else if raw < 1.375 {
+        1.25
+    } else {
+        1.5
+    }
+}
+
+/// Current interface scale, resilient to unknown stored values.
+pub fn get_ui_scale(db: &Db) -> f32 {
+    match get(db, UI_SCALE) {
+        Ok(Some(v)) => v
+            .trim()
+            .parse::<f32>()
+            .map(normalize_ui_scale)
+            .unwrap_or(1.0),
+        _ => 1.0,
+    }
+}
+
+/// Store an interface scale (snapped first).
+pub fn set_ui_scale(db: &Db, value: f32) -> Result<()> {
+    let snapped = normalize_ui_scale(value);
+    set(
+        db,
+        UI_SCALE,
+        if snapped == 1.1 {
+            "1.1"
+        } else if snapped == 1.25 {
+            "1.25"
+        } else if snapped == 1.5 {
+            "1.5"
+        } else {
+            "1"
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,5 +430,24 @@ mod tests {
         assert_eq!(get_sync_interval(&db), 0);
         set(&db, SIGNATURE_TEXT, "Kind regards").unwrap();
         assert_eq!(get_signature_text(&db), "Kind regards");
+    }
+
+    #[test]
+    fn ui_scale_snaps_to_supported_steps() {
+        assert_eq!(normalize_ui_scale(1.0), 1.0);
+        assert_eq!(normalize_ui_scale(1.1), 1.1);
+        assert_eq!(normalize_ui_scale(1.25), 1.25);
+        assert_eq!(normalize_ui_scale(1.5), 1.5);
+        assert_eq!(normalize_ui_scale(0.5), 1.0);
+        assert_eq!(normalize_ui_scale(2.0), 1.5);
+        assert_eq!(normalize_ui_scale(f32::NAN), 1.0);
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(get_ui_scale(&db), 1.0);
+        set_ui_scale(&db, 1.5).unwrap();
+        assert_eq!(get_ui_scale(&db), 1.5);
+        set_ui_scale(&db, 2.0).unwrap();
+        assert_eq!(get_ui_scale(&db), 1.5);
+        set(&db, UI_SCALE, "nonsense").unwrap();
+        assert_eq!(get_ui_scale(&db), 1.0);
     }
 }

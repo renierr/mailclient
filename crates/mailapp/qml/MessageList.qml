@@ -396,13 +396,13 @@ Rectangle {
                     // breaks its `checked` binding on the first click and then
                     // ignores programmatic select-all/clear).
                     Item {
-                        Layout.preferredWidth: root.selectionMode ? 30 : 0
+                        Layout.preferredWidth: root.selectionMode ? Math.round(30 * Theme.uiScale) : 0
                         Layout.fillHeight: true
                         visible: root.selectionMode
                         Rectangle {
                             anchors.centerIn: parent
-                            width: 18
-                            height: 18
+                            width: Theme.checkSize
+                            height: Theme.checkSize
                             radius: Theme.xs
                             color: root.isAllSelected() ? Theme.accent
                                  : root.isNoneSelected() ? Theme.bg : Theme.bg
@@ -476,7 +476,7 @@ Rectangle {
                 RowLayout {
                     visible: root.selectionMode && root.selectedUids.length > 0
                     width: parent.width
-                    height: 40
+                    height: Math.round(40 * Theme.uiScale)
                     spacing: 2
 
                     Label {
@@ -562,7 +562,7 @@ Rectangle {
             delegate: Item {
                 id: row
                 width: list.width
-                height: root.density === "compact" ? 58 : Theme.listItemHeight
+                height: root.density === "compact" ? Math.round(58 * Theme.uiScale) : Theme.listItemHeight
 
                 required property int index
                 required property var model
@@ -635,14 +635,14 @@ Rectangle {
                     // Hidden until selection mode is toggled in the header.
                     Item {
                         id: checkCell
-                        width: root.selectionMode ? 22 : 0
+                        width: root.selectionMode ? Math.round(22 * Theme.uiScale) : 0
                         visible: root.selectionMode
                         height: parent.height
                         z: 1
                         Rectangle {
                             anchors.verticalCenter: parent.verticalCenter
-                            width: 18
-                            height: 18
+                            width: Theme.checkSize
+                            height: Theme.checkSize
                             radius: Theme.xs
                             color: row.checked ? Theme.accent : Theme.bg
                             border.width: 1
@@ -685,7 +685,7 @@ Rectangle {
                     }
 
                     Column {
-                        width: parent.width - 8 - (root.selectionMode ? 22 : 0) - 34 - (Theme.sm * (root.selectionMode ? 4 : 3)) - 24
+                        width: parent.width - 8 - (root.selectionMode ? Math.round(22 * Theme.uiScale) : 0) - Math.round(34 * Theme.uiScale) - (Theme.sm * (root.selectionMode ? 4 : 3)) - Theme.miniButton
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 2
 
@@ -736,8 +736,8 @@ Rectangle {
                     // Star, always visible when set, on hover otherwise.
                     IconButton {
                         anchors.verticalCenter: parent.verticalCenter
-                        width: 24
-                        height: 24
+                        width: Theme.miniButton
+                        height: Theme.miniButton
                         fontSize: Theme.fontBase
                         visible: row.model.starred || hoverArea.containsMouse
                         text: row.model.starred ? "★" : "☆"

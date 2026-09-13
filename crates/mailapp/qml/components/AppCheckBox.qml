@@ -13,8 +13,8 @@ CheckBox {
     spacing: Theme.sm
 
     indicator: Rectangle {
-        implicitWidth: 18
-        implicitHeight: 18
+        implicitWidth: Theme.checkSize
+        implicitHeight: Theme.checkSize
         x: control.leftPadding
         y: control.topPadding + (control.availableHeight - height) / 2
         radius: Theme.xs

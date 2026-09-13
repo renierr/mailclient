@@ -95,7 +95,7 @@ Dialog {
         delegate: Rectangle {
             id: accountRow
             width: accountList.width
-            height: 66
+            height: Math.round(66 * Theme.uiScale)
             radius: Theme.radius
             color: current ? Theme.selected : Theme.bgAlt
             border.width: 1
@@ -111,8 +111,8 @@ Dialog {
                 spacing: Theme.md
 
                 Avatar {
-                    implicitWidth: 32
-                    implicitHeight: 32
+                    implicitWidth: Math.round(32 * Theme.uiScale)
+                    implicitHeight: Math.round(32 * Theme.uiScale)
                     seed: accountRow.model.email
                     initials: (accountRow.model.email || "?").substring(0, 1).toUpperCase()
                 }
@@ -132,8 +132,8 @@ Dialog {
                         Rectangle {
                             visible: accountRow.current
                             implicitWidth: activeLabel.implicitWidth + Theme.sm
-                            implicitHeight: 16
-                            radius: 8
+                            implicitHeight: Math.round(16 * Theme.uiScale)
+                            radius: Math.round(8 * Theme.uiScale)
                             color: Theme.accent
                             Label {
                                 id: activeLabel

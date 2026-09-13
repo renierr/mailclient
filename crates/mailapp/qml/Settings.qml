@@ -38,6 +38,7 @@ Dialog {
     property bool localConfirmDelete: true
     property string localDensity: "comfortable"
     property string localReaderFont: "normal"
+    property real localUiScale: 1.0
     property int localSyncInterval: 0
     property bool localSigEnabled: false
     property string localSigText: ""
@@ -171,6 +172,17 @@ Dialog {
         return idx >= 0 ? idx : fallback
     }
 
+    // Nearest supported interface-scale step (float-safe: no exact compare).
+    function scaleIndex(v) {
+        var steps = [1.0, 1.1, 1.25, 1.5]
+        var best = 0
+        for (var i = 1; i < steps.length; i++) {
+            if (Math.abs(v - steps[i]) < Math.abs(v - steps[best]))
+                best = i
+        }
+        return best
+    }
+
     onOpened: {
         settingsBridge.load()
         root.localSentCopy = settingsBridge.sent_copy_enabled
@@ -183,6 +195,7 @@ Dialog {
         root.localConfirmDelete = settingsBridge.confirm_delete
         root.localDensity = settingsBridge.list_density
         root.localReaderFont = settingsBridge.reader_font_size
+        root.localUiScale = settingsBridge.ui_scale
         root.localSyncInterval = settingsBridge.sync_interval_minutes
         root.localSigEnabled = settingsBridge.signature_enabled
         root.localSigText = settingsBridge.signature_text
@@ -199,11 +212,12 @@ Dialog {
         // --- section navigation --------------------------------------
         ListView {
             id: nav
-            Layout.preferredWidth: 168
+            Layout.preferredWidth: Math.round(168 * Theme.uiScale)
             Layout.fillHeight: true
             clip: true
             spacing: 2
             model: ListModel {
+                ListElement { icon: "Aa"; label: qsTr("Interface") }
                 ListElement { icon: "📥"; label: qsTr("Mailbox") }
                 ListElement { icon: "📖"; label: qsTr("Reading") }
                 ListElement { icon: "✏️"; label: qsTr("Composing") }
@@ -215,7 +229,7 @@ Dialog {
                 required property string label
                 required property int index
                 width: nav.width
-                height: 38
+                height: Math.round(38 * Theme.uiScale)
                 Rectangle {
                     anchors.fill: parent
                     radius: Theme.radius
@@ -264,6 +278,40 @@ Dialog {
             Layout.fillWidth: true
             Layout.fillHeight: true
             currentIndex: nav.currentIndex
+
+            // Interface.
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                contentWidth: availableWidth
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                ColumnLayout {
+                    width: parent.availableWidth
+                    spacing: Theme.sm
+
+                    SectionCaption { text: qsTr("INTERFACE") }
+
+                    ChoiceRow {
+                        caption: qsTr("Interface scale")
+                        model: [qsTr("100%"), qsTr("110%"), qsTr("125%"), qsTr("150%")]
+                        currentIndex: scaleIndex(root.localUiScale)
+                        help: qsTr("Scales type and controls across the whole app. The desktop zoom still applies on top of this.")
+                        onChosen: index => {
+                            root.localUiScale = [1.0, 1.1, 1.25, 1.5][index]
+                        }
+                    }
+                    ChoiceRow {
+                        caption: qsTr("Mail text size")
+                        model: [qsTr("Small"), qsTr("Normal"), qsTr("Large")]
+                        currentIndex: indexOr(["small", "normal", "large"], root.localReaderFont, 1)
+                        help: qsTr("Applies to plain-text mail; HTML mail brings its own sizes.")
+                        onChosen: index => {
+                            root.localReaderFont = ["small", "normal", "large"][index]
+                        }
+                    }
+                }
+            }
 
             // Mailbox view.
             ScrollView {
@@ -354,15 +402,6 @@ Dialog {
                     }
                     HintLabel {
                         text: qsTr("Remote images can track opens. Blocked images still offer a one-click “Show once” banner per message.")
-                    }
-                    ChoiceRow {
-                        caption: qsTr("Text size")
-                        model: [qsTr("Small"), qsTr("Normal"), qsTr("Large")]
-                        currentIndex: indexOr(["small", "normal", "large"], root.localReaderFont, 1)
-                        help: qsTr("Applies to plain-text mail; HTML mail brings its own sizes.")
-                        onChosen: index => {
-                            root.localReaderFont = ["small", "normal", "large"][index]
-                        }
                     }
                 }
             }
@@ -511,6 +550,7 @@ Dialog {
         settingsBridge.confirm_delete = root.localConfirmDelete
         settingsBridge.list_density = root.localDensity
         settingsBridge.reader_font_size = root.localReaderFont
+        settingsBridge.ui_scale = root.localUiScale
         settingsBridge.sync_interval_minutes = root.localSyncInterval
         settingsBridge.signature_enabled = root.localSigEnabled
         settingsBridge.signature_text = root.localSigText

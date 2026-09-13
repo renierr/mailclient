@@ -15,7 +15,7 @@ Button {
     // "quiet" = secondary/cancel.
     property string intent: "quiet"
 
-    implicitHeight: 32
+    implicitHeight: Theme.controlHeight
     hoverEnabled: true
     font.pixelSize: Theme.fontBase
     font.bold: intent === "primary"

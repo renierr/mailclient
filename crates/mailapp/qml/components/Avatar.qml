@@ -9,8 +9,8 @@ Rectangle {
     property string initials: "?"
     property string seed: initials
 
-    implicitWidth: 34
-    implicitHeight: 34
+    implicitWidth: Math.round(34 * Theme.uiScale)
+    implicitHeight: Math.round(34 * Theme.uiScale)
     width: implicitWidth
     height: implicitHeight
     radius: width / 2

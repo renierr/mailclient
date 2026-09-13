@@ -8,7 +8,7 @@ import Mailclient
 ComboBox {
     id: control
 
-    implicitHeight: 32
+    implicitHeight: Theme.controlHeight
     font.pixelSize: Theme.fontBase
 
     background: Rectangle {
@@ -61,7 +61,7 @@ ComboBox {
     delegate: ItemDelegate {
         id: item
         width: control.width
-        implicitHeight: 30
+        implicitHeight: Math.round(30 * Theme.uiScale)
         required property var model
         required property int index
 

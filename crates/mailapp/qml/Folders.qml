@@ -143,7 +143,7 @@ Dialog {
             delegate: Rectangle {
                 id: folderRow
                 width: folderList.width
-                height: 44
+                height: Math.round(44 * Theme.uiScale)
                 radius: Theme.radius
                 color: folderRow.model.name === root.currentFolder ? Theme.selected : "transparent"
 

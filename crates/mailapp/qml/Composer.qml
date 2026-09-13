@@ -379,7 +379,7 @@ Dialog {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredWidth: 200
-                implicitHeight: 32
+                implicitHeight: Theme.controlHeight
                 radius: Theme.radius
                 color: Theme.bg
                 border.width: 1
@@ -434,8 +434,8 @@ Dialog {
                 IconButton {
                     text: "Cc"
                     fontSize: Theme.fontSmall
-                    implicitWidth: 36
-                    implicitHeight: 32
+                    implicitWidth: Math.round(36 * Theme.uiScale)
+                    implicitHeight: Theme.controlHeight
                     active: root.showCc || ccField.text !== ""
                     tooltip: qsTr("Show Cc field")
                     onClicked: root.showCc = !root.showCc
@@ -443,8 +443,8 @@ Dialog {
                 IconButton {
                     text: qsTr("Bcc")
                     fontSize: Theme.fontSmall
-                    implicitWidth: 40
-                    implicitHeight: 32
+                    implicitWidth: Math.round(40 * Theme.uiScale)
+                    implicitHeight: Theme.controlHeight
                     active: root.showBcc || bccField.text !== ""
                     tooltip: qsTr("Show Bcc field")
                     onClicked: root.showBcc = !root.showBcc
@@ -532,7 +532,7 @@ Dialog {
                         model: root.attachments
                         Rectangle {
                             id: chipBox
-                            height: 26
+                            height: Math.round(26 * Theme.uiScale)
                             width: chipRow.implicitWidth + Theme.sm * 2
                             radius: 13
                             color: Theme.bgRaised
@@ -554,8 +554,8 @@ Dialog {
                                 }
                                 IconButton {
                                     anchors.verticalCenter: parent.verticalCenter
-                                    width: 20
-                                    height: 20
+                                    width: Math.round(20 * Theme.uiScale)
+                                    height: Math.round(20 * Theme.uiScale)
                                     fontSize: Theme.fontSmall
                                     text: "✕"
                                     tooltip: qsTr("Remove")
@@ -575,7 +575,7 @@ Dialog {
         // --- formatting toolbar -------------------------------------------
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: 38
+            implicitHeight: Math.round(38 * Theme.uiScale)
             radius: Theme.radius
             color: Theme.bgAlt
             border.width: 1
@@ -655,7 +655,7 @@ Dialog {
                 IconButton {
                     text: "</>"
                     fontSize: Theme.fontSmall
-                    implicitWidth: 40
+                    implicitWidth: Math.round(40 * Theme.uiScale)
                     tooltip: qsTr("Toggle HTML source")
                     active: root.sourceMode
                     onClicked: root.toggleSource()

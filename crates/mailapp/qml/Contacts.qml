@@ -45,7 +45,7 @@ Dialog {
             spacing: 2
             delegate: Rectangle {
                 width: ListView.view.width
-                implicitHeight: 46
+                implicitHeight: Math.round(46 * Theme.uiScale)
                 color: contactHover.hovered ? Theme.bgAlt : "transparent"
                 radius: Theme.radius
                 HoverHandler { id: contactHover }

@@ -222,7 +222,7 @@ Rectangle {
     // Colours come from the theme so HTML mail matches the app in dark mode.
     function wrapDoc(inner) {
         return "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
-            + "<style>body{font-family:sans-serif;font-size:14px;line-height:1.55;"
+            + "<style>body{font-family:sans-serif;font-size:" + Math.round(14 * Theme.uiScale) + "px;line-height:1.55;"
             + "max-width:78ch;margin:16px;word-wrap:break-word;"
             + "color:" + Theme.text + ";background:" + Theme.bg + "}"
             + "a{color:" + Theme.accent + "}"
@@ -278,8 +278,8 @@ Rectangle {
                     spacing: Theme.md
 
                     Avatar {
-                        implicitWidth: 36
-                        implicitHeight: 36
+                        implicitWidth: Math.round(36 * Theme.uiScale)
+                        implicitHeight: Math.round(36 * Theme.uiScale)
                         seed: root.sender.name || root.sender.addr || "?"
                         initials: (root.sender.name || "?").replace(/^[^a-zA-Z0-9]*/, "").substring(0, 1).toUpperCase()
                     }
@@ -422,7 +422,7 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true
             Layout.margins: Theme.md
-            implicitHeight: 40
+            implicitHeight: Math.round(40 * Theme.uiScale)
             visible: root.isHtml && root.hasRemote && !root.effectiveAutoLoad()
             radius: Theme.radius
             color: Theme.bgAlt

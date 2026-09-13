@@ -90,8 +90,8 @@ Rectangle {
             contentItem: RowLayout {
                 spacing: Theme.sm
                 Avatar {
-                    implicitWidth: 28
-                    implicitHeight: 28
+                    implicitWidth: Math.round(28 * Theme.uiScale)
+                    implicitHeight: Math.round(28 * Theme.uiScale)
                     seed: root.currentEmail
                     initials: (root.currentEmail || "?").substring(0, 1).toUpperCase()
                 }
@@ -241,9 +241,9 @@ Rectangle {
                     // Unread count as a pill, the way mail clients do it.
                     Rectangle {
                         visible: folderRow.model.unread > 0
-                        implicitWidth: Math.max(20, unreadLabel.implicitWidth + Theme.sm)
-                        implicitHeight: 18
-                        radius: 9
+                        implicitWidth: Math.max(Math.round(20 * Theme.uiScale), unreadLabel.implicitWidth + Theme.sm)
+                        implicitHeight: Math.round(18 * Theme.uiScale)
+                        radius: Math.round(9 * Theme.uiScale)
                         color: folderRow.current ? Theme.accent : Theme.border
                         Label {
                             id: unreadLabel
