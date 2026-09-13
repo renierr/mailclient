@@ -581,168 +581,22 @@ Dialog {
         }
 
         // --- attachments ----------------------------------------------------
-        Rectangle {
+        ComposerAttachmentTray {
             Layout.fillWidth: true
-            implicitHeight: attachRow.implicitHeight + Theme.sm * 2
             visible: root.attachments.length > 0
-            radius: Theme.radius
-            color: Theme.bgAlt
-            border.width: 1
-            border.color: Theme.border
-
-            RowLayout {
-                id: attachRow
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.margins: Theme.sm
-                spacing: Theme.xs
-
-                Label {
-                    text: "📎"
-                }
-                Label {
-                    text: qsTr("%n file(s)", "", root.attachments.length)
-                    color: Theme.textMuted
-                    font.pixelSize: Theme.fontSmall
-                }
-                // Chips wrap via Flow (names can be long).
-                Flow {
-                    Layout.fillWidth: true
-                    spacing: Theme.xs
-                    Repeater {
-                        model: root.attachments
-                        Rectangle {
-                            id: chipBox
-                            height: Math.round(26 * Theme.uiScale)
-                            width: chipRow.implicitWidth + Theme.sm * 2
-                            radius: 13
-                            color: Theme.bgRaised
-                            border.width: 1
-                            border.color: Theme.border
-                            required property var modelData
-                            required property int index
-                            Row {
-                                id: chipRow
-                                anchors.centerIn: parent
-                                spacing: 4
-                                Label {
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    text: chipBox.modelData.name
-                                    color: Theme.text
-                                    font.pixelSize: Theme.fontSmall
-                                    elide: Text.ElideMiddle
-                                    width: Math.min(implicitWidth, 180)
-                                }
-                                IconButton {
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    width: Math.round(20 * Theme.uiScale)
-                                    height: Math.round(20 * Theme.uiScale)
-                                    fontSize: Theme.fontSmall
-                                    text: "✕"
-                                    tooltip: qsTr("Remove")
-                                    onClicked: root.removeAttachment(chipBox.index)
-                                }
-                            }
-                        }
-                    }
-                }
-                AppButton {
-                    text: qsTr("Add")
-                    onClicked: attachDialog.open()
-                }
-            }
+            attachments: root.attachments
+            onAddRequested: attachDialog.open()
+            onRemoveRequested: index => root.removeAttachment(index)
         }
 
         // --- formatting toolbar -------------------------------------------
-        Rectangle {
+        ComposerToolbar {
             Layout.fillWidth: true
-            implicitHeight: Math.round(38 * Theme.uiScale)
-            radius: Theme.radius
-            color: Theme.bgAlt
-            border.width: 1
-            border.color: Theme.border
-
-            RowLayout {
-                anchors.fill: parent
-                anchors.leftMargin: Theme.xs
-                anchors.rightMargin: Theme.xs
-                spacing: 2
-
-                IconButton {
-                    text: "B"
-                    tooltip: qsTr("Bold (Ctrl+B)")
-                    enabled: !root.sourceMode
-                    active: bodyEditor.boldActive
-                    font.bold: true
-                    onClicked: bodyEditor.exec("bold")
-                }
-                IconButton {
-                    text: "I"
-                    tooltip: qsTr("Italic (Ctrl+I)")
-                    enabled: !root.sourceMode
-                    active: bodyEditor.italicActive
-                    font.italic: true
-                    onClicked: bodyEditor.exec("italic")
-                }
-                IconButton {
-                    text: "U"
-                    tooltip: qsTr("Underline (Ctrl+U)")
-                    enabled: !root.sourceMode
-                    active: bodyEditor.underlineActive
-                    font.underline: true
-                    onClicked: bodyEditor.exec("underline")
-                }
-
-                Rectangle {
-                    implicitWidth: 1
-                    implicitHeight: 20
-                    color: Theme.border
-                }
-
-                IconButton {
-                    text: "•≡"
-                    tooltip: qsTr("Bullet list")
-                    enabled: !root.sourceMode
-                    active: bodyEditor.listActive
-                    onClicked: bodyEditor.exec("insertUnorderedList")
-                }
-                IconButton {
-                    text: "❝"
-                    tooltip: qsTr("Quote")
-                    enabled: !root.sourceMode
-                    active: bodyEditor.quoteActive
-                    onClicked: bodyEditor.exec("formatBlock", bodyEditor.quoteActive ? "p" : "blockquote")
-                }
-                IconButton {
-                    text: "🔗"
-                    tooltip: qsTr("Insert link")
-                    enabled: !root.sourceMode
-                    onClicked: linkDialog.open()
-                }
-                IconButton {
-                    text: "✕"
-                    tooltip: qsTr("Clear formatting")
-                    enabled: !root.sourceMode
-                    onClicked: bodyEditor.exec("removeFormat")
-                }
-                IconButton {
-                    text: "📎"
-                    tooltip: qsTr("Attach files")
-                    onClicked: attachDialog.open()
-                }
-
-                Item { Layout.fillWidth: true }
-
-                IconButton {
-                    text: "</>"
-                    fontSize: Theme.fontSmall
-                    implicitWidth: Math.round(40 * Theme.uiScale)
-                    tooltip: qsTr("Toggle HTML source")
-                    active: root.sourceMode
-                    onClicked: root.toggleSource()
-                }
-            }
+            sourceMode: root.sourceMode
+            bodyEditor: bodyEditor
+            onLinkRequested: linkDialog.open()
+            onAttachRequested: attachDialog.open()
+            onToggleSourceRequested: root.toggleSource()
         }
 
         // --- body ---------------------------------------------------------

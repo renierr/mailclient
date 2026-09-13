@@ -474,79 +474,28 @@ Rectangle {
                 }
 
                 // Bulk bar: Roundcube-style actions for the checkbox set.
-                RowLayout {
+                BulkActionBar {
                     visible: root.selectionMode && root.selectedUids.length > 0
                     width: parent.width
-                    height: Math.round(40 * Theme.uiScale)
-                    spacing: 2
-
-                    Label {
-                        Layout.leftMargin: Theme.md
-                        text: qsTr("%n selected", "", root.selectedUids.length)
-                        color: Theme.text
-                        font.pixelSize: Theme.fontSmall
-                        font.bold: true
+                    selectedCount: root.selectedUids.length
+                    allStarred: root.selectionAllStarred()
+                    onClearRequested: root.clearSelection()
+                    onMarkReadRequested: root.emitLater2(root.bulkMarkReadRequested, root.selectedUids.slice(), true)
+                    onMarkUnreadRequested: root.emitLater2(root.bulkMarkReadRequested, root.selectedUids.slice(), false)
+                    onToggleStarRequested: root.emitLater2(root.bulkStarRequested, root.selectedUids.slice(), !root.selectionAllStarred())
+                    onArchiveRequested: {
+                        var uids = root.selectedUids.slice()
+                        Qt.callLater(root.bulkArchiveRequested, uids)
                     }
-                    IconButton {
-                        text: "✕"
-                        fontSize: Theme.fontSmall
-                        tooltip: qsTr("Clear selection")
-                        onClicked: root.clearSelection()
+                    onMoveRequested: {
+                        var uids = root.selectedUids.slice()
+                        Qt.callLater(root.bulkMoveRequested, uids)
                     }
-                    Item { Layout.fillWidth: true }
-                    IconButton {
-                        text: "✓"
-                        fontSize: Theme.fontSmall
-                        tooltip: qsTr("Mark selected as read")
-                        onClicked: root.emitLater2(root.bulkMarkReadRequested, root.selectedUids.slice(), true)
+                    onDeleteRequested: {
+                        var uids = root.selectedUids.slice()
+                        Qt.callLater(root.bulkDeleteRequested, uids)
                     }
-                    IconButton {
-                        text: "○"
-                        fontSize: Theme.fontSmall
-                        tooltip: qsTr("Mark selected as unread")
-                        onClicked: root.emitLater2(root.bulkMarkReadRequested, root.selectedUids.slice(), false)
-                    }
-                    IconButton {
-                        text: root.selectionAllStarred() ? "☆" : "★"
-                        fontSize: Theme.fontBase
-                        contentColor: root.selectionAllStarred() ? Theme.textMuted : Theme.star
-                        tooltip: root.selectionAllStarred() ? qsTr("Remove star from selected") : qsTr("Star selected")
-                        onClicked: root.emitLater2(root.bulkStarRequested, root.selectedUids.slice(), !root.selectionAllStarred())
-                    }
-                    IconButton {
-                        text: "🗄"
-                        fontSize: Theme.fontSmall
-                        tooltip: qsTr("Archive selected")
-                        onClicked: {
-                            var uids = root.selectedUids.slice()
-                            Qt.callLater(root.bulkArchiveRequested, uids)
-                        }
-                    }
-                    IconButton {
-                        text: "➡"
-                        fontSize: Theme.fontSmall
-                        tooltip: qsTr("Move selected to…")
-                        onClicked: {
-                            var uids = root.selectedUids.slice()
-                            Qt.callLater(root.bulkMoveRequested, uids)
-                        }
-                    }
-                    IconButton {
-                        text: "🗑"
-                        fontSize: Theme.fontSmall
-                        tooltip: qsTr("Move selected to Trash")
-                        onClicked: {
-                            var uids = root.selectedUids.slice()
-                            Qt.callLater(root.bulkDeleteRequested, uids)
-                        }
-                    }
-                    IconButton {
-                        Layout.rightMargin: Theme.sm
-                        text: "⋯"
-                        fontSize: Theme.fontBase
-                        tooltip: qsTr("More bulk actions")
-                        onClicked: bulkMenu.popup()
-                    }
+                    onMoreRequested: bulkMenu.popup()
                 }
             }
         }
