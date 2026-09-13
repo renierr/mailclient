@@ -114,7 +114,7 @@ pub fn upsert(db: &Db, m: &NewMessage) -> Result<i64> {
     Ok(id)
 }
 
-/// Paged message list for a folder, newest first.
+/// Paged message list for a folder, newest server arrival first.
 pub fn list_by_folder(db: &Db, folder_id: i64, limit: u64, offset: u64) -> Result<Vec<Message>> {
     list_by_folder_sorted(db, folder_id, limit, offset, "date", true)
 }
@@ -124,7 +124,9 @@ pub fn list_by_folder(db: &Db, folder_id: i64, limit: u64, offset: u64) -> Resul
 /// `sort_field` is allowlisted (`date` | `from` | `subject`, anything else =
 /// `date`) so the `ORDER BY` fragment is always safe to inline. `descending`
 /// flips the primary key; `from`/`subject` keep newest-first as the stable
-/// secondary order while `date` uses the row id as its tiebreaker.
+/// secondary order. The Date view orders by IMAP UID, which reflects the
+/// server's delivery order. RFC 5322 `Date:` headers are sender-controlled and
+/// can be stale or malformed, so they cannot define the newest server window.
 pub fn list_by_folder_sorted(
     db: &Db,
     folder_id: i64,
@@ -141,7 +143,7 @@ pub fn list_by_folder_sorted(
         "subject" => {
             format!("coalesce(subject, '') collate nocase {dir}, date desc, id desc")
         }
-        _ => format!("case when date is null then 1 else 0 end, date {dir}, id {dir}"),
+        _ => format!("uid {dir}"),
     };
     let mut stmt = db.conn().prepare(&format!(
         "select {COLS} from messages where folder_id = ?1
@@ -754,13 +756,16 @@ mod tests {
 
         let uids =
             |rows: Vec<crate::models::Message>| rows.into_iter().map(|m| m.uid).collect::<Vec<_>>();
+        // IMAP UIDs define the server arrival order. The Date header is
+        // sender-controlled, so a stale/future header must not reorder the
+        // newest server window in the default list.
         assert_eq!(
             uids(list_by_folder_sorted(&db, f, 10, 0, "date", true).unwrap()),
-            vec![2, 3, 1]
+            vec![3, 2, 1]
         );
         assert_eq!(
             uids(list_by_folder_sorted(&db, f, 10, 0, "date", false).unwrap()),
-            vec![1, 3, 2]
+            vec![1, 2, 3]
         );
         assert_eq!(
             uids(list_by_folder_sorted(&db, f, 10, 0, "from", true).unwrap()),
@@ -773,7 +778,7 @@ mod tests {
         // Unknown fields fall back to date ordering.
         assert_eq!(
             uids(list_by_folder_sorted(&db, f, 10, 0, "size", true).unwrap()),
-            vec![2, 3, 1]
+            vec![3, 2, 1]
         );
     }
 

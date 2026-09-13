@@ -143,7 +143,7 @@ pub fn message_html(db: &Db, folder_id: i64, uid: u32, allow_remote: bool) -> Re
 /// `[{uid, subject, from, date, snippet, unread, starred, body_text,
 /// body_html, is_html, has_remote_images, has_attachments, attachments,
 /// body}]`, in the user's sort order (see `message_sort_field` /
-/// `message_sort_desc` settings — date newest-first by default).
+/// `message_sort_desc` settings — Date means newest IMAP UID first).
 /// - `body_html` is **sanitized** (scripts/handlers/remote-img gated by the
 ///   `load_remote_images` setting); never trust the stored raw HTML in QML.
 /// - Inline `cid:`/`data:` images are part of the mail and always kept —

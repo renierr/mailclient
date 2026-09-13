@@ -683,6 +683,7 @@ ApplicationWindow {
             onBulkMoveRequested: uids => root.openBulkMove(uids)
             onBulkDeleteRequested: uids => root.bulkDelete(uids)
             onBulkPurgeRequested: uids => root.confirmBulkPurge(uids)
+            onLoadOlderRequested: root.loadOlder()
             onSortRequested: (field, descending) => root.changeSort(field, descending)
         }
 
