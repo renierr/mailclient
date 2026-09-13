@@ -524,7 +524,7 @@ impl Default for BridgeRust {
             accounts_json: qstring("[]"),
             message_limit: DEFAULT_MESSAGE_LIMIT,
             messages_total: 0,
-            messages_server_total: 0,
+            messages_server_total: -1,
             sort_field: qstring("date"),
             sort_descending: true,
         }
@@ -558,7 +558,7 @@ fn push_feeds(
             .unwrap_or_else(|_| "[]".to_string());
         (msgs, total, server_total)
     } else {
-        ("[]".to_string(), 0, 0)
+        ("[]".to_string(), 0, -1)
     };
     let email = accounts::get(db, account_id)
         .map(|a| a.email_address)

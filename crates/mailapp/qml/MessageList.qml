@@ -32,7 +32,7 @@ Rectangle {
     // `totalCount` is the local cache count; `serverTotal` is the count seen
     // during the last successful IMAP sync. All cached messages are displayed.
     property int totalCount: 0
-    property int serverTotal: 0
+    property int serverTotal: -1
     property int limit: 200
     property bool busy: false
 
@@ -66,8 +66,9 @@ Rectangle {
     signal bulkPurgeRequested(var uids)
     signal sortRequested(string field, bool descending)
 
-    readonly property bool canLoadOlder: root.filterText === ""
-        && root.messages.length > 0
+    readonly property bool canLoadOlder: root.folderName !== ""
+        && root.filterText === ""
+        && (root.messages.length > 0 || root.serverTotal < 0)
         && (root.serverTotal < 0 || root.serverTotal > root.totalCount)
 
     // Row actions rebuild the feed, which destroys the delegates. Emitting
@@ -750,11 +751,12 @@ Rectangle {
         }
 
         // One batch (200) per press, fetched below the oldest cached UID.
-        // Only shown when the last server count proves older mail remains.
+        // Only shown when older mail remains or when the server has not been checked.
         Rectangle {
             id: loadOlderBar
             width: parent.width
-            implicitHeight: root.filterText === "" && root.messages.length > 0 ? 56 : 0
+            implicitHeight: root.folderName !== "" && root.filterText === ""
+                && (root.messages.length > 0 || root.serverTotal < 0) ? 56 : 0
             visible: implicitHeight > 0
             color: Theme.bgAlt
             clip: true
@@ -764,22 +766,25 @@ Rectangle {
                 height: 1
                 color: Theme.border
             }
-            Row {
-                anchors.centerIn: parent
-                width: parent.width - Theme.md * 2
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: Theme.md
+                anchors.rightMargin: Theme.md
                 spacing: Theme.sm
                 Label {
                     id: olderStatus
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: parent.width - (loadOlderButton.visible ? loadOlderButton.width + parent.spacing : 0)
+                    Layout.fillWidth: true
+                    Layout.alignment: Qt.AlignVCenter
                     elide: Text.ElideRight
                     text: {
-                        if (root.messages.length === 0)
-                            return qsTr("No cached messages")
+                        if (root.folderName === "")
+                            return ""
                         if (root.serverTotal < 0)
                             return qsTr("Cached %1 (server not checked)").arg(root.totalCount)
                         if (root.serverTotal > root.totalCount)
                             return qsTr("Cached %1 of %2").arg(root.totalCount).arg(root.serverTotal)
+                        if (root.messages.length === 0)
+                            return qsTr("No cached messages")
                         return qsTr("All %1 messages loaded").arg(root.totalCount)
                     }
                     color: Theme.textMuted
@@ -788,7 +793,7 @@ Rectangle {
                 }
                 AppButton {
                     id: loadOlderButton
-                    anchors.verticalCenter: parent.verticalCenter
+                    Layout.alignment: Qt.AlignVCenter
                     visible: root.canLoadOlder
                     text: root.busy
                           ? qsTr("Loading…")

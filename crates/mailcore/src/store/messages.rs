@@ -127,6 +127,25 @@ pub struct CompactMessage {
     pub has_attachments: bool,
 }
 
+/// Builds the SQL `ORDER BY` clause for message listings.
+///
+/// `sort_field` is allowlisted (`date` | `from` | `subject`, anything else =
+/// `date`). `descending` flips the primary key; `from`/`subject` keep newest-first
+/// as the stable secondary order. The Date view orders by IMAP UID, which reflects
+/// the server's delivery order.
+fn folder_sort_clause(sort_field: &str, descending: bool) -> String {
+    let dir = if descending { "desc" } else { "asc" };
+    match sort_field.trim().to_ascii_lowercase().as_str() {
+        "from" | "from_addr" | "sender" => {
+            format!("coalesce(from_addr, '') collate nocase {dir}, date desc, id desc")
+        }
+        "subject" => {
+            format!("coalesce(subject, '') collate nocase {dir}, date desc, id desc")
+        }
+        _ => format!("uid {dir}"),
+    }
+}
+
 /// Lightweight query for folder message lists: selects only the 8 columns
 /// needed for compact rows, skipping heavy bodies, raw headers, and JSON arrays.
 pub fn list_compact_by_folder_sorted(
@@ -137,16 +156,7 @@ pub fn list_compact_by_folder_sorted(
     sort_field: &str,
     descending: bool,
 ) -> Result<Vec<CompactMessage>> {
-    let dir = if descending { "desc" } else { "asc" };
-    let order = match sort_field.trim().to_ascii_lowercase().as_str() {
-        "from" | "from_addr" | "sender" => {
-            format!("coalesce(from_addr, '') collate nocase {dir}, date desc, id desc")
-        }
-        "subject" => {
-            format!("coalesce(subject, '') collate nocase {dir}, date desc, id desc")
-        }
-        _ => format!("uid {dir}"),
-    };
+    let order = folder_sort_clause(sort_field, descending);
     let mut stmt = db.conn().prepare(&format!(
         "select uid, subject, from_addr, date, snippet, is_read, is_starred, has_attachments
          from messages where folder_id = ?1
@@ -175,13 +185,6 @@ pub fn list_by_folder(db: &Db, folder_id: i64, limit: u64, offset: u64) -> Resul
 }
 
 /// Paged message list for a folder with Roundcube-style ordering.
-///
-/// `sort_field` is allowlisted (`date` | `from` | `subject`, anything else =
-/// `date`) so the `ORDER BY` fragment is always safe to inline. `descending`
-/// flips the primary key; `from`/`subject` keep newest-first as the stable
-/// secondary order. The Date view orders by IMAP UID, which reflects the
-/// server's delivery order. RFC 5322 `Date:` headers are sender-controlled and
-/// can be stale or malformed, so they cannot define the newest server window.
 pub fn list_by_folder_sorted(
     db: &Db,
     folder_id: i64,
@@ -190,16 +193,7 @@ pub fn list_by_folder_sorted(
     sort_field: &str,
     descending: bool,
 ) -> Result<Vec<Message>> {
-    let dir = if descending { "desc" } else { "asc" };
-    let order = match sort_field.trim().to_ascii_lowercase().as_str() {
-        "from" | "from_addr" | "sender" => {
-            format!("coalesce(from_addr, '') collate nocase {dir}, date desc, id desc")
-        }
-        "subject" => {
-            format!("coalesce(subject, '') collate nocase {dir}, date desc, id desc")
-        }
-        _ => format!("uid {dir}"),
-    };
+    let order = folder_sort_clause(sort_field, descending);
     let mut stmt = db.conn().prepare(&format!(
         "select {COLS} from messages where folder_id = ?1
          order by {order} limit ?2 offset ?3"
