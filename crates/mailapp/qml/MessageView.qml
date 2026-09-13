@@ -10,6 +10,9 @@ import "components"
 
 // Reader pane. `message` roles come from the Rust feed:
 // {subject, from, date, body_text, body_html, is_html, has_remote_images}.
+// Sender display name + To/Cc/full date come from the on-demand headers
+// (`message_headers_json`), loaded once per opened message — the feed only
+// carries the bare From address.
 // - Plain mail renders as PlainText (never shows HTML source as code).
 // - HTML was sanitized in Rust (scripts/handlers/styles stripped).
 //   Inline `cid:`/`data:` images are part of the mail and always shown;
@@ -54,6 +57,8 @@ Rectangle {
         // One-shot remote consent is per-message.
         root.allowRemoteOnce = false
         root.remoteHtml = ""
+        root.headerExpanded = false
+        root.loadHeaders()
         root.reloadHtml()
     }
     onHtmlBodyChanged: {
@@ -144,8 +149,52 @@ Rectangle {
             root.statusMessage(url)
     }
 
+    // Full headers for the opened mail (sender display name, To/Cc, full
+    // date) — same on-demand source as the Headers dialog, loaded once per
+    // message so the header shows more than the bare From address.
+    function loadHeaders() {
+        root.headersInfo = ({})
+        if (!root.backend || !root.backend.message_headers_json || root.messageUid < 0)
+            return
+        try {
+            root.headersInfo = JSON.parse(root.backend.message_headers_json(root.messageUid))
+        } catch (e) {
+            root.headersInfo = ({})
+        }
+    }
+
+    // "Name <addr>" -> {name, addr}; a bare address yields both identical.
+    function splitAddr(full) {
+        var s = (full || "").trim()
+        var lt = s.indexOf("<")
+        var gt = s.lastIndexOf(">")
+        if (lt >= 0 && gt > lt) {
+            var name = s.substring(0, lt).trim().replace(/^["']|["']$/g, "")
+            var addr = s.substring(lt + 1, gt).trim()
+            return {"name": name !== "" ? name : addr, "addr": addr}
+        }
+        return {"name": s, "addr": s}
+    }
+
+    readonly property var sender: root.splitAddr(
+        root.headersInfo.from || (root.message ? root.message.from : ""))
+    readonly property string toLine: root.joinAddrs(root.headersInfo.to)
+    readonly property string ccLine: root.joinAddrs(root.headersInfo.cc)
+    readonly property string fullDate:
+        (root.headersInfo.date || "") !== "" ? root.headersInfo.date
+        : (root.message ? root.message.date : "")
+
+    // Collapsible extra header info. Auto-collapses on narrow panes so the
+    // body keeps its space; the chevron re-opens it on demand.
+    property bool headerExpanded: false
+    onWidthChanged: {
+        if (root.width < 480)
+            root.headerExpanded = false
+    }
+
     // Header details for the Headers dialog (Roundcube-style "Kopfzeilen"):
-    // fetched on demand, never part of the feed rows.
+    // fetched on demand, never part of the feed rows. Also feeds the
+    // sender/recipient lines above (loaded once per opened message).
     property var headersInfo: ({})
 
     function joinAddrs(v) {
@@ -162,13 +211,7 @@ Rectangle {
     }
 
     function openHeaders() {
-        if (!root.backend || !root.backend.message_headers_json)
-            return
-        try {
-            root.headersInfo = JSON.parse(root.backend.message_headers_json(root.messageUid))
-        } catch (e) {
-            root.headersInfo = ({})
-        }
+        root.loadHeaders()
         headersDialog.open()
     }
 
@@ -224,6 +267,9 @@ Rectangle {
                     elide: Text.ElideRight
                 }
 
+                // Sender block: avatar + display name / address + recipient.
+                // Extra lines (To/Cc/full date) collapse behind the chevron
+                // on narrow panes; actions live on their own row below.
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: Theme.md
@@ -231,23 +277,41 @@ Rectangle {
                     Avatar {
                         implicitWidth: 36
                         implicitHeight: 36
-                        seed: root.message ? (root.message.from || "?") : "?"
-                        initials: root.message ? (root.message.from || "?").replace(/^[^a-zA-Z0-9]*/, "").substring(0, 1).toUpperCase() : "?"
+                        seed: root.sender.name || root.sender.addr || "?"
+                        initials: (root.sender.name || "?").replace(/^[^a-zA-Z0-9]*/, "").substring(0, 1).toUpperCase()
                     }
 
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 0
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.sm
+                            Label {
+                                text: root.sender.name || (root.message ? root.message.from : "")
+                                color: Theme.text
+                                font.pixelSize: Theme.fontBase
+                                font.bold: true
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                            }
+                            Label {
+                                text: root.message ? root.message.date : ""
+                                color: Theme.textMuted
+                                font.pixelSize: Theme.fontSmall
+                            }
+                        }
                         Label {
-                            text: root.message ? root.message.from : ""
-                            color: Theme.text
-                            font.pixelSize: Theme.fontBase
-                            font.bold: true
+                            visible: root.sender.addr !== "" && root.sender.addr !== root.sender.name
+                            text: root.sender.addr
+                            color: Theme.textMuted
+                            font.pixelSize: Theme.fontSmall
                             elide: Text.ElideRight
                             Layout.fillWidth: true
                         }
                         Label {
-                            text: root.message ? root.message.date : ""
+                            visible: !root.headerExpanded && root.toLine !== ""
+                            text: qsTr("To %1").arg(root.toLine)
                             color: Theme.textMuted
                             font.pixelSize: Theme.fontSmall
                             elide: Text.ElideRight
@@ -255,6 +319,71 @@ Rectangle {
                         }
                     }
 
+                    IconButton {
+                        text: root.headerExpanded ? "⌄" : "›"
+                        fontSize: Theme.fontMedium
+                        tooltip: root.headerExpanded ? qsTr("Hide details") : qsTr("Show details")
+                        onClicked: root.headerExpanded = !root.headerExpanded
+                    }
+                }
+
+                // Expanded details: full From/To/Cc/date (same source as the
+                // Headers dialog, inline so nothing needs copying around).
+                GridLayout {
+                    Layout.fillWidth: true
+                    visible: root.headerExpanded
+                    columns: 2
+                    columnSpacing: Theme.md
+                    rowSpacing: Theme.xs
+
+                    Label { text: qsTr("From"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.headersInfo.from || root.sender.addr
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSmall
+                        wrapMode: Text.WrapAnywhere
+                        textFormat: Text.PlainText
+                    }
+                    Label { text: qsTr("To"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.toLine
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSmall
+                        wrapMode: Text.WrapAnywhere
+                        textFormat: Text.PlainText
+                    }
+                    Label {
+                        text: qsTr("Cc")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                        visible: root.ccLine !== ""
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.ccLine
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSmall
+                        wrapMode: Text.WrapAnywhere
+                        textFormat: Text.PlainText
+                        visible: text !== ""
+                    }
+                    Label { text: qsTr("Date"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.fullDate
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSmall
+                        textFormat: Text.PlainText
+                    }
+                }
+
+                // Actions on their own row (right-aligned, as before).
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.xs
+                    Item { Layout.fillWidth: true }
                     IconButton {
                         text: "↩"
                         tooltip: qsTr("Reply (R)")
