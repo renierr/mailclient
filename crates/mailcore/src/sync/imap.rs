@@ -239,6 +239,12 @@ pub struct ImapSync {
     /// round-trip; cleared on [`ImapSync::disconnect`].
     password: Option<String>,
     session: Option<TlsSession>,
+    /// NAMESPACE probe outcome: once a server proves it answers NAMESPACE
+    /// with a shape our parser cannot model, stop asking on this session.
+    /// Asking anyway costs a full reconnect per sync (the unread tagged
+    /// completion desyncs the stream) for zero namespaces in return.
+    /// Reset on every fresh connect; a replacement session re-probes once.
+    skip_namespaces: bool,
 }
 
 impl ImapSync {
@@ -253,6 +259,7 @@ impl ImapSync {
             implicit_tls: ep.implicit_tls,
             password: None,
             session: None,
+            skip_namespaces: false,
         }
     }
 
@@ -284,6 +291,9 @@ impl ImapSync {
         }
         log::info!("imap: logged in as {}", self.username);
         self.session = Some(session);
+        // Fresh stream: re-probe NAMESPACE once (a replacement session may
+        // talk to a fixed server, or a different backend behind a proxy).
+        self.skip_namespaces = false;
         Ok(())
     }
 
@@ -329,6 +339,11 @@ impl ImapSync {
     /// exactly this error the session reconnects itself before returning.
     /// BAD/NO answers are clean (their tagged line was consumed) and need nothing.
     fn query_namespaces(&mut self) -> Namespaces {
+        // Probed unparseable before on this session: asking again would buy
+        // another full reconnect for zero namespaces.
+        if self.skip_namespaces {
+            return Namespaces::default();
+        }
         let raw = match self.session() {
             Ok(session) => match session.run_command_and_read_response("NAMESPACE") {
                 Ok(raw) => raw,
@@ -337,6 +352,9 @@ impl ImapSync {
                     if let Err(e) = self.reconnect() {
                         log::warn!("imap: reconnect failed: {e}");
                     }
+                    // After the resync (connect() clears the flag for the
+                    // fresh stream): never ask again on this session.
+                    self.skip_namespaces = true;
                     return Namespaces::default();
                 }
                 Err(e) => {

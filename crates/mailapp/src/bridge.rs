@@ -659,7 +659,9 @@ fn pooled_session<'a>(
     let id = account.id;
     let reusable = pool.get_mut(&id).map(|s| s.is_healthy()).unwrap_or(false);
     if reusable {
-        log::debug!("imap: reusing pooled session for account {id}");
+        // Info, not debug: this is the line that proves the pool works
+        // (one per action, same as the connecting/logged-in pair it replaces).
+        log::info!("imap: reusing pooled session for account {id}");
     } else {
         if pool.remove(&id).is_some() {
             log::info!("imap: pooled session for account {id} went stale, reconnecting");
