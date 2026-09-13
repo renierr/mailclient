@@ -90,8 +90,8 @@ pub mod qobject {
         fn sync_now(self: Pin<&mut Self>) -> QString;
 
         /// Sync one folder (by path) fully (newest 200) on demand.
-        /// Used when opening a folder and after sends/deletes — cheap because
-        /// it is a single SELECT + windowed FETCH, not all folders.
+        /// Not called from the folder-click path: SELECT + UID SEARCH + body
+        /// fetches are synchronous today, so that path is cache-only.
         /// Returns a summary or an error message.
         #[qinvokable]
         fn sync_folder_now(self: Pin<&mut Self>, path: &QString) -> QString;

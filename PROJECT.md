@@ -61,11 +61,13 @@ Current state detail:
 
 ## 5. Sync Strategy (when / what / scaling)
 
-Manual ⟳ plus auto-refresh on startup, folder open, and after send.
+Manual ⟳ plus auto-refresh on startup and after send. Folder switches are
+cache-only so they render immediately.
 
-- **When**: cache shows instantly (offline-first); then auto-sync on startup
-  (deferred past first paint), on every folder open (that folder only), and
-  best-effort Sent refresh after each send. Read/star stay local + queued
+- **When**: cache shows instantly (offline-first); folder clicks only change
+  the local feed. Auto-sync runs on startup (deferred past first paint), plus
+  a best-effort Sent refresh after each send. The toolbar Sync refreshes the
+  account explicitly. Read/star stay local + queued
   (`flags_dirty`) and push on the next sync; delete/purge hit IMAP at once.
 - **What**: multi-pass folder discovery every run (recursive `LIST`, `LSUB`
   merge, per-root subtree `LIST` incl. dotted prefixes, `LIST` inside every
@@ -77,9 +79,8 @@ Manual ⟳ plus auto-refresh on startup, folder open, and after send.
   session reconnects itself on exactly that parse error before continuing),
   then selective + windowed per folder: INBOX syncs flags + newest 200 full
   bodies (`FULL_SYNC_WINDOW`, matches feed limit); every other folder only
-  flags + newest 50 (`QUICK_SYNC_WINDOW`) for fresh sidebar pills — custom
-  folders never auto-sync all mail, they fill (newest 200) when opened via
-  `sync_folder_now`. Delete means Trash, except spam (destroyed outright,
+   flags + newest 50 (`QUICK_SYNC_WINDOW`) for fresh sidebar pills — custom
+   folders never auto-sync all mail. Delete means Trash, except spam (destroyed outright,
   junk never touches Trash) and Trash itself (deleting there is permanent);
    one-click archive moves to Archive (auto-created server-side when missing).
    Expunge diffing is always full (local, no network);

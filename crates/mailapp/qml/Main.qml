@@ -416,15 +416,12 @@ ApplicationWindow {
             root.currentFolder = path
             root.currentUid = -1
             reloadMessages()
-            // On-demand fill: auto-sync only covered this folder quickly
-            // (newest 50), so fetch its newest 200 now that it is open.
-            // Single-folder + windowed, still cheap; failure keeps the cache.
-            var s = backend.sync_folder_now(path)
-            reloadFolders()
-            reloadMessages()
-            root.statusText = s === "" || s.indexOf("Synced") === 0
-                ? qsTr("Folder: %1").arg(path)
-                : s
+            // A folder click must only read the local cache. `sync_folder_now`
+            // SELECTs, SEARCHes every server UID and can download a 200-mail
+            // window; doing that synchronously here freezes Qt long enough for
+            // the desktop's "not responding" watchdog. Startup, auto-check
+            // and the toolbar Sync button refresh the server separately.
+            root.statusText = qsTr("Folder: %1").arg(path)
         } else {
             root.statusText = r
         }
