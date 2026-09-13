@@ -49,6 +49,8 @@ Rectangle {
     readonly property string htmlBody: message ? (message.body_html !== undefined ? message.body_html : "") : ""
     readonly property bool hasRemote: message !== undefined && message.has_remote_images === true
     property bool allowRemoteOnce: false
+    property bool isFullscreen: false
+    signal fullscreenRequested()
 
     // Keyed on the UID, not on `message` itself: the feed is re-parsed after
     // every open, star, delete and sync, so `message` is a fresh object each
@@ -408,6 +410,11 @@ Rectangle {
                         tooltip: qsTr("Delete (Del)")
                         contentColor: Theme.danger
                         onClicked: root.deleteRequested()
+                    }
+                    IconButton {
+                        text: root.isFullscreen ? "⤢" : "⤡"
+                        tooltip: root.isFullscreen ? qsTr("Exit full screen") : qsTr("Enter full screen")
+                        onClicked: root.fullscreenRequested()
                     }
                     IconButton {
                         text: "⋯"

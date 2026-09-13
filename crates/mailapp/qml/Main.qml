@@ -52,6 +52,11 @@ ApplicationWindow {
     property int currentUid: -1
     property string statusText: qsTr("Starting…")
     property bool busy: false
+    property bool readerFullscreen: false
+
+    function toggleReaderFullscreen() {
+        root.readerFullscreen = !root.readerFullscreen
+    }
 
     Bridge {
         id: backend
@@ -540,10 +545,20 @@ ApplicationWindow {
         sequences: ["F"]
         onActivated: if (root.currentUid >= 0) composer.openForForward(root.messageByUid(root.currentUid))
     }
+    Shortcut {
+        sequences: ["F11"]
+        onActivated: root.toggleReaderFullscreen()
+    }
+    Shortcut {
+        sequences: ["Esc"]
+        onActivated: if (root.readerFullscreen) root.toggleReaderFullscreen()
+    }
 
     // --- chrome -----------------------------------------------------------
 
     header: Rectangle {
+        visible: !root.readerFullscreen
+        enabled: !root.readerFullscreen
         implicitHeight: Theme.toolbarHeight
         color: Theme.bgAlt
 
@@ -642,6 +657,8 @@ ApplicationWindow {
     }
 
     SplitView {
+        visible: !root.readerFullscreen
+        enabled: !root.readerFullscreen
         anchors.fill: parent
 
         handle: Rectangle {
@@ -705,6 +722,8 @@ ApplicationWindow {
             id: messageView
             SplitView.fillWidth: true
             SplitView.minimumWidth: 260
+            visible: !root.readerFullscreen
+            isFullscreen: root.readerFullscreen
             loadRemoteImages: appSettings.load_remote_images
             readerFont: appSettings.reader_font_size
             backend: backend
@@ -716,8 +735,30 @@ ApplicationWindow {
             onArchiveRequested: root.archiveMessage(root.currentUid)
             onMoveRequested: root.openMove(root.currentUid)
             onDeleteRequested: root.deleteMessage(root.currentUid)
+            onFullscreenRequested: root.toggleReaderFullscreen()
             onStatusMessage: text => root.statusText = text
         }
+    }
+
+    MessageView {
+        id: fullscreenMessageView
+        anchors.fill: parent
+        visible: root.readerFullscreen
+        enabled: root.readerFullscreen
+        isFullscreen: true
+        loadRemoteImages: appSettings.load_remote_images
+        readerFont: appSettings.reader_font_size
+        backend: backend
+        message: root.currentMessage
+        onReplyRequested: composer.openForReply(root.currentMessage)
+        onReplyAllRequested: composer.openForReply(root.currentMessage)
+        onForwardRequested: composer.openForForward(root.currentMessage)
+        onStarRequested: root.toggleStar(root.currentUid)
+        onArchiveRequested: root.archiveMessage(root.currentUid)
+        onMoveRequested: root.openMove(root.currentUid)
+        onDeleteRequested: root.deleteMessage(root.currentUid)
+        onFullscreenRequested: root.toggleReaderFullscreen()
+        onStatusMessage: text => root.statusText = text
     }
 
     footer: Rectangle {
