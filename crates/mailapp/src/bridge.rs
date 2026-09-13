@@ -77,6 +77,10 @@ pub mod qobject {
         #[qinvokable]
         fn contacts_json(&self, prefix: &QString) -> QString;
 
+        /// Set or update a contact's custom alias. Returns `""` or an error.
+        #[qinvokable]
+        fn update_contact_alias(&self, address: &QString, alias: &QString) -> QString;
+
         /// Remove one auto-collected recipient. Returns `""` or an error.
         #[qinvokable]
         fn delete_contact(&self, address: &QString) -> QString;
@@ -452,6 +456,24 @@ impl qobject::Bridge {
             log::warn!("contacts: cannot load suggestions: {e}");
             "[]".to_string()
         }))
+    }
+
+    pub fn update_contact_alias(&self, address: &QString, alias: &QString) -> QString {
+        let address = address.to_string();
+        let alias = alias.to_string();
+        let alias_opt = if alias.trim().is_empty() {
+            None
+        } else {
+            Some(alias.as_str())
+        };
+        let result = open_db().and_then(|db| {
+            mailcore::store::contacts::set_alias(&db, address.trim(), alias_opt)
+                .map_err(|e| e.to_string())
+        });
+        match result {
+            Ok(()) => qstring(""),
+            Err(e) => qstring(&e),
+        }
     }
 
     pub fn delete_contact(&self, address: &QString) -> QString {

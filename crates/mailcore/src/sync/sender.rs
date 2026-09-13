@@ -645,6 +645,16 @@ impl MailSender for SmtpSender {
                 log::info!("smtp: sent to {:?}: {response:?}", req.to);
                 queue::mark_sent(db, queue_id)?;
                 if settings::get_bool(db, settings::COLLECT_SENT_CONTACTS).unwrap_or(true) {
+                    let mut all_rcpts = valid_mailboxes(req.to);
+                    all_rcpts.extend(valid_mailboxes(req.cc));
+                    all_rcpts.extend(valid_mailboxes(req.bcc));
+                    for mb in all_rcpts {
+                        let addr = mb.email.to_string();
+                        let name = mb.name.as_deref();
+                        if let Err(e) = contacts::seen(db, &addr, name) {
+                            log::warn!("contacts: could not collect recipient: {e}");
+                        }
+                    }
                     for mailbox in email.envelope().to() {
                         if let Err(e) = contacts::seen(db, mailbox.as_ref(), None) {
                             log::warn!("contacts: could not collect recipient: {e}");

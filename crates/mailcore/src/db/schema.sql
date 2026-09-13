@@ -134,6 +134,7 @@ create index if not exists idx_attachments_message on attachments (message_id);
 create table if not exists contacts (
     address      text primary key,
     name         text,
+    alias        text,
     times_seen   integer not null default 1,
     last_seen_at text not null
 );

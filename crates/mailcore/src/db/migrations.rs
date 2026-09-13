@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -102,6 +102,18 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
             }
         }
     }
+    if current < 8 {
+        if let Err(e) = conn.execute_batch("alter table contacts add column alias text;") {
+            let msg = e.to_string().to_ascii_lowercase();
+            if !(msg.contains("duplicate column") || msg.contains("already exists")) {
+                return Err(e.into());
+            }
+        }
+        let _ = conn.execute_batch(
+            "update contacts set alias = name where alias is null and name is not null;",
+        );
+        let _ = crate::store::contacts::seed_contacts_from_connection(conn);
+    }
     if current != SCHEMA_VERSION {
         conn.execute(
             "update schema_meta set value = ?1 where key = 'version'",
@@ -109,4 +121,35 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v8_migration_adds_alias_column_and_updates_version() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_FULL).unwrap();
+        conn.execute(
+            "insert into schema_meta (key, value) values ('version', '7')",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch("alter table contacts drop column alias;")
+            .unwrap();
+
+        ensure_schema(&conn).unwrap();
+
+        let version: String = conn
+            .query_row(
+                "select value from schema_meta where key = 'version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, "8");
+
+        conn.execute("select alias from contacts", []).unwrap();
+    }
 }

@@ -13,7 +13,7 @@ use native_tls::{TlsConnector, TlsStream};
 use crate::db::Db;
 use crate::error::{Result, StoreError};
 use crate::models::{Folder, FolderRole, Message, NewAttachment, NewMessage};
-use crate::store::{accounts, folders, messages};
+use crate::store::{accounts, contacts, folders, messages, settings};
 use crate::sync::traits::{SyncProvider, SyncReport};
 
 type TlsSession = imap::Session<TlsStream<TcpStream>>;
@@ -714,6 +714,7 @@ impl ImapSync {
                 let (parsed, files) =
                     parse_to_new(account.id, folder_id, uid, msg.flags(), raw, false)?;
                 let id = messages::upsert(db, &parsed)?;
+                collect_contacts_from_headers(db, parsed.raw_headers.as_deref());
                 // Metadata only: attachment bytes stay on the server until the
                 // user explicitly downloads a file.
                 store_attachment_meta(db, id, files);
@@ -817,6 +818,7 @@ impl ImapSync {
                 let (parsed, files) =
                     parse_to_new(account.id, folder_id, uid, msg.flags(), raw, false)?;
                 let id = messages::upsert(db, &parsed)?;
+                collect_contacts_from_headers(db, parsed.raw_headers.as_deref());
                 // Metadata only — see the windowed sync above.
                 store_attachment_meta(db, id, files);
                 fetched += 1;
@@ -1353,6 +1355,35 @@ fn addr_list(a: Option<&mail_parser::Address>) -> Vec<String> {
         }
     }
     out
+}
+
+fn collect_contacts_from_headers(db: &Db, raw_headers: Option<&str>) {
+    if !settings::get_bool(db, settings::COLLECT_SENT_CONTACTS).unwrap_or(true) {
+        return;
+    }
+    let Some(headers) = raw_headers else {
+        return;
+    };
+    if headers.trim().is_empty() {
+        return;
+    }
+    if let Some(parsed) = mail_parser::MessageParser::default().parse(headers.as_bytes()) {
+        let collect = |addr_list: Option<&mail_parser::Address>| {
+            if let Some(addrs) = addr_list {
+                for a in addrs.iter() {
+                    if let Some(email) = a.address.as_deref() {
+                        let name = a.name.as_deref();
+                        if let Err(e) = contacts::seen(db, email, name) {
+                            log::warn!("contacts: could not collect contact {email}: {e}");
+                        }
+                    }
+                }
+            }
+        };
+        collect(parsed.from());
+        collect(parsed.to());
+        collect(parsed.cc());
+    }
 }
 
 #[cfg(test)]

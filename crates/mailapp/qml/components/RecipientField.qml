@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 
 import Mailclient
 
@@ -61,18 +62,53 @@ Item {
         id: popup
         x: 0
         y: root.height + 2
-        width: root.width
+        width: Math.max(root.width, 360)
         padding: 4
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle { color: Theme.bgRaised; radius: Theme.radius; border.width: 1; border.color: Theme.border }
         contentItem: ListView {
-            implicitHeight: Math.min(contentHeight, 192)
+            implicitHeight: Math.min(contentHeight, 220)
             model: suggestionModel
             clip: true
             delegate: ItemDelegate {
                 width: ListView.view.width
-                text: (model.name ? model.name + " <" + model.address + ">" : model.address)
-                onClicked: root.choose(model.address)
+                implicitHeight: Math.round(44 * Theme.uiScale)
+                padding: Theme.sm
+                contentItem: RowLayout {
+                    spacing: Theme.sm
+                    Label {
+                        text: {
+                            var display = model.alias || model.name || ""
+                            return display !== "" ? display : model.address
+                        }
+                        color: Theme.text
+                        font.bold: true
+                        elide: Text.ElideRight
+                        Layout.maximumWidth: Math.round(ListView.view.width * 0.45)
+                    }
+                    Label {
+                        text: {
+                            var display = model.alias || model.name || ""
+                            return display !== "" ? "<" + model.address + ">" : ""
+                        }
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
+                    }
+                    Label {
+                        text: model.name && model.alias && model.name !== model.alias ? "(" + model.name + ")" : ""
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontTiny
+                        elide: Text.ElideRight
+                        visible: text !== ""
+                    }
+                }
+                onClicked: {
+                    var display = (model.alias || model.name || "").replace(/[;,]/g, " ").trim()
+                    var formatted = display !== "" ? display + " <" + model.address + ">" : model.address
+                    root.choose(formatted)
+                }
             }
         }
     }

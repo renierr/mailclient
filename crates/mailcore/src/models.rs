@@ -210,6 +210,7 @@ pub struct NewAttachment {
 pub struct Contact {
     pub address: String,
     pub name: Option<String>,
+    pub alias: Option<String>,
     pub times_seen: u64,
     pub last_seen_at: String,
 }
