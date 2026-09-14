@@ -20,7 +20,12 @@ impl qobject::Bridge {
             let acc = current_account(db, wanted)?;
             if let Ok(secrets) = auth::load_account_secrets(&acc.auth_vault_key) {
                 let sender = SmtpSender::new(&acc);
-                match sender.flush_outbox(db, acc.id, &secrets.smtp_password) {
+                match sender.flush_outbox(
+                    db,
+                    acc.id,
+                    &secrets.smtp_password,
+                    Some(secrets.imap_password.as_str()),
+                ) {
                     Ok(n) if n > 0 => log::info!("smtp: flushed {n} queued send(s)"),
                     Err(e) => log::warn!("smtp: outbox flush failed: {e}"),
                     _ => {}
@@ -89,11 +94,7 @@ impl qobject::Bridge {
                     "Synced {} folders: +{fetched} new, -{expunged} removed{flags}{scope}{hidden}",
                     folders.len()
                 ),
-                JobRefresh {
-                    account_id: acc.id,
-                    folder_id,
-                    message_limit: None,
-                },
+                Some(JobRefresh::feeds(acc.id, folder_id)),
             ))
         })
     }
@@ -118,11 +119,7 @@ impl qobject::Bridge {
                     "Synced {}: +{} new, -{} removed",
                     folder.path, r.fetched, r.expunged
                 ),
-                JobRefresh {
-                    account_id: acc.id,
-                    folder_id: folder.id,
-                    message_limit: None,
-                },
+                Some(JobRefresh::feeds(acc.id, folder.id)),
             ))
         })
     }
@@ -150,7 +147,7 @@ impl qobject::Bridge {
             };
             Ok((
                 status,
-                JobRefresh {
+                Some(JobRefresh {
                     account_id: acc.id,
                     folder_id,
                     message_limit: if r.fetched > 0 {
@@ -158,7 +155,7 @@ impl qobject::Bridge {
                     } else {
                         None
                     },
-                },
+                }),
             ))
         })
     }
@@ -184,11 +181,7 @@ impl qobject::Bridge {
             };
             Ok((
                 format!("Found {} IMAP folders", list.len()),
-                JobRefresh {
-                    account_id: acc.id,
-                    folder_id,
-                    message_limit: None,
-                },
+                Some(JobRefresh::feeds(acc.id, folder_id)),
             ))
         })
     }
@@ -256,11 +249,7 @@ impl qobject::Bridge {
             if folders::get_by_path(db, acc.id, &normalized).is_ok() {
                 return Ok((
                     "Folder already exists".to_string(),
-                    JobRefresh {
-                        account_id: acc.id,
-                        folder_id: current,
-                        message_limit: None,
-                    },
+                    Some(JobRefresh::feeds(acc.id, current)),
                 ));
             }
             let folder = with_imap(&acc, |imap| {
@@ -270,11 +259,7 @@ impl qobject::Bridge {
             })?;
             Ok((
                 format!("Created {folder}"),
-                JobRefresh {
-                    account_id: acc.id,
-                    folder_id: current,
-                    message_limit: None,
-                },
+                Some(JobRefresh::feeds(acc.id, current)),
             ))
         })
     }

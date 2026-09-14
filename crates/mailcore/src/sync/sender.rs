@@ -641,7 +641,13 @@ impl MailSender for SmtpSender {
         )?;
         let raw = email.formatted();
         let queue_id = queue::enqueue_mime(db, account_id, None, &raw, from_addr, &rcpts)?;
-        self.submit_queued(db, queue_id, req.password)?;
+        if let Err(e) = self.submit_queued(db, queue_id, req.password) {
+            // The user is about to see this failure and owns the retry. Leaving
+            // submittable bytes behind would let the next sync deliver the same
+            // message again, duplicating whatever they resend by hand.
+            let _ = queue::discard_mime(db, queue_id);
+            return Err(e);
+        }
         if settings::get_bool(db, settings::COLLECT_SENT_CONTACTS).unwrap_or(true) {
             let mut all_rcpts = valid_mailboxes(req.to);
             all_rcpts.extend(valid_mailboxes(req.cc));
@@ -654,7 +660,7 @@ impl MailSender for SmtpSender {
                 }
             }
         }
-        self.save_sent_copy(db, account_id, req, &raw);
+        self.save_sent_copy(db, account_id, req.imap_password, &raw);
         Ok(())
     }
 }
@@ -695,16 +701,54 @@ impl SmtpSender {
         }
     }
 
-    /// Retry every submittable outbox row for this account (failed / leftover
-    /// `sending` after a crash). Stops at the first SMTP error.
-    pub fn flush_outbox(&self, db: &Db, account_id: i64, password: &str) -> Result<u64> {
-        let _ = queue::requeue_interrupted(db);
+    /// Retry every submittable outbox row for this account — rows left in
+    /// `sending` by a crash, or earlier flushes that failed transiently. A row
+    /// whose failure already reached the user has no MIME left and is skipped.
+    ///
+    /// Each row is delivered exactly as the original send would have been,
+    /// Sent copy included. One row failing does not stop the rest: a permanent
+    /// rejection would otherwise block every message queued behind it until
+    /// its retry budget ran out. Errors are logged per row; one is returned
+    /// only when nothing at all got through, so a partial flush still reports
+    /// what it delivered.
+    pub fn flush_outbox(
+        &self,
+        db: &Db,
+        account_id: i64,
+        password: &str,
+        imap_password: Option<&str>,
+    ) -> Result<u64> {
+        let _ = queue::requeue_interrupted(db, account_id);
+        let _ = queue::prune_sent(db);
         let mut sent = 0u64;
+        let mut first_error = None;
         for row in queue::list_submittable(db, account_id)? {
-            self.submit_queued(db, row.id, password)?;
-            sent += 1;
+            match self.submit_queued(db, row.id, password) {
+                Ok(()) => {
+                    sent += 1;
+                    if settings::get_bool(db, settings::COLLECT_SENT_CONTACTS).unwrap_or(true) {
+                        // Envelope only: the display names lived in the
+                        // composer form, which is long gone by now.
+                        for addr in &row.envelope_to {
+                            if let Err(e) = contacts::seen(db, addr, None) {
+                                log::warn!("contacts: could not collect recipient: {e}");
+                            }
+                        }
+                    }
+                    if let Some(raw) = row.raw_mime.as_deref() {
+                        self.save_sent_copy(db, account_id, imap_password, raw);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("smtp: outbox entry {} failed: {e}", row.id);
+                    first_error.get_or_insert(e);
+                }
+            }
         }
-        Ok(sent)
+        match first_error {
+            Some(e) if sent == 0 => Err(e),
+            _ => Ok(sent),
+        }
     }
 
     fn submit_raw(&self, from: &str, to: &[String], raw: &[u8], password: &str) -> Result<()> {
@@ -727,7 +771,7 @@ impl SmtpSender {
     /// Best-effort: skipped (with a warning) when the `sent_copy_enabled`
     /// setting is off, no Sent folder is known, or no IMAP credential is
     /// available. Never fails the send itself.
-    fn save_sent_copy(&self, db: &Db, account_id: i64, req: &SendRequest<'_>, raw: &[u8]) {
+    fn save_sent_copy(&self, db: &Db, account_id: i64, imap_password: Option<&str>, raw: &[u8]) {
         match settings::get_bool(db, settings::SENT_COPY_ENABLED) {
             Ok(true) => {}
             Ok(false) => {
@@ -753,7 +797,7 @@ impl SmtpSender {
             log::warn!("smtp: no Sent folder known, skipping sent copy");
             return;
         };
-        let Some(imap_password) = req.imap_password else {
+        let Some(imap_password) = imap_password else {
             log::warn!("smtp: no IMAP credential, skipping sent copy");
             return;
         };

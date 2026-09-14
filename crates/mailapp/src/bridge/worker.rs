@@ -18,6 +18,46 @@ pub(crate) struct JobRefresh {
     pub message_limit: Option<i32>,
 }
 
+/// The selection a job started from, so its completion can tell a deliberate
+/// redirect (the synced folder vanished) from a stale one (the user moved on
+/// while the network was busy).
+#[derive(Clone, Copy)]
+struct Selection {
+    account_id: i64,
+    folder_id: i64,
+}
+
+impl JobRefresh {
+    /// Rebuild the folder and message feeds for this selection.
+    pub fn feeds(account_id: i64, folder_id: i64) -> Self {
+        Self {
+            account_id,
+            folder_id,
+            message_limit: None,
+        }
+    }
+
+    /// Resolve what the GUI should actually show. A job that asks for the same
+    /// selection it started on is only restating it, so the user's newer
+    /// choice wins; a job that asks for something else redirected on purpose
+    /// and is honoured — unless the account changed underneath it, which makes
+    /// its whole view stale.
+    fn resolve(self, started: Selection, live: Selection) -> Selection {
+        if live.account_id != started.account_id {
+            return live;
+        }
+        let folder_id = if self.folder_id == started.folder_id {
+            live.folder_id
+        } else {
+            self.folder_id
+        };
+        Selection {
+            account_id: self.account_id,
+            folder_id,
+        }
+    }
+}
+
 type JobFn = Box<dyn FnOnce() + Send>;
 
 fn net_tx() -> &'static mpsc::Sender<JobFn> {
@@ -37,16 +77,22 @@ fn net_tx() -> &'static mpsc::Sender<JobFn> {
 }
 
 /// Run `op` on the network thread. Returns immediately with `""` (queued) or
-/// a busy message. Completion is [`qobject::Bridge::job_finished`].
+/// a busy message. Completion is [`qobject::Bridge::job_finished`]; `op`
+/// returns `None` for the refresh when it changed nothing the feeds show, so
+/// reading a draft or saving an attachment does not rebuild the message list.
 pub(crate) fn spawn_job(
     mut bridge: Pin<&mut qobject::Bridge>,
     kind: &str,
-    op: impl FnOnce(&mailcore::Db) -> Result<(String, JobRefresh), String> + Send + 'static,
+    op: impl FnOnce(&mailcore::Db) -> Result<(String, Option<JobRefresh>), String> + Send + 'static,
 ) -> QString {
     if *bridge.busy() {
         return qstring("busy — wait for the current action");
     }
     bridge.as_mut().set_busy(true);
+    let started = Selection {
+        account_id: *bridge.current_account_id(),
+        folder_id: *bridge.current_folder_id(),
+    };
     let qt = bridge.qt_thread();
     let kind_owned = kind.to_string();
     let _ = net_tx().send(Box::new(move || {
@@ -55,16 +101,21 @@ pub(crate) fn spawn_job(
             op(&db)
         });
         let (status, refresh) = match outcome {
-            Ok((status, refresh)) => (status, Some(refresh)),
+            Ok((status, refresh)) => (status, refresh),
             Err(e) => (e, None),
         };
-        let _ = qt.queue(move |mut bridge| {
+        let queued = qt.queue(move |mut bridge| {
             if let Some(refresh) = refresh {
                 if let Some(limit) = refresh.message_limit {
                     bridge.as_mut().set_message_limit(limit);
                 }
+                let live = Selection {
+                    account_id: *bridge.current_account_id(),
+                    folder_id: *bridge.current_folder_id(),
+                };
+                let target = refresh.resolve(started, live);
                 if let Ok(db) = open_db() {
-                    push_feeds(&mut bridge, &db, refresh.account_id, refresh.folder_id);
+                    push_feeds(&mut bridge, &db, target.account_id, target.folder_id);
                 }
             }
             bridge.as_mut().set_busy(false);
@@ -72,6 +123,49 @@ pub(crate) fn spawn_job(
             let status = qstring(&status);
             bridge.job_finished(&kind, &status);
         });
+        if let Err(e) = queued {
+            // Only reachable once the QObject is gone, i.e. during shutdown —
+            // but `busy` would stay latched forever if it ever happened while
+            // the window still lived, so never let it pass silently.
+            log::error!("worker: cannot deliver job result to the GUI thread: {e}");
+        }
     }));
     qstring("")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{JobRefresh, Selection};
+
+    fn sel(account_id: i64, folder_id: i64) -> Selection {
+        Selection {
+            account_id,
+            folder_id,
+        }
+    }
+
+    #[test]
+    fn a_folder_switch_during_the_job_is_not_undone() {
+        let started = sel(1, 10);
+        let refresh = JobRefresh::feeds(1, 10);
+        let got = refresh.resolve(started, sel(1, 20));
+        assert_eq!(got.folder_id, 20);
+    }
+
+    #[test]
+    fn a_job_that_redirects_still_wins() {
+        // The synced folder disappeared, so the job picked the inbox instead.
+        let started = sel(1, 10);
+        let refresh = JobRefresh::feeds(1, 99);
+        let got = refresh.resolve(started, sel(1, 10));
+        assert_eq!(got.folder_id, 99);
+    }
+
+    #[test]
+    fn an_account_switch_discards_the_whole_stale_view() {
+        let started = sel(1, 10);
+        let refresh = JobRefresh::feeds(1, 99);
+        let got = refresh.resolve(started, sel(2, 30));
+        assert_eq!((got.account_id, got.folder_id), (2, 30));
+    }
 }

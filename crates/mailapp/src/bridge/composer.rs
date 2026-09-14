@@ -9,9 +9,9 @@ use mailcore::sync::traits::MailSender;
 
 use crate::bridge::messages::{draft_attachment_path, ensure_attachment_data, safe_filename};
 use crate::bridge::qobject;
+use crate::bridge::qstring;
 use crate::bridge::session::{current_account, evict_imap_session, with_imap};
 use crate::bridge::worker::{spawn_job, JobRefresh};
-use crate::bridge::qstring;
 
 impl qobject::Bridge {
     pub fn send_mail(self: Pin<&mut Self>, form: &QString) -> QString {
@@ -160,14 +160,7 @@ impl qobject::Bridge {
                         .map_err(|e| e.to_string())
                 });
             }
-            Ok((
-                String::new(),
-                JobRefresh {
-                    account_id: acc.id,
-                    folder_id,
-                    message_limit: None,
-                },
-            ))
+            Ok((String::new(), Some(JobRefresh::feeds(acc.id, folder_id))))
         })
     }
 
@@ -269,18 +262,13 @@ impl qobject::Bridge {
             }
             Ok((
                 String::new(),
-                JobRefresh {
-                    account_id: acc.id,
-                    folder_id: current_folder_id,
-                    message_limit: None,
-                },
+                Some(JobRefresh::feeds(acc.id, current_folder_id)),
             ))
         })
     }
 
     pub fn draft_form(self: Pin<&mut Self>, uid: i32) -> QString {
         let folder_id = *self.current_folder_id();
-        let acc_id = *self.current_account_id();
         spawn_job(self, "Open draft", move |db| {
             let folder = folders::get(db, folder_id).map_err(|_| "unknown folder".to_string())?;
             let message = messages::get_by_uid(db, folder_id, uid as u32)
@@ -312,11 +300,9 @@ impl qobject::Bridge {
                     "attachments": attachments,
                 })
                 .to_string(),
-                JobRefresh {
-                    account_id: acc_id,
-                    folder_id,
-                    message_limit: None,
-                },
+                // Read-only: opening a draft must not rebuild the feed under
+                // the list the user just clicked in.
+                None,
             ))
         })
     }

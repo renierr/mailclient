@@ -476,13 +476,25 @@ ApplicationWindow {
         function onColorSchemeChanged() { backend.apply_native_theme(Theme.dark) }
     }
 
+    // The bridge exposes its signal under the Rust name, so the handler is
+    // `onJob_finished` (Qt only capitalises the first letter) — `onJobFinished`
+    // silently matches nothing and the whole block never runs.
     Connections {
+        id: jobConnections
         target: backend
-        function onJobFinished(kind, status) {
-            reloadAccounts()
-            reloadFolders()
-            reloadMessages()
+        // Jobs that only read: nothing they did is visible in the feeds, so
+        // reloading would throw away the list's scroll position for free.
+        readonly property var readOnlyKinds: ["Open", "Open draft", "Save"]
+
+        function onJob_finished(kind, status) {
+            if (jobConnections.readOnlyKinds.indexOf(kind) < 0) {
+                reloadAccounts()
+                reloadFolders()
+                reloadMessages()
+            }
             if (kind === "Send") {
+                // "sent, but …" means SMTP already accepted the message.
+                // Closing prevents a retry from sending a duplicate.
                 if (status === "" || status.indexOf("sent, but") === 0) {
                     composer.markClean()
                     composer.close()
@@ -493,7 +505,15 @@ ApplicationWindow {
                 return
             }
             if (kind === "Save draft") {
-                root.statusText = status === "" ? qsTr("Draft saved") : status
+                // Same reasoning: a partial save already appended the
+                // replacement, so reopening and retrying would duplicate it.
+                if (status === "" || status.indexOf("draft saved, but") === 0) {
+                    composer.markClean()
+                    composer.close()
+                    root.statusText = status === "" ? qsTr("Draft saved") : status
+                } else {
+                    root.statusText = status
+                }
                 return
             }
             if (kind === "Open") {
@@ -839,13 +859,11 @@ ApplicationWindow {
         }
         onSaveDraftRequested: payload => {
             root.statusText = qsTr("Saving draft…")
+            // Stays open until the job reports back: closing on the queue
+            // acknowledgement would discard the text if the save then failed.
             var r = backend.save_draft(payload)
-            if (r === "") {
-                composer.markClean()
-                composer.close()
-            } else {
+            if (r !== "")
                 root.statusText = r
-            }
         }
     }
 

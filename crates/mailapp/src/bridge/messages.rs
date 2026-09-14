@@ -259,8 +259,6 @@ impl qobject::Bridge {
         if attachment_id < 0 {
             return qstring("unknown attachment");
         }
-        let acc_id = *self.current_account_id();
-        let folder_id = *self.current_folder_id();
         spawn_job(self, "Open", move |db| {
             let parent =
                 messages::get_attachment(db, attachment_id as i64).map_err(|e| e.to_string())?;
@@ -278,14 +276,9 @@ impl qobject::Bridge {
             let dest = dir.join(name);
             messages::save_attachment_to_path(db, attachment_id as i64, &dest)
                 .map_err(|e| e.to_string())?;
-            Ok((
-                file_url(&dest),
-                JobRefresh {
-                    account_id: acc_id,
-                    folder_id,
-                    message_limit: None,
-                },
-            ))
+            // Reading bytes out of a message changes nothing the feeds
+            // show, so the list keeps its scroll position and selection.
+            Ok((file_url(&dest), None))
         })
     }
 
@@ -293,8 +286,6 @@ impl qobject::Bridge {
         if attachment_id < 0 {
             return qstring("unknown attachment");
         }
-        let acc_id = *self.current_account_id();
-        let folder_id = *self.current_folder_id();
         let path = path.to_string();
         spawn_job(self, "Save", move |db| {
             let parent =
@@ -303,19 +294,11 @@ impl qobject::Bridge {
             let dest = resolve_save_path(db, attachment_id as i64, &path)?;
             messages::save_attachment_to_path(db, attachment_id as i64, &dest)
                 .map_err(|e| e.to_string())?;
-            Ok((
-                format!("Saved to {}", dest.display()),
-                JobRefresh {
-                    account_id: acc_id,
-                    folder_id,
-                    message_limit: None,
-                },
-            ))
+            Ok((format!("Saved to {}", dest.display()), None))
         })
     }
 
     pub fn save_all_attachments(self: Pin<&mut Self>, uid: i32, dir: &QString) -> QString {
-        let acc_id = *self.current_account_id();
         let folder_id = *self.current_folder_id();
         let dir = dir.to_string();
         spawn_job(self, "Save", move |db| {
@@ -358,14 +341,7 @@ impl qobject::Bridge {
             if saved == 0 {
                 return Err("could not save attachments".to_string());
             }
-            Ok((
-                format!("Saved {saved} attachment(s)"),
-                JobRefresh {
-                    account_id: acc_id,
-                    folder_id,
-                    message_limit: None,
-                },
-            ))
+            Ok((format!("Saved {saved} attachment(s)"), None))
         })
     }
 
@@ -418,7 +394,8 @@ impl qobject::Bridge {
         let acc_id = *self.current_account_id();
         let folder_id = *self.current_folder_id();
         spawn_job(self, "Delete", move |db| {
-            let msg = messages::get_by_uid(db, folder_id, uid as u32).map_err(|_| String::new())?;
+            let msg = messages::get_by_uid(db, folder_id, uid as u32)
+                .map_err(|_| "message is no longer available".to_string())?;
             let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
             let outcome = with_imap(&acc, |imap| {
                 imap.trash_message(db, msg.id).map_err(|e| e.to_string())
@@ -428,11 +405,7 @@ impl qobject::Bridge {
                     TrashOutcome::Moved(path) => format!("Moved to {path}"),
                     TrashOutcome::Expunged => "Deleted permanently".to_string(),
                 },
-                JobRefresh {
-                    account_id: acc_id,
-                    folder_id,
-                    message_limit: None,
-                },
+                Some(JobRefresh::feeds(acc_id, folder_id)),
             ))
         })
     }
@@ -441,7 +414,8 @@ impl qobject::Bridge {
         let acc_id = *self.current_account_id();
         let folder_id = *self.current_folder_id();
         spawn_job(self, "Archive", move |db| {
-            let msg = messages::get_by_uid(db, folder_id, uid as u32).map_err(|_| String::new())?;
+            let msg = messages::get_by_uid(db, folder_id, uid as u32)
+                .map_err(|_| "message is no longer available".to_string())?;
             let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
             let outcome = with_imap(&acc, |imap| {
                 imap.archive_message(db, msg.id).map_err(|e| e.to_string())
@@ -451,11 +425,7 @@ impl qobject::Bridge {
                     ArchiveOutcome::Moved(path) => format!("Archived to {path}"),
                     ArchiveOutcome::AlreadyThere => "Already in Archive".to_string(),
                 },
-                JobRefresh {
-                    account_id: acc_id,
-                    folder_id,
-                    message_limit: None,
-                },
+                Some(JobRefresh::feeds(acc_id, folder_id)),
             ))
         })
     }
@@ -466,7 +436,8 @@ impl qobject::Bridge {
         let path = path.to_string();
         spawn_job(self, "Move", move |db| {
             let acc = current_account(db, wanted)?;
-            let msg = messages::get_by_uid(db, current, uid as u32).map_err(|_| String::new())?;
+            let msg = messages::get_by_uid(db, current, uid as u32)
+                .map_err(|_| "message is no longer available".to_string())?;
             let dest = folders::get_by_path(db, acc.id, &path).map_err(|e| e.to_string())?;
             let outcome = with_imap(&acc, |imap| {
                 imap.move_to_folder(db, msg.id, dest.id)
@@ -477,11 +448,7 @@ impl qobject::Bridge {
                     MoveOutcome::Moved(path) => format!("Moved to {path}"),
                     MoveOutcome::AlreadyThere => "Already here".to_string(),
                 },
-                JobRefresh {
-                    account_id: acc.id,
-                    folder_id: current,
-                    message_limit: None,
-                },
+                Some(JobRefresh::feeds(acc.id, current)),
             ))
         })
     }
@@ -490,18 +457,15 @@ impl qobject::Bridge {
         let acc_id = *self.current_account_id();
         let folder_id = *self.current_folder_id();
         spawn_job(self, "Delete", move |db| {
-            let msg = messages::get_by_uid(db, folder_id, uid as u32).map_err(|_| String::new())?;
+            let msg = messages::get_by_uid(db, folder_id, uid as u32)
+                .map_err(|_| "message is no longer available".to_string())?;
             let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
             with_imap(&acc, |imap| {
                 imap.delete_message(db, msg.id).map_err(|e| e.to_string())
             })?;
             Ok((
                 "Deleted permanently".to_string(),
-                JobRefresh {
-                    account_id: acc_id,
-                    folder_id,
-                    message_limit: None,
-                },
+                Some(JobRefresh::feeds(acc_id, folder_id)),
             ))
         })
     }
@@ -626,14 +590,7 @@ impl qobject::Bridge {
                     }
                 }
             };
-            Ok((
-                summary,
-                JobRefresh {
-                    account_id: acc_id,
-                    folder_id,
-                    message_limit: None,
-                },
-            ))
+            Ok((summary, Some(JobRefresh::feeds(acc_id, folder_id))))
         })
     }
 
@@ -672,14 +629,7 @@ impl qobject::Bridge {
                     .map_err(|e| e.to_string())?;
                 Ok(format!("Archived {n} to {}", archive.path))
             })?;
-            Ok((
-                summary,
-                JobRefresh {
-                    account_id: acc_id,
-                    folder_id,
-                    message_limit: None,
-                },
-            ))
+            Ok((summary, Some(JobRefresh::feeds(acc_id, folder_id))))
         })
     }
 
@@ -697,11 +647,7 @@ impl qobject::Bridge {
             if dest.id == current {
                 return Ok((
                     "Already here".to_string(),
-                    JobRefresh {
-                        account_id: acc.id,
-                        folder_id: current,
-                        message_limit: None,
-                    },
+                    Some(JobRefresh::feeds(acc.id, current)),
                 ));
             }
             let folder = folders::get(db, current).map_err(|e| e.to_string())?;
@@ -714,11 +660,7 @@ impl qobject::Bridge {
             })?;
             Ok((
                 format!("Moved {n} to {}", dest.path),
-                JobRefresh {
-                    account_id: acc.id,
-                    folder_id: current,
-                    message_limit: None,
-                },
+                Some(JobRefresh::feeds(acc.id, current)),
             ))
         })
     }
@@ -738,11 +680,7 @@ impl qobject::Bridge {
             })?;
             Ok((
                 format!("Deleted {n} permanently"),
-                JobRefresh {
-                    account_id: acc_id,
-                    folder_id,
-                    message_limit: None,
-                },
+                Some(JobRefresh::feeds(acc_id, folder_id)),
             ))
         })
     }
