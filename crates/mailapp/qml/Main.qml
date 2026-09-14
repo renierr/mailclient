@@ -486,6 +486,16 @@ ApplicationWindow {
         // reloading would throw away the list's scroll position for free.
         readonly property var readOnlyKinds: ["Open", "Open draft", "Save"]
 
+        // SMTP has accepted the message; the Sent copy and the folder
+        // resync still have to run, but the user is done waiting.
+        function onJob_progress(kind, status) {
+            if (kind === "Send") {
+                composer.markClean()
+                composer.close()
+                root.statusText = qsTr("Sent")
+            }
+        }
+
         function onJob_finished(kind, status) {
             if (jobConnections.readOnlyKinds.indexOf(kind) < 0) {
                 reloadAccounts()
@@ -493,15 +503,16 @@ ApplicationWindow {
                 reloadMessages()
             }
             if (kind === "Send") {
-                // "sent, but …" means SMTP already accepted the message.
-                // Closing prevents a retry from sending a duplicate.
+                // Normally already closed on the progress signal; closing an
+                // already-closed dialog is a no-op, and this is the backstop
+                // for the case where it never arrived. "sent, but …"
+                // means the bookkeeping failed, never the delivery.
                 if (status === "" || status.indexOf("sent, but") === 0) {
                     composer.markClean()
                     composer.close()
-                    root.statusText = status === "" ? qsTr("Sent") : status
-                } else {
-                    root.statusText = status
                 }
+                if (status !== "")
+                    root.statusText = status
                 return
             }
             if (kind === "Save draft") {

@@ -41,6 +41,13 @@ pub mod qobject {
         #[qsignal]
         fn job_finished(self: Pin<&mut Self>, kind: &QString, status: &QString);
 
+        /// Fired when a job reaches a milestone the UI should act on before
+        /// the job itself is done — SMTP accepting a message, say, so the
+        /// composer can close while the Sent copy and the folder refresh
+        /// still run. Feeds are *not* refreshed yet; `job_finished` follows.
+        #[qsignal]
+        fn job_progress(self: Pin<&mut Self>, kind: &QString, status: &QString);
+
         /// Health check callable from QML: returns `"pong: <message>"`.
         #[qinvokable]
         fn ping(&self, message: &QString) -> QString;

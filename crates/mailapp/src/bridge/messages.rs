@@ -259,7 +259,7 @@ impl qobject::Bridge {
         if attachment_id < 0 {
             return qstring("unknown attachment");
         }
-        spawn_job(self, "Open", move |db| {
+        spawn_job(self, "Open", move |db, _progress| {
             let parent =
                 messages::get_attachment(db, attachment_id as i64).map_err(|e| e.to_string())?;
             ensure_attachment_data(db, parent.message_id, false)?;
@@ -287,7 +287,7 @@ impl qobject::Bridge {
             return qstring("unknown attachment");
         }
         let path = path.to_string();
-        spawn_job(self, "Save", move |db| {
+        spawn_job(self, "Save", move |db, _progress| {
             let parent =
                 messages::get_attachment(db, attachment_id as i64).map_err(|e| e.to_string())?;
             ensure_attachment_data(db, parent.message_id, false)?;
@@ -301,7 +301,7 @@ impl qobject::Bridge {
     pub fn save_all_attachments(self: Pin<&mut Self>, uid: i32, dir: &QString) -> QString {
         let folder_id = *self.current_folder_id();
         let dir = dir.to_string();
-        spawn_job(self, "Save", move |db| {
+        spawn_job(self, "Save", move |db, _progress| {
             if folder_id < 0 || uid < 0 {
                 return Err("no message selected".to_string());
             }
@@ -393,7 +393,7 @@ impl qobject::Bridge {
     pub fn delete_message(self: Pin<&mut Self>, uid: i32) -> QString {
         let acc_id = *self.current_account_id();
         let folder_id = *self.current_folder_id();
-        spawn_job(self, "Delete", move |db| {
+        spawn_job(self, "Delete", move |db, _progress| {
             let msg = messages::get_by_uid(db, folder_id, uid as u32)
                 .map_err(|_| "message is no longer available".to_string())?;
             let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
@@ -413,7 +413,7 @@ impl qobject::Bridge {
     pub fn archive_message(self: Pin<&mut Self>, uid: i32) -> QString {
         let acc_id = *self.current_account_id();
         let folder_id = *self.current_folder_id();
-        spawn_job(self, "Archive", move |db| {
+        spawn_job(self, "Archive", move |db, _progress| {
             let msg = messages::get_by_uid(db, folder_id, uid as u32)
                 .map_err(|_| "message is no longer available".to_string())?;
             let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
@@ -434,7 +434,7 @@ impl qobject::Bridge {
         let wanted = *self.current_account_id();
         let current = *self.current_folder_id();
         let path = path.to_string();
-        spawn_job(self, "Move", move |db| {
+        spawn_job(self, "Move", move |db, _progress| {
             let acc = current_account(db, wanted)?;
             let msg = messages::get_by_uid(db, current, uid as u32)
                 .map_err(|_| "message is no longer available".to_string())?;
@@ -456,7 +456,7 @@ impl qobject::Bridge {
     pub fn purge_message(self: Pin<&mut Self>, uid: i32) -> QString {
         let acc_id = *self.current_account_id();
         let folder_id = *self.current_folder_id();
-        spawn_job(self, "Delete", move |db| {
+        spawn_job(self, "Delete", move |db, _progress| {
             let msg = messages::get_by_uid(db, folder_id, uid as u32)
                 .map_err(|_| "message is no longer available".to_string())?;
             let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
@@ -556,7 +556,7 @@ impl qobject::Bridge {
         };
         let acc_id = *self.current_account_id();
         let folder_id = *self.current_folder_id();
-        spawn_job(self, "Delete", move |db| {
+        spawn_job(self, "Delete", move |db, _progress| {
             let folder = folders::get(db, folder_id).map_err(|e| e.to_string())?;
             let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
             if folder.account_id != acc.id {
@@ -601,7 +601,7 @@ impl qobject::Bridge {
         };
         let acc_id = *self.current_account_id();
         let folder_id = *self.current_folder_id();
-        spawn_job(self, "Archive", move |db| {
+        spawn_job(self, "Archive", move |db, _progress| {
             let folder = folders::get(db, folder_id).map_err(|e| e.to_string())?;
             let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
             let summary = with_imap(&acc, |imap| {
@@ -641,7 +641,7 @@ impl qobject::Bridge {
         let wanted = *self.current_account_id();
         let current = *self.current_folder_id();
         let path = path.to_string();
-        spawn_job(self, "Move", move |db| {
+        spawn_job(self, "Move", move |db, _progress| {
             let acc = current_account(db, wanted)?;
             let dest = folders::get_by_path(db, acc.id, &path).map_err(|e| e.to_string())?;
             if dest.id == current {
@@ -672,7 +672,7 @@ impl qobject::Bridge {
         };
         let acc_id = *self.current_account_id();
         let folder_id = *self.current_folder_id();
-        spawn_job(self, "Delete", move |db| {
+        spawn_job(self, "Delete", move |db, _progress| {
             let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
             let n = with_imap(&acc, |imap| {
                 imap.purge_uids(db, folder_id, &uids)

@@ -87,7 +87,7 @@ impl qobject::Bridge {
         let draft_uid = v.get("draft_uid").and_then(|x| x.as_i64()).unwrap_or(-1) as i32;
         let wanted = *self.current_account_id();
         let folder_id = *self.current_folder_id();
-        spawn_job(self, "Send", move |db| {
+        spawn_job(self, "Send", move |db, progress| {
             let acc = current_account(db, wanted)?;
             let secrets = auth::load_account_secrets(&acc.auth_vault_key)
                 .map_err(|e| format!("no password in keyring: {e}"))?;
@@ -129,6 +129,10 @@ impl qobject::Bridge {
             sender
                 .send_raw(db, acc.id, &req)
                 .map_err(|e| e.to_string())?;
+            // Handed off to the server: the message is sent and nothing below
+            // can un-send it. Release the composer now rather than holding it
+            // open through the Sent copy, the draft removal and the resync.
+            progress.report("");
             if draft_uid >= 0 {
                 let draft_folder = folders::list_by_account(db, acc.id)
                     .map_err(|e| e.to_string())?
@@ -203,7 +207,7 @@ impl qobject::Bridge {
         let source_uid = v.get("draft_uid").and_then(|x| x.as_i64()).unwrap_or(-1) as i32;
         let wanted = *self.current_account_id();
         let current_folder_id = *self.current_folder_id();
-        spawn_job(self, "Save draft", move |db| {
+        spawn_job(self, "Save draft", move |db, _progress| {
             let acc = current_account(db, wanted)?;
             let drafts = folders::list_by_account(db, acc.id)
                 .map_err(|e| e.to_string())?
@@ -269,7 +273,7 @@ impl qobject::Bridge {
 
     pub fn draft_form(self: Pin<&mut Self>, uid: i32) -> QString {
         let folder_id = *self.current_folder_id();
-        spawn_job(self, "Open draft", move |db| {
+        spawn_job(self, "Open draft", move |db, _progress| {
             let folder = folders::get(db, folder_id).map_err(|_| "unknown folder".to_string())?;
             let message = messages::get_by_uid(db, folder_id, uid as u32)
                 .map_err(|_| "draft is no longer available".to_string())?;

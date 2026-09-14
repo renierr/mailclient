@@ -16,7 +16,7 @@ impl qobject::Bridge {
     pub fn sync_now(self: Pin<&mut Self>) -> QString {
         let wanted = *self.current_account_id();
         let current = *self.current_folder_id();
-        spawn_job(self, "Sync", move |db| {
+        spawn_job(self, "Sync", move |db, _progress| {
             let acc = current_account(db, wanted)?;
             if let Ok(secrets) = auth::load_account_secrets(&acc.auth_vault_key) {
                 let sender = SmtpSender::new(&acc);
@@ -102,7 +102,7 @@ impl qobject::Bridge {
     pub fn sync_folder_now(self: Pin<&mut Self>, path: &QString) -> QString {
         let wanted = *self.current_account_id();
         let path = path.to_string();
-        spawn_job(self, "Sync", move |db| {
+        spawn_job(self, "Sync", move |db, _progress| {
             let acc = current_account(db, wanted)?;
             let folder = folders::get_by_path(db, acc.id, &path).map_err(|e| e.to_string())?;
             let r = with_imap(&acc, |imap| {
@@ -130,7 +130,7 @@ impl qobject::Bridge {
         if folder_id < 0 {
             return qstring("no folder selected");
         }
-        spawn_job(self, "Sync", move |db| {
+        spawn_job(self, "Sync", move |db, _progress| {
             let acc = current_account(db, wanted)?;
             let folder = folders::get(db, folder_id).map_err(|e| e.to_string())?;
             if folder.account_id != acc.id {
@@ -163,7 +163,7 @@ impl qobject::Bridge {
     pub fn refresh_folders(self: Pin<&mut Self>) -> QString {
         let wanted = *self.current_account_id();
         let current = *self.current_folder_id();
-        spawn_job(self, "Sync", move |db| {
+        spawn_job(self, "Sync", move |db, _progress| {
             let acc = current_account(db, wanted)?;
             let list = with_imap(&acc, |imap| {
                 imap.sync_folders(db, acc.id).map_err(|e| e.to_string())
@@ -237,7 +237,7 @@ impl qobject::Bridge {
         let wanted = *self.current_account_id();
         let current = *self.current_folder_id();
         let path = path.to_string();
-        spawn_job(self, "Sync", move |db| {
+        spawn_job(self, "Sync", move |db, _progress| {
             let acc = current_account(db, wanted)?;
             let delimiter = folders::list_by_account(db, acc.id)
                 .unwrap_or_default()

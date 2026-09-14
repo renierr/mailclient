@@ -58,6 +58,30 @@ impl JobRefresh {
     }
 }
 
+/// Lets a running job tell the GUI it has passed a milestone worth acting on
+/// before the job is over. A send is the case that matters: once SMTP has
+/// accepted the message it *is* sent, and making the user watch the composer
+/// while the Sent copy is appended and the folder resyncs is a lie about what
+/// they are waiting for.
+pub(crate) struct JobProgress {
+    qt: cxx_qt::CxxQtThread<qobject::Bridge>,
+    kind: String,
+}
+
+impl JobProgress {
+    pub fn report(&self, status: &str) {
+        let kind = self.kind.clone();
+        let status = status.to_string();
+        if let Err(e) = self.qt.queue(move |mut bridge| {
+            let kind = qstring(&kind);
+            let status = qstring(&status);
+            bridge.as_mut().job_progress(&kind, &status);
+        }) {
+            log::warn!("worker: cannot report job progress to the GUI thread: {e}");
+        }
+    }
+}
+
 type JobFn = Box<dyn FnOnce() + Send>;
 
 fn net_tx() -> &'static mpsc::Sender<JobFn> {
@@ -83,7 +107,9 @@ fn net_tx() -> &'static mpsc::Sender<JobFn> {
 pub(crate) fn spawn_job(
     mut bridge: Pin<&mut qobject::Bridge>,
     kind: &str,
-    op: impl FnOnce(&mailcore::Db) -> Result<(String, Option<JobRefresh>), String> + Send + 'static,
+    op: impl FnOnce(&mailcore::Db, &JobProgress) -> Result<(String, Option<JobRefresh>), String>
+        + Send
+        + 'static,
 ) -> QString {
     if *bridge.busy() {
         return qstring("busy — wait for the current action");
@@ -95,10 +121,14 @@ pub(crate) fn spawn_job(
     };
     let qt = bridge.qt_thread();
     let kind_owned = kind.to_string();
+    let progress = JobProgress {
+        qt: qt.clone(),
+        kind: kind_owned.clone(),
+    };
     let _ = net_tx().send(Box::new(move || {
         let outcome = guard_sync(&kind_owned, || {
             let db = open_db()?;
-            op(&db)
+            op(&db, &progress)
         });
         let (status, refresh) = match outcome {
             Ok((status, refresh)) => (status, refresh),
