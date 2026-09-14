@@ -32,8 +32,14 @@ pub mod qobject {
         #[qproperty(i32, messages_server_total)]
         #[qproperty(QString, sort_field)]
         #[qproperty(bool, sort_descending)]
+        #[qproperty(bool, busy)]
         #[namespace = "mailclient"]
         type Bridge = super::BridgeRust;
+
+        /// Fired when a background network job finishes. Feeds are already
+        /// refreshed. `kind` is `"Sync"` / `"Send"` / `"Delete"` / …
+        #[qsignal]
+        fn job_finished(self: Pin<&mut Self>, kind: &QString, status: &QString);
 
         /// Health check callable from QML: returns `"pong: <message>"`.
         #[qinvokable]
@@ -155,18 +161,18 @@ pub mod qobject {
         /// user request — background sync stores names/sizes only). Returns
         /// an error message instead of a URL on failure.
         #[qinvokable]
-        fn open_attachment(&self, attachment_id: i32) -> QString;
+        fn open_attachment(self: Pin<&mut Self>, attachment_id: i32) -> QString;
 
         /// Write one attachment's bytes to `path` (plain path or `file://`
         /// URL from a save dialog). A directory target appends the attachment
         /// filename automatically. Returns `"Saved to <path>"` or an error.
         #[qinvokable]
-        fn save_attachment(&self, attachment_id: i32, path: &QString) -> QString;
+        fn save_attachment(self: Pin<&mut Self>, attachment_id: i32, path: &QString) -> QString;
 
         /// Write every non-inline attachment of a message into `dir`.
         /// Returns e.g. `"Saved 3 attachments"` or an error message.
         #[qinvokable]
-        fn save_all_attachments(&self, uid: i32, dir: &QString) -> QString;
+        fn save_all_attachments(self: Pin<&mut Self>, uid: i32, dir: &QString) -> QString;
 
         /// Select a folder by path and refresh the message feed.
         #[qinvokable]
@@ -315,6 +321,8 @@ pub mod qobject {
         #[qinvokable]
         fn save(self: Pin<&mut Self>);
     }
+
+    impl cxx_qt::Threading for Bridge {}
 }
 
 use core::pin::Pin;
@@ -347,6 +355,7 @@ pub struct BridgeRust {
     messages_server_total: i32,
     sort_field: QString,
     sort_descending: bool,
+    busy: bool,
 }
 
 /// Initial older-load batch size; cached messages are always rendered in full.
@@ -371,6 +380,7 @@ impl Default for BridgeRust {
             messages_server_total: -1,
             sort_field: qstring("date"),
             sort_descending: true,
+            busy: false,
         }
     }
 }
@@ -548,3 +558,4 @@ mod messages;
 mod session;
 mod settings;
 mod sync;
+mod worker;

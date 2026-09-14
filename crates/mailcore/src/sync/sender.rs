@@ -8,6 +8,7 @@
 //! Passwords arrive as function args (from the OS keyring or test env),
 //! never from SQLite.
 
+use lettre::address::{Address, Envelope};
 use lettre::message::header::ContentType;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::transport::smtp::client::{Tls, TlsParameters};
@@ -638,45 +639,90 @@ impl MailSender for SmtpSender {
             &files,
             req.request_mdn,
         )?;
-
-        let queue_id = queue::enqueue(db, account_id, None)?;
-        match self.transport(req.password)?.send(&email) {
-            Ok(response) => {
-                log::info!(
-                    "smtp: sent to {:?} via {}: {response:?}",
-                    req.to,
-                    self.endpoint.addr
-                );
-                queue::mark_sent(db, queue_id)?;
-                if settings::get_bool(db, settings::COLLECT_SENT_CONTACTS).unwrap_or(true) {
-                    let mut all_rcpts = valid_mailboxes(req.to);
-                    all_rcpts.extend(valid_mailboxes(req.cc));
-                    all_rcpts.extend(valid_mailboxes(req.bcc));
-                    for mb in all_rcpts {
-                        let addr = mb.email.to_string();
-                        let name = mb.name.as_deref();
-                        if let Err(e) = contacts::seen(db, &addr, name) {
-                            log::warn!("contacts: could not collect recipient: {e}");
-                        }
-                    }
-                    for mailbox in email.envelope().to() {
-                        if let Err(e) = contacts::seen(db, mailbox.as_ref(), None) {
-                            log::warn!("contacts: could not collect recipient: {e}");
-                        }
-                    }
+        let raw = email.formatted();
+        let queue_id = queue::enqueue_mime(db, account_id, None, &raw, from_addr, &rcpts)?;
+        self.submit_queued(db, queue_id, req.password)?;
+        if settings::get_bool(db, settings::COLLECT_SENT_CONTACTS).unwrap_or(true) {
+            let mut all_rcpts = valid_mailboxes(req.to);
+            all_rcpts.extend(valid_mailboxes(req.cc));
+            all_rcpts.extend(valid_mailboxes(req.bcc));
+            for mb in all_rcpts {
+                let addr = mb.email.to_string();
+                let name = mb.name.as_deref();
+                if let Err(e) = contacts::seen(db, &addr, name) {
+                    log::warn!("contacts: could not collect recipient: {e}");
                 }
-                self.save_sent_copy(db, account_id, req, &email.formatted());
-                Ok(())
-            }
-            Err(e) => {
-                queue::mark_failed(db, queue_id, &e.to_string())?;
-                Err(StoreError::Smtp(e))
             }
         }
+        self.save_sent_copy(db, account_id, req, &raw);
+        Ok(())
     }
 }
 
 impl SmtpSender {
+    /// Submit one persisted outbox row. Crash-safe: MIME is already on disk,
+    /// `sending` is set before the SMTP round-trip, and the same bytes are
+    /// retried after a restart.
+    pub fn submit_queued(&self, db: &Db, queue_id: i64, password: &str) -> Result<()> {
+        let row = queue::get(db, queue_id)?;
+        let raw = row
+            .raw_mime
+            .as_deref()
+            .filter(|b| !b.is_empty())
+            .ok_or_else(|| {
+                StoreError::InvalidInput(format!("queue entry {queue_id} has no MIME bytes"))
+            })?;
+        let from = row
+            .envelope_from
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| StoreError::InvalidInput("queued send missing envelope from".into()))?;
+        if row.envelope_to.is_empty() {
+            return Err(StoreError::InvalidInput(
+                "queued send has no envelope recipients".into(),
+            ));
+        }
+        queue::mark_sending(db, queue_id)?;
+        match self.submit_raw(from, &row.envelope_to, raw, password) {
+            Ok(()) => {
+                queue::mark_sent(db, queue_id)?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = queue::mark_failed(db, queue_id, &e.to_string());
+                Err(e)
+            }
+        }
+    }
+
+    /// Retry every submittable outbox row for this account (failed / leftover
+    /// `sending` after a crash). Stops at the first SMTP error.
+    pub fn flush_outbox(&self, db: &Db, account_id: i64, password: &str) -> Result<u64> {
+        let _ = queue::requeue_interrupted(db);
+        let mut sent = 0u64;
+        for row in queue::list_submittable(db, account_id)? {
+            self.submit_queued(db, row.id, password)?;
+            sent += 1;
+        }
+        Ok(sent)
+    }
+
+    fn submit_raw(&self, from: &str, to: &[String], raw: &[u8], password: &str) -> Result<()> {
+        let from_addr: Address = from.parse()?;
+        let rcpts: Vec<Address> = to
+            .iter()
+            .map(|s| s.parse())
+            .collect::<std::result::Result<_, _>>()?;
+        let envelope = Envelope::new(Some(from_addr), rcpts)
+            .map_err(|e| StoreError::InvalidInput(format!("smtp envelope: {e}")))?;
+        let response = self.transport(password)?.send_raw(&envelope, raw)?;
+        log::info!(
+            "smtp: sent to {to:?} via {}: {response:?}",
+            self.endpoint.addr
+        );
+        Ok(())
+    }
+
     /// File the sent MIME bytes into the account's Sent folder (Thunderbird-style).
     /// Best-effort: skipped (with a warning) when the `sent_copy_enabled`
     /// setting is off, no Sent folder is known, or no IMAP credential is

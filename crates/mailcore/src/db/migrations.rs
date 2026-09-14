@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -114,6 +114,20 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         );
         let _ = crate::store::contacts::seed_contacts_from_connection(conn);
     }
+    if current < 9 {
+        for stmt in [
+            "alter table send_queue add column raw_mime blob;",
+            "alter table send_queue add column envelope_from text;",
+            "alter table send_queue add column envelope_to text not null default '[]';",
+        ] {
+            if let Err(e) = conn.execute_batch(stmt) {
+                let msg = e.to_string().to_ascii_lowercase();
+                if !(msg.contains("duplicate column") || msg.contains("already exists")) {
+                    return Err(e.into());
+                }
+            }
+        }
+    }
     if current != SCHEMA_VERSION {
         conn.execute(
             "update schema_meta set value = ?1 where key = 'version'",
@@ -148,8 +162,41 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(version, "8");
+        assert_eq!(version, SCHEMA_VERSION.to_string());
 
         conn.execute("select alias from contacts", []).unwrap();
+    }
+
+    #[test]
+    fn v9_migration_adds_outbox_mime_columns() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_FULL).unwrap();
+        conn.execute(
+            "insert into schema_meta (key, value) values ('version', '8')",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch(
+            "alter table send_queue drop column raw_mime;
+             alter table send_queue drop column envelope_from;
+             alter table send_queue drop column envelope_to;",
+        )
+        .unwrap();
+
+        ensure_schema(&conn).unwrap();
+
+        let version: String = conn
+            .query_row(
+                "select value from schema_meta where key = 'version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, "9");
+        conn.execute(
+            "select raw_mime, envelope_from, envelope_to from send_queue",
+            [],
+        )
+        .unwrap();
     }
 }

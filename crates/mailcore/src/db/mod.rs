@@ -60,7 +60,8 @@ impl Db {
         conn.execute_batch(
             "pragma journal_mode = WAL;
              pragma synchronous = NORMAL;
-             pragma foreign_keys = ON;",
+             pragma foreign_keys = ON;
+             pragma busy_timeout = 5000;",
         )?;
         Ok(())
     }

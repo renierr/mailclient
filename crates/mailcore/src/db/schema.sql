@@ -142,14 +142,17 @@ create index if not exists idx_contacts_seen on contacts (times_seen desc, last_
 
 -- -------------------------------------------------------------- send_queue
 create table if not exists send_queue (
-    id          integer primary key autoincrement,
-    account_id  integer not null references accounts (id) on delete cascade,
-    message_id  integer references messages (id) on delete set null,
-    status      text not null default 'queued',
-    last_error  text,
-    retries     integer not null default 0,
-    created_at  text not null,
-    updated_at  text not null
+    id            integer primary key autoincrement,
+    account_id    integer not null references accounts (id) on delete cascade,
+    message_id    integer references messages (id) on delete set null,
+    status        text not null default 'queued',
+    last_error    text,
+    retries       integer not null default 0,
+    raw_mime      blob,
+    envelope_from text,
+    envelope_to   text not null default '[]',
+    created_at    text not null,
+    updated_at    text not null
 );
 create index if not exists idx_send_queue_pending
     on send_queue (status, created_at);

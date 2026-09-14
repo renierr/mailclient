@@ -14,7 +14,6 @@ uuid = { version = "1.0", features = ["v4"] }
 thiserror = "2.0"
 log = "0.4"
 directories = "6.0"
-tokio = { version = "1.0", features = ["full"] }
 # Mail protocols (wired up in Milestone 1-2; versions pinned early on purpose)
 lettre = "0.11"
 imap = "2.4"

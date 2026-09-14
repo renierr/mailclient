@@ -263,6 +263,10 @@ pub struct QueuedSend {
     pub status: QueueStatus,
     pub last_error: Option<String>,
     pub retries: u64,
+    /// Raw RFC 5322 bytes. `None` on legacy rows from before MIME was stored.
+    pub raw_mime: Option<Vec<u8>>,
+    pub envelope_from: Option<String>,
+    pub envelope_to: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
 }

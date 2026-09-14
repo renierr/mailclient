@@ -29,8 +29,8 @@ pub(crate) fn imap_pool() -> std::sync::MutexGuard<'static, HashMap<i64, ImapSyn
     /// Process-global rather than a `BridgeRust` field: bridge invokables
     /// only expose `Pin<&mut Self>`, which cannot hand out the `&mut`
     /// HashMap a checkout needs, while a module pool keeps every call site
-    /// a two-line change. All invokables run on the Qt GUI thread, so the
-    /// mutex is uncontended in practice; `into_inner` on poison keeps a
+    /// a two-line change. Network jobs run on the mailclient-net thread, so
+    /// the mutex serializes checkout; `into_inner` on poison keeps a
     /// panicking action from bricking later ones.
     static POOL: OnceLock<Mutex<HashMap<i64, ImapSync>>> = OnceLock::new();
     POOL.get_or_init(|| Mutex::new(HashMap::new()))
@@ -108,10 +108,10 @@ pub(crate) fn drop_all_imap_sessions() {
 /// double-panics by design), which kills the app on something as routine as
 /// startup auto-sync. A sync panic must surface as a status message instead —
 /// the failure is logged with its payload for diagnosis.
-pub(crate) fn guard_sync(
+pub(crate) fn guard_sync<T>(
     label: &str,
-    f: impl FnOnce() -> Result<String, String>,
-) -> Result<String, String> {
+    f: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(r) => r,
         Err(payload) => {

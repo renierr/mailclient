@@ -51,7 +51,7 @@ ApplicationWindow {
     property string currentFolder: ""
     property int currentUid: -1
     property string statusText: qsTr("Starting…")
-    property bool busy: false
+    property bool busy: backend.busy
     property bool readerFullscreen: false
 
     function toggleReaderFullscreen() {
@@ -161,12 +161,10 @@ ApplicationWindow {
         for (var i = 0; i < folderModel.count; i++) {
             if (folderModel.get(i).name === root.currentFolder
                     && folderModel.get(i).role === "drafts") {
-                var draft = JSON.parse(backend.draft_form(uid))
-                if (draft.draft_uid === undefined) {
-                    root.statusText = qsTr("Draft is no longer available")
-                } else {
-                    composer.openForDraft(draft)
-                }
+                root.statusText = qsTr("Opening draft…")
+                var r = backend.draft_form(uid)
+                if (r !== "")
+                    root.statusText = r
                 return
             }
         }
@@ -190,12 +188,15 @@ ApplicationWindow {
     function markAsRead(uid) {
         if (uid < 0)
             return
-        // Local-only mark-as-read: fast, no network on the click path.
         var r = backend.open_message(uid)
-        reloadFolders()
-        reloadMessages()
         if (r !== "")
             root.statusText = r
+        var row = root.messageByUid(uid)
+        if (row)
+            row.unread = false
+        if (root.currentMessage && root.currentUid === uid)
+            root.currentMessage.unread = false
+        reloadFolders()
     }
 
     function syncNow() {
@@ -203,29 +204,21 @@ ApplicationWindow {
             root.statusText = qsTr("Add an account first")
             return
         }
-        root.busy = true
+        if (root.busy)
+            return
         root.statusText = qsTr("Syncing…")
-        // NOTE: blocking network call; async worker is a follow-up.
         var r = backend.sync_now()
-        reloadFolders()
-        reloadMessages()
-        root.busy = false
-        root.statusText = r
+        if (r !== "")
+            root.statusText = r
     }
 
-    // One older batch (200) below the oldest cached UID, then the page grows
-    // so the list extends backwards without losing scroll position (the
-    // models update in place — see ModelSync).
     function loadOlder() {
         if (root.busy)
             return
-        root.busy = true
         root.statusText = qsTr("Loading older messages…")
         var r = backend.load_older_messages()
-        reloadFolders()
-        reloadMessages()
-        root.busy = false
-        root.statusText = r
+        if (r !== "")
+            root.statusText = r
     }
 
     function toggleStar(uid) {
@@ -272,26 +265,25 @@ ApplicationWindow {
     function doDelete(uid) {
         if (uid < 0)
             return
-        var r = backend.delete_message(uid)
         if (root.currentUid === uid) {
             root.currentUid = -1
             root.currentMessage = undefined
         }
-        reloadFolders()
-        reloadMessages()
-        root.statusText = r === "" ? qsTr("Deleted") : r
+        root.statusText = qsTr("Deleting…")
+        var r = backend.delete_message(uid)
+        if (r !== "")
+            root.statusText = r
     }
 
-    // One-click archive: moves to the Archive folder (created on demand).
     function archiveMessage(uid) {
         if (uid < 0)
             return
-        var r = backend.archive_message(uid)
         if (root.currentUid === uid)
             root.currentUid = -1
-        reloadFolders()
-        reloadMessages()
-        root.statusText = r === "" ? qsTr("Archived") : r
+        root.statusText = qsTr("Archiving…")
+        var r = backend.archive_message(uid)
+        if (r !== "")
+            root.statusText = r
     }
 
     // Move picker: remembers which message, the dialog reports the target.
@@ -318,12 +310,12 @@ ApplicationWindow {
     function purgeMessage(uid) {
         if (uid < 0)
             return
-        var r = backend.purge_message(uid)
         if (root.currentUid === uid)
             root.currentUid = -1
-        reloadFolders()
-        reloadMessages()
-        root.statusText = r === "" ? qsTr("Deleted permanently") : r
+        root.statusText = qsTr("Deleting…")
+        var r = backend.purge_message(uid)
+        if (r !== "")
+            root.statusText = r
     }
 
     function confirmPurge(uid) {
@@ -372,11 +364,11 @@ ApplicationWindow {
     function bulkArchive(uids) {
         if (!uids || uids.length === 0)
             return
-        var r = backend.archive_many(JSON.stringify(uids))
         root.dropPreviewIfGone(uids)
-        reloadFolders()
-        reloadMessages()
-        root.statusText = r
+        root.statusText = qsTr("Archiving…")
+        var r = backend.archive_many(JSON.stringify(uids))
+        if (r !== "")
+            root.statusText = r
     }
 
     function bulkDelete(uids) {
@@ -396,21 +388,21 @@ ApplicationWindow {
     function doBulkDelete(uids) {
         if (!uids || uids.length === 0)
             return
-        var r = backend.delete_many(JSON.stringify(uids))
         root.dropPreviewIfGone(uids)
-        reloadFolders()
-        reloadMessages()
-        root.statusText = r
+        root.statusText = qsTr("Deleting…")
+        var r = backend.delete_many(JSON.stringify(uids))
+        if (r !== "")
+            root.statusText = r
     }
 
     function bulkPurge(uids) {
         if (!uids || uids.length === 0)
             return
-        var r = backend.purge_many(JSON.stringify(uids))
         root.dropPreviewIfGone(uids)
-        reloadFolders()
-        reloadMessages()
-        root.statusText = r
+        root.statusText = qsTr("Deleting…")
+        var r = backend.purge_many(JSON.stringify(uids))
+        if (r !== "")
+            root.statusText = r
     }
 
     function changeSort(field, descending) {
@@ -482,6 +474,49 @@ ApplicationWindow {
     Connections {
         target: Application.styleHints
         function onColorSchemeChanged() { backend.apply_native_theme(Theme.dark) }
+    }
+
+    Connections {
+        target: backend
+        function onJobFinished(kind, status) {
+            reloadAccounts()
+            reloadFolders()
+            reloadMessages()
+            if (kind === "Send") {
+                if (status === "" || status.indexOf("sent, but") === 0) {
+                    composer.markClean()
+                    composer.close()
+                    root.statusText = status === "" ? qsTr("Sent") : status
+                } else {
+                    root.statusText = status
+                }
+                return
+            }
+            if (kind === "Save draft") {
+                root.statusText = status === "" ? qsTr("Draft saved") : status
+                return
+            }
+            if (kind === "Open") {
+                if (status.indexOf("file://") === 0)
+                    Qt.openUrlExternally(status)
+                else
+                    root.statusText = status
+                return
+            }
+            if (kind === "Open draft") {
+                try {
+                    var draft = JSON.parse(status)
+                    if (draft.draft_uid === undefined)
+                        root.statusText = qsTr("Draft is no longer available")
+                    else
+                        composer.openForDraft(draft)
+                } catch (e) {
+                    root.statusText = status === "" ? qsTr("Draft is no longer available") : status
+                }
+                return
+            }
+            root.statusText = status
+        }
     }
 
     // Delayed mark-as-read: fires only while the same message is still open.
@@ -797,41 +832,17 @@ ApplicationWindow {
         replyBelowQuote: appSettings.reply_below_quote
         onStatusMessage: text => root.statusText = text
         onSendRequested: payload => {
+            root.statusText = qsTr("Sending…")
             var r = backend.send_mail(payload)
-            if (r === "") {
-                composer.markClean()
-                composer.close()
-                reloadFolders()
-                reloadMessages()
-                root.statusText = qsTr("Sent")
-            } else if (r.indexOf("sent, but") === 0) {
-                // SMTP already accepted the message. Closing prevents a retry
-                // from sending a duplicate while keeping the source draft for recovery.
-                composer.markClean()
-                composer.close()
-                reloadFolders()
-                reloadMessages()
+            if (r !== "")
                 root.statusText = r
-            } else {
-                root.statusText = r
-            }
         }
         onSaveDraftRequested: payload => {
+            root.statusText = qsTr("Saving draft…")
             var r = backend.save_draft(payload)
             if (r === "") {
                 composer.markClean()
                 composer.close()
-                reloadFolders()
-                reloadMessages()
-                root.statusText = qsTr("Draft saved")
-            } else if (r.indexOf("draft saved, but") === 0) {
-                // A replacement was appended but its old source survived.
-                // Close so retrying cannot append another duplicate.
-                composer.markClean()
-                composer.close()
-                reloadFolders()
-                reloadMessages()
-                root.statusText = r
             } else {
                 root.statusText = r
             }
@@ -885,24 +896,21 @@ ApplicationWindow {
         onRefreshRequested: {
             if (root.busy)
                 return
-            root.busy = true
             root.statusText = qsTr("Refreshing folders…")
             var r = backend.refresh_folders()
-            reloadFolders()
-            reloadMessages()
-            root.busy = false
-            showResult(qsTr("Folders refreshed"), r)
+            if (r !== "")
+                root.statusText = r
         }
         onVisibilityToggled: (path, subscribed) => {
             showResult("", backend.set_folder_subscribed(path, subscribed))
             reloadFolders()
         }
         onCreateRequested: path => {
-            var r = backend.create_folder(path)
-            reloadFolders()
-            reloadMessages()
             foldersDialog.clearNewFolder()
-            showResult(qsTr("Folder created"), r)
+            root.statusText = qsTr("Creating folder…")
+            var r = backend.create_folder(path)
+            if (r !== "")
+                root.statusText = r
         }
         onFolderSelected: path => {
             foldersDialog.close()
@@ -923,18 +931,18 @@ ApplicationWindow {
             // Out of the click handler: moving rebuilds the feed.
             Qt.callLater(function () {
                 var r
+                root.statusText = qsTr("Moving…")
                 if (targets.length > 1 || (moveDialog.uids && moveDialog.uids.length > 0)) {
-                    r = backend.move_many(JSON.stringify(targets), path)
                     root.dropPreviewIfGone(targets)
+                    r = backend.move_many(JSON.stringify(targets), path)
                 } else {
                     var target = targets[0]
-                    r = backend.move_message(target, path)
                     if (root.currentUid === target)
                         root.currentUid = -1
+                    r = backend.move_message(target, path)
                 }
-                reloadFolders()
-                reloadMessages()
-                root.statusText = r === "" ? qsTr("Moved") : r
+                if (r !== "")
+                    root.statusText = r
             })
         }
     }

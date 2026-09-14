@@ -168,10 +168,9 @@ Rectangle {
     function openOne(a) {
         if (!root.backend || !root.backend.open_attachment)
             return
+        root.statusMessage(qsTr("Opening…"))
         var url = root.backend.open_attachment(a.id)
-        if (url.indexOf("file://") === 0)
-            Qt.openUrlExternally(url)
-        else
+        if (url !== "")
             root.statusMessage(url)
     }
 
@@ -670,9 +669,12 @@ Rectangle {
         fileMode: FileDialog.SaveFile
         property int attachmentId: -1
         onAccepted: {
-            if (root.backend && root.backend.save_attachment)
-                root.statusMessage(
-                    root.backend.save_attachment(attachmentId, selectedFile.toString()))
+            if (root.backend && root.backend.save_attachment) {
+                root.statusMessage(qsTr("Saving…"))
+                var r = root.backend.save_attachment(attachmentId, selectedFile.toString())
+                if (r !== "")
+                    root.statusMessage(r)
+            }
         }
     }
 
@@ -680,9 +682,12 @@ Rectangle {
         id: saveAllDialog
         title: qsTr("Save all attachments")
         onAccepted: {
-            if (root.backend && root.backend.save_all_attachments)
-                root.statusMessage(
-                    root.backend.save_all_attachments(root.messageUid, selectedFolder.toString()))
+            if (root.backend && root.backend.save_all_attachments) {
+                root.statusMessage(qsTr("Saving…"))
+                var r = root.backend.save_all_attachments(root.messageUid, selectedFolder.toString())
+                if (r !== "")
+                    root.statusMessage(r)
+            }
         }
     }
 

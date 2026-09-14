@@ -7,7 +7,8 @@ use mailcore::store::{accounts, folders, messages, settings};
 use mailcore::sync::imap::{ArchiveOutcome, MoveOutcome, TrashOutcome};
 
 use crate::bridge::qobject;
-use crate::bridge::session::{current_account, guard_sync, with_imap};
+use crate::bridge::session::{current_account, with_imap};
+use crate::bridge::worker::{spawn_job, JobRefresh};
 use crate::bridge::{open_db, push_feeds, qstring, MAX_MESSAGE_LIMIT};
 
 /// Turn save-dialog output into a plain path. Dialogs hand back `file://`
@@ -254,19 +255,18 @@ impl qobject::Bridge {
             .map_or_else(|_| qstring("{}"), |j| qstring(&j))
     }
 
-    pub fn open_attachment(&self, attachment_id: i32) -> QString {
+    pub fn open_attachment(self: Pin<&mut Self>, attachment_id: i32) -> QString {
         if attachment_id < 0 {
             return qstring("unknown attachment");
         }
-        // Guarded: ensuring bytes may hit the network on first open.
-        let result = guard_sync("Open", || {
-            let db = open_db()?;
+        let acc_id = *self.current_account_id();
+        let folder_id = *self.current_folder_id();
+        spawn_job(self, "Open", move |db| {
             let parent =
-                messages::get_attachment(&db, attachment_id as i64).map_err(|e| e.to_string())?;
-            // Open implies download: fetch bytes when not cached yet.
-            ensure_attachment_data(&db, parent.message_id, false)?;
+                messages::get_attachment(db, attachment_id as i64).map_err(|e| e.to_string())?;
+            ensure_attachment_data(db, parent.message_id, false)?;
             let a =
-                messages::get_attachment(&db, attachment_id as i64).map_err(|e| e.to_string())?;
+                messages::get_attachment(db, attachment_id as i64).map_err(|e| e.to_string())?;
             let dir = std::env::temp_dir().join("mailclient-attachments");
             std::fs::create_dir_all(&dir).map_err(|e| format!("cannot use temp folder: {e}"))?;
             let name = format!(
@@ -276,50 +276,56 @@ impl qobject::Bridge {
                 safe_filename(a.filename.as_deref(), attachment_id as i64)
             );
             let dest = dir.join(name);
-            messages::save_attachment_to_path(&db, attachment_id as i64, &dest)
+            messages::save_attachment_to_path(db, attachment_id as i64, &dest)
                 .map_err(|e| e.to_string())?;
-            Ok(file_url(&dest))
-        });
-        match result {
-            Ok(s) => qstring(&s),
-            Err(e) => qstring(&e),
-        }
+            Ok((
+                file_url(&dest),
+                JobRefresh {
+                    account_id: acc_id,
+                    folder_id,
+                    message_limit: None,
+                },
+            ))
+        })
     }
 
-    pub fn save_attachment(&self, attachment_id: i32, path: &QString) -> QString {
+    pub fn save_attachment(self: Pin<&mut Self>, attachment_id: i32, path: &QString) -> QString {
         if attachment_id < 0 {
             return qstring("unknown attachment");
         }
-        // Guarded: ensuring bytes may hit the network on first save.
-        let result = guard_sync("Save", || {
-            let db = open_db()?;
+        let acc_id = *self.current_account_id();
+        let folder_id = *self.current_folder_id();
+        let path = path.to_string();
+        spawn_job(self, "Save", move |db| {
             let parent =
-                messages::get_attachment(&db, attachment_id as i64).map_err(|e| e.to_string())?;
-            ensure_attachment_data(&db, parent.message_id, false)?;
-            let dest = resolve_save_path(&db, attachment_id as i64, &path.to_string())?;
-            messages::save_attachment_to_path(&db, attachment_id as i64, &dest)
+                messages::get_attachment(db, attachment_id as i64).map_err(|e| e.to_string())?;
+            ensure_attachment_data(db, parent.message_id, false)?;
+            let dest = resolve_save_path(db, attachment_id as i64, &path)?;
+            messages::save_attachment_to_path(db, attachment_id as i64, &dest)
                 .map_err(|e| e.to_string())?;
-            Ok(format!("Saved to {}", dest.display()))
-        });
-        match result {
-            Ok(s) => qstring(&s),
-            Err(e) => qstring(&e),
-        }
+            Ok((
+                format!("Saved to {}", dest.display()),
+                JobRefresh {
+                    account_id: acc_id,
+                    folder_id,
+                    message_limit: None,
+                },
+            ))
+        })
     }
 
-    pub fn save_all_attachments(&self, uid: i32, dir: &QString) -> QString {
-        // Guarded: ensuring bytes may hit the network on first save.
+    pub fn save_all_attachments(self: Pin<&mut Self>, uid: i32, dir: &QString) -> QString {
+        let acc_id = *self.current_account_id();
         let folder_id = *self.current_folder_id();
-        let result = guard_sync("Save", || {
-            let db = open_db()?;
+        let dir = dir.to_string();
+        spawn_job(self, "Save", move |db| {
             if folder_id < 0 || uid < 0 {
                 return Err("no message selected".to_string());
             }
-            let msg = messages::get_by_uid(&db, folder_id, uid as u32)
+            let msg = messages::get_by_uid(db, folder_id, uid as u32)
                 .map_err(|_| "unknown message".to_string())?;
-            // Download on explicit request only — then save from the cache.
-            ensure_attachment_data(&db, msg.id, false)?;
-            let files = messages::list_attachments(&db, msg.id)
+            ensure_attachment_data(db, msg.id, false)?;
+            let files = messages::list_attachments(db, msg.id)
                 .map_err(|e| e.to_string())?
                 .into_iter()
                 .filter(|a| !a.is_inline)
@@ -327,20 +333,19 @@ impl qobject::Bridge {
             if files.is_empty() {
                 return Err("no attachments to save".to_string());
             }
-            let mut base = dir_to_path(&dir.to_string());
+            let mut base = dir_to_path(&dir);
             std::fs::create_dir_all(&base).map_err(|e| format!("cannot create folder: {e}"))?;
             let mut saved = 0u32;
             for a in &files {
                 let name = safe_filename(a.filename.as_deref(), a.id);
                 base.push(&name);
-                // Never overwrite: photo(1).pdf, photo(2).pdf, …
                 let mut n = 1;
                 while base.exists() {
                     base.pop();
                     base.push(numbered_filename(&name, n));
                     n += 1;
                 }
-                match messages::save_attachment_to_path(&db, a.id, &base) {
+                match messages::save_attachment_to_path(db, a.id, &base) {
                     Ok(_) => saved += 1,
                     Err(e) => {
                         log::warn!("save-all: {} failed: {e}", a.id);
@@ -351,33 +356,31 @@ impl qobject::Bridge {
                 base.pop();
             }
             if saved == 0 {
-                Err("could not save attachments".to_string())
-            } else {
-                Ok(format!("Saved {saved} attachment(s)"))
+                return Err("could not save attachments".to_string());
             }
-        });
-        match result {
-            Ok(s) => qstring(&s),
-            Err(e) => qstring(&e),
-        }
+            Ok((
+                format!("Saved {saved} attachment(s)"),
+                JobRefresh {
+                    account_id: acc_id,
+                    folder_id,
+                    message_limit: None,
+                },
+            ))
+        })
     }
 
-    pub fn open_message(mut self: Pin<&mut Self>, uid: i32) -> QString {
+    pub fn open_message(self: Pin<&mut Self>, uid: i32) -> QString {
         let db = match open_db() {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+        let folder_id = *self.current_folder_id();
         let Ok(msg) = messages::get_by_uid(&db, folder_id, uid as u32) else {
             return qstring("");
         };
         if !msg.is_read {
-            // Local write + dirty mark only. Pushing \Seen here meant a full
-            // IMAP connect on every click, which froze the list and made
-            // selection appear stuck; `sync_now` flushes the queue instead.
             let _ = messages::set_flags(&db, msg.id, true, msg.is_starred);
         }
-        push_feeds(&mut self, &db, acc_id, folder_id);
         qstring("")
     }
 
@@ -411,98 +414,96 @@ impl qobject::Bridge {
         qstring("")
     }
 
-    pub fn delete_message(mut self: Pin<&mut Self>, uid: i32) -> QString {
-        // Guarded: any panic becomes a status message, never SIGABRT.
-        let result = guard_sync("Delete", || {
-            let db = open_db()?;
-            let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
-            let msg =
-                messages::get_by_uid(&db, folder_id, uid as u32).map_err(|_| String::new())?;
-            let acc = accounts::get(&db, acc_id).map_err(|e| e.to_string())?;
+    pub fn delete_message(self: Pin<&mut Self>, uid: i32) -> QString {
+        let acc_id = *self.current_account_id();
+        let folder_id = *self.current_folder_id();
+        spawn_job(self, "Delete", move |db| {
+            let msg = messages::get_by_uid(db, folder_id, uid as u32).map_err(|_| String::new())?;
+            let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
             let outcome = with_imap(&acc, |imap| {
-                imap.trash_message(&db, msg.id).map_err(|e| e.to_string())
+                imap.trash_message(db, msg.id).map_err(|e| e.to_string())
             })?;
-            push_feeds(&mut self, &db, acc_id, folder_id);
-            // Reported, not silent: "deleted permanently" is a different promise
-            // from "moved to Trash" and the user needs to know which happened.
-            Ok(match outcome {
-                TrashOutcome::Moved(path) => format!("Moved to {path}"),
-                TrashOutcome::Expunged => "Deleted permanently".to_string(),
-            })
-        });
-        match result {
-            Ok(s) => qstring(&s),
-            Err(e) => qstring(&e),
-        }
+            Ok((
+                match outcome {
+                    TrashOutcome::Moved(path) => format!("Moved to {path}"),
+                    TrashOutcome::Expunged => "Deleted permanently".to_string(),
+                },
+                JobRefresh {
+                    account_id: acc_id,
+                    folder_id,
+                    message_limit: None,
+                },
+            ))
+        })
     }
 
-    pub fn archive_message(mut self: Pin<&mut Self>, uid: i32) -> QString {
-        // Guarded: any panic becomes a status message, never SIGABRT.
-        let result = guard_sync("Archive", || {
-            let db = open_db()?;
-            let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
-            let msg =
-                messages::get_by_uid(&db, folder_id, uid as u32).map_err(|_| String::new())?;
-            let acc = accounts::get(&db, acc_id).map_err(|e| e.to_string())?;
+    pub fn archive_message(self: Pin<&mut Self>, uid: i32) -> QString {
+        let acc_id = *self.current_account_id();
+        let folder_id = *self.current_folder_id();
+        spawn_job(self, "Archive", move |db| {
+            let msg = messages::get_by_uid(db, folder_id, uid as u32).map_err(|_| String::new())?;
+            let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
             let outcome = with_imap(&acc, |imap| {
-                imap.archive_message(&db, msg.id).map_err(|e| e.to_string())
+                imap.archive_message(db, msg.id).map_err(|e| e.to_string())
             })?;
-            push_feeds(&mut self, &db, acc_id, folder_id);
-            Ok(match outcome {
-                ArchiveOutcome::Moved(path) => format!("Archived to {path}"),
-                ArchiveOutcome::AlreadyThere => "Already in Archive".to_string(),
-            })
-        });
-        match result {
-            Ok(s) => qstring(&s),
-            Err(e) => qstring(&e),
-        }
+            Ok((
+                match outcome {
+                    ArchiveOutcome::Moved(path) => format!("Archived to {path}"),
+                    ArchiveOutcome::AlreadyThere => "Already in Archive".to_string(),
+                },
+                JobRefresh {
+                    account_id: acc_id,
+                    folder_id,
+                    message_limit: None,
+                },
+            ))
+        })
     }
 
-    pub fn move_message(mut self: Pin<&mut Self>, uid: i32, path: &QString) -> QString {
-        // Guarded: any panic becomes a status message, never SIGABRT.
+    pub fn move_message(self: Pin<&mut Self>, uid: i32, path: &QString) -> QString {
         let wanted = *self.current_account_id();
         let current = *self.current_folder_id();
         let path = path.to_string();
-        let result = guard_sync("Move", || {
-            let db = open_db()?;
-            let acc = current_account(&db, wanted)?;
-            let msg = messages::get_by_uid(&db, current, uid as u32).map_err(|_| String::new())?;
-            let dest = folders::get_by_path(&db, acc.id, &path).map_err(|e| e.to_string())?;
+        spawn_job(self, "Move", move |db| {
+            let acc = current_account(db, wanted)?;
+            let msg = messages::get_by_uid(db, current, uid as u32).map_err(|_| String::new())?;
+            let dest = folders::get_by_path(db, acc.id, &path).map_err(|e| e.to_string())?;
             let outcome = with_imap(&acc, |imap| {
-                imap.move_to_folder(&db, msg.id, dest.id)
+                imap.move_to_folder(db, msg.id, dest.id)
                     .map_err(|e| e.to_string())
             })?;
-            push_feeds(&mut self, &db, acc.id, current);
-            Ok(match outcome {
-                MoveOutcome::Moved(path) => format!("Moved to {path}"),
-                MoveOutcome::AlreadyThere => "Already here".to_string(),
-            })
-        });
-        match result {
-            Ok(s) => qstring(&s),
-            Err(e) => qstring(&e),
-        }
+            Ok((
+                match outcome {
+                    MoveOutcome::Moved(path) => format!("Moved to {path}"),
+                    MoveOutcome::AlreadyThere => "Already here".to_string(),
+                },
+                JobRefresh {
+                    account_id: acc.id,
+                    folder_id: current,
+                    message_limit: None,
+                },
+            ))
+        })
     }
 
-    pub fn purge_message(mut self: Pin<&mut Self>, uid: i32) -> QString {
-        // Guarded: any panic becomes a status message, never SIGABRT.
-        let result = guard_sync("Delete", || {
-            let db = open_db()?;
-            let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
-            let msg =
-                messages::get_by_uid(&db, folder_id, uid as u32).map_err(|_| String::new())?;
-            let acc = accounts::get(&db, acc_id).map_err(|e| e.to_string())?;
+    pub fn purge_message(self: Pin<&mut Self>, uid: i32) -> QString {
+        let acc_id = *self.current_account_id();
+        let folder_id = *self.current_folder_id();
+        spawn_job(self, "Delete", move |db| {
+            let msg = messages::get_by_uid(db, folder_id, uid as u32).map_err(|_| String::new())?;
+            let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
             with_imap(&acc, |imap| {
-                imap.delete_message(&db, msg.id).map_err(|e| e.to_string())
+                imap.delete_message(db, msg.id).map_err(|e| e.to_string())
             })?;
-            push_feeds(&mut self, &db, acc_id, folder_id);
-            Ok("Deleted permanently".to_string())
-        });
-        match result {
-            Ok(s) => qstring(&s),
-            Err(e) => qstring(&e),
-        }
+            Ok((
+                "Deleted permanently".to_string(),
+                JobRefresh {
+                    account_id: acc_id,
+                    folder_id,
+                    message_limit: None,
+                },
+            ))
+        })
     }
 
     pub fn set_sort(mut self: Pin<&mut Self>, field: &QString, descending: bool) -> QString {
@@ -584,82 +585,82 @@ impl qobject::Bridge {
         }
     }
 
-    pub fn delete_many(mut self: Pin<&mut Self>, uids_json: &QString) -> QString {
+    pub fn delete_many(self: Pin<&mut Self>, uids_json: &QString) -> QString {
         let uids = match parse_uids_json(&uids_json.to_string()) {
             Ok(u) => u,
             Err(e) => return qstring(&e),
         };
-        let result = guard_sync("Delete", || {
-            let db = open_db()?;
-            let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
-            let folder = folders::get(&db, folder_id).map_err(|e| e.to_string())?;
-            let acc = accounts::get(&db, acc_id).map_err(|e| e.to_string())?;
+        let acc_id = *self.current_account_id();
+        let folder_id = *self.current_folder_id();
+        spawn_job(self, "Delete", move |db| {
+            let folder = folders::get(db, folder_id).map_err(|e| e.to_string())?;
+            let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
             if folder.account_id != acc.id {
                 return Err("folder does not belong to this account".to_string());
             }
-            // Junk never touches Trash; Trash deletes are permanent — same
-            // rule as the single-message path, applied once per folder.
             let summary = if folder.role == FolderRole::Junk {
                 let n = with_imap(&acc, |imap| {
-                    imap.purge_uids(&db, folder_id, &uids)
+                    imap.purge_uids(db, folder_id, &uids)
                         .map_err(|e| e.to_string())
                 })?;
                 format!("Deleted {n} permanently")
             } else {
-                let trash = folders::list_by_account(&db, acc.id)
+                let trash = folders::list_by_account(db, acc.id)
                     .map_err(|e| e.to_string())?
                     .into_iter()
                     .find(|f| f.role == FolderRole::Trash);
                 match trash.filter(|t| t.id != folder.id) {
                     Some(t) => {
                         let n = with_imap(&acc, |imap| {
-                            imap.move_uids_to(&db, folder_id, &uids, &t.path)
+                            imap.move_uids_to(db, folder_id, &uids, &t.path)
                                 .map_err(|e| e.to_string())
                         })?;
                         format!("Moved {n} to {}", t.path)
                     }
                     None => {
                         let n = with_imap(&acc, |imap| {
-                            imap.purge_uids(&db, folder_id, &uids)
+                            imap.purge_uids(db, folder_id, &uids)
                                 .map_err(|e| e.to_string())
                         })?;
                         format!("Deleted {n} permanently")
                     }
                 }
             };
-            push_feeds(&mut self, &db, acc_id, folder_id);
-            Ok(summary)
-        });
-        match result {
-            Ok(s) => qstring(&s),
-            Err(e) => qstring(&e),
-        }
+            Ok((
+                summary,
+                JobRefresh {
+                    account_id: acc_id,
+                    folder_id,
+                    message_limit: None,
+                },
+            ))
+        })
     }
 
-    pub fn archive_many(mut self: Pin<&mut Self>, uids_json: &QString) -> QString {
+    pub fn archive_many(self: Pin<&mut Self>, uids_json: &QString) -> QString {
         let uids = match parse_uids_json(&uids_json.to_string()) {
             Ok(u) => u,
             Err(e) => return qstring(&e),
         };
-        let result = guard_sync("Archive", || {
-            let db = open_db()?;
-            let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
-            let folder = folders::get(&db, folder_id).map_err(|e| e.to_string())?;
-            let acc = accounts::get(&db, acc_id).map_err(|e| e.to_string())?;
+        let acc_id = *self.current_account_id();
+        let folder_id = *self.current_folder_id();
+        spawn_job(self, "Archive", move |db| {
+            let folder = folders::get(db, folder_id).map_err(|e| e.to_string())?;
+            let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
             let summary = with_imap(&acc, |imap| {
-                let archive = match folders::list_by_account(&db, acc.id)
+                let archive = match folders::list_by_account(db, acc.id)
                     .map_err(|e| e.to_string())?
                     .into_iter()
                     .find(|f| f.role == FolderRole::Archive)
                 {
                     Some(a) => a,
                     None => {
-                        let delim = folders::list_by_account(&db, acc.id)
+                        let delim = folders::list_by_account(db, acc.id)
                             .unwrap_or_default()
                             .first()
                             .map(|f| f.delimiter.clone())
                             .unwrap_or_else(|| "/".to_string());
-                        imap.create_folder_path(&db, acc.id, "Archive", &delim)
+                        imap.create_folder_path(db, acc.id, "Archive", &delim)
                             .map_err(|e| e.to_string())?
                     }
                 };
@@ -667,20 +668,22 @@ impl qobject::Bridge {
                     return Ok("Already in Archive".to_string());
                 }
                 let n = imap
-                    .move_uids_to(&db, folder_id, &uids, &archive.path)
+                    .move_uids_to(db, folder_id, &uids, &archive.path)
                     .map_err(|e| e.to_string())?;
                 Ok(format!("Archived {n} to {}", archive.path))
             })?;
-            push_feeds(&mut self, &db, acc_id, folder_id);
-            Ok(summary)
-        });
-        match result {
-            Ok(s) => qstring(&s),
-            Err(e) => qstring(&e),
-        }
+            Ok((
+                summary,
+                JobRefresh {
+                    account_id: acc_id,
+                    folder_id,
+                    message_limit: None,
+                },
+            ))
+        })
     }
 
-    pub fn move_many(mut self: Pin<&mut Self>, uids_json: &QString, path: &QString) -> QString {
+    pub fn move_many(self: Pin<&mut Self>, uids_json: &QString, path: &QString) -> QString {
         let uids = match parse_uids_json(&uids_json.to_string()) {
             Ok(u) => u,
             Err(e) => return qstring(&e),
@@ -688,50 +691,59 @@ impl qobject::Bridge {
         let wanted = *self.current_account_id();
         let current = *self.current_folder_id();
         let path = path.to_string();
-        let result = guard_sync("Move", || {
-            let db = open_db()?;
-            let acc = current_account(&db, wanted)?;
-            let dest = folders::get_by_path(&db, acc.id, &path).map_err(|e| e.to_string())?;
+        spawn_job(self, "Move", move |db| {
+            let acc = current_account(db, wanted)?;
+            let dest = folders::get_by_path(db, acc.id, &path).map_err(|e| e.to_string())?;
             if dest.id == current {
-                return Ok("Already here".to_string());
+                return Ok((
+                    "Already here".to_string(),
+                    JobRefresh {
+                        account_id: acc.id,
+                        folder_id: current,
+                        message_limit: None,
+                    },
+                ));
             }
-            // Sanity: source folder must belong to this account.
-            let folder = folders::get(&db, current).map_err(|e| e.to_string())?;
+            let folder = folders::get(db, current).map_err(|e| e.to_string())?;
             if folder.account_id != acc.id {
                 return Err("folder does not belong to this account".to_string());
             }
             let n = with_imap(&acc, |imap| {
-                imap.move_uids_to(&db, current, &uids, &dest.path)
+                imap.move_uids_to(db, current, &uids, &dest.path)
                     .map_err(|e| e.to_string())
             })?;
-            push_feeds(&mut self, &db, acc.id, current);
-            Ok(format!("Moved {n} to {}", dest.path))
-        });
-        match result {
-            Ok(s) => qstring(&s),
-            Err(e) => qstring(&e),
-        }
+            Ok((
+                format!("Moved {n} to {}", dest.path),
+                JobRefresh {
+                    account_id: acc.id,
+                    folder_id: current,
+                    message_limit: None,
+                },
+            ))
+        })
     }
 
-    pub fn purge_many(mut self: Pin<&mut Self>, uids_json: &QString) -> QString {
+    pub fn purge_many(self: Pin<&mut Self>, uids_json: &QString) -> QString {
         let uids = match parse_uids_json(&uids_json.to_string()) {
             Ok(u) => u,
             Err(e) => return qstring(&e),
         };
-        let result = guard_sync("Delete", || {
-            let db = open_db()?;
-            let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
-            let acc = accounts::get(&db, acc_id).map_err(|e| e.to_string())?;
+        let acc_id = *self.current_account_id();
+        let folder_id = *self.current_folder_id();
+        spawn_job(self, "Delete", move |db| {
+            let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
             let n = with_imap(&acc, |imap| {
-                imap.purge_uids(&db, folder_id, &uids)
+                imap.purge_uids(db, folder_id, &uids)
                     .map_err(|e| e.to_string())
             })?;
-            push_feeds(&mut self, &db, acc_id, folder_id);
-            Ok(format!("Deleted {n} permanently"))
-        });
-        match result {
-            Ok(s) => qstring(&s),
-            Err(e) => qstring(&e),
-        }
+            Ok((
+                format!("Deleted {n} permanently"),
+                JobRefresh {
+                    account_id: acc_id,
+                    folder_id,
+                    message_limit: None,
+                },
+            ))
+        })
     }
 }
