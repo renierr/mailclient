@@ -842,8 +842,16 @@ impl ImapSync {
         let folder = folders::get(db, message.folder_id)?;
         let account = accounts::get(db, folder.account_id)?;
         let session = self.session()?;
+        let started = std::time::Instant::now();
         session.select(&folder.path)?;
+        log::info!("imap: select {} took {:?}", folder.path, started.elapsed());
+        let started = std::time::Instant::now();
         let fetched = session.uid_fetch(message.uid.to_string(), "(UID FLAGS RFC822)")?;
+        log::info!(
+            "imap: attachment fetch for uid {} took {:?}",
+            message.uid,
+            started.elapsed()
+        );
         let mut stored = 0u64;
         let mut seen = false;
         for msg in fetched.iter() {

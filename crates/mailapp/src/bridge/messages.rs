@@ -10,11 +10,12 @@ use crate::bridge::qobject;
 use crate::bridge::session::{current_account, guard_sync, with_imap};
 use crate::bridge::{open_db, push_feeds, qstring, MAX_MESSAGE_LIMIT};
 
-/// Strip a `file://` URL prefix from save-dialog output into a plain path.
+/// Turn save-dialog output into a plain path. Dialogs hand back `file://`
+/// URLs (percent-encoded, `file:///C:/…` on Windows); plain paths pass
+/// through. Delegates to the shared `mailcore::paths` helper so save, open
+/// and composer-send all parse URLs identically.
 pub(crate) fn dir_to_path(raw: &str) -> std::path::PathBuf {
-    let t = raw.trim();
-    let stripped = t.strip_prefix("file://").unwrap_or(t);
-    std::path::PathBuf::from(stripped)
+    mailcore::paths::file_url_to_path(raw)
 }
 
 /// Absolute path → `file://` URL for `Qt.openUrlExternally`. Percent-encodes
@@ -73,7 +74,7 @@ pub(crate) fn resolve_save_path(
         return Err("choose where to save".to_string());
     }
     let mut p = dir_to_path(trimmed);
-    if p.is_dir() || trimmed.ends_with('/') {
+    if p.is_dir() || trimmed.ends_with('/') || trimmed.ends_with('\\') {
         let a = messages::get_attachment(db, attachment_id).map_err(|e| e.to_string())?;
         p.push(safe_filename(a.filename.as_deref(), attachment_id));
     }
@@ -110,10 +111,16 @@ pub(crate) fn ensure_attachment_data(
     let msg = messages::get(db, message_id).map_err(|e| e.to_string())?;
     let folder = folders::get(db, msg.folder_id).map_err(|e| e.to_string())?;
     let acc = accounts::get(db, folder.account_id).map_err(|e| e.to_string())?;
-    with_imap(&acc, |imap| {
+    let started = std::time::Instant::now();
+    let n = with_imap(&acc, |imap| {
         imap.fetch_attachments(db, message_id)
             .map_err(|e| e.to_string())
-    })
+    })?;
+    log::info!(
+        "attachments: downloaded {n} file(s) for message {message_id} in {:?}",
+        started.elapsed()
+    );
+    Ok(n)
 }
 
 /// Materialize one cached attachment for Composer. The file name keeps the

@@ -289,10 +289,10 @@ pub fn load_outgoing_attachments(paths: &[String]) -> Result<Vec<(String, String
     let mut out = Vec::with_capacity(paths.len());
     for p in paths {
         let raw = p.trim();
-        // QML FileDialog hands `file://` URLs — accept both URL and plain path.
-        let stripped = raw.strip_prefix("file://").unwrap_or(raw);
-        let path = std::path::Path::new(stripped);
-        let meta = std::fs::metadata(path).map_err(|_| {
+        // QML FileDialog hands `file://` URLs (percent-encoded,
+        // `file:///C:/…` on Windows) — accept both URL and plain path.
+        let path = crate::paths::file_url_to_path(raw);
+        let meta = std::fs::metadata(&path).map_err(|_| {
             StoreError::InvalidInput(format!("cannot read attachment: {}", path.display()))
         })?;
         if !meta.is_file() {
@@ -308,7 +308,7 @@ pub fn load_outgoing_attachments(paths: &[String]) -> Result<Vec<(String, String
                 meta.len() / (1024 * 1024)
             )));
         }
-        let bytes = std::fs::read(path)?;
+        let bytes = std::fs::read(&path)?;
         let filename = path
             .file_name()
             .and_then(|n| n.to_str())

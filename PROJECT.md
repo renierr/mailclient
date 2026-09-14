@@ -115,7 +115,7 @@ UI iteration: `./dev.sh` runs the app against live `crates/mailapp/qml/` (embedd
 
 ## 8. Known Flaws & Repair List (user-reported)
 
-F1–F15 below; all currently closed.
+F1–F17 below; all currently closed.
 
 | # | Flaw | Status | Resolution |
 |---|---|---|---|
@@ -135,6 +135,7 @@ F1–F15 below; all currently closed.
 | F14 | Segfault after clicking the same message repeatedly | ✅ fixed | Every reload did `ListModel.clear()` + `append()` per row. `ListModel.get()` hands out QObjects the model owns, so the reader pane — which held the selected message — was left dereferencing freed memory as soon as the next click cleared the model, and every delegate was destroyed and rebuilt underneath the mouse handler that triggered it. The feed is now plain JavaScript objects (snapshots that stay valid), list models are updated in place by `ModelSync.sync()` (remove, insert, move, and write only the roles that changed), the reader keys its reloads on the UID instead of object identity, and re-clicking the open message is a no-op |
 | F15 | Window title bar stayed white on a dark desktop | ✅ fixed | Windows draws the caption bar outside the Qt scene and Qt does not set `DWMWA_USE_IMMERSIVE_DARK_MODE` from the system colour scheme — a stock Qt window reports the attribute as off on a fully dark desktop. `platform.rs` sets it on the app's own top-level windows (and again if the desktop scheme changes); on Linux the compositor already follows the preference, so it is a no-op |
 | F16 | Manage Contacts row overflow / inaccessible action buttons & fixed modal dialogs without resizing or dragging | ✅ fixed | Built `components/AppDialog.qml` as a generic resizable and draggable dialog component (header dragging, bottom-right resize grip canvas, edge/corner resizing, host bounds clamping, session geometry memory) adopted across Contacts, Accounts, Folders, MoveTo, Settings, and AccountSetup. In Contacts, constrained the contact layout with `Layout.minimumWidth: 0` and `wrapMode: Text.WrapAtWordBoundaryOrAnywhere`, dynamically sizing delegates to fit multi-line content without clipping; pinned the seen badge, edit button, and delete button to the right; added keyboard navigation (arrow keys, Enter to edit, Delete to remove) and full Accessible attributes |
+| F17 | Saving attachments always failed on Windows ("cannot create folder … os error 123") | ✅ fixed | Save/Folder dialogs return `file://` URLs, but Rust only stripped the `file://` prefix: `file:///C:/…` became `/C:/…`, which Windows rejects (OS error 123), and `%20`/`%23` stayed encoded. New shared `mailcore::paths::file_url_to_path` (percent-decodes, strips the stray slash before drive letters, handles host-form/UNC/localhost/plain paths) now backs save, save-all, open-temp and composer-send attachment paths; QML builds save-dialog URLs via `joinFileUrl` (`writableLocation` is a QUrl on Qt 6, plain path elsewhere) with `encodeURIComponent` filenames. Stage timings (`select`/`fetch`/total download) logged at info for slow-save diagnosis |
 
 Reported working (keep while fixing): account setup + keyring, manual ⟳ sync, folder tree, send + Sent-copy, star/delete, remote-image blocking default.
 

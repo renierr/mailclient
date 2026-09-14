@@ -128,18 +128,39 @@ Rectangle {
         return a.filename || qsTr("attachment-%1.bin").arg(a.id)
     }
 
+    // Join a downloads-folder value with a filename into a `file://` URL
+    // for the save dialogs. `writableLocation` returns a QUrl on Qt 6
+    // (already `file:///…`) but a plain path on others — both are handled.
+    // The filename is encoded so spaces/`#` survive the string→QUrl trip
+    // (Rust decodes it back).
+    function joinFileUrl(dir, name) {
+        var s = dir.toString().replace(/\\/g, "/")
+        if (s.indexOf("file:") !== 0) {
+            if (s.length >= 2 && s[1] === ":")
+                s = "/" + s
+            s = "file://" + s
+        }
+        s = s.replace(/\/+$/, "")
+        if (name !== undefined)
+            s += "/" + encodeURIComponent(name)
+        return s
+    }
+
     function saveOne(a) {
         if (!root.backend || !root.backend.save_attachment)
             return
         saveOneDialog.attachmentId = a.id
         var base = StandardPaths.writableLocation(StandardPaths.DownloadLocation)
-        saveOneDialog.selectedFile = "file://" + base + "/" + root.displayName(a)
+        saveOneDialog.selectedFile = root.joinFileUrl(base, root.displayName(a))
         saveOneDialog.open()
     }
 
     function saveAll() {
         if (!root.backend || !root.backend.save_all_attachments)
             return
+        var base = StandardPaths.writableLocation(StandardPaths.DownloadLocation)
+        if (base.toString() !== "")
+            saveAllDialog.selectedFolder = root.joinFileUrl(base)
         saveAllDialog.open()
     }
 

@@ -8,6 +8,7 @@ pub mod error;
 pub mod feed;
 pub mod html;
 pub mod models;
+pub mod paths;
 pub mod search;
 pub mod store;
 pub mod sync;
