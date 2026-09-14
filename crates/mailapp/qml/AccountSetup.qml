@@ -246,6 +246,12 @@ AppDialog {
                         id: imapSecBox
                         Layout.preferredWidth: 120
                         model: ["TLS", "STARTTLS"]
+                        onActivated: function(index) {
+                            if (index === 1 && imapPortField.text === "993")
+                                imapPortField.text = "143"
+                            else if (index === 0 && imapPortField.text === "143")
+                                imapPortField.text = "993"
+                        }
                     }
                 }
             }
@@ -303,6 +309,12 @@ AppDialog {
                         id: smtpSecBox
                         Layout.preferredWidth: 120
                         model: ["TLS", "STARTTLS"]
+                        onActivated: function(index) {
+                            if (index === 1 && smtpPortField.text === "465")
+                                smtpPortField.text = "587"
+                            else if (index === 0 && smtpPortField.text === "587")
+                                smtpPortField.text = "465"
+                        }
                     }
                 }
             }

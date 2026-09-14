@@ -1,8 +1,8 @@
 //! IMAP sync (Milestone 1): connect, LIST folders with role mapping,
 //! SELECT + UID FETCH into SQLite, flag push, expunge handling.
 //!
-//! Transport: implicit TLS (port 993). Anything else is rejected unless the
-//! account explicitly opts into STARTTLS/plain (see AGENT.md security rules).
+//! Transport: implicit TLS (port 993) or STARTTLS (port 143). Plaintext is
+//! refused unless the account explicitly opts in (see AGENT.md security rules).
 
 use std::collections::HashSet;
 use std::net::TcpStream;
@@ -46,16 +46,32 @@ pub const MAX_ATTACHMENTS_PER_MESSAGE: usize = 50;
 pub struct ImapEndpoint {
     /// `host:port`.
     pub addr: String,
-    /// `true` for implicit TLS (993), `false` for STARTTLS/plain (143 + opt-in).
+    /// `true` for implicit TLS (993 / `tls`).
     pub implicit_tls: bool,
+    /// `true` for STARTTLS upgrade (typically 143). Mutually exclusive with
+    /// [`Self::implicit_tls`]. Neither set means plaintext, which [`ImapSync::connect`]
+    /// refuses.
+    pub starttls: bool,
 }
 
 /// Derive the endpoint from account settings.
 #[must_use]
 pub fn endpoint_for(account: &crate::models::Account) -> ImapEndpoint {
+    let sec = account.imap_security.trim().to_ascii_lowercase();
+    let implicit_tls = match sec.as_str() {
+        "starttls" | "plain" | "none" => false,
+        "tls" => true,
+        _ => account.imap_port == 993,
+    };
+    let starttls = match sec.as_str() {
+        "starttls" => true,
+        "tls" | "plain" | "none" => false,
+        _ => account.imap_port == 143,
+    };
     ImapEndpoint {
         addr: format!("{}:{}", account.imap_host, account.imap_port),
-        implicit_tls: account.imap_port == 993 || account.imap_security.eq_ignore_ascii_case("tls"),
+        implicit_tls,
+        starttls,
     }
 }
 
@@ -93,26 +109,29 @@ pub fn map_folder_role(attributes: &[NameAttribute], name: &str) -> FolderRole {
 }
 
 /// Name-based role guess (used when SPECIAL-USE is absent).
+///
+/// Matches the last path segment exactly so names like `Cabin` / `Binders`
+/// are not classified as Trash via a substring `bin`.
 #[must_use]
 pub fn role_from_name(name: &str) -> FolderRole {
-    let lower = name.to_ascii_lowercase();
-    if lower == "inbox" {
+    let lower = name.to_lowercase();
+    let last = lower
+        .rsplit(['/', '.', '\\'])
+        .next()
+        .unwrap_or(&lower)
+        .trim();
+    if last == "inbox" {
         return FolderRole::Inbox;
     }
-    let last = lower.rsplit(['/', '.']).next().unwrap_or(&lower);
-    let has = |words: &[&str]| words.iter().any(|w| last.contains(w));
-    if has(&["sent", "gesendet", "sent mail", "sent items"]) {
-        FolderRole::Sent
-    } else if has(&["draft", "entwurf", "entwürf"]) {
-        FolderRole::Drafts
-    } else if has(&["trash", "deleted", "papierkorb", "gelöscht", "bin"]) {
-        FolderRole::Trash
-    } else if has(&["junk", "spam"]) {
-        FolderRole::Junk
-    } else if has(&["archive", "archiv"]) {
-        FolderRole::Archive
-    } else {
-        FolderRole::Custom
+    match last {
+        "sent" | "gesendet" | "sent mail" | "sent items" | "sent-mail" => FolderRole::Sent,
+        "draft" | "drafts" | "entwurf" | "entwürfe" | "entwurfe" => FolderRole::Drafts,
+        "trash" | "deleted" | "deleted items" | "papierkorb" | "gelöscht" | "geloscht" | "bin" => {
+            FolderRole::Trash
+        }
+        "junk" | "spam" | "junk e-mail" | "junk email" | "junk-e-mail" => FolderRole::Junk,
+        "archive" | "archiv" => FolderRole::Archive,
+        _ => FolderRole::Custom,
     }
 }
 
@@ -233,6 +252,7 @@ pub struct ImapSync {
     port: u16,
     username: String,
     implicit_tls: bool,
+    starttls: bool,
     /// Login password, memory-only (never logged, never stored — see AGENT.md:
     /// secrets live in the keyring or memory). Kept so the session can
     /// re-establish itself after a protocol desync without another keyring
@@ -257,6 +277,7 @@ impl ImapSync {
             port: account.imap_port,
             username: account.imap_username.clone(),
             implicit_tls: ep.implicit_tls,
+            starttls: ep.starttls,
             password: None,
             session: None,
             skip_namespaces: false,
@@ -268,15 +289,20 @@ impl ImapSync {
         if self.session.is_some() {
             return Ok(());
         }
-        if !self.implicit_tls {
+        if !self.implicit_tls && !self.starttls {
             return Err(StoreError::InvalidInput(format!(
-                "refusing non-TLS IMAP for {} (explicit opt-in required)",
+                "refusing plaintext IMAP for {} (TLS or STARTTLS required)",
                 self.host
             )));
         }
-        log::info!("imap: connecting to {}:{}", self.host, self.port);
+        let mode = if self.implicit_tls { "tls" } else { "starttls" };
+        log::info!("imap: connecting to {}:{} ({mode})", self.host, self.port);
         let tls = TlsConnector::builder().build()?;
-        let client = imap::connect((self.host.as_str(), self.port), &self.host, &tls)?;
+        let client = if self.implicit_tls {
+            imap::connect((self.host.as_str(), self.port), &self.host, &tls)?
+        } else {
+            imap::connect_starttls((self.host.as_str(), self.port), &self.host, &tls)?
+        };
         let mut session = client
             .login(self.username.as_str(), password)
             .map_err(|(e, _)| StoreError::Imap(e))?;
@@ -654,18 +680,19 @@ impl ImapSync {
             }
         }
 
-        let server_uids: HashSet<u32> = session.uid_search("ALL")?;
         let local_uids: HashSet<u32> = messages::list_uids(db, folder_id)?.into_iter().collect();
+        let (searched_uids, search_lo) = search_recent_uids(session, window, mb.uid_next)?;
 
         // Newest-N relevance window: UIDs grow monotonically, so the largest
         // N are the newest. Everything outside costs no network.
         let relevant: Option<HashSet<u32>> = window.map(|n| {
-            let mut sorted: Vec<u32> = server_uids.iter().copied().collect();
+            let mut sorted: Vec<u32> = searched_uids.iter().copied().collect();
             sorted.sort_unstable();
             let skip = sorted.len().saturating_sub(n);
             sorted.into_iter().skip(skip).collect()
         });
         let in_window = |uid: &u32| relevant.as_ref().is_none_or(|r| r.contains(uid));
+        let server_uids = searched_uids;
 
         // 1. Flag refresh for messages we already have (windowed).
         let existing: Vec<u32> = server_uids
@@ -722,9 +749,8 @@ impl ImapSync {
             }
         }
         if let Some(n) = window {
-            let skipped = server_uids
-                .len()
-                .saturating_sub(relevant.map(|r| r.len()).unwrap_or(0));
+            let skipped =
+                (mb.exists as usize).saturating_sub(relevant.map(|r| r.len()).unwrap_or(0));
             if skipped > 0 {
                 log::info!(
                     "imap: {} skipped {} old mails outside window {n}",
@@ -734,16 +760,19 @@ impl ImapSync {
             }
         }
 
-        // 3. Expunge locally what the server no longer has (full, no network).
+        // 3. Expunge locally what the searched UID range no longer has.
+        // UIDs below `search_lo` were never asked about, so they stay cached.
         let mut expunged = 0u64;
-        for uid in local_uids.difference(&server_uids) {
-            messages::delete_by_uid(db, folder_id, *uid)?;
-            expunged += 1;
+        for uid in &local_uids {
+            if *uid >= search_lo && !server_uids.contains(uid) {
+                messages::delete_by_uid(db, folder_id, *uid)?;
+                expunged += 1;
+            }
         }
 
         let validity = mb.uid_validity.unwrap_or(folder.uid_validity.unwrap_or(0));
         let uid_next = mb.uid_next.unwrap_or(folder.uid_next.unwrap_or(0));
-        folders::set_sync_state(db, folder_id, validity, uid_next, server_uids.len() as u64)?;
+        folders::set_sync_state(db, folder_id, validity, uid_next, u64::from(mb.exists))?;
 
         Ok(SyncReport {
             fetched,
@@ -754,12 +783,12 @@ impl ImapSync {
 
     /// Fetch the next older batch below the smallest locally cached UID.
     ///
-    /// The "load older messages" button path: one `SEARCH ALL` to learn the
-    /// server set (cheap, no bodies), then a single windowed `RFC822` fetch
-    /// for up to `batch` missing UIDs older than our minimum. Empty folders
-    /// fall back to a normal windowed sync; a UIDVALIDITY change resyncs
-    /// first so the window math stays valid. Returns `fetched == 0` when the
-    /// cache already reaches the oldest server mail ("caught up").
+    /// The "load older messages" button path: a bounded `UID SEARCH` just
+    /// below the smallest local UID, then a windowed `RFC822` fetch for up
+    /// to `batch` missing older UIDs. Empty folders fall back to a normal
+    /// windowed sync; a UIDVALIDITY change resyncs first so the window math
+    /// stays valid. Returns `fetched == 0` when the cache already reaches
+    /// the oldest server mail ("caught up").
     pub fn sync_older(&mut self, db: &Db, folder_id: i64, batch: usize) -> Result<SyncReport> {
         let folder = folders::get(db, folder_id)?;
         let account = accounts::get(db, folder.account_id)?;
@@ -784,19 +813,15 @@ impl ImapSync {
             let r = self.sync_folder_window(db, folder_id, Some(FULL_SYNC_WINDOW))?;
             return Ok(r);
         };
-        let server_uids: HashSet<u32> = session.uid_search("ALL")?;
         if min_local <= 1 {
-            folders::set_sync_state(db, folder_id, validity, uid_next, server_uids.len() as u64)?;
+            folders::set_sync_state(db, folder_id, validity, uid_next, u64::from(mb.exists))?;
             return Ok(SyncReport::default());
         }
         let local_uids: HashSet<u32> = messages::list_uids(db, folder_id)?.into_iter().collect();
+        let found = search_uids_below(session, min_local, batch)?;
         // Older than everything we have, newest-first within the batch so the
         // list extends contiguously backwards.
-        let mut older: Vec<u32> = server_uids
-            .difference(&local_uids)
-            .copied()
-            .filter(|u| *u < min_local)
-            .collect();
+        let mut older: Vec<u32> = found.difference(&local_uids).copied().collect();
         older.sort_unstable_by(|a, b| b.cmp(a));
         older.truncate(batch);
 
@@ -824,7 +849,7 @@ impl ImapSync {
                 fetched += 1;
             }
         }
-        folders::set_sync_state(db, folder_id, validity, uid_next, server_uids.len() as u64)?;
+        folders::set_sync_state(db, folder_id, validity, uid_next, u64::from(mb.exists))?;
         log::info!("imap: {} older batch: +{fetched}", folder.path);
         Ok(SyncReport {
             fetched,
@@ -1138,6 +1163,43 @@ impl SyncProvider for ImapSync {
     }
 }
 
+/// SEARCH the newest `window` UIDs without enumerating the whole mailbox.
+///
+/// Returns `(uids, search_lo)`: `search_lo` is the inclusive lower bound of
+/// the UID range that was asked about (`1` when unbounded). Expunge must not
+/// delete local UIDs below that bound — they were never queried.
+fn search_recent_uids(
+    session: &mut TlsSession,
+    window: Option<usize>,
+    uid_next: Option<u32>,
+) -> Result<(HashSet<u32>, u32)> {
+    let Some(n) = window else {
+        return Ok((session.uid_search("ALL")?, 1));
+    };
+    let hi = uid_next.unwrap_or(0).saturating_sub(1);
+    if hi == 0 {
+        return Ok((session.uid_search("ALL")?, 1));
+    }
+    let span = (n as u32).saturating_mul(8).max(n as u32);
+    let lo = hi.saturating_sub(span.saturating_sub(1)).max(1);
+    Ok((session.uid_search(format!("UID {lo}:*"))?, lo))
+}
+
+/// SEARCH a bounded UID range just below `exclusive_hi` for an older-mail batch.
+fn search_uids_below(
+    session: &mut TlsSession,
+    exclusive_hi: u32,
+    batch: usize,
+) -> Result<HashSet<u32>> {
+    if exclusive_hi <= 1 {
+        return Ok(HashSet::new());
+    }
+    let hi = exclusive_hi - 1;
+    let span = (batch as u32).saturating_mul(8).max(batch as u32);
+    let lo = hi.saturating_sub(span.saturating_sub(1)).max(1);
+    Ok(session.uid_search(format!("UID {lo}:{hi}"))?)
+}
+
 fn flag_state(flags: &[Flag]) -> (bool, bool, bool) {
     let mut read = false;
     let mut starred = false;
@@ -1421,6 +1483,42 @@ mod tests {
         let ep = endpoint_for(&a);
         assert_eq!(ep.addr, "imap.x:993");
         assert!(ep.implicit_tls);
+        assert!(!ep.starttls);
+    }
+
+    #[test]
+    fn endpoint_honours_starttls_even_on_993() {
+        let mut a = crate::models::Account {
+            id: 1,
+            name: "n".to_string(),
+            email_address: "e".to_string(),
+            from_name: String::new(),
+            imap_host: "imap.x".to_string(),
+            imap_port: 143,
+            imap_security: "starttls".to_string(),
+            imap_username: "u".to_string(),
+            smtp_host: "s".to_string(),
+            smtp_port: 587,
+            smtp_security: "starttls".to_string(),
+            smtp_username: "u".to_string(),
+            auth_vault_key: "k".to_string(),
+            check_interval_secs: 300,
+            created_at: "t".to_string(),
+            updated_at: "t".to_string(),
+        };
+        let ep = endpoint_for(&a);
+        assert!(!ep.implicit_tls);
+        assert!(ep.starttls);
+        a.imap_port = 993;
+        let ep = endpoint_for(&a);
+        assert!(!ep.implicit_tls);
+        assert!(ep.starttls);
+        a.imap_security = "plain".to_string();
+        a.imap_port = 143;
+        let ep = endpoint_for(&a);
+        assert!(!ep.implicit_tls);
+        assert!(!ep.starttls);
+        assert!(ImapSync::new(&a).connect("pw").is_err());
     }
 
     #[test]
@@ -1479,6 +1577,10 @@ mod tests {
         assert_eq!(role_from_name("Archiv"), FolderRole::Archive);
         assert_eq!(role_from_name("INBOX.Projekte.Kunde"), FolderRole::Custom);
         assert_eq!(role_from_name("Family"), FolderRole::Custom);
+        assert_eq!(role_from_name("Cabin"), FolderRole::Custom);
+        assert_eq!(role_from_name("Binders"), FolderRole::Custom);
+        assert_eq!(role_from_name("INBOX.Bin"), FolderRole::Trash);
+        assert_eq!(role_from_name("Drafts"), FolderRole::Drafts);
     }
 
     #[test]

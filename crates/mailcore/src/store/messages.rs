@@ -57,7 +57,7 @@ pub fn upsert(db: &Db, m: &NewMessage) -> Result<i64> {
             created_at, updated_at)
          values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
              ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?24)
-         on conflict (account_id, folder_id, uid) do update set
+          on conflict (account_id, folder_id, uid) do update set
             message_id_header = excluded.message_id_header,
             thread_id = excluded.thread_id,
             subject = excluded.subject,
@@ -71,9 +71,9 @@ pub fn upsert(db: &Db, m: &NewMessage) -> Result<i64> {
             body_text = excluded.body_text,
              body_html = excluded.body_html,
              raw_headers = excluded.raw_headers,
-            is_read = excluded.is_read,
+            is_read = case when messages.flags_dirty != 0 then messages.is_read else excluded.is_read end,
             keywords = excluded.keywords,
-            is_starred = excluded.is_starred,
+            is_starred = case when messages.flags_dirty != 0 then messages.is_starred else excluded.is_starred end,
             is_draft = excluded.is_draft,
             has_attachments = excluded.has_attachments,
             size = excluded.size,
@@ -479,7 +479,7 @@ pub fn set_flags_by_uid(
     db.conn().execute(
         "update messages set is_read = ?1, is_starred = ?2, is_draft = ?3,
             updated_at = ?4
-         where account_id = ?5 and folder_id = ?6 and uid = ?7",
+         where account_id = ?5 and folder_id = ?6 and uid = ?7 and flags_dirty = 0",
         params![
             i64::from(is_read),
             i64::from(is_starred),
@@ -673,6 +673,26 @@ mod tests {
         assert_eq!(dirty.len(), 1);
         assert_eq!(dirty[0].id, other);
         assert!(dirty[0].is_starred);
+    }
+
+    #[test]
+    fn server_flag_refresh_skips_dirty_rows() {
+        let (db, acc, f) = setup();
+        let id = upsert(&db, &sample_new(acc, f, 1)).unwrap();
+        set_flags(&db, id, true, true).unwrap();
+        set_flags_by_uid(&db, acc, f, 1, false, false, false).unwrap();
+        let m = get(&db, id).unwrap();
+        assert!(m.is_read && m.is_starred);
+        assert_eq!(list_flags_dirty(&db, acc).unwrap().len(), 1);
+
+        let mut again = sample_new(acc, f, 1);
+        again.is_read = false;
+        again.is_starred = false;
+        again.subject = Some("resync".to_string());
+        upsert(&db, &again).unwrap();
+        let m = get(&db, id).unwrap();
+        assert!(m.is_read && m.is_starred);
+        assert_eq!(m.subject.as_deref(), Some("resync"));
     }
 
     #[test]
