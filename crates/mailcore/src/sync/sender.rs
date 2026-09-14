@@ -642,7 +642,11 @@ impl MailSender for SmtpSender {
         let queue_id = queue::enqueue(db, account_id, None)?;
         match self.transport(req.password)?.send(&email) {
             Ok(response) => {
-                log::info!("smtp: sent to {:?}: {response:?}", req.to);
+                log::info!(
+                    "smtp: sent to {:?} via {}: {response:?}",
+                    req.to,
+                    self.endpoint.addr
+                );
                 queue::mark_sent(db, queue_id)?;
                 if settings::get_bool(db, settings::COLLECT_SENT_CONTACTS).unwrap_or(true) {
                     let mut all_rcpts = valid_mailboxes(req.to);
