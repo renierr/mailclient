@@ -843,6 +843,42 @@ Rectangle {
     AppMenu {
         id: bulkMenu
 
+        // Complete action set: the bulk bar collapses buttons into here on
+        // narrow panes, so every bar action must have a menu twin.
+        MenuItem {
+            text: qsTr("Mark selected as read")
+            onTriggered: root.emitLater2(root.bulkMarkReadRequested, root.selectedUids.slice(), true)
+        }
+        MenuItem {
+            text: qsTr("Mark selected as unread")
+            onTriggered: root.emitLater2(root.bulkMarkReadRequested, root.selectedUids.slice(), false)
+        }
+        MenuItem {
+            text: root.selectionAllStarred() ? qsTr("Remove star from selected") : qsTr("Star selected")
+            onTriggered: root.emitLater2(root.bulkStarRequested, root.selectedUids.slice(), !root.selectionAllStarred())
+        }
+        MenuItem {
+            text: qsTr("Archive selected")
+            onTriggered: {
+                var uids = root.selectedUids.slice()
+                Qt.callLater(root.bulkArchiveRequested, uids)
+            }
+        }
+        MenuItem {
+            text: qsTr("Move selected to…")
+            onTriggered: {
+                var uids = root.selectedUids.slice()
+                Qt.callLater(root.bulkMoveRequested, uids)
+            }
+        }
+        MenuItem {
+            text: qsTr("Move selected to Trash")
+            onTriggered: {
+                var uids = root.selectedUids.slice()
+                Qt.callLater(root.bulkDeleteRequested, uids)
+            }
+        }
+        MenuSeparator {}
         MenuItem {
             text: qsTr("Select unread")
             onTriggered: root.selectUnread()

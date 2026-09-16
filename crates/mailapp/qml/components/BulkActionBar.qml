@@ -20,13 +20,23 @@ RowLayout {
 
     height: Math.round(40 * Theme.uiScale)
     spacing: 2
+    clip: true
+
+    // Narrow panes cannot fit the whole row: collapse the least-critical
+    // buttons first so Delete + the overflow menu stay reachable. Anything
+    // hidden here lives on in the overflow menu (MessageList.bulkMenu).
+    readonly property bool compact: root.width > 0 && root.width < Math.round(380 * Theme.uiScale)
+    readonly property bool veryCompact: root.width > 0 && root.width < Math.round(300 * Theme.uiScale)
 
     Label {
         Layout.leftMargin: Theme.md
-        text: qsTr("%n selected", "", root.selectedCount)
+        Layout.minimumWidth: 0
+        Layout.preferredWidth: Math.min(implicitWidth, Math.max(Math.round(28 * Theme.uiScale), root.width - Math.round(220 * Theme.uiScale)))
+        text: root.veryCompact ? qsTr("%1").arg(root.selectedCount) : qsTr("%n selected", "", root.selectedCount)
         color: Theme.text
         font.pixelSize: Theme.fontSmall
         font.bold: true
+        elide: Text.ElideRight
     }
 
     IconButton {
@@ -46,6 +56,7 @@ RowLayout {
     }
 
     IconButton {
+        visible: !root.veryCompact
         text: "○"
         fontSize: Theme.fontSmall
         tooltip: qsTr("Mark selected as unread")
@@ -53,6 +64,7 @@ RowLayout {
     }
 
     IconButton {
+        visible: !root.veryCompact
         text: root.allStarred ? "☆" : "★"
         fontSize: Theme.fontBase
         contentColor: root.allStarred ? Theme.textMuted : Theme.star
@@ -61,6 +73,7 @@ RowLayout {
     }
 
     IconButton {
+        visible: !root.compact
         text: "🗄"
         fontSize: Theme.fontSmall
         tooltip: qsTr("Archive selected")
@@ -68,6 +81,7 @@ RowLayout {
     }
 
     IconButton {
+        visible: !root.compact
         text: "➡"
         fontSize: Theme.fontSmall
         tooltip: qsTr("Move selected to…")
