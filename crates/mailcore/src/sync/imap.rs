@@ -884,7 +884,7 @@ impl ImapSync {
             let (_, files) =
                 parse_to_new(account.id, folder.id, message.uid, msg.flags(), raw, true)?;
             stored = files.len() as u64;
-            store_attachments(db, message_id, files);
+            store_attachments(db, message_id, files)?;
             seen = true;
         }
         if !seen {
@@ -1371,22 +1371,8 @@ fn extract_attachments(parsed: &mail_parser::Message<'_>, with_bytes: bool) -> V
     out
 }
 
-/// Replace a message's attachments with a freshly parsed full set (the
-/// on-demand download path). Failures are logged, never fatal.
-fn store_attachments(db: &Db, message_id: i64, files: Vec<NewAttachment>) {
-    if let Err(e) = messages::delete_attachments_for_message(db, message_id) {
-        log::warn!("imap: cannot clear attachments for {message_id}: {e}");
-        return;
-    }
-    for f in &files {
-        if f.data.as_ref().is_none_or(|b| b.is_empty()) {
-            log::warn!("imap: skipping attachment without bytes {:?}", f.filename);
-            continue;
-        }
-        if let Err(e) = messages::add_attachment(db, message_id, f) {
-            log::warn!("imap: cannot store attachment {:?}: {e}", f.filename);
-        }
-    }
+fn store_attachments(db: &Db, message_id: i64, files: Vec<NewAttachment>) -> Result<()> {
+    messages::replace_attachments(db, message_id, &files)
 }
 
 /// Store attachment metadata (names/sizes, no bytes) for a freshly synced
@@ -1459,6 +1445,64 @@ fn collect_contacts_from_headers(db: &Db, raw_headers: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attachment_download_preserves_metadata_ids() {
+        let db = Db::open_in_memory().unwrap();
+        let account_id = accounts::create(
+            &db,
+            &crate::models::NewAccount {
+                name: "Test".to_string(),
+                email_address: "alice@example.com".to_string(),
+                from_name: String::new(),
+                imap_host: "imap.example.com".to_string(),
+                imap_port: 993,
+                imap_security: "tls".to_string(),
+                imap_username: "alice@example.com".to_string(),
+                smtp_host: "smtp.example.com".to_string(),
+                smtp_port: 465,
+                smtp_security: "tls".to_string(),
+                smtp_username: "alice@example.com".to_string(),
+                auth_vault_key: "test".to_string(),
+                check_interval_secs: 60,
+            },
+        )
+        .unwrap();
+        let folder_id = folders::upsert(&db, account_id, "INBOX", "/", FolderRole::Inbox).unwrap();
+        let message_id =
+            messages::upsert(&db, &messages::sample_new(account_id, folder_id, 1)).unwrap();
+        let files: Vec<_> = [b"first".to_vec(), b"other".to_vec()]
+            .into_iter()
+            .map(|data| NewAttachment {
+                filename: Some("notes.txt".to_string()),
+                mime_type: Some("text/plain".to_string()),
+                content_id: None,
+                size: data.len() as u64,
+                data: Some(data),
+                is_inline: false,
+            })
+            .collect();
+        store_attachment_meta(&db, message_id, files.clone());
+        let metadata = messages::list_attachments(&db, message_id).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        for _ in 0..2 {
+            store_attachments(&db, message_id, files.clone()).unwrap();
+            assert_eq!(
+                messages::list_attachments(&db, message_id).unwrap().len(),
+                2
+            );
+            for (original, expected) in metadata.iter().zip(&files) {
+                let downloaded = messages::get_attachment(&db, original.id).unwrap();
+                assert_eq!(downloaded.data, expected.data);
+                let path = dir.path().join(original.id.to_string());
+                messages::save_attachment_to_path(&db, original.id, &path).unwrap();
+                assert_eq!(
+                    std::fs::read(path).unwrap(),
+                    expected.data.as_ref().unwrap().as_slice()
+                );
+            }
+        }
+    }
 
     #[test]
     fn endpoint_defaults_to_implicit_tls_on_993() {

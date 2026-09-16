@@ -337,6 +337,55 @@ pub fn add_attachment(db: &Db, message_id: i64, a: &NewAttachment) -> Result<i64
     Ok(db.conn().last_insert_rowid())
 }
 
+/// Replace a message's attachments with a freshly parsed set while keeping
+/// stable row IDs: matches on filename/mime/content-id/size/inline, fills
+/// bytes in place, inserts truly new parts, deletes vanished ones — all in
+/// one transaction so an open/save click holding a pre-download ID still
+/// resolves afterwards (`unchecked_` because `Db::conn()` is shared `&`).
+pub fn replace_attachments(db: &Db, message_id: i64, files: &[NewAttachment]) -> Result<()> {
+    let tx = db.conn().unchecked_transaction()?;
+    let mut existing = list_attachments(db, message_id)?;
+    for file in files {
+        let matched = existing.iter().position(|a| {
+            a.filename == file.filename
+                && a.mime_type == file.mime_type
+                && a.content_id == file.content_id
+                && a.size == file.size
+                && a.is_inline == file.is_inline
+        });
+        if let Some(index) = matched {
+            let attachment = existing.remove(index);
+            tx.execute(
+                "update attachments set data = coalesce(?1, data),
+                    storage_path = case when ?1 is not null then null else storage_path end
+                 where id = ?2",
+                params![file.data.as_deref(), attachment.id],
+            )?;
+        } else {
+            tx.execute(
+                "insert into attachments (message_id, filename, mime_type, size,
+                    content_id, storage_path, data, is_inline, created_at)
+                 values (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8)",
+                params![
+                    message_id,
+                    file.filename,
+                    file.mime_type,
+                    file.size as i64,
+                    file.content_id,
+                    file.data.as_deref(),
+                    i64::from(file.is_inline),
+                    now()
+                ],
+            )?;
+        }
+    }
+    for attachment in existing {
+        tx.execute("delete from attachments where id = ?1", [attachment.id])?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 /// List attachment metadata of a message (no BLOB bytes — keeps feeds cheap).
 /// Ordered with regular attachments first, inline parts last.
 pub fn list_attachments(db: &Db, message_id: i64) -> Result<Vec<Attachment>> {
