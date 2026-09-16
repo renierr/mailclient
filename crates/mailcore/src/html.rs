@@ -122,6 +122,15 @@ pub fn decode_entities(s: &str) -> String {
                     // re-escapes the `&` and recipients literally read
                     // "&nbsp;" (`&amp;nbsp;` on the wire).
                     "&nbsp;" | "&NBSP;" => Some('\u{a0}'),
+                    // Invisible format chars (newsletter spacer hacks):
+                    // unknown named entities survive decoding, so the
+                    // serializer re-escapes the `&` and readers see a
+                    // literal "&zwnj;" instead of nothing.
+                    "&zwnj;" | "&ZWNJ;" => Some('\u{200c}'),
+                    "&zwj;" | "&ZWJ;" => Some('\u{200d}'),
+                    "&lrm;" | "&LRM;" => Some('\u{200e}'),
+                    "&rlm;" | "&RLM;" => Some('\u{200f}'),
+                    "&shy;" | "&SHY;" => Some('\u{ad}'),
                     "&#34;" | "&#x22;" | "&#X22;" => Some('"'),
                     "&#60;" | "&#x3C;" | "&#x3c;" => Some('<'),
                     "&#62;" | "&#x3E;" | "&#x3e;" => Some('>'),
@@ -919,5 +928,17 @@ mod tests {
         assert!(!s.contains("&amp;nbsp;"), "nbsp leaked: {s:?}");
         assert!(!s.contains("&nbsp;"), "nbsp leaked: {s:?}");
         assert_eq!(html_to_text("<p>a&nbsp;b</p>"), "a\u{a0}b");
+    }
+
+    #[test]
+    fn invisible_format_entities_stay_invisible() {
+        // Newsletter spacer divs (`&zwnj;` runs) must not leak as literal
+        // "&zwnj;" text in the reader or get baked into forwards that way.
+        assert_eq!(decode_entities("a&zwnj;b"), "a\u{200c}b");
+        let s = sanitize("<p>a&zwnj;&zwj;b</p>", false);
+        assert!(s.html.contains('\u{200c}'), "zwnj lost: {s:?}");
+        assert!(!s.html.contains("&amp;zwnj;"), "zwnj leaked: {s:?}");
+        assert!(!s.html.contains("&zwnj;"), "zwnj leaked: {s:?}");
+        assert_eq!(html_to_text("<p>a&zwnj;b</p>"), "a\u{200c}b");
     }
 }
