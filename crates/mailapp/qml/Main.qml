@@ -60,6 +60,16 @@ ApplicationWindow {
         root.readerFullscreen = !root.readerFullscreen
     }
 
+    // Fullscreen hides everything except the reader — including the exit
+    // control, which lives inside the message pane. If the open mail
+    // disappears while maximized (delete/archive/move/purge), drop back to
+    // the 3-pane view instead of stranding the user in an empty fullscreen
+    // pane that no button (and no Esc reaching past WebEngine focus) can leave.
+    onCurrentMessageChanged: {
+        if (root.currentMessage === undefined && root.readerFullscreen)
+            root.readerFullscreen = false
+    }
+
     Bridge {
         id: backend
     }
