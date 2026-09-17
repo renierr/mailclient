@@ -522,13 +522,21 @@ ApplicationWindow {
                 reloadMessages()
             }
             if (kind === "Send") {
-                // Normally already closed on the progress signal; closing an
+                // Normally already closed when queued; closing an
                 // already-closed dialog is a no-op, and this is the backstop
                 // for the case where it never arrived. "sent, but …"
                 // means the bookkeeping failed, never the delivery.
                 if (status === "" || status.indexOf("sent, but") === 0) {
                     composer.markClean()
                     composer.close()
+                } else {
+                    // Genuine send failure after the optimistic close: the
+                    // fields still hold the text (nothing cleared them), so
+                    // reopen and flag dirty — cancelling then asks before
+                    // discarding. Edge: text composed since is shown instead;
+                    // the error status still says what failed.
+                    composer.dirty = true
+                    composer.open()
                 }
                 if (status !== "")
                     root.statusText = status
@@ -884,8 +892,15 @@ ApplicationWindow {
         onSendRequested: payload => {
             root.statusText = qsTr("Sending…")
             var r = backend.send_mail(payload)
-            if (r !== "")
+            if (r !== "") {
                 root.statusText = r
+            } else {
+                // Validated + queued locally (no network yet): close at once
+                // instead of waiting out the SMTP transaction. A later
+                // failure reopens the composer with the text still in place.
+                composer.markClean()
+                composer.close()
+            }
         }
         onSaveDraftRequested: payload => {
             root.statusText = qsTr("Saving draft…")

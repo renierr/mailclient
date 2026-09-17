@@ -618,6 +618,28 @@ pub(crate) fn assemble_message(
 
 impl MailSender for SmtpSender {
     fn send_raw(&mut self, db: &Db, account_id: i64, req: &SendRequest<'_>) -> Result<()> {
+        let raw = self.submit(db, account_id, req)?;
+        // Never fails the send itself (kept for the harness path).
+        if let Err(e) = self.save_sent_copy(db, account_id, req.imap_password, &raw) {
+            log::warn!("smtp: sent copy failed (send itself succeeded): {e}");
+        }
+        Ok(())
+    }
+}
+
+impl SmtpSender {
+    /// Validate, build and enqueue one message without touching the network:
+    /// address checks, MIME assembly (incl. attachment reads) and the outbox
+    /// row. Pure local work, so the composer can run it synchronously for
+    /// instant feedback and close before any network happens. Returns the
+    /// outbox row id plus the raw MIME (for the Sent copy). `password` /
+    /// `imap_password` are unused here — they only matter at submit time.
+    pub fn enqueue_send(
+        &self,
+        db: &Db,
+        account_id: i64,
+        req: &SendRequest<'_>,
+    ) -> Result<(i64, Vec<u8>)> {
         let to_boxes = valid_mailboxes(req.to);
         let cc_boxes = strict_mailboxes("Cc", req.cc)?;
         let bcc_boxes = strict_mailboxes("Bcc", req.bcc)?;
@@ -702,6 +724,15 @@ impl MailSender for SmtpSender {
         )?;
         let raw = email.formatted();
         let queue_id = queue::enqueue_mime(db, account_id, None, &raw, from_addr, &rcpts)?;
+        Ok((queue_id, raw))
+    }
+
+    /// SMTP-submit one message: everything up to the server accepting it.
+    /// Returns the raw MIME for the Sent copy. Enqueues first (crash-safe),
+    /// then submits the row; on failure the row's bytes are discarded so a
+    /// manual retry cannot deliver the same message twice.
+    pub fn submit(&mut self, db: &Db, account_id: i64, req: &SendRequest<'_>) -> Result<Vec<u8>> {
+        let (queue_id, raw) = self.enqueue_send(db, account_id, req)?;
         if let Err(e) = self.submit_queued(db, queue_id, req.password) {
             // The user is about to see this failure and owns the retry. Leaving
             // submittable bytes behind would let the next sync deliver the same
@@ -721,8 +752,7 @@ impl MailSender for SmtpSender {
                 }
             }
         }
-        self.save_sent_copy(db, account_id, req.imap_password, &raw);
-        Ok(())
+        Ok(raw)
     }
 }
 
@@ -797,7 +827,9 @@ impl SmtpSender {
                         }
                     }
                     if let Some(raw) = row.raw_mime.as_deref() {
-                        self.save_sent_copy(db, account_id, imap_password, raw);
+                        if let Err(e) = self.save_sent_copy(db, account_id, imap_password, raw) {
+                            log::warn!("smtp: outbox sent copy failed: {e}");
+                        }
                     }
                 }
                 Err(e) => {
@@ -829,57 +861,56 @@ impl SmtpSender {
     }
 
     /// File the sent MIME bytes into the account's Sent folder (Thunderbird-style).
-    /// Best-effort: skipped (with a warning) when the `sent_copy_enabled`
-    /// setting is off, no Sent folder is known, or no IMAP credential is
-    /// available. Never fails the send itself.
-    fn save_sent_copy(&self, db: &Db, account_id: i64, imap_password: Option<&str>, raw: &[u8]) {
+    /// A disabled setting skips silently (`Ok` — that is intentional, not a
+    /// failure); every genuine failure is returned so the caller can tell
+    /// the user the Sent copy is missing instead of looking sent-but-unsaved.
+    /// Never fails the send itself — callers run this after SMTP accepted.
+    pub fn save_sent_copy(
+        &self,
+        db: &Db,
+        account_id: i64,
+        imap_password: Option<&str>,
+        raw: &[u8],
+    ) -> Result<()> {
         match settings::get_bool(db, settings::SENT_COPY_ENABLED) {
             Ok(true) => {}
             Ok(false) => {
                 log::info!("smtp: sent-copy disabled by setting");
-                return;
+                return Ok(());
             }
             Err(e) => {
-                log::warn!("smtp: cannot read sent-copy setting, skipping copy: {e}");
-                return;
+                return Err(StoreError::InvalidInput(format!(
+                    "cannot read sent-copy setting, skipping copy: {e}"
+                )));
             }
         }
-        let sent_path = match folders::list_by_account(db, account_id) {
-            Ok(list) => list
-                .into_iter()
-                .find(|f| f.role == FolderRole::Sent)
-                .map(|f| f.path),
-            Err(e) => {
-                log::warn!("smtp: cannot list folders, skipping sent copy: {e}");
-                return;
-            }
-        };
-        let Some(sent_path) = sent_path else {
-            log::warn!("smtp: no Sent folder known, skipping sent copy");
-            return;
-        };
+        let sent_path = folders::list_by_account(db, account_id)
+            .map_err(|e| {
+                StoreError::InvalidInput(format!("cannot list folders, skipping sent copy: {e}"))
+            })?
+            .into_iter()
+            .find(|f| f.role == FolderRole::Sent)
+            .map(|f| f.path)
+            .ok_or_else(|| {
+                StoreError::InvalidInput("no Sent folder known, skipping sent copy".to_string())
+            })?;
         let Some(imap_password) = imap_password else {
-            log::warn!("smtp: no IMAP credential, skipping sent copy");
-            return;
+            return Err(StoreError::InvalidInput(
+                "no IMAP credential, skipping sent copy".to_string(),
+            ));
         };
-        let account = match crate::store::accounts::get(db, account_id) {
-            Ok(a) => a,
-            Err(e) => {
-                log::warn!("smtp: cannot load account, skipping sent copy: {e}");
-                return;
-            }
-        };
+        let account = crate::store::accounts::get(db, account_id).map_err(|e| {
+            StoreError::InvalidInput(format!("cannot load account, skipping sent copy: {e}"))
+        })?;
         let mut imap = ImapSync::new(&account);
-        if let Err(e) = imap.connect(imap_password) {
-            log::warn!("smtp: IMAP connect failed, skipping sent copy: {e}");
-            return;
-        }
-        if let Err(e) = imap.append_to_folder(&sent_path, raw) {
-            log::warn!("smtp: APPEND to {sent_path} failed: {e}");
-        } else {
-            log::info!("smtp: saved copy to {sent_path}");
-        }
+        imap.connect(imap_password).map_err(|e| {
+            StoreError::InvalidInput(format!("IMAP connect failed, skipping sent copy: {e}"))
+        })?;
+        imap.append_to_folder(&sent_path, raw)
+            .map_err(|e| StoreError::InvalidInput(format!("APPEND to {sent_path} failed: {e}")))?;
+        log::info!("smtp: saved copy to {sent_path}");
         imap.disconnect();
+        Ok(())
     }
 }
 
@@ -1078,6 +1109,69 @@ mod tests {
         // Garbage fails loudly instead of being dropped or sent raw.
         assert!(strict_mailboxes("Cc", &["bob@".to_string()]).is_err());
         assert!(strict_mailboxes("Bcc", &["".to_string()]).is_err());
+    }
+
+    #[test]
+    fn enqueue_validates_and_stores_without_network() {
+        let db = Db::open_in_memory().unwrap();
+        let account = test_account();
+        let sender = SmtpSender::new(&account);
+        let acc = crate::store::accounts::create(
+            &db,
+            &crate::models::NewAccount {
+                name: "t".to_string(),
+                email_address: account.email_address.clone(),
+                from_name: String::new(),
+                imap_host: "i".to_string(),
+                imap_port: 993,
+                imap_security: "tls".to_string(),
+                imap_username: "u".to_string(),
+                smtp_host: "s".to_string(),
+                smtp_port: 587,
+                smtp_security: "starttls".to_string(),
+                smtp_username: "u".to_string(),
+                auth_vault_key: "k".to_string(),
+                check_interval_secs: 300,
+            },
+        )
+        .unwrap();
+        let to = vec!["you@example.com".to_string()];
+        let cc = Vec::new();
+        let bcc = Vec::new();
+        let files = Vec::new();
+        let base = SendRequest {
+            to: &to,
+            cc: &cc,
+            bcc: &bcc,
+            from: None,
+            from_name: None,
+            reply_to: None,
+            subject: "queued",
+            body_text: "hello",
+            body_html: None,
+            attachments: &files,
+            format: SendFormat::Plain,
+            include_plain: true,
+            policy: &SendPolicy::Unrestricted,
+            password: "",
+            imap_password: None,
+            request_mdn: false,
+        };
+        // A bad address fails here — before any network and before a row.
+        let bad_cc = vec!["bob@".to_string()];
+        let bad = SendRequest {
+            cc: &bad_cc,
+            ..base
+        };
+        assert!(sender.enqueue_send(&db, acc, &bad).is_err());
+        // A good one stores a submittable row plus the MIME for Sent filing.
+        let (id, raw) = sender.enqueue_send(&db, acc, &base).unwrap();
+        assert!(id > 0);
+        let text = String::from_utf8(raw).unwrap();
+        assert!(text.contains("Subject: queued"));
+        let row = queue::get(&db, id).unwrap();
+        assert!(row.raw_mime.as_deref().is_some_and(|b| !b.is_empty()));
+        assert!(!row.envelope_to.is_empty());
     }
 
     #[test]

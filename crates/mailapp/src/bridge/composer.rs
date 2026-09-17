@@ -2,10 +2,9 @@ use std::pin::Pin;
 
 use cxx_qt_lib::QString;
 use mailcore::auth;
-use mailcore::store::{folders, messages, settings};
+use mailcore::store::{contacts, folders, messages, queue, settings};
 use mailcore::sync::imap::{FULL_SYNC_WINDOW, QUICK_SYNC_WINDOW};
 use mailcore::sync::sender::{format_draft, SendFormat, SendPolicy, SendRequest, SmtpSender};
-use mailcore::sync::traits::MailSender;
 
 use crate::bridge::messages::{draft_attachment_path, ensure_attachment_data, safe_filename};
 use crate::bridge::qobject;
@@ -89,86 +88,126 @@ impl qobject::Bridge {
         let draft_uid = v.get("draft_uid").and_then(|x| x.as_i64()).unwrap_or(-1) as i32;
         let wanted = *self.current_account_id();
         let folder_id = *self.current_folder_id();
+        // Validate + build + enqueue synchronously: pure local work (SQLite +
+        // file reads), so mistakes report instantly with the composer still
+        // open, and the close below never waits on the network. The password
+        // fields stay empty — no secret is needed before the SMTP submit.
+        let db = match crate::bridge::open_db() {
+            Ok(d) => d,
+            Err(e) => return qstring(&e),
+        };
+        let acc = match current_account(&db, wanted) {
+            Ok(a) => a,
+            Err(e) => return qstring(&e),
+        };
+        let sender = SmtpSender::new(&acc);
+        let format = SendFormat::parse(&settings::get_send_format(&db));
+        let include_plain =
+            settings::get_bool(&db, settings::COMPOSE_INCLUDE_PLAIN).unwrap_or(true);
+        let request_mdn = settings::get_bool(&db, settings::REQUEST_MDN).unwrap_or(false);
+        let from_name = from_name_composed.or_else(|| {
+            let n = acc.from_name.trim().to_string();
+            if n.is_empty() {
+                None
+            } else {
+                Some(n)
+            }
+        });
+        let from = if from_raw.is_empty() {
+            None
+        } else {
+            Some(from_raw.as_str())
+        };
+        let reply_to = (!reply_to_raw.is_empty()).then_some(reply_to_raw.as_str());
+        let req = SendRequest {
+            to: &to,
+            cc: &cc,
+            bcc: &bcc,
+            from,
+            from_name: from_name.as_deref(),
+            reply_to,
+            subject: &subject,
+            body_text: &body,
+            body_html: body_html.as_deref(),
+            attachments: &attachments,
+            format,
+            include_plain,
+            policy: &SendPolicy::Unrestricted,
+            password: "",
+            imap_password: None,
+            request_mdn,
+        };
+        let (queue_id, raw) = match sender.enqueue_send(&db, acc.id, &req) {
+            Ok(v) => v,
+            Err(e) => return qstring(&e.to_string()),
+        };
         spawn_job(self, "Send", move |db, progress| {
             let acc = current_account(db, wanted)?;
             let secrets = auth::load_account_secrets(&acc.auth_vault_key)
                 .map_err(|e| format!("no password in keyring: {e}"))?;
-            let mut sender = SmtpSender::new(&acc);
-            let format = SendFormat::parse(&settings::get_send_format(db));
-            let include_plain =
-                settings::get_bool(db, settings::COMPOSE_INCLUDE_PLAIN).unwrap_or(true);
-            let request_mdn = settings::get_bool(db, settings::REQUEST_MDN).unwrap_or(false);
-            let from_name = from_name_composed.or_else(|| {
-                let n = acc.from_name.trim().to_string();
-                if n.is_empty() {
-                    None
-                } else {
-                    Some(n)
+            let sender = SmtpSender::new(&acc);
+            if let Err(e) = sender.submit_queued(db, queue_id, &secrets.smtp_password) {
+                // Same no-duplicate rule as an interactive failure: the user
+                // sees this error and owns the retry.
+                let _ = queue::discard_mime(db, queue_id);
+                return Err(format!("send failed: {e}"));
+            }
+            if settings::get_bool(db, settings::COLLECT_SENT_CONTACTS).unwrap_or(true) {
+                let mut all_rcpts = mailcore::sync::sender::valid_mailboxes(&to);
+                all_rcpts.extend(mailcore::sync::sender::valid_mailboxes(&cc));
+                all_rcpts.extend(mailcore::sync::sender::valid_mailboxes(&bcc));
+                for mb in all_rcpts {
+                    let addr = mb.email.to_string();
+                    let name = mb.name.as_deref();
+                    if let Err(e) = contacts::seen(db, &addr, name) {
+                        log::warn!("contacts: could not collect recipient: {e}");
+                    }
                 }
-            });
-            let from = if from_raw.is_empty() {
-                None
-            } else {
-                Some(from_raw.as_str())
-            };
-            let reply_to = (!reply_to_raw.is_empty()).then_some(reply_to_raw.as_str());
-            let req = SendRequest {
-                to: &to,
-                cc: &cc,
-                bcc: &bcc,
-                from,
-                from_name: from_name.as_deref(),
-                reply_to,
-                subject: &subject,
-                body_text: &body,
-                body_html: body_html.as_deref(),
-                attachments: &attachments,
-                format,
-                include_plain,
-                policy: &SendPolicy::Unrestricted,
-                password: &secrets.smtp_password,
-                imap_password: Some(&secrets.imap_password),
-                request_mdn,
-            };
-            sender
-                .send_raw(db, acc.id, &req)
-                .map_err(|e| e.to_string())?;
-            // Handed off to the server: the message is sent and nothing below
-            // can un-send it. Release the composer now rather than holding it
-            // open through the Sent copy, the draft removal and the resync.
+            }
+            // Everything below runs while the user is already free. The mail
+            // IS sent, so failures here must not fail the job (which would
+            // skip the feed refresh and look like nothing happened) — they
+            // become "sent, but …" notes, which close the composer anyway.
+            let mut notes: Vec<String> = Vec::new();
+            // SMTP accepted it: release the composer now rather than holding
+            // it open through the Sent copy, the draft removal and the
+            // resync (the Sent copy pays a second TLS + LOGIN of its own).
             progress.report("");
+            if let Err(e) = sender.save_sent_copy(db, acc.id, Some(&secrets.imap_password), &raw) {
+                log::warn!("send: sent copy failed: {e}");
+                notes.push(format!("sent, but the Sent copy failed: {e}"));
+            }
             if draft_uid >= 0 {
                 let draft_folder = folders::list_by_account(db, acc.id)
                     .map_err(|e| e.to_string())?
                     .into_iter()
-                    .find(|f| f.role == mailcore::models::FolderRole::Drafts)
-                    .ok_or_else(|| {
+                    .find(|f| f.role == mailcore::models::FolderRole::Drafts);
+                match draft_folder {
+                    None => notes.push(
                         "sent, but no Drafts folder is available to remove the source draft"
-                            .to_string()
-                    })?;
-                let source = messages::get_by_uid(db, draft_folder.id, draft_uid as u32)
-                    .map_err(|_| "sent, but the source draft no longer exists".to_string())?;
-                if !source.is_draft {
-                    return Err("sent, but the source message is not a draft".to_string());
+                            .to_string(),
+                    ),
+                    Some(draft_folder) => {
+                        match messages::get_by_uid(db, draft_folder.id, draft_uid as u32) {
+                            Ok(source) if source.is_draft => {
+                                if let Err(e) = with_imap(&acc, |imap| {
+                                    imap.delete_message(db, source.id)
+                                        .map_err(|e| e.to_string())
+                                }) {
+                                    notes.push(format!(
+                                        "sent, but could not remove source draft: {e}"
+                                    ));
+                                }
+                            }
+                            Ok(_) => notes
+                                .push("sent, but the source message is not a draft".to_string()),
+                            Err(_) => notes
+                                .push("sent, but the source draft no longer exists".to_string()),
+                        }
+                    }
                 }
-                with_imap(&acc, |imap| {
-                    imap.delete_message(db, source.id)
-                        .map_err(|e| e.to_string())
-                })
-                .map_err(|e| format!("sent, but could not remove source draft: {e}"))?;
             }
-            if let Some(sent) = folders::list_by_account(db, acc.id)
-                .unwrap_or_default()
-                .into_iter()
-                .find(|f| f.role == mailcore::models::FolderRole::Sent)
-                .map(|f| f.id)
-            {
-                let _ = with_imap(&acc, |imap| {
-                    imap.sync_folder_window(db, sent, Some(QUICK_SYNC_WINDOW))
-                        .map_err(|e| e.to_string())
-                });
-            }
-            Ok((String::new(), Some(JobRefresh::feeds(acc.id, folder_id))))
+            sent_resync(db, &acc, folder_id, notes)
         })
     }
 
@@ -318,4 +357,44 @@ impl qobject::Bridge {
             ))
         })
     }
+}
+
+/// Resync after a send and always refresh the feeds: the Sent folder (the
+/// copy just landed there) plus the viewed folder (a mail sent to self only
+/// arrives via delivery, so without this the list sits stale until the next
+/// manual refresh). The mail IS sent at this point, so even a failed resync
+/// reports ("sent, but …") instead of failing the job — a failed job skips
+/// the feed refresh and looks exactly like "the folder did not update",
+/// with no reason shown.
+fn sent_resync(
+    db: &mailcore::Db,
+    acc: &mailcore::models::Account,
+    folder_id: i64,
+    mut notes: Vec<String>,
+) -> Result<(String, Option<JobRefresh>), String> {
+    let mut targets: Vec<(i64, &'static str)> = Vec::new();
+    if let Some(sent) = folders::list_by_account(db, acc.id)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|f| f.role == mailcore::models::FolderRole::Sent)
+        .map(|f| f.id)
+    {
+        targets.push((sent, "Sent"));
+    }
+    if folder_id >= 0 && !targets.iter().any(|(id, _)| *id == folder_id) {
+        match folders::get(db, folder_id) {
+            Ok(f) if f.account_id == acc.id => targets.push((folder_id, "current")),
+            _ => {}
+        }
+    }
+    for (id, label) in targets {
+        if let Err(e) = with_imap(acc, |imap| {
+            imap.sync_folder_window(db, id, Some(QUICK_SYNC_WINDOW))
+                .map_err(|e| e.to_string())
+        }) {
+            log::warn!("send: {label} resync failed: {e}");
+            notes.push(format!("sent, but the {label} folder did not refresh: {e}"));
+        }
+    }
+    Ok((notes.join(" "), Some(JobRefresh::feeds(acc.id, folder_id))))
 }
