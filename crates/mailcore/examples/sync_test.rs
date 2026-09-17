@@ -151,6 +151,7 @@ fn main() -> Result<(), String> {
                     format: SendFormat::Plain,
                     include_plain: true,
                     from_name: None,
+                    reply_to: None,
                     policy: &policy,
                     password: &smtp_pass,
                     imap_password: Some(&imap_pass),

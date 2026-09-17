@@ -143,6 +143,9 @@ pub struct SendRequest<'a> {
     /// Sender display name for `From:` (`None`/empty = address only).
     /// Defaults to the account's `from_name` when the composer sends none.
     pub from_name: Option<&'a str>,
+    /// Reply-To for outgoing mail (composer field, optional, one address).
+    /// `None`/empty = no header; replies to our mail go to `From`.
+    pub reply_to: Option<&'a str>,
     pub subject: &'a str,
     /// Plain-text source. For composer rich text this may hold HTML source —
     /// [`resolve_bodies`] sorts that out resiliently.
@@ -344,6 +347,7 @@ pub fn format_draft(account: &Account, req: &SendRequest<'_>) -> Result<Vec<u8>>
     let files = load_outgoing_attachments(req.attachments)?;
     let to = valid_mailboxes(req.to);
     let to_group = to.is_empty().then(|| to_group_name(&req.to.join(" ")));
+    let reply_to = parse_reply_to(req.reply_to.unwrap_or(""))?;
     // Same strict Cc/Bcc validation as a real send: a draft carrying a bad
     // address must fail here, not when the user hits Send.
     let cc: Vec<String> = strict_mailboxes("Cc", req.cc)?
@@ -361,6 +365,7 @@ pub fn format_draft(account: &Account, req: &SendRequest<'_>) -> Result<Vec<u8>>
         to_group.as_deref(),
         &cc,
         &bcc,
+        reply_to,
         SendFormat::Multipart,
         plain,
         html,
@@ -460,6 +465,19 @@ pub fn strict_mailboxes(field: &str, raw: &[String]) -> Result<Vec<lettre::messa
         .collect()
 }
 
+/// Parse the composer's optional Reply-To into a single mailbox: empty =
+/// no header (`None`), anything unparseable is a user-facing error (fail
+/// here, not as a silent missing header after send).
+pub fn parse_reply_to(raw: &str) -> Result<Option<lettre::message::Mailbox>> {
+    let t = raw.trim();
+    if t.is_empty() {
+        return Ok(None);
+    }
+    t.parse::<lettre::message::Mailbox>()
+        .map(Some)
+        .map_err(|_| StoreError::InvalidInput(format!("invalid Reply-To address: {t}")))
+}
+
 /// Whether the visible sender stays within the configured account domain.
 #[must_use]
 pub fn sender_domain_is_aligned(from: &str, account_email: &str) -> bool {
@@ -507,6 +525,7 @@ pub(crate) fn assemble_message(
     to_group: Option<&str>,
     cc: &[String],
     bcc: &[String],
+    reply_to: Option<lettre::message::Mailbox>,
     format: SendFormat,
     plain: String,
     html: Option<String>,
@@ -514,6 +533,11 @@ pub(crate) fn assemble_message(
     request_mdn: bool,
 ) -> Result<Message> {
     let mut builder = Message::builder().from(from.clone()).subject(subject);
+    // Composer's Reply-To ("replies to my mail go here"): omitted when the
+    // field is blank, so replies default to From.
+    if let Some(mbox) = reply_to {
+        builder = builder.reply_to(mbox);
+    }
     // Read receipt request (RFC 3798): the address receipts go back to is
     // the visible sender. Recipients may ignore it; it only asks.
     if request_mdn {
@@ -657,6 +681,7 @@ impl MailSender for SmtpSender {
         let to_group = to_boxes
             .is_empty()
             .then(|| to_group_name(&req.to.join(" ")));
+        let reply_to = parse_reply_to(req.reply_to.unwrap_or(""))?;
         // Normalized mailbox strings (display names preserved): headers and
         // envelope agree, and malformed strings never reach the SMTP envelope.
         let cc: Vec<String> = cc_boxes.iter().map(|m| m.to_string()).collect();
@@ -668,6 +693,7 @@ impl MailSender for SmtpSender {
             to_group.as_deref(),
             &cc,
             &bcc,
+            reply_to,
             format,
             plain,
             html,
@@ -902,6 +928,7 @@ mod tests {
             bcc: &bcc,
             from: None,
             from_name: None,
+            reply_to: None,
             subject: "unfinished",
             body_text: "<p>still writing</p>",
             body_html: Some("<p>still writing</p>"),
@@ -1054,6 +1081,45 @@ mod tests {
     }
 
     #[test]
+    fn reply_to_header_roundtrips() {
+        use SendFormat::Plain;
+        assert!(parse_reply_to("").unwrap().is_none());
+        assert!(parse_reply_to("   ").unwrap().is_none());
+        let mbox = parse_reply_to("replies@example.com").unwrap().unwrap();
+        assert_eq!(mbox.email.to_string(), "replies@example.com");
+        assert!(parse_reply_to("not an address").is_err());
+
+        let from: lettre::message::Mailbox = "me@example.com".parse().unwrap();
+        let call = |reply_to| {
+            assemble_message(
+                from.clone(),
+                "hi",
+                valid_mailboxes(&["bob@example.com".to_string()]),
+                None,
+                &[],
+                &[],
+                reply_to,
+                Plain,
+                "hello".to_string(),
+                None,
+                &[],
+                false,
+            )
+            .unwrap()
+        };
+        let raw = String::from_utf8(call(Some(mbox)).formatted()).unwrap();
+        assert!(
+            raw.contains("Reply-To: replies@example.com"),
+            "no Reply-To: {raw:?}"
+        );
+        let raw_off = String::from_utf8(call(None).formatted()).unwrap();
+        assert!(
+            !raw_off.contains("Reply-To"),
+            "Reply-To leaked in: {raw_off:?}"
+        );
+    }
+
+    #[test]
     fn to_field_tolerates_placeholder_text() {
         let s = |x: &str| x.to_string();
         // Real addresses pass through; placeholder text is dropped so a
@@ -1091,6 +1157,7 @@ mod tests {
             Some("my friends"),
             &[],
             &bcc,
+            None,
             Plain,
             "hello".to_string(),
             None,
@@ -1112,6 +1179,7 @@ mod tests {
             Some("undisclosed-recipients"),
             &[],
             &bcc,
+            None,
             Plain,
             "hello".to_string(),
             None,
@@ -1141,6 +1209,7 @@ mod tests {
             None,
             &[],
             &[],
+            None,
             Plain,
             "hello".to_string(),
             None,
@@ -1167,6 +1236,7 @@ mod tests {
                 None,
                 &[],
                 &[],
+                None,
                 Plain,
                 "hello".to_string(),
                 None,

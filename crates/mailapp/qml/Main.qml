@@ -149,6 +149,15 @@ ApplicationWindow {
         return undefined
     }
 
+    // Full reader payload when the mail is open (it carries reply_to and
+    // bodies the compact list rows omit), else the list row itself — so
+    // reply/forward from anywhere see the same recipient and quote.
+    function messageForAnswer(uid) {
+        if (root.currentMessage && root.currentMessage.uid === uid)
+            return root.currentMessage
+        return root.messageByUid(uid)
+    }
+
     function showResult(okMessage, result) {
         root.statusText = result === "" ? okMessage : result
     }
@@ -607,11 +616,11 @@ ApplicationWindow {
     Shortcut { sequences: ["M"]; onActivated: root.openMove(root.currentUid) }
     Shortcut {
         sequences: ["R"]
-        onActivated: if (root.currentUid >= 0) composer.openForReply(root.messageByUid(root.currentUid))
+        onActivated: if (root.currentUid >= 0) composer.openForReply(root.messageForAnswer(root.currentUid))
     }
     Shortcut {
         sequences: ["F"]
-        onActivated: if (root.currentUid >= 0) composer.openForForward(root.messageByUid(root.currentUid))
+        onActivated: if (root.currentUid >= 0) composer.openForForward(root.messageForAnswer(root.currentUid))
     }
     Shortcut {
         sequences: ["F11"]

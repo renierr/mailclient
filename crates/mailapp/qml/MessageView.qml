@@ -9,7 +9,7 @@ import Mailclient
 import "components"
 
 // Reader pane. `message` roles come from the Rust feed:
-// {subject, from, date, body_text, body_html, is_html, has_remote_images}.
+// {subject, from, reply_to, date, body_text, body_html, is_html, has_remote_images}.
 // Sender display name + To/Cc/full date come from the on-demand headers
 // (`message_headers_json`), loaded once per opened message — the feed only
 // carries the bare From address.
@@ -203,6 +203,11 @@ Rectangle {
 
     readonly property var sender: root.splitAddr(
         root.headersInfo.from || (root.message ? root.message.from : ""))
+    // Reply-To pointing elsewhere than the sender: answering goes there,
+    // not to From. Compared on the bare address, case-insensitively.
+    readonly property string replyToAddr: (root.headersInfo.reply_to || "").trim()
+    readonly property bool replyToDiffers: root.replyToAddr !== ""
+        && root.replyToAddr.toLowerCase() !== root.sender.addr.trim().toLowerCase()
     readonly property string toLine: root.joinAddrs(root.headersInfo.to)
     readonly property string ccLine: root.joinAddrs(root.headersInfo.cc)
     readonly property string fullDate:
@@ -342,6 +347,16 @@ Rectangle {
                             elide: Text.ElideRight
                             Layout.fillWidth: true
                         }
+                        // A differing Reply-To is shown inline (not just in
+                        // the Headers dialog): replies go there, not to From.
+                        Label {
+                            visible: root.replyToDiffers
+                            text: qsTr("↩ Replies go to %1, not to the sender").arg(root.replyToAddr)
+                            color: Theme.danger
+                            font.pixelSize: Theme.fontSmall
+                            elide: Text.ElideRight
+                            Layout.fillWidth: true
+                        }
                     }
 
                     IconButton {
@@ -401,6 +416,21 @@ Rectangle {
                         color: Theme.text
                         font.pixelSize: Theme.fontSmall
                         textFormat: Text.PlainText
+                    }
+                    Label {
+                        text: qsTr("Reply-To")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                        visible: (root.headersInfo.reply_to || "") !== ""
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.headersInfo.reply_to || ""
+                        color: root.replyToDiffers ? Theme.danger : Theme.text
+                        font.pixelSize: Theme.fontSmall
+                        wrapMode: Text.WrapAnywhere
+                        textFormat: Text.PlainText
+                        visible: (root.headersInfo.reply_to || "") !== ""
                     }
                 }
 

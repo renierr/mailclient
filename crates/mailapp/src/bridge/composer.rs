@@ -28,6 +28,8 @@ impl qobject::Bridge {
         };
         let to_raw = str_field("to");
         let from_raw = str_field("from");
+        // Optional Reply-To for our mail ("replies go here instead of From").
+        let reply_to_raw = str_field("reply_to");
         // Display name for `From:` — composer field first, else the account
         // default (empty = address only).
         let from_name_raw = str_field("from_name");
@@ -109,12 +111,14 @@ impl qobject::Bridge {
             } else {
                 Some(from_raw.as_str())
             };
+            let reply_to = (!reply_to_raw.is_empty()).then_some(reply_to_raw.as_str());
             let req = SendRequest {
                 to: &to,
                 cc: &cc,
                 bcc: &bcc,
                 from,
                 from_name: from_name.as_deref(),
+                reply_to,
                 subject: &subject,
                 body_text: &body,
                 body_html: body_html.as_deref(),
@@ -189,6 +193,7 @@ impl qobject::Bridge {
         };
         let from_raw = str_field("from");
         let from_name_raw = str_field("from_name");
+        let reply_to_raw = str_field("reply_to");
         let body = str_field("body");
         let body_html_raw = str_field("body_html");
         let to = split_addresses("to");
@@ -223,6 +228,7 @@ impl qobject::Bridge {
             }
             let from = (!from_raw.is_empty()).then_some(from_raw.as_str());
             let from_name = (!from_name_raw.is_empty()).then_some(from_name_raw.as_str());
+            let reply_to = (!reply_to_raw.is_empty()).then_some(reply_to_raw.as_str());
             let body_html = (!body_html_raw.is_empty()).then_some(body_html_raw.as_str());
             let req = SendRequest {
                 to: &to,
@@ -230,6 +236,7 @@ impl qobject::Bridge {
                 bcc: &bcc,
                 from,
                 from_name,
+                reply_to,
                 subject: &subject,
                 body_text: &body,
                 body_html,
@@ -296,6 +303,7 @@ impl qobject::Bridge {
                 serde_json::json!({
                     "draft_uid": message.uid,
                     "from": message.from_addr.unwrap_or_default(),
+                    "reply_to": message.reply_to.unwrap_or_default(),
                     "to": message.to_addrs.join(", "),
                     "cc": message.cc_addrs.join(", "),
                     "bcc": message.bcc_addrs.join(", "),

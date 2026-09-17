@@ -105,6 +105,16 @@ Dialog {
     // Cc/Bcc rows stay collapsed until toggled (or non-empty).
     property bool showCc: false
     property bool showBcc: false
+    // Reply-To for our mail ("replies go here instead of From"): collapsed
+    // beside From until toggled (or non-empty, e.g. a reopened draft).
+    property bool showReplyTo: false
+
+    // Incoming Reply-To that points elsewhere than From, for the mail being
+    // answered: shown as a banner so the different recipient is obvious.
+    // Cleared on reset; the banner hides itself once the user edits To to
+    // something else (they took control of the recipient).
+    property string replyNoticeAddr: ""
+    property string replyNoticeSender: ""
 
     // Outgoing files picked via FileDialog: [{path, name}]. Paths (plain or
     // `file://` URLs) travel in the send payload; Rust reads the bytes at
@@ -249,9 +259,13 @@ Dialog {
         toField.text = ""
         ccField.text = ""
         bccField.text = ""
+        replyToField.text = ""
         subjectField.text = ""
         root.showCc = false
         root.showBcc = false
+        root.showReplyTo = false
+        root.replyNoticeAddr = ""
+        root.replyNoticeSender = ""
         root.attachments = []
         root.draftUid = -1
     }
@@ -273,9 +287,16 @@ Dialog {
         root.sourceMode = false
         root.resetHeaders()
         if (message !== undefined) {
-            // Replies go to Reply-To when the sender set one, else From.
-            var replyTo = (message.reply_to || "").trim() !== "" ? message.reply_to : (message.from || "")
-            toField.text = replyTo
+            // Replies go to Reply-To when the sender set one, else From —
+            // and when the two differ the banner below says so out loud.
+            var from = message.from || ""
+            var rt = (message.reply_to || "").trim()
+            var differs = rt !== "" && rt.toLowerCase() !== from.trim().toLowerCase()
+            toField.text = differs ? rt : from
+            if (differs) {
+                root.replyNoticeAddr = rt
+                root.replyNoticeSender = from
+            }
             subjectField.text = "Re: " + (message.subject || "")
             var core = root.quoteCore(message,
                 "On " + (message.date || "") + ", " + (message.from || "") + " wrote:")
@@ -322,8 +343,10 @@ Dialog {
         toField.text = draft.to || ""
         ccField.text = draft.cc || ""
         bccField.text = draft.bcc || ""
+        replyToField.text = draft.reply_to || ""
         root.showCc = ccField.text !== ""
         root.showBcc = bccField.text !== ""
+        root.showReplyTo = replyToField.text !== ""
         subjectField.text = draft.subject || ""
         root.attachments = draft.attachments || []
         root.setBody(draft.body || "")
@@ -384,6 +407,7 @@ Dialog {
         return JSON.stringify({
             from: root.effectiveFrom,
             from_name: fromName.text.trim(),
+            reply_to: replyToField.text,
             to: toField.text,
             cc: ccField.text,
             bcc: bccField.text,
@@ -498,6 +522,17 @@ Dialog {
                     }
                 }
             }
+            // Collapsed Reply-To toggle: our mail asks replies to go to
+            // another address instead of From. Optional, off by default.
+            IconButton {
+                text: "↩"
+                fontSize: Theme.fontSmall
+                implicitWidth: Math.round(36 * Theme.uiScale)
+                implicitHeight: Theme.controlHeight
+                active: root.showReplyTo || replyToField.text !== ""
+                tooltip: qsTr("Set Reply-To address")
+                onClicked: root.showReplyTo = !root.showReplyTo
+            }
             }
 
             Label {
@@ -570,6 +605,21 @@ Dialog {
             }
 
             Label {
+                text: qsTr("Reply-To")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+                visible: root.showReplyTo || replyToField.text !== ""
+            }
+            AppTextField {
+                id: replyToField
+                Layout.fillWidth: true
+                Layout.columnSpan: 2
+                visible: root.showReplyTo || replyToField.text !== ""
+                placeholderText: qsTr("replies to this mail go here instead of From (optional, one address)")
+                onTextChanged: root.dirty = true
+            }
+
+            Label {
                 text: qsTr("Subject")
                 color: Theme.textMuted
                 font.pixelSize: Theme.fontSmall
@@ -579,6 +629,41 @@ Dialog {
                 Layout.fillWidth: true
                 Layout.columnSpan: 2
                 onTextChanged: root.dirty = true
+            }
+        }
+
+        // --- reply-to notice ------------------------------------------------
+        // Answering a mail whose Reply-To points elsewhere: the To field
+        // alone would not say the recipient differs from the sender, so the
+        // banner says it out loud. Editing To to something else dismisses
+        // it (the user took control of the recipient).
+        Rectangle {
+            Layout.fillWidth: true
+            visible: root.replyNoticeAddr !== ""
+                     && toField.text.trim().toLowerCase() === root.replyNoticeAddr.toLowerCase()
+            radius: Theme.radius
+            color: Theme.bgAlt
+            border.width: 1
+            border.color: Theme.danger
+            implicitHeight: noticeRow.implicitHeight + Theme.sm * 2
+
+            RowLayout {
+                id: noticeRow
+                anchors.fill: parent
+                anchors.margins: Theme.sm
+                spacing: Theme.sm
+                Label {
+                    text: "↩"
+                    color: Theme.danger
+                    font.pixelSize: Theme.fontBase
+                }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    color: Theme.text
+                    font.pixelSize: Theme.fontSmall
+                    text: qsTr("Replies to this mail go to %1 — not to the sender (%2).").arg(root.replyNoticeAddr).arg(root.replyNoticeSender)
+                }
             }
         }
 
