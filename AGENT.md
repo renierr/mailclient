@@ -44,7 +44,7 @@ This file is normative for all coding agents (human or AI) working in this repo.
 
 ## 3. Code Style
 
-- Rust: `rustfmt` defaults, `clippy` clean, `thiserror` for errors, `serde` for JSON fields, `chrono` (UTC/RFC3339) for times, `log` + `env_logger` for logging. Async runtime: `tokio` (single global choice).
+- Rust: `rustfmt` defaults, `clippy` clean, `thiserror` for errors, `serde` for JSON fields, `chrono` (UTC/RFC3339) for times, `log` + `env_logger` for logging. Network is blocking (`imap`/`lettre` + `native-tls`) on a dedicated `mailclient-net` thread in `mailapp` — no async runtime in use.
 - SQL: lowercase keywords, `snake_case` tables/columns, explicit `FOREIGN KEY … ON DELETE CASCADE`, indexes for every `(account_id, folder_id, uid)`-style lookup and for date-descending list queries. Every table has `created_at`/`updated_at` (UTC ISO8601 text) unless it is a pure FTS/virtual table.
 - QML: one component per file in `crates/mailapp/qml/`, `PascalCase.qml` filenames, `qmllint`-clean, no inline JS business logic beyond formatting. All user-visible strings ready for `qsTr()`. Rust objects reach QML via `#[qml_element]` in the `Mailclient` module — never duplicate QML outside the crate.
 - No emojis in code unless the user asks. Concise comments only.
@@ -52,7 +52,7 @@ This file is normative for all coding agents (human or AI) working in this repo.
 ## 4. Dependency Policy
 
 Allowed without asking (pinned in `Cargo.toml`):
-`rusqlite`, `tokio`, `thiserror`, `anyhow` (binaries only), `serde`/`serde_json`, `chrono`, `uuid`, `log`/`env_logger`, `imap`, `async-imap`, `tokio-rustls`/`native-tls`, `lettre`, `mail-parser`, `mail-builder`, `keyring`, `directories`, `cxx-qt`/`cxx-qt-lib`/`cxx-qt-build`, `cxx`.
+`rusqlite`, `thiserror`, `anyhow` (binaries only), `serde`/`serde_json`, `chrono`, `uuid`, `log`/`env_logger`, `imap`, `native-tls`, `lettre`, `mail-parser`, `keyring`, `directories`, `cxx-qt`/`cxx-qt-lib`/`cxx-qt-build`, `cxx`.
 Anything else (new crypto, new runtime, new Qt modules beyond Core/Gui/Qml/Quick/QuickControls2/Network/WebEngine) → ask first.
 
 ## 5. Workflows
@@ -70,7 +70,8 @@ Anything else (new crypto, new runtime, new Qt modules beyond Core/Gui/Qml/Quick
 - Test sending is allowlist-only: automated sends (harness, workers, tests)
   are refused for any recipient outside `MAILCLIENT_TEST_SEND_ALLOWLIST`
   (unset = deny all, configured locally via gitignored `.env`, never
-  committed). An interactive Send click in the composer is explicit user
+  committed). `MAILCLIENT_ALLOW_ANY_RECIPIENT=1` is a harness-only escape
+  hatch — never export it globally. An interactive Send click in the composer is explicit user
   consent (`SendPolicy::Unrestricted`). Never add ad-hoc bypasses.
 - **Privacy (hard rule): never write or comment any real account or mail
   information.** No real addresses, credentials, hosts, passwords, subjects,

@@ -273,7 +273,9 @@ Dialog {
         root.sourceMode = false
         root.resetHeaders()
         if (message !== undefined) {
-            toField.text = message.from || ""
+            // Replies go to Reply-To when the sender set one, else From.
+            var replyTo = (message.reply_to || "").trim() !== "" ? message.reply_to : (message.from || "")
+            toField.text = replyTo
             subjectField.text = "Re: " + (message.subject || "")
             var core = root.quoteCore(message,
                 "On " + (message.date || "") + ", " + (message.from || "") + " wrote:")

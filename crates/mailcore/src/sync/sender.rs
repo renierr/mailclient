@@ -34,6 +34,11 @@ pub enum SendPolicy {
 impl SendPolicy {
     /// Build from the environment (see module docs).
     /// Unset/empty allowlist denies every recipient.
+    ///
+    /// `MAILCLIENT_ALLOW_ANY_RECIPIENT=1` lifts the restriction for automated
+    /// sends (test harness only — the interactive composer does not consult
+    /// this at all). Never export it globally: it belongs in the local
+    /// gitignored `.env`, if anywhere.
     #[must_use]
     pub fn from_env() -> Self {
         if std::env::var("MAILCLIENT_ALLOW_ANY_RECIPIENT").as_deref() == Ok("1") {
@@ -128,9 +133,9 @@ pub const MAX_SEND_ATTACHMENT_COUNT: usize = 20;
 pub struct SendRequest<'a> {
     /// Recipients (checked against the [`SendPolicy`]).
     pub to: &'a [String],
-    /// Cc recipients (also policy-checked).
+    /// Cc recipients (strictly parsed, then policy-checked).
     pub cc: &'a [String],
-    /// Bcc recipients (also policy-checked, never in the headers).
+    /// Bcc recipients (strictly parsed, then policy-checked, never in the headers).
     pub bcc: &'a [String],
     /// Sender identity. `None` = account email. Any other address is used
     /// verbatim (server may reject logins that must match the username).
@@ -339,13 +344,23 @@ pub fn format_draft(account: &Account, req: &SendRequest<'_>) -> Result<Vec<u8>>
     let files = load_outgoing_attachments(req.attachments)?;
     let to = valid_mailboxes(req.to);
     let to_group = to.is_empty().then(|| to_group_name(&req.to.join(" ")));
+    // Same strict Cc/Bcc validation as a real send: a draft carrying a bad
+    // address must fail here, not when the user hits Send.
+    let cc: Vec<String> = strict_mailboxes("Cc", req.cc)?
+        .iter()
+        .map(|m| m.to_string())
+        .collect();
+    let bcc: Vec<String> = strict_mailboxes("Bcc", req.bcc)?
+        .iter()
+        .map(|m| m.to_string())
+        .collect();
     Ok(assemble_message(
         from,
         req.subject,
         to,
         to_group.as_deref(),
-        req.cc,
-        req.bcc,
+        &cc,
+        &bcc,
         SendFormat::Multipart,
         plain,
         html,
@@ -429,6 +444,20 @@ impl SmtpSender {
 #[must_use]
 pub fn valid_mailboxes(raw: &[String]) -> Vec<lettre::message::Mailbox> {
     raw.iter().filter_map(|s| s.parse().ok()).collect()
+}
+
+/// Split a Cc/Bcc field into real mailboxes, rejecting anything that does
+/// not parse. Unlike To (which tolerates placeholder text for BCC-only
+/// sends), a mistyped Cc/Bcc must fail loudly — silently dropping it would
+/// lie about delivery. Display names (`Bob <bob@example.com>`) are fine;
+/// the envelope later uses the bare address.
+pub fn strict_mailboxes(field: &str, raw: &[String]) -> Result<Vec<lettre::message::Mailbox>> {
+    raw.iter()
+        .map(|s| {
+            s.parse()
+                .map_err(|_| StoreError::InvalidInput(format!("invalid address in {field}: {s}")))
+        })
+        .collect()
 }
 
 /// Whether the visible sender stays within the configured account domain.
@@ -566,9 +595,11 @@ pub(crate) fn assemble_message(
 impl MailSender for SmtpSender {
     fn send_raw(&mut self, db: &Db, account_id: i64, req: &SendRequest<'_>) -> Result<()> {
         let to_boxes = valid_mailboxes(req.to);
+        let cc_boxes = strict_mailboxes("Cc", req.cc)?;
+        let bcc_boxes = strict_mailboxes("Bcc", req.bcc)?;
         let mut rcpts: Vec<String> = to_boxes.iter().map(|m| m.email.to_string()).collect();
-        rcpts.extend(req.cc.iter().cloned());
-        rcpts.extend(req.bcc.iter().cloned());
+        rcpts.extend(cc_boxes.iter().map(|m| m.email.to_string()));
+        rcpts.extend(bcc_boxes.iter().map(|m| m.email.to_string()));
         if rcpts.is_empty() {
             return Err(StoreError::InvalidInput(
                 "add at least one recipient (To, Cc or Bcc)".to_string(),
@@ -626,13 +657,17 @@ impl MailSender for SmtpSender {
         let to_group = to_boxes
             .is_empty()
             .then(|| to_group_name(&req.to.join(" ")));
+        // Normalized mailbox strings (display names preserved): headers and
+        // envelope agree, and malformed strings never reach the SMTP envelope.
+        let cc: Vec<String> = cc_boxes.iter().map(|m| m.to_string()).collect();
+        let bcc: Vec<String> = bcc_boxes.iter().map(|m| m.to_string()).collect();
         let email = assemble_message(
             from_box,
             req.subject,
             to_boxes,
             to_group.as_deref(),
-            req.cc,
-            req.bcc,
+            &cc,
+            &bcc,
             format,
             plain,
             html,
@@ -998,6 +1033,24 @@ mod tests {
                 assert!(!h.contains("color: red"), "style leaked for {format:?}");
             }
         }
+    }
+
+    #[test]
+    fn cc_bcc_validation_is_strict() {
+        // Bare and display-name forms pass, envelope uses the bare address.
+        let ok = strict_mailboxes(
+            "Cc",
+            &[
+                "bob@example.com".to_string(),
+                "Bob <bob2@example.com>".to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(ok.len(), 2);
+        assert_eq!(ok[1].email.to_string(), "bob2@example.com");
+        // Garbage fails loudly instead of being dropped or sent raw.
+        assert!(strict_mailboxes("Cc", &["bob@".to_string()]).is_err());
+        assert!(strict_mailboxes("Bcc", &["".to_string()]).is_err());
     }
 
     #[test]

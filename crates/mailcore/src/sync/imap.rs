@@ -651,9 +651,11 @@ impl ImapSync {
     }
 
     /// Windowed folder sync: only the newest `window` server UIDs cost
-    /// network (flag refresh + full RFC822 fetch). Expunge diffing is local
-    /// and always full. `None` = all UIDs (used only by explicit tests —
-    /// production callers pass `FULL_SYNC_WINDOW` / `QUICK_SYNC_WINDOW`).
+    /// network (flag refresh + full RFC822 fetch). The UID SEARCH pages
+    /// backwards to UID 1 when the range is sparse, so expunge diffing is a
+    /// full local diff in the common case. `None` = all UIDs (used only by
+    /// explicit tests — production callers pass `FULL_SYNC_WINDOW` /
+    /// `QUICK_SYNC_WINDOW`).
     pub fn sync_folder_window(
         &mut self,
         db: &Db,
@@ -1165,9 +1167,9 @@ impl SyncProvider for ImapSync {
 
 /// SEARCH the newest `window` UIDs without enumerating the whole mailbox.
 ///
-/// Returns `(uids, search_lo)`: `search_lo` is the inclusive lower bound of
-/// the UID range that was asked about (`1` when unbounded). Expunge must not
-/// delete local UIDs below that bound — they were never queried.
+/// Returns `(uids, search_lo)`: every UID in `search_lo..=top` was asked
+/// about, so local rows at or above `search_lo` missing from `uids` are safe
+/// to expunge (`1` = the whole mailbox was covered: a full diff).
 fn search_recent_uids(
     session: &mut TlsSession,
     window: Option<usize>,
@@ -1176,13 +1178,12 @@ fn search_recent_uids(
     let Some(n) = window else {
         return Ok((session.uid_search("ALL")?, 1));
     };
-    let hi = uid_next.unwrap_or(0).saturating_sub(1);
-    if hi == 0 {
+    let top = uid_next.unwrap_or(0).saturating_sub(1);
+    if top == 0 {
         return Ok((session.uid_search("ALL")?, 1));
     }
     let span = (n as u32).saturating_mul(8).max(n as u32);
-    let lo = hi.saturating_sub(span.saturating_sub(1)).max(1);
-    Ok((session.uid_search(format!("UID {lo}:*"))?, lo))
+    search_paged(session, top, n, span)
 }
 
 /// SEARCH a bounded UID range just below `exclusive_hi` for an older-mail batch.
@@ -1194,10 +1195,48 @@ fn search_uids_below(
     if exclusive_hi <= 1 {
         return Ok(HashSet::new());
     }
-    let hi = exclusive_hi - 1;
+    let top = exclusive_hi - 1;
     let span = (batch as u32).saturating_mul(8).max(batch as u32);
-    let lo = hi.saturating_sub(span.saturating_sub(1)).max(1);
-    Ok(session.uid_search(format!("UID {lo}:{hi}"))?)
+    Ok(search_paged(session, top, batch, span)?.0)
+}
+
+/// Max UID SEARCH pages per sync pass. Dense mailboxes finish in one page;
+/// the cap only bounds pathological UID gaps (mass deletions) to a handful
+/// of cheap UID-only round-trips.
+const SEARCH_PAGES: u32 = 8;
+
+/// SEARCH UID space backwards from `top`, paging down until `want` UIDs are
+/// known or UID 1 is reached.
+///
+/// UID ranges go sparse after mass deletions, so a single fixed window can
+/// cover far fewer messages than asked for — the list would under-fill and
+/// deletions below the window would linger locally as ghosts. Paging keeps
+/// going while the take is short, so the newest-N window is genuinely the
+/// newest N and the expunge diff covers everything asked about.
+fn search_paged(
+    session: &mut TlsSession,
+    top: u32,
+    want: usize,
+    span: u32,
+) -> Result<(HashSet<u32>, u32)> {
+    let span = span.max(1);
+    let mut found = HashSet::new();
+    let mut hi = top;
+    let mut lo = hi.saturating_sub(span.saturating_sub(1)).max(1);
+    for _ in 0..SEARCH_PAGES {
+        found.extend(session.uid_search(format!("UID {lo}:{hi}"))?);
+        if found.len() >= want || lo <= 1 {
+            break;
+        }
+        hi = lo - 1;
+        lo = hi.saturating_sub(span.saturating_sub(1)).max(1);
+    }
+    if lo > 1 && found.len() < want {
+        log::debug!(
+            "imap: UID space still sparse after {SEARCH_PAGES} SEARCH pages, stopping at {lo}"
+        );
+    }
+    Ok((found, lo))
 }
 
 fn flag_state(flags: &[Flag]) -> (bool, bool, bool) {
@@ -1286,7 +1325,10 @@ fn parse_to_new(
             to_addrs: addr_list(parsed.to()),
             cc_addrs: addr_list(parsed.cc()),
             bcc_addrs: addr_list(parsed.bcc()),
-            reply_to: None,
+            reply_to: parsed
+                .reply_to()
+                .and_then(|a| a.first())
+                .and_then(|a| a.address.as_ref().map(|s| s.to_string())),
             date,
             snippet,
             body_text,
@@ -1704,6 +1746,32 @@ mod tests {
             Namespaces::default()
         );
         assert_eq!(parse_namespace_response(b""), Namespaces::default());
+    }
+
+    #[test]
+    fn parse_captures_reply_to() {
+        let raw = b"From: alice@example.com\r\n\
+            Reply-To: replies@example.org\r\n\
+            To: bob@example.com\r\n\
+            Subject: reply here\r\n\
+            Message-ID: <a4@example.com>\r\n\
+            Date: Mon, 07 Sep 2026 10:00:00 +0000\r\n\
+            Content-Type: text/plain\r\n\
+            \r\n\
+            body\r\n";
+        let (msg, _) = parse_to_new(1, 1, 45, &[], raw, false).unwrap();
+        assert_eq!(msg.reply_to.as_deref(), Some("replies@example.org"));
+        // No Reply-To header: stays empty rather than echoing From.
+        let raw2 = b"From: alice@example.com\r\n\
+            To: bob@example.com\r\n\
+            Subject: no reply-to\r\n\
+            Message-ID: <a5@example.com>\r\n\
+            Date: Mon, 07 Sep 2026 10:00:00 +0000\r\n\
+            Content-Type: text/plain\r\n\
+            \r\n\
+            body\r\n";
+        let (msg2, _) = parse_to_new(1, 1, 46, &[], raw2, false).unwrap();
+        assert!(msg2.reply_to.is_none());
     }
 
     #[test]

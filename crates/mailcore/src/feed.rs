@@ -274,6 +274,7 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
         "uid": m.uid,
         "subject": m.subject.as_deref().unwrap_or("(no subject)"),
         "from": m.from_addr.as_deref().unwrap_or("?"),
+        "reply_to": m.reply_to.as_deref().unwrap_or(""),
         "date": short_date(m.date.as_deref()),
         "snippet": m.snippet.as_deref().unwrap_or(""),
         "unread": !m.is_read, "starred": m.is_starred,
