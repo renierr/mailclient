@@ -22,6 +22,10 @@ Item {
   property bool syncing: false
   property string lastError: ""
   property double lastSyncAt: 0
+  // Consecutive failed polls. The timer backs off x2 per failure (capped
+  // at x8) so a dead server isn't poked at the full rate forever; any
+  // clean report resets it.
+  property int failStreak: 0
   // Highest unread count already notified for. -1 = no baseline yet
   // (first sync only sets it). Named to avoid QQuickItem's FINAL
   // `baseline` anchor-line property.
@@ -55,6 +59,11 @@ Item {
     return root.account !== "" ? ["--account", root.account] : []
   }
 
+  function pollIntervalMs() {
+    var shift = Math.max(0, Math.min(root.failStreak, 3))
+    return root.syncIntervalMin * 60000 * (1 << shift)
+  }
+
   function refresh() {
     root.syncNow()
   }
@@ -66,13 +75,38 @@ Item {
     syncProcess.running = true
   }
 
+  // Cheap cache re-read (no network): called when the popup opens so mail
+  // read in the GUI clears the badge without waiting for the next poll.
+  // Only adopts downward — a higher cached count stays quiet until the
+  // next real sync, which is what sends the notification.
+  function refreshCache() {
+    if (syncProcess.running || statusProcess.running || root.syncing) return
+    statusProcess.command = [root.mailBin, "--status", "--json"].concat(accountArgs())
+    statusProcess.running = true
+  }
+
+  function applyStatus(raw) {
+    var parsed = Model.parseReport(raw)
+    if (!parsed.ok) return
+    unread = parsed.unread
+    recent = parsed.recent
+    if (knownUnread < 0 || parsed.unread < knownUnread) knownUnread = parsed.unread
+  }
+
   function applyReport(raw) {
     var parsed = Model.parseReport(raw)
     if (!parsed.ok) {
       lastError = "Could not read mail sync result"
+      root.failStreak += 1
       return
     }
-    lastError = parsed.errors.length > 0 ? String(parsed.errors[0]) : ""
+    if (parsed.errors.length > 0) {
+      root.failStreak += 1
+      lastError = parsed.errors.length > 1 ? String(parsed.errors[0]) + " (+" + (parsed.errors.length - 1) + " more)" : String(parsed.errors[0])
+    } else {
+      root.failStreak = 0
+      lastError = ""
+    }
     unread = parsed.unread
     recent = parsed.recent
     lastSyncAt = Date.now()
@@ -105,7 +139,7 @@ Item {
 
   Timer {
     id: syncTimer
-    interval: root.syncIntervalMin * 60000
+    interval: root.pollIntervalMs()
     repeat: true
     running: true
     triggeredOnStart: true
@@ -121,7 +155,20 @@ Item {
     onExited: function(exitCode) {
       root.syncing = false
       if (exitCode === 0) root.applyReport(syncStdout.text)
-      else root.lastError = String(syncStderr.text || syncStdout.text || "mail sync failed").trim().substring(0, 140)
+      else {
+        root.failStreak += 1
+        root.lastError = String(syncStderr.text || syncStdout.text || "mail sync failed").trim().substring(0, 140)
+      }
+    }
+  }
+
+  Process {
+    id: statusProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: statusStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) root.applyStatus(statusStdout.text)
     }
   }
 }

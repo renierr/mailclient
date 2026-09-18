@@ -240,20 +240,22 @@ pub fn unread_summary(db: &Db) -> Vec<AccountSyncResult> {
         .collect()
 }
 
-/// Newest unread messages across all accounts (metadata only, no network).
-/// Ordered newest-first, capped at `limit`.
+/// Newest unread messages (metadata only, no network). Ordered
+/// newest-first, capped at `limit`. When `account_id` is set, only that
+/// account is listed so the popup agrees with a filtered unread count.
 #[must_use]
-pub fn recent_unread(db: &Db, limit: u64) -> Vec<RecentUnread> {
+pub fn recent_unread(db: &Db, limit: u64, account_id: Option<i64>) -> Vec<RecentUnread> {
     let sql = "select m.account_id, a.email_address, f.path,
                       coalesce(m.from_addr, ''), coalesce(m.subject, ''), coalesce(m.date, '')
                from messages m
                join accounts a on a.id = m.account_id
                join folders f on f.id = m.folder_id
                where m.is_read = 0
+                 and (?2 is null or m.account_id = ?2)
                order by m.date desc, m.id desc
                limit ?1";
     let rows = db.conn().prepare(sql).and_then(|mut stmt| {
-        stmt.query_map([limit as i64], |row| {
+        stmt.query_map((limit as i64, account_id), |row| {
             Ok(RecentUnread {
                 account_id: row.get(0)?,
                 account_email: row.get(1)?,

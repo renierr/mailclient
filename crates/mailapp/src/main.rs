@@ -155,57 +155,66 @@ fn run_headless(args: &[String]) -> i32 {
         locked = true;
     }
 
+    // Resolve --account once, up front: an unknown value is a usage error
+    // (exit 2) before any network or DB writes, and the id scopes both the
+    // sync and the recent list so badge and popup agree with each other.
+    let filter_account: Option<mailcore::models::Account> = match &filter {
+        Some(f) => {
+            let found = mailcore::store::accounts::list(&db)
+                .unwrap_or_default()
+                .into_iter()
+                .find(|a| a.id.to_string() == *f || a.email_address == *f);
+            match found {
+                Some(a) => Some(a),
+                None => {
+                    eprintln!("no account matching '{f}'");
+                    return 2;
+                }
+            }
+        }
+        None => None,
+    };
+    let filter_id = filter_account.as_ref().map(|a| a.id);
+
     let mut report = if sync && !locked {
-        match &filter {
-            Some(f) => {
-                let acc = mailcore::store::accounts::list(&db)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .find(|a| a.id.to_string() == *f || a.email_address == *f);
-                match acc {
-                    Some(a) => {
-                        let mut imap = mailcore::sync::imap::ImapSync::new(&a);
-                        let mut r = headless::SyncAllReport::default();
-                        match mailcore::auth::load_account_secrets(&a.auth_vault_key)
-                            .map_err(|e| e.to_string())
-                            .and_then(|s| {
-                                imap.connect(&s.imap_password).map_err(|e| e.to_string())?;
-                                Ok((s, headless::sync_account(&db, &a, &mut imap)))
-                            }) {
-                            Ok((_, ar)) => {
-                                imap.disconnect();
-                                r.total_unread = ar.unread;
-                                r.errors.extend(
-                                    ar.errors
-                                        .iter()
-                                        .map(|e| format!("{}: {e}", a.email_address)),
-                                );
-                                r.accounts.push(ar);
-                            }
-                            Err(e) => {
-                                let mut ar = headless::AccountSyncResult {
-                                    account_id: a.id,
-                                    email: a.email_address.clone(),
-                                    ..Default::default()
-                                };
-                                ar.errors.push(e);
-                                ar.unread = headless::unread_for_account(&db, a.id);
-                                r.total_unread = ar.unread;
-                                r.errors.extend(
-                                    ar.errors
-                                        .iter()
-                                        .map(|e| format!("{}: {e}", a.email_address)),
-                                );
-                                r.accounts.push(ar);
-                            }
-                        }
-                        r
+        match filter_account {
+            Some(a) => {
+                let mut imap = mailcore::sync::imap::ImapSync::new(&a);
+                let mut r = headless::SyncAllReport::default();
+                match mailcore::auth::load_account_secrets(&a.auth_vault_key)
+                    .map_err(|e| e.to_string())
+                    .and_then(|s| {
+                        imap.connect(&s.imap_password).map_err(|e| e.to_string())?;
+                        Ok((s, headless::sync_account(&db, &a, &mut imap)))
+                    }) {
+                    Ok((_, ar)) => {
+                        imap.disconnect();
+                        r.total_unread = ar.unread;
+                        r.errors.extend(
+                            ar.errors
+                                .iter()
+                                .map(|e| format!("{}: {e}", a.email_address)),
+                        );
+                        r.accounts.push(ar);
                     }
-                    None => {
-                        eprintln!("no account matching '{f}'");
-                        return 2;
+                    Err(e) => {
+                        let mut ar = headless::AccountSyncResult {
+                            account_id: a.id,
+                            email: a.email_address.clone(),
+                            ..Default::default()
+                        };
+                        ar.errors.push(e);
+                        ar.unread = headless::unread_for_account(&db, a.id);
+                        r.total_unread = ar.unread;
+                        r.errors.extend(
+                            ar.errors
+                                .iter()
+                                .map(|e| format!("{}: {e}", a.email_address)),
+                        );
+                        r.accounts.push(ar);
                     }
                 }
+                r
             }
             None => headless::sync_all_accounts(&db),
         }
@@ -225,7 +234,7 @@ fn run_headless(args: &[String]) -> i32 {
     if report.total_unread == 0 {
         report.total_unread = report.accounts.iter().map(|a| a.unread).sum();
     }
-    let recent = headless::recent_unread(&db, 10);
+    let recent = headless::recent_unread(&db, 10, filter_id);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())

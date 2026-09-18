@@ -26,9 +26,9 @@ BarWidget {
   property bool panelOpen: false
   readonly property bool opened: panelOpen
 
-  function open() { panelOpen = true }
+  function open() { panelOpen = true; mail.refreshCache() }
   function close() { panelOpen = false }
-  function toggle() { panelOpen = !panelOpen }
+  function toggle() { panelOpen = !panelOpen; if (panelOpen) mail.refreshCache() }
 
   // Persist one setting to shell.json (clock pattern): applied locally
   // first so the popup reflects it instantly, then stored.
@@ -39,6 +39,11 @@ BarWidget {
     root.settings = entry
     if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
       root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  function saveAccountFilter(rawText) {
+    var value = String(rawText || "").trim()
+    if (value !== mail.account) root.saveSetting("account", value)
   }
 
   function heroMeta() {
@@ -207,7 +212,10 @@ BarWidget {
         text: mail.account
         placeholderText: "All accounts (id or address filter)"
         font.family: root.panelFontFamily
-        onAccepted: root.saveSetting("account", text.trim())
+        // accepted fires on Enter, editingFinished on Enter or focus loss —
+        // either persists, so clicking away never silently discards the edit.
+        onAccepted: saveAccountFilter(text)
+        onEditingFinished: saveAccountFilter(text)
       }
 
       Text {
