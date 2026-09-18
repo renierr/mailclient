@@ -73,7 +73,7 @@ come from the `directories` crate, so on Windows the SQLite cache lands under
 ```text
 crates/mailcore/   pure-Rust core: db, models, store, sync, search
 crates/mailapp/    cxx-qt bridge binary (Qt models + main) + qml/ UI
-resources/         .desktop entry + icon
+resources/         .desktop entry + icon + omarchy bar-widget plugin
 scripts/           helpers: install-local.sh, qt-env.sh (+ *.ps1 for Windows)
 dist/              gitignored build output
 ```

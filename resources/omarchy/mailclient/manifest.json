@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "id": "mailclient.unread",
+  "name": "Mailclient unread",
+  "version": "1.0.0",
+  "author": "mailclient",
+  "description": "Unread mail count from the mailclient app. Left-click opens mail, right-click syncs now.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Mailclient unread",
+    "description": "Unread mail count; opens the mail app on click and notifies on new mail.",
+    "category": "Mail",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "mailBin": "mailapp",
+      "account": "",
+      "refreshIntervalSec": 30,
+      "syncIntervalMin": 15,
+      "notify": true
+    },
+    "schema": [
+      {
+        "key": "mailBin",
+        "type": "string",
+        "label": "Mail binary (PATH lookup)",
+        "defaultValue": "mailapp"
+      },
+      {
+        "key": "account",
+        "type": "string",
+        "label": "Account filter: id or address (empty = all)",
+        "defaultValue": ""
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Cache poll interval (seconds, mailapp --status)",
+        "min": 10,
+        "max": 3600,
+        "step": 5,
+        "defaultValue": 30
+      },
+      {
+        "key": "syncIntervalMin",
+        "type": "integer",
+        "label": "Network sync interval (minutes, mailapp --sync-once; 0 = never)",
+        "min": 0,
+        "max": 1440,
+        "step": 1,
+        "defaultValue": 15
+      },
+      {
+        "key": "notify",
+        "type": "boolean",
+        "label": "Desktop notification on new mail",
+        "defaultValue": true
+      }
+    ]
+  }
+}

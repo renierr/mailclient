@@ -51,7 +51,10 @@ fn main() {
     // Unknown `--` flags fail fast instead of booting the GUI by accident
     // (a typo in a bar script must not pop a window).
     let cli: Vec<String> = std::env::args().skip(1).collect();
-    if cli.iter().any(|a| a == "--sync-once" || a == "--status" || a == "--help") {
+    if cli
+        .iter()
+        .any(|a| a == "--sync-once" || a == "--status" || a == "--help")
+    {
         std::process::exit(run_headless(&cli));
     }
     if let Some(bad) = cli.iter().find(|a| a.starts_with("--")) {
