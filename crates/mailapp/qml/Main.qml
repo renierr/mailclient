@@ -210,11 +210,10 @@ ApplicationWindow {
         var r = backend.open_message(uid)
         if (r !== "")
             root.statusText = r
-        var row = root.messageByUid(uid)
-        if (row)
-            row.unread = false
-        if (root.currentMessage && root.currentUid === uid)
-            root.currentMessage.unread = false
+        // messageRows are plain JS objects: mutating row.unread in place
+        // never re-renders the delegate. Rebuild the feed like every
+        // other mutation path does instead.
+        reloadMessages()
         reloadFolders()
     }
 
