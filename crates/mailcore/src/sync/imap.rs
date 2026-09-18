@@ -718,7 +718,11 @@ impl ImapSync {
             }
         }
 
-        // 2. Full fetch of new messages (windowed).
+        // 2. Full fetch of new messages (windowed). BODY.PEEK[] is
+        // mandatory here: a plain RFC822/BODY[] fetch implicitly sets
+        // \Seen on most servers, which would mark every synced mail as
+        // read behind the user's back (and silently kill unread counts
+        // and new-mail notifications).
         let mut fetched = 0u64;
         let missing: Vec<u32> = server_uids
             .difference(&local_uids)
@@ -734,7 +738,7 @@ impl ImapSync {
                 .map(u32::to_string)
                 .collect::<Vec<_>>()
                 .join(",");
-            for msg in session.uid_fetch(set, "(UID FLAGS RFC822)")?.iter() {
+            for msg in session.uid_fetch(set, "(UID FLAGS BODY.PEEK[])")?.iter() {
                 let uid = msg.uid.unwrap_or(0);
                 if uid == 0 {
                     continue;
@@ -836,7 +840,7 @@ impl ImapSync {
                 .map(u32::to_string)
                 .collect::<Vec<_>>()
                 .join(",");
-            for msg in session.uid_fetch(set, "(UID FLAGS RFC822)")?.iter() {
+            for msg in session.uid_fetch(set, "(UID FLAGS BODY.PEEK[])")?.iter() {
                 let uid = msg.uid.unwrap_or(0);
                 if uid == 0 {
                     continue;
@@ -861,9 +865,10 @@ impl ImapSync {
     }
 
     /// Download one message's attachments on explicit user request (Save /
-    /// Download click). Re-fetches the full RFC822 body, stores every part
-    /// with bytes, and refreshes only the `has_attachments` flag — read/star
-    /// state is never touched. Returns the number of stored files.
+    /// Download click). Re-fetches the full body with PEEK (never implicitly
+    /// marks `\Seen`), stores every part with bytes, and refreshes only the
+    /// `has_attachments` flag — read/star state is never touched. Returns
+    /// the number of stored files.
     pub fn fetch_attachments(&mut self, db: &Db, message_id: i64) -> Result<u64> {
         let message = messages::get(db, message_id)?;
         let folder = folders::get(db, message.folder_id)?;
@@ -873,7 +878,7 @@ impl ImapSync {
         session.select(&folder.path)?;
         log::info!("imap: select {} took {:?}", folder.path, started.elapsed());
         let started = std::time::Instant::now();
-        let fetched = session.uid_fetch(message.uid.to_string(), "(UID FLAGS RFC822)")?;
+        let fetched = session.uid_fetch(message.uid.to_string(), "(UID FLAGS BODY.PEEK[])")?;
         log::info!(
             "imap: attachment fetch for uid {} took {:?}",
             message.uid,
