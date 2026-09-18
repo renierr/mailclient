@@ -1,10 +1,9 @@
 use std::pin::Pin;
 
 use cxx_qt_lib::QString;
-use mailcore::auth;
 use mailcore::store::{folders, messages};
-use mailcore::sync::imap::{FULL_SYNC_WINDOW, OLDER_BATCH, QUICK_SYNC_WINDOW};
-use mailcore::sync::sender::SmtpSender;
+use mailcore::sync::headless;
+use mailcore::sync::imap::{FULL_SYNC_WINDOW, OLDER_BATCH};
 use mailcore::sync::traits::SyncProvider;
 
 use crate::bridge::qobject;
@@ -18,51 +17,9 @@ impl qobject::Bridge {
         let current = *self.current_folder_id();
         spawn_job(self, "Sync", move |db, _progress| {
             let acc = current_account(db, wanted)?;
-            if let Ok(secrets) = auth::load_account_secrets(&acc.auth_vault_key) {
-                let sender = SmtpSender::new(&acc);
-                match sender.flush_outbox(
-                    db,
-                    acc.id,
-                    &secrets.smtp_password,
-                    Some(secrets.imap_password.as_str()),
-                ) {
-                    Ok(n) if n > 0 => log::info!("smtp: flushed {n} queued send(s)"),
-                    Err(e) => log::warn!("smtp: outbox flush failed: {e}"),
-                    _ => {}
-                }
-            }
-            let mut pushed = 0u64;
-            let mut fetched = 0u64;
-            let mut expunged = 0u64;
-            let mut quick = 0usize;
-            let mut skipped = 0usize;
-            let folders = with_imap(&acc, |imap| {
-                for m in messages::list_flags_dirty(db, acc.id).unwrap_or_default() {
-                    if imap.push_flags(db, &m).is_ok() {
-                        let _ = messages::clear_flags_dirty(db, m.id);
-                        pushed += 1;
-                    }
-                }
-                let folders = imap.sync_folders(db, acc.id).map_err(|e| e.to_string())?;
-                for f in &folders {
-                    if !f.subscribed {
-                        skipped += 1;
-                        continue;
-                    }
-                    let window = if f.role == mailcore::models::FolderRole::Inbox {
-                        Some(FULL_SYNC_WINDOW)
-                    } else {
-                        quick += 1;
-                        Some(QUICK_SYNC_WINDOW)
-                    };
-                    let r = imap
-                        .sync_folder_window(db, f.id, window)
-                        .map_err(|e| e.to_string())?;
-                    fetched += r.fetched;
-                    expunged += r.expunged;
-                }
-                Ok(folders)
-            })?;
+            // Shared orchestration (outbox flush, flag push, folder sweep);
+            // the GUI lends its pooled session, the CLI brings a fresh one.
+            let r = with_imap(&acc, |imap| Ok(headless::sync_account(db, &acc, imap)))?;
             let all = folders::list_by_account(db, acc.id).map_err(|e| e.to_string())?;
             let folder_id = all
                 .iter()
@@ -74,25 +31,31 @@ impl qobject::Bridge {
                 .or(all.first())
                 .map(|f| f.id)
                 .unwrap_or(-1);
-            let flags = if pushed > 0 {
-                format!(", {pushed} flag(s) pushed")
+            let flags = if r.pushed_flags > 0 {
+                format!(", {} flag(s) pushed", r.pushed_flags)
             } else {
                 String::new()
             };
+            let quick = r.folders.iter().filter(|f| f.role != "inbox").count();
             let scope = if quick > 0 {
                 format!(" (inbox full, {quick} folder(s) quick)")
             } else {
                 String::new()
             };
-            let hidden = if skipped > 0 {
-                format!(", {skipped} hidden skipped")
+            let hidden = if r.folders_skipped_hidden > 0 {
+                format!(", {} hidden skipped", r.folders_skipped_hidden)
             } else {
                 String::new()
             };
+            let errs = if r.errors.is_empty() {
+                String::new()
+            } else {
+                format!("; {} error(s): {}", r.errors.len(), r.errors[0])
+            };
             Ok((
                 format!(
-                    "Synced {} folders: +{fetched} new, -{expunged} removed{flags}{scope}{hidden}",
-                    folders.len()
+                    "Synced {} folders: +{} new, -{} removed{flags}{scope}{hidden}{errs}",
+                    r.folders_synced, r.fetched, r.expunged,
                 ),
                 Some(JobRefresh::feeds(acc.id, folder_id)),
             ))
