@@ -32,6 +32,18 @@ function elide(text, max) {
   return value.length > max ? value.substring(0, max - 1) + "…" : value
 }
 
+function lastSyncText(ts) {
+  var t = Number(ts || 0)
+  if (!isFinite(t) || t <= 0) return "never"
+  var diff = Math.max(0, Math.floor((Date.now() - t) / 1000))
+  if (diff < 60) return "just now"
+  var minutes = Math.floor(diff / 60)
+  if (minutes < 60) return minutes + "m ago"
+  var hours = Math.floor(minutes / 60)
+  if (hours < 24) return hours + "h ago"
+  return Math.floor(hours / 24) + "d ago"
+}
+
 function tooltip(unread, recent, lastError, syncing) {
   var n = Math.max(0, parseInt(unread, 10) || 0)
   var lines = []
@@ -53,6 +65,7 @@ if (typeof module !== "undefined") {
     parseReport: parseReport,
     badge: badge,
     tooltip: tooltip,
-    elide: elide
+    elide: elide,
+    lastSyncText: lastSyncText
   }
 }

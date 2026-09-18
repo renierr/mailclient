@@ -5,12 +5,11 @@ import "Model.js" as Model
 
 // Headless state for the mailclient.unread bar widget.
 //
-// Two poll loops share one binary:
-// - statusTimer runs `mailapp --status --json` (SQLite only, no network)
-//   every refreshIntervalSec for a cheap badge.
-// - syncTimer runs `mailapp --sync-once --json` (real IMAP sync) every
-//   syncIntervalMin; 0 disables network sync (badge follows the open app).
-// A rise in the unread count after the first baseline poll sends one
+// Single poll loop: `mailapp --sync-once --json` (real IMAP sync) every
+// syncIntervalMin. A cache-only `--status` poll would just re-read the same
+// SQLite rows while the app is closed, so it was dropped as noise — every
+// tick here does real network and rewrites the cache itself.
+// A rise in the unread count after the first baseline sync sends one
 // desktop notification; clicking it opens the mail app via --exec.
 Item {
   id: root
@@ -22,17 +21,17 @@ Item {
   property var recent: []
   property bool syncing: false
   property string lastError: ""
+  property double lastSyncAt: 0
   // Highest unread count already notified for. -1 = no baseline yet
-  // (first poll only sets it). Named to avoid QQuickItem's FINAL
+  // (first sync only sets it). Named to avoid QQuickItem's FINAL
   // `baseline` anchor-line property.
   property int knownUnread: -1
 
   readonly property string mailBin: String(setting("mailBin", "mailapp") || "mailapp")
   readonly property string account: String(setting("account", "") || "")
-  readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 30, 10, 3600)
-  readonly property int syncIntervalMin: intSetting("syncIntervalMin", 15, 0, 1440)
+  readonly property int syncIntervalMin: intSetting("syncIntervalMin", 15, 1, 1440)
   readonly property bool notify: boolSetting("notify", true)
-  readonly property bool busy: statusProcess.running || syncProcess.running
+  readonly property bool busy: syncProcess.running
 
   function setting(name, fallback) {
     var value = settings ? settings[name] : undefined
@@ -57,11 +56,7 @@ Item {
   }
 
   function refresh() {
-    // A running sync already refreshes the cache on completion; skip the
-    // cheap poll while it flies so ticks never pile up.
-    if (statusProcess.running || syncProcess.running) return
-    statusProcess.command = [root.mailBin, "--status", "--json"].concat(accountArgs())
-    statusProcess.running = true
+    root.syncNow()
   }
 
   function syncNow() {
@@ -71,18 +66,19 @@ Item {
     syncProcess.running = true
   }
 
-  function applyReport(raw, fromSync) {
+  function applyReport(raw) {
     var parsed = Model.parseReport(raw)
     if (!parsed.ok) {
-      lastError = "Could not read mail status"
+      lastError = "Could not read mail sync result"
       return
     }
     lastError = parsed.errors.length > 0 ? String(parsed.errors[0]) : ""
     unread = parsed.unread
     recent = parsed.recent
+    lastSyncAt = Date.now()
     if (knownUnread < 0) {
       knownUnread = unread
-    } else if (fromSync && root.notify && unread > knownUnread) {
+    } else if (root.notify && unread > knownUnread) {
       notifyNew(unread - knownUnread)
       knownUnread = unread
     } else if (unread < knownUnread) {
@@ -108,33 +104,12 @@ Item {
   }
 
   Timer {
-    id: statusTimer
-    interval: root.refreshIntervalSec * 1000
+    id: syncTimer
+    interval: root.syncIntervalMin * 60000
     repeat: true
     running: true
     triggeredOnStart: true
-    onTriggered: root.refresh()
-  }
-
-  Timer {
-    id: syncTimer
-    interval: Math.max(1, root.syncIntervalMin) * 60000
-    repeat: true
-    running: root.syncIntervalMin > 0
-    triggeredOnStart: true
     onTriggered: root.syncNow()
-  }
-
-  Process {
-    id: statusProcess
-    running: false
-    command: []
-    stdout: StdioCollector { id: statusStdout; waitForEnd: true }
-    stderr: StdioCollector { id: statusStderr; waitForEnd: true }
-    onExited: function(exitCode) {
-      if (exitCode === 0) root.applyReport(statusStdout.text, false)
-      else root.lastError = String(statusStderr.text || statusStdout.text || "mail status failed").trim().substring(0, 140)
-    }
   }
 
   Process {
@@ -145,11 +120,8 @@ Item {
     stderr: StdioCollector { id: syncStderr; waitForEnd: true }
     onExited: function(exitCode) {
       root.syncing = false
-      if (exitCode === 0) root.applyReport(syncStdout.text, true)
+      if (exitCode === 0) root.applyReport(syncStdout.text)
       else root.lastError = String(syncStderr.text || syncStdout.text || "mail sync failed").trim().substring(0, 140)
-      // The sync rewrote the cache; re-read the cheap state right away so
-      // the badge never lags one poll behind.
-      Qt.callLater(root.refresh)
     }
   }
 }

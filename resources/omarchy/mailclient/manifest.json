@@ -20,7 +20,6 @@
     "defaults": {
       "mailBin": "mailapp",
       "account": "",
-      "refreshIntervalSec": 30,
       "syncIntervalMin": 15,
       "notify": true
     },
@@ -38,19 +37,10 @@
         "defaultValue": ""
       },
       {
-        "key": "refreshIntervalSec",
-        "type": "integer",
-        "label": "Cache poll interval (seconds, mailapp --status)",
-        "min": 10,
-        "max": 3600,
-        "step": 5,
-        "defaultValue": 30
-      },
-      {
         "key": "syncIntervalMin",
         "type": "integer",
-        "label": "Network sync interval (minutes, mailapp --sync-once; 0 = never)",
-        "min": 0,
+        "label": "Sync interval (minutes, mailapp --sync-once)",
+        "min": 1,
         "max": 1440,
         "step": 1,
         "defaultValue": 15
