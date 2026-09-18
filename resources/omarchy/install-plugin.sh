@@ -22,8 +22,8 @@ omarchy plugin enable mailclient.unread || {
 omarchy bar move mailclient.unread --section right
 
 cat <<'EOF'
-Installed. The widget polls `mailapp --status` every 30s and syncs
-every 15min (both configurable):
+Installed. The widget syncs `mailapp --sync-once --json` every 15min
+(configurable), notifies on new mail, and re-reads the cache on popup open:
     omarchy bar set mailclient.unread syncIntervalMin 5
     omarchy bar set mailclient.unread notify false
 Requires `mailapp` on PATH (./scripts/install-local.sh).
