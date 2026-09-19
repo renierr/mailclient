@@ -308,10 +308,12 @@ Rectangle {
 
     // Only the roles a row actually draws. `key` is the ModelSync identity:
     // plain UIDs in folder mode, folder-scoped keys for search hits (the
-    // same UID can hit in several folders at once).
+    // same UID can hit in several folders at once). Always a string: the
+    // model is shared between modes and ListModel roles are typed by first
+    // assignment (mixed Number/String logs "Can't assign to existing role").
     function displayRow(m) {
         return {
-            key: m.key !== undefined ? m.key : m.uid,
+            key: m.key !== undefined ? String(m.key) : String(m.uid),
             uid: m.uid,
             folder: m.folder || "",
             subject: m.subject,

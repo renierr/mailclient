@@ -355,6 +355,101 @@ impl ImapSync {
         }
     }
 
+    /// Server-side search backfill for the search UI: the local FTS index
+    /// only covers synced mail, so when it runs thin the UI asks the server
+    /// too. Runs `UID SEARCH TEXT` per token in every folder of the account,
+    /// intersects the per-token hits (AND, like FTS), and fetches full bodies
+    /// only for UIDs missing locally (newest 50 per folder, 100 total).
+    /// Fetched mail lands in SQLite + the FTS index through the normal
+    /// upsert path, so a plain local re-query picks it up — and later syncs
+    /// keep it like any cached mail. Only ASCII tokens go over the wire
+    /// (IMAP SEARCH strings are ASCII unless UTF8=ACCEPT is negotiated,
+    /// which we don't); the rest stays FTS-only.
+    pub fn search_server_into_cache(
+        &mut self,
+        db: &Db,
+        account_id: i64,
+        tokens: &[String],
+    ) -> Result<ServerSearchReport> {
+        const PER_FOLDER_CAP: usize = 50;
+        const TOTAL_CAP: u64 = 100;
+        let mut report = ServerSearchReport::default();
+        let ascii: Vec<&str> = tokens
+            .iter()
+            .map(String::as_str)
+            .filter(|t| t.is_ascii())
+            .collect();
+        if ascii.is_empty() {
+            return Ok(report);
+        }
+        let account = accounts::get(db, account_id)?;
+        for folder in folders::list_by_account(db, account_id)? {
+            if report.fetched >= TOTAL_CAP {
+                break;
+            }
+            let session = self.session()?;
+            if session.select(&folder.path).is_err() {
+                log::debug!("search: cannot select {}", folder.path);
+                continue;
+            }
+            report.folders_searched += 1;
+            let mut hits: Option<HashSet<u32>> = None;
+            let mut failed = false;
+            for tok in &ascii {
+                match session.uid_search(format!("TEXT \"{tok}\"")) {
+                    Ok(set) => {
+                        hits = Some(match hits {
+                            Some(h) => h.intersection(&set).copied().collect(),
+                            None => set,
+                        });
+                    }
+                    Err(e) => {
+                        log::debug!("search: {} TEXT query failed: {e}", folder.path);
+                        failed = true;
+                        break;
+                    }
+                }
+            }
+            if failed {
+                continue;
+            }
+            // Newest first, metadata only — bytes stay server-side until an
+            // explicit open/download, exactly like background sync.
+            let local: HashSet<u32> = messages::list_uids(db, folder.id)?.into_iter().collect();
+            let mut missing: Vec<u32> = hits
+                .unwrap_or_default()
+                .difference(&local)
+                .copied()
+                .collect();
+            missing.sort_unstable_by(|a, b| b.cmp(a));
+            missing.truncate(PER_FOLDER_CAP);
+            for chunk in missing.chunks(FETCH_CHUNK) {
+                if report.fetched >= TOTAL_CAP {
+                    break;
+                }
+                let set = chunk
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",");
+                for msg in session.uid_fetch(set, "(UID FLAGS BODY.PEEK[])")?.iter() {
+                    let uid = msg.uid.unwrap_or(0);
+                    if uid == 0 {
+                        continue;
+                    }
+                    let raw = msg.body().unwrap_or_default();
+                    let (parsed, files) =
+                        parse_to_new(account.id, folder.id, uid, msg.flags(), raw, false)?;
+                    let id = messages::upsert(db, &parsed)?;
+                    collect_contacts_from_headers(db, parsed.raw_headers.as_deref());
+                    store_attachment_meta(db, id, files);
+                    report.fetched += 1;
+                }
+            }
+        }
+        Ok(report)
+    }
+
     /// Server CAPABILITY names (RFC 3501 §7.2.1) for the settings About view.
     /// One cheap round-trip on the pooled session, no folder selected.
     /// Returns sorted, de-duplicated names (`IMAP4rev1`, `IDLE`, `MOVE`,
@@ -988,6 +1083,15 @@ pub enum MoveOutcome {
     Moved(String),
     /// Already in that folder: nothing to do.
     AlreadyThere,
+}
+
+/// Outcome of [`ImapSync::search_server_into_cache`], so the UI can say so.
+#[derive(Debug, Default)]
+pub struct ServerSearchReport {
+    /// Folders successfully SELECTed + SEARCHed.
+    pub folders_searched: usize,
+    /// Full bodies fetched into the cache (bounded).
+    pub fetched: u64,
 }
 
 /// Validate + normalize a user-typed folder path: trims whitespace, maps `/`

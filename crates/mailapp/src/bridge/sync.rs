@@ -149,6 +149,36 @@ impl qobject::Bridge {
         })
     }
 
+    pub fn search_server(self: Pin<&mut Self>, query: &QString) -> QString {
+        let wanted = *self.current_account_id();
+        let current = *self.current_folder_id();
+        let query = query.to_string();
+        spawn_job(self, "Search", move |db, _progress| {
+            let acc = current_account(db, wanted)?;
+            let tokens = mailcore::search::search_tokens(&query);
+            if tokens.is_empty() {
+                return Ok(("Search: nothing searchable in that query".to_string(), None));
+            }
+            let r = with_imap(&acc, |imap| {
+                imap.search_server_into_cache(db, acc.id, &tokens)
+                    .map_err(|e| e.to_string())
+            })?;
+            Ok((
+                if r.fetched > 0 {
+                    format!(
+                        "Server search: +{} message(s) in {} folder(s)",
+                        r.fetched, r.folders_searched,
+                    )
+                } else {
+                    "Server search: nothing more on the server".to_string()
+                },
+                // Backfilled mail changes counts/unread pills: rebuild the
+                // feeds (and the search re-query on completion picks it up).
+                Some(JobRefresh::feeds(acc.id, current)),
+            ))
+        })
+    }
+
     pub fn set_folder_subscribed(
         mut self: Pin<&mut Self>,
         path: &QString,

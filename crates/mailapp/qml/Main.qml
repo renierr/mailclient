@@ -104,6 +104,12 @@ ApplicationWindow {
     // query the index across every folder of the account instead.
     property var searchRows: []
     property bool searching: false
+    // A server SEARCH backfill is in flight (thin local hits are topped up
+    // from IMAP, then the local re-query picks them up).
+    property bool serverSearching: false
+    // Query the last backfill ran for: the same text is never searched
+    // twice, so a finished job cannot re-arm another one (the loop).
+    property string lastServerQuery: ""
 
     // --- feed plumbing ----------------------------------------------------
 
@@ -180,8 +186,11 @@ ApplicationWindow {
 
     // Toolbar search: short input filters the loaded folder feed (see
     // MessageList.matches); 3+ letters run the FTS index account-wide.
-    // Local SQLite read, cheap enough per keystroke.
-    function updateSearch() {
+    // Local SQLite read, cheap enough per keystroke. `fromTyping` marks a
+    // real keystroke: only those re-arm the server-search debounce — a
+    // job-finish refresh must not, or the finished job would retrigger
+    // itself forever.
+    function updateSearch(fromTyping) {
         var q = searchField.text.trim()
         if (q.length >= 3) {
             root.searching = true
@@ -190,9 +199,34 @@ ApplicationWindow {
             } catch (e) {
                 root.searchRows = []
             }
+            // Thin local hits get topped up from the server once typing
+            // settles (debounced below); the job refresh re-runs this.
+            if (fromTyping)
+                serverSearchTimer.restart()
         } else {
             root.searching = false
             root.searchRows = []
+            root.lastServerQuery = ""
+            serverSearchTimer.stop()
+        }
+    }
+
+    // Ask the server too when the local index runs thin (full local pages
+    // need no backfill). Retries while busy; the in-flight flag plus the
+    // same-query guard stop overlapping or repeated jobs.
+    function kickServerSearch() {
+        if (!root.searching || root.serverSearching)
+            return
+        var q = searchField.text.trim()
+        if (q.length < 3 || q === root.lastServerQuery || root.searchRows.length >= 50)
+            return
+        var r = backend.search_server(q)
+        if (r === "") {
+            root.lastServerQuery = q
+            root.serverSearching = true
+            root.statusText = qsTr("Searching server…")
+        } else {
+            serverSearchTimer.restart()
         }
     }
 
@@ -496,6 +530,9 @@ ApplicationWindow {
             reloadAccounts()
             reloadFolders()
             reloadMessages()
+            // An active search belongs to the previous account: re-run it
+            // here so results (and any server top-up) follow the switch.
+            root.updateSearch(true)
             root.statusText = qsTr("Account: %1").arg(backend.current_account_email)
             // Render the selected account's cache before the synchronous
             // account-scoped refresh begins. `sync_now` only ever uses
@@ -553,9 +590,12 @@ ApplicationWindow {
                 reloadMessages()
             }
             // A sync can change what the index holds: re-run an active
-            // search so results never go stale behind a fresh feed.
+            // search so results never go stale behind a fresh feed (local
+            // re-query only — never re-arms the server debounce).
             if (root.searching)
-                root.updateSearch()
+                root.updateSearch(false)
+            if (kind === "Search")
+                root.serverSearching = false
             if (kind === "Capabilities") {
                 // Owned by the Settings About pane (its own Connections parses
                 // the JSON payload); keep it off the status bar.
@@ -626,6 +666,15 @@ ApplicationWindow {
             if (markReadTimer.uid >= 0 && markReadTimer.uid === root.currentUid)
                 root.markAsRead(markReadTimer.uid)
         }
+    }
+
+    // Server SEARCH backfill waits for typing to settle so every keystroke
+    // does not buy a full multi-folder IMAP round.
+    Timer {
+        id: serverSearchTimer
+        interval: 800
+        repeat: false
+        onTriggered: root.kickServerSearch()
     }
 
     // Automatic mail check: only while idle (never mid-action), manual-only
@@ -730,11 +779,11 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.maximumWidth: 460
                 implicitHeight: Theme.controlHeight
-                placeholderText: qsTr("Search mail… (3+ letters searches all folders)")
+                placeholderText: qsTr("Search mail… (3+ letters: account + server)")
                 color: Theme.text
                 placeholderTextColor: Theme.textMuted
                 font.pixelSize: Theme.fontBase
-                onTextChanged: root.updateSearch()
+                onTextChanged: root.updateSearch(true)
                 leftPadding: Theme.sm
                 rightPadding: clearSearch.visible ? clearSearch.width + Theme.xs : Theme.sm
                 selectByMouse: true

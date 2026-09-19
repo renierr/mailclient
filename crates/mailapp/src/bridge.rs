@@ -171,6 +171,17 @@ pub mod qobject {
         /// when the query is blank or has no usable terms.
         #[qinvokable]
         fn search_json(&self, query: &QString) -> QString;
+
+        /// Server-side search backfill for thin local results: runs IMAP
+        /// `TEXT` search per token across the account's folders and fetches
+        /// missing hits into the cache (bounded, metadata only). Network runs
+        /// on the mailclient-net thread: returns `""` when queued (completion
+        /// arrives via `job_finished` with kind `"Search"`, which refreshes
+        /// the feeds so the local search re-query picks the hits up), or a
+        /// busy message when not queued.
+        #[qinvokable]
+        fn search_server(self: Pin<&mut Self>, query: &QString) -> QString;
+
         /// Copy one attachment to a temp file and return its `file://` URL
         /// so QML can open it with the system viewer (`Qt.openUrlExternally`).
         /// Downloads the bytes first when they are not cached yet (explicit

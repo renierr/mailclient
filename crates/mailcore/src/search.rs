@@ -22,22 +22,32 @@ pub struct SearchHit {
 /// cannot change meaning or fail the MATCH. Tokens become prefix phrases.
 #[must_use]
 pub fn escape_fts_query(raw: &str) -> Option<String> {
+    let terms: Vec<String> = search_tokens(raw)
+        .into_iter()
+        .map(|t| format!("\"{t}\"*"))
+        .collect();
+    if terms.is_empty() {
+        None
+    } else {
+        Some(terms.join(" "))
+    }
+}
+
+/// Cleaned search tokens (no operators/quotes): shared by the FTS MATCH
+/// builder above and the server-side IMAP SEARCH backfill.
+#[must_use]
+pub fn search_tokens(raw: &str) -> Vec<String> {
     let mut terms = Vec::new();
     for token in raw.split_whitespace() {
         let cleaned: String = token
             .chars()
             .filter(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '@' | '.'))
             .collect();
-        if cleaned.is_empty() {
-            continue;
+        if !cleaned.is_empty() {
+            terms.push(cleaned);
         }
-        terms.push(format!("\"{cleaned}\"*"));
     }
-    if terms.is_empty() {
-        None
-    } else {
-        Some(terms.join(" "))
-    }
+    terms
 }
 
 /// Search subject/from/body of one account's messages.
@@ -104,6 +114,14 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert!(hits[0].snippet.contains("<b>quick</b>"));
         assert!(search(&db, acc, "zebra", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn search_tokens_share_cleaning_with_fts() {
+        assert_eq!(search_tokens("quick brown"), vec!["quick", "brown"]);
+        assert_eq!(search_tokens("AND OR ***"), vec!["AND", "OR"]);
+        assert!(search_tokens("   \"\" ***   ").is_empty());
+        assert_eq!(search_tokens("user@example.com"), vec!["user@example.com"]);
     }
 
     #[test]
