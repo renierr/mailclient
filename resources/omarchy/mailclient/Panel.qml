@@ -7,8 +7,8 @@ import "Model.js" as Model
 
 // Bar entry point for mailclient.unread: envelope badge with the cached
 // unread count plus a popup with newest mail, settings, and actions.
-// Hover shows the tooltip, left-click toggles the popup, right-click syncs
-// now, middle-click opens the mail app straight away.
+// Hover shows the tooltip, left-click toggles the popup, middle-click syncs
+// now, right-click opens the mail app straight away.
 BarWidget {
   id: root
   moduleName: "mailclient.unread"
@@ -77,8 +77,8 @@ BarWidget {
     dimmed: mail.unread === 0 && !mail.syncing
     active: mail.unread > 0
     onPressed: function(b) {
-      if (b === Qt.RightButton) mail.syncNow()
-      else if (b === Qt.MiddleButton) mail.openApp()
+      if (b === Qt.MiddleButton) mail.syncNow()
+      else if (b === Qt.RightButton) mail.openApp()
       else root.toggle()
     }
   }

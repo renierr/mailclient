@@ -60,7 +60,7 @@ function tooltip(unread, recent, lastError, syncing) {
     if (from !== "" || subject !== "") lines.push((from !== "" ? from : "(unknown)") + " — " + (subject !== "" ? subject : "(no subject)"))
   }
   if (lastError) lines.push("Error: " + elide(lastError, 100))
-  lines.push("Left-click: mail popup · Right-click: sync now · Middle-click: open mail")
+  lines.push("Left-click: mail popup · Middle-click: sync now · Right-click: open mail")
   return lines.join("\n")
 }
 
