@@ -97,6 +97,30 @@ cache-only so they render immediately.
   (a bounded handful of UID SEARCH pages + ≤200 flag FETCH + ≤200 RFC822 FETCH), not by mailbox size.
   Planned next: larger chunks → CONDSTORE/QRESYNC deltas → IDLE push + polling.
 
+## 5a. COMPLETED — CONDSTORE/QRESYNC delta sync & imap-next migration
+
+**Status: Complete.**
+
+### Architecture & Implementation
+- Upgraded from legacy `imap 2.4.1` / `imap-proto 0.10.2` to `imap-next 0.3.4` (backed by `imap-codec 2.0.0-alpha.9` and `imap-types 2.0.0-alpha.7`).
+- Migrated TLS layer to `tokio-rustls 0.26` with `rustls-native-certs` / `webpki-roots`.
+- Upgraded SQLite schema to version 10 (`crates/mailcore/src/db/schema.sql` and `migrations.rs`), adding `highest_modseq: u64` column to `folders`.
+- Implemented CONDSTORE and QRESYNC support in `ImapSession`:
+  - Automatic `ENABLE CONDSTORE` / `ENABLE QRESYNC` negotiation.
+  - Selective `SELECT` with `QRESYNC (uidvalidity modseq)` parameter handling.
+  - Delta flag sync using `CHANGEDSINCE <highest_modseq>` via `FetchModifier::ChangedSince`.
+  - Vanished expunge reporting with fallback backwards `UID SEARCH` diffing.
+- Preserved 100% of features across the application:
+  - Folder discovery, listing, and subscription.
+  - Interactive and background sync (`sync_now`, `sync_folder_now`, `load_older_messages`).
+  - Safe session checkout and pooling via `SessionLease` in `mailapp::bridge::session`.
+  - Headless CLI sync with single and multi-account sync reports (`mailapp --sync`).
+  - Attachment downloading on-demand (`ensure_attachment_data`).
+  - Sent copy saving (`SmtpSender::save_sent_copy`) and draft saving/discarding.
+  - FTS server search backfill (`search_server_into_cache`).
+- All 96 unit tests in `mailcore` and 3 unit tests in `mailapp` pass offline (in-memory SQLite, zero live network calls).
+- Release bundle builds cleanly via `./build.sh` into `dist/mailclient/bin/mailapp`.
+
 ## 6. Build / Run / Install
 
 ```sh
@@ -116,6 +140,8 @@ UI iteration: `./dev.sh` runs the app against live `crates/mailapp/qml/` (embedd
 - Sync engine behind `SyncProvider` trait; IMAP first, JMAP/POP3 later without touching UI.
 - HTML compose editing: `TextArea` rich-text now, consider WebEngine-based editor in M2.
 - Windows: keep all paths via `directories`, no Linux-only calls outside `mailapp` platform shim.
+- See §5a for the CONDSTORE/QRESYNC delta-sync task (open decision: `imap 2.4.1`
+  hand-rolled vs. `imap-next` tokio migration).
 
 ## 8. Known Flaws & Repair List (user-reported)
 

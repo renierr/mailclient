@@ -7,6 +7,7 @@ use serde_json::json;
 use crate::db::Db;
 use crate::error::Result;
 use crate::html::{self, Sanitized};
+use crate::models::FolderRole;
 use crate::store::{accounts, folders, messages, settings};
 
 /// Max messages per folder feed (keeps QML lists snappy).
@@ -16,11 +17,16 @@ pub const FEED_LIMIT: u64 = 200;
 pub fn folders_json(db: &Db, account_id: i64) -> Result<String> {
     let mut arr = Vec::new();
     for f in folders::list_by_account(db, account_id)? {
+        let unread = if f.role == FolderRole::Trash {
+            0
+        } else {
+            messages::count_unread(db, f.id)?
+        };
         arr.push(json!({
             "id": f.id,
             "name": f.path,
             "role": f.role.as_str(),
-            "unread": messages::count_unread(db, f.id)?,
+            "unread": unread,
             // Sidebar visibility toggle + cached total (see Folders dialog),
             // plus the hierarchy delimiter so the move picker can indent
             // subfolders (depth = segments - 1).
@@ -179,6 +185,8 @@ pub fn messages_json_paged_sorted(
     descending: bool,
 ) -> Result<String> {
     let allow_remote = settings::get_bool(db, settings::LOAD_REMOTE_IMAGES).unwrap_or(false);
+    let folder = folders::get(db, folder_id).ok();
+    let is_trash = folder.as_ref().is_some_and(|f| f.role == FolderRole::Trash);
     let mut arr = Vec::new();
     for m in messages::list_by_folder_sorted(db, folder_id, limit, offset, sort_field, descending)?
     {
@@ -211,7 +219,7 @@ pub fn messages_json_paged_sorted(
             "from": m.from_addr.as_deref().unwrap_or("?"),
             "date": short_date(m.date.as_deref()),
             "snippet": m.snippet.as_deref().unwrap_or(""),
-            "unread": !m.is_read,
+            "unread": if is_trash { false } else { !m.is_read },
             "starred": m.is_starred,
             "has_attachments": m.has_attachments || !files.is_empty(),
             "attachments": files,
@@ -238,6 +246,8 @@ pub fn messages_list_json_paged(
     let descending = settings::get_sort_descending(db);
     let rows =
         messages::list_compact_by_folder_sorted(db, folder_id, limit, offset, &field, descending)?;
+    let folder = folders::get(db, folder_id).ok();
+    let is_trash = folder.as_ref().is_some_and(|f| f.role == FolderRole::Trash);
     Ok(serde_json::to_string(
         &rows
             .into_iter()
@@ -248,7 +258,7 @@ pub fn messages_list_json_paged(
                     "from": m.from_addr.unwrap_or_else(|| "?".to_string()),
                     "date": short_date(m.date.as_deref()),
                     "snippet": m.snippet.unwrap_or_default(),
-                    "unread": !m.is_read,
+                    "unread": if is_trash { false } else { !m.is_read },
                     "starred": m.is_starred,
                     "has_attachments": m.has_attachments,
                 })
@@ -261,6 +271,8 @@ pub fn messages_list_json_paged(
 pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
     let allow_remote = settings::get_bool(db, settings::LOAD_REMOTE_IMAGES).unwrap_or(false);
     let m = messages::get_by_uid(db, folder_id, uid)?;
+    let folder = folders::get(db, folder_id).ok();
+    let is_trash = folder.as_ref().is_some_and(|f| f.role == FolderRole::Trash);
     let (body_html, had_remote, is_html, plain) =
         sanitized_bodies(m.body_html.as_deref(), m.body_text.as_deref(), allow_remote);
     let legacy_body = if is_html {
@@ -285,7 +297,7 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
         "reply_to": m.reply_to.as_deref().unwrap_or(""),
         "date": short_date(m.date.as_deref()),
         "snippet": m.snippet.as_deref().unwrap_or(""),
-        "unread": !m.is_read, "starred": m.is_starred,
+        "unread": if is_trash { false } else { !m.is_read }, "starred": m.is_starred,
         "has_attachments": m.has_attachments || !files.is_empty(),
         "attachments": files, "body_text": plain, "body_html": body_html,
         "is_html": is_html, "has_remote_images": had_remote && is_html,
@@ -481,6 +493,41 @@ mod tests {
         // No files on this message: flag off, empty list.
         assert!(!msgs[0]["has_attachments"].as_bool().unwrap());
         assert_eq!(msgs[0]["attachments"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn trash_messages_and_folders_are_always_seen() {
+        let (db, acc, _inbox) = setup();
+        let trash_id = folders::upsert(&db, acc, "Trash", "/", FolderRole::Trash).unwrap();
+        let mut m = msg_store::sample_new(acc, trash_id, 42);
+        m.is_read = false;
+        msg_store::upsert(&db, &m).unwrap();
+
+        // 1. folders_json must report unread: 0 for Trash
+        let folders: serde_json::Value =
+            serde_json::from_str(&folders_json(&db, acc).unwrap()).unwrap();
+        let trash_folder = folders
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["role"] == "trash")
+            .unwrap();
+        assert_eq!(trash_folder["unread"], 0);
+
+        // 2. messages_json must report unread: false for Trash
+        let msgs: serde_json::Value =
+            serde_json::from_str(&messages_json(&db, trash_id).unwrap()).unwrap();
+        assert!(!msgs[0]["unread"].as_bool().unwrap());
+
+        // 3. messages_list_json_paged must report unread: false
+        let list_paged: serde_json::Value =
+            serde_json::from_str(&messages_list_json_paged(&db, trash_id, 10, 0).unwrap()).unwrap();
+        assert!(!list_paged[0]["unread"].as_bool().unwrap());
+
+        // 4. message_json must report unread: false
+        let single_msg: serde_json::Value =
+            serde_json::from_str(&message_json(&db, trash_id, 42).unwrap()).unwrap();
+        assert!(!single_msg["unread"].as_bool().unwrap());
     }
 
     #[test]

@@ -241,6 +241,19 @@ pub fn count_unread(db: &Db, folder_id: i64) -> Result<u64> {
     Ok(n as u64)
 }
 
+/// List UIDs of unread messages in a folder.
+pub fn list_unread_uids(db: &Db, folder_id: i64) -> Result<Vec<u32>> {
+    let mut stmt = db
+        .conn()
+        .prepare("select uid from messages where folder_id = ?1 and is_read = 0")?;
+    let rows = stmt.query_map([folder_id], |r| r.get(0))?;
+    let mut uids = Vec::new();
+    for r in rows {
+        uids.push(r?);
+    }
+    Ok(uids)
+}
+
 /// Total cached messages in a folder (drives the "load older" button:
 /// shown rows vs cached rows vs server remainder).
 pub fn count_by_folder(db: &Db, folder_id: i64) -> Result<u64> {

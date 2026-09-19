@@ -16,8 +16,13 @@ log = "0.4"
 directories = "6.0"
 # Mail protocols (wired up in Milestone 1-2; versions pinned early on purpose)
 lettre = "0.11"
-imap = "2.4"
-imap-proto = "0.10"
+imap-next = { version = "0.3.4", features = ["stream", "expose_stream", "ext_condstore_qresync", "ext_namespace", "starttls"] }
+imap-types = "2.0.0-alpha.7"
+tokio = { version = "1", features = ["full"] }
+tokio-rustls = "0.26"
+rustls-pki-types = "1.0"
+rustls-native-certs = "0.8"
+webpki-roots = "1.0"
 native-tls = "0.2"
 mail-parser = "0.11"
 

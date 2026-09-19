@@ -18,13 +18,14 @@ fn row_to_folder(row: &rusqlite::Row<'_>) -> rusqlite::Result<Folder> {
         uid_validity: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
         uid_next: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
         server_total: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
-        subscribed: opt_bool(row.get::<_, i64>(8)?),
-        last_sync_at: row.get(9)?,
+        highest_modseq: row.get::<_, Option<i64>>(8)?.unwrap_or(0) as u64,
+        subscribed: opt_bool(row.get::<_, i64>(9)?),
+        last_sync_at: row.get(10)?,
     })
 }
 
 const COLS: &str = "id, account_id, path, delimiter, role, uid_validity,
-    uid_next, server_total, subscribed, last_sync_at";
+    uid_next, server_total, highest_modseq, subscribed, last_sync_at";
 
 /// Insert or update a folder identified by `(account_id, path)` (IMAP LIST sync).
 pub fn upsert(
@@ -130,15 +131,17 @@ pub fn set_sync_state(
     uid_validity: u32,
     uid_next: u32,
     server_total: u64,
+    highest_modseq: u64,
 ) -> Result<()> {
     let ts = now();
     let n = db.conn().execute(
         "update folders set uid_validity = ?1, uid_next = ?2, server_total = ?3,
-            last_sync_at = ?4, updated_at = ?4 where id = ?5",
+            highest_modseq = ?4, last_sync_at = ?5, updated_at = ?5 where id = ?6",
         params![
             uid_validity as i64,
             uid_next as i64,
             server_total as i64,
+            highest_modseq as i64,
             ts,
             id
         ],
@@ -186,11 +189,12 @@ mod tests {
         assert_eq!(inbox, again);
         upsert(&db, acc, "INBOX.Sent", ".", FolderRole::Sent).unwrap();
         assert_eq!(list_by_account(&db, acc).unwrap().len(), 2);
-        set_sync_state(&db, inbox, 123, 456, 12).unwrap();
+        set_sync_state(&db, inbox, 123, 456, 12, 789).unwrap();
         let f = get(&db, inbox).unwrap();
         assert_eq!(f.uid_validity, Some(123));
         assert_eq!(f.uid_next, Some(456));
         assert_eq!(f.server_total, Some(12));
+        assert_eq!(f.highest_modseq, 789);
         assert!(f.last_sync_at.is_some());
     }
 

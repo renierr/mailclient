@@ -79,7 +79,7 @@ pub struct RecentUnread {
 /// Flushes the SMTP outbox, pushes local flag changes, refreshes the folder
 /// list, then syncs every subscribed folder (INBOX full window, the rest
 /// quick). Per-folder failures are recorded in `errors` and skipped.
-pub fn sync_account(db: &Db, account: &Account, imap: &mut ImapSync) -> AccountSyncResult {
+pub async fn sync_account(db: &Db, account: &Account, imap: &mut ImapSync) -> AccountSyncResult {
     let mut out = AccountSyncResult {
         account_id: account.id,
         email: account.email_address.clone(),
@@ -96,25 +96,28 @@ pub fn sync_account(db: &Db, account: &Account, imap: &mut ImapSync) -> AccountS
     };
 
     let sender = SmtpSender::new(account);
-    match sender.flush_outbox(
-        db,
-        account.id,
-        &secrets.smtp_password,
-        Some(secrets.imap_password.as_str()),
-    ) {
+    match sender
+        .flush_outbox(
+            db,
+            account.id,
+            &secrets.smtp_password,
+            Some(secrets.imap_password.as_str()),
+        )
+        .await
+    {
         Ok(n) if n > 0 => log::info!("smtp: flushed {n} queued send(s)"),
         Err(e) => out.errors.push(format!("outbox: {e}")),
         _ => {}
     }
 
     for m in messages::list_flags_dirty(db, account.id).unwrap_or_default() {
-        if imap.push_flags(db, &m).is_ok() {
+        if imap.push_flags(db, &m).await.is_ok() {
             let _ = messages::clear_flags_dirty(db, m.id);
             out.pushed_flags += 1;
         }
     }
 
-    let remote = match imap.sync_folders(db, account.id) {
+    let remote = match imap.sync_folders(db, account.id).await {
         Ok(f) => f,
         Err(e) => {
             out.errors.push(format!("folder list: {e}"));
@@ -133,7 +136,7 @@ pub fn sync_account(db: &Db, account: &Account, imap: &mut ImapSync) -> AccountS
         } else {
             QUICK_SYNC_WINDOW
         };
-        match imap.sync_folder_window(db, f.id, Some(window)) {
+        match imap.sync_folder_window(db, f.id, Some(window)).await {
             Ok(r) => {
                 out.fetched += r.fetched;
                 out.expunged += r.expunged;
@@ -166,7 +169,7 @@ pub fn sync_account(db: &Db, account: &Account, imap: &mut ImapSync) -> AccountS
 
 /// Sync every account with a fresh connection each. One account failing
 /// (bad password, offline) never stops the rest.
-pub fn sync_all_accounts(db: &Db) -> SyncAllReport {
+pub async fn sync_all_accounts(db: &Db) -> SyncAllReport {
     let mut report = SyncAllReport::default();
     let list = match accounts::list(db) {
         Ok(a) => a,
@@ -179,9 +182,9 @@ pub fn sync_all_accounts(db: &Db) -> SyncAllReport {
         let mut imap = ImapSync::new(acc);
         let secrets = auth::load_account_secrets(&acc.auth_vault_key);
         let result = match secrets {
-            Ok(s) => match imap.connect(&s.imap_password) {
+            Ok(s) => match imap.connect(&s.imap_password).await {
                 Ok(()) => {
-                    let r = sync_account(db, acc, &mut imap);
+                    let r = sync_account(db, acc, &mut imap).await;
                     imap.disconnect();
                     r
                 }
@@ -219,6 +222,15 @@ pub fn sync_all_accounts(db: &Db) -> SyncAllReport {
         report.accounts.push(result);
     }
     report
+}
+
+/// Synchronous wrapper around [`sync_all_accounts`] for CLI callers.
+pub fn sync_all_accounts_blocking(db: &Db) -> SyncAllReport {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime for headless sync");
+    rt.block_on(sync_all_accounts(db))
 }
 
 /// Cached unread total for one account (no network).

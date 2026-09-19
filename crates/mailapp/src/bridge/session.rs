@@ -38,50 +38,81 @@ pub(crate) fn imap_pool() -> std::sync::MutexGuard<'static, HashMap<i64, ImapSyn
         .unwrap_or_else(|e| e.into_inner())
 }
 
-/// Check out the pooled session for `account`: reuse while healthy, else
-/// drop it and connect fresh. The fresh connect re-reads the keyring, so a
-/// changed password heals automatically on the next action.
-pub(crate) fn pooled_session<'a>(
-    pool: &'a mut HashMap<i64, ImapSync>,
-    account: &Account,
-) -> Result<&'a mut ImapSync, String> {
-    let id = account.id;
-    let reusable = pool.get_mut(&id).map(|s| s.is_healthy()).unwrap_or(false);
-    if reusable {
-        // Info, not debug: this is the line that proves the pool works
-        // (one per action, same as the connecting/logged-in pair it replaces).
-        log::info!("imap: reusing pooled session for account {id}");
-    } else {
-        if pool.remove(&id).is_some() {
-            log::info!("imap: pooled session for account {id} went stale, reconnecting");
-        }
-        let secrets = auth::load_account_secrets(&account.auth_vault_key)
-            .map_err(|e| format!("no password in keyring: {e}"))?;
-        let mut fresh = ImapSync::new(account);
-        fresh
-            .connect(&secrets.imap_password)
-            .map_err(|e| e.to_string())?;
-        pool.insert(id, fresh);
-    }
-    Ok(pool.get_mut(&id).expect("session just pooled"))
+pub(crate) struct SessionLease {
+    account_id: i64,
+    session: Option<ImapSync>,
 }
 
-/// Run `op` on the account's pooled session. Any failure evicts the session
-/// so the next action reconnects fresh — a failed op may leave the stream
-/// desynced, and the old connect-per-action code never reused a session
-/// past one op either. Same failure guarantee, without the handshake.
-pub(crate) fn with_imap<T>(
-    account: &Account,
-    op: impl FnOnce(&mut ImapSync) -> Result<T, String>,
-) -> Result<T, String> {
-    let mut pool = imap_pool();
-    let session = pooled_session(&mut pool, account)?;
-    let id = account.id;
-    let result = op(session);
-    if result.is_err() {
-        pool.remove(&id);
+impl SessionLease {
+    /// Return the session to the pool on clean completion.
+    pub fn checkin(mut self) {
+        if let Some(s) = self.session.take() {
+            if s.is_healthy() {
+                imap_pool().insert(self.account_id, s);
+            }
+        }
     }
-    result
+}
+
+impl std::ops::Deref for SessionLease {
+    type Target = ImapSync;
+    fn deref(&self) -> &Self::Target {
+        self.session.as_ref().expect("session present")
+    }
+}
+
+impl std::ops::DerefMut for SessionLease {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.session.as_mut().expect("session present")
+    }
+}
+
+impl Drop for SessionLease {
+    fn drop(&mut self) {
+        // If not checked in (e.g. error, panic, or early return),
+        // we disconnect to ensure the stream isn't left in a desynced state.
+        if let Some(mut s) = self.session.take() {
+            log::info!(
+                "imap: dropping un-checked-in session for account {}",
+                self.account_id
+            );
+            s.disconnect();
+        }
+    }
+}
+
+/// Check out a pooled session for `account`: reuse while healthy, else
+/// drop it and connect fresh. The fresh connect re-reads the keyring, so a
+/// changed password heals automatically on the next action.
+pub(crate) async fn checkout_session(account: &Account) -> Result<SessionLease, String> {
+    let id = account.id;
+    let existing = {
+        let mut pool = imap_pool();
+        pool.remove(&id)
+    };
+    let session = match existing {
+        Some(s) if s.is_healthy() => {
+            log::info!("imap: reusing pooled session for account {id}");
+            s
+        }
+        Some(_) | None => {
+            if existing.is_some() {
+                log::info!("imap: pooled session for account {id} went stale, reconnecting");
+            }
+            let secrets = auth::load_account_secrets(&account.auth_vault_key)
+                .map_err(|e| format!("no password in keyring: {e}"))?;
+            let mut fresh = ImapSync::new(account);
+            fresh
+                .connect(&secrets.imap_password)
+                .await
+                .map_err(|e| e.to_string())?;
+            fresh
+        }
+    };
+    Ok(SessionLease {
+        account_id: id,
+        session: Some(session),
+    })
 }
 
 /// Drop one account's pooled session (account edited or deleted).

@@ -22,10 +22,13 @@ pub enum StoreError {
     Time(#[from] chrono::ParseError),
     /// IMAP protocol/transport failure.
     #[error("imap error: {0}")]
-    Imap(#[from] imap::Error),
+    Imap(String),
+    /// Network/transport failure.
+    #[error("network error: {0}")]
+    Network(String),
     /// TLS failure.
     #[error("tls error: {0}")]
-    Tls(#[from] native_tls::Error),
+    Tls(String),
     /// SMTP failure.
     #[error("smtp error: {0}")]
     Smtp(#[from] lettre::transport::smtp::Error),

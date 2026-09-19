@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 9;
+pub const SCHEMA_VERSION: u32 = 10;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -22,6 +22,10 @@ const SCHEMA_V2: &str = "create table if not exists settings (
 /// v3 DDL: `messages.flags_dirty` — local read/star changes awaiting an IMAP
 /// push, so flag toggles never block the UI on the network.
 const SCHEMA_V3: &str = "alter table messages add column flags_dirty integer not null default 0;";
+
+/// v10 DDL: `folders.highest_modseq` — CONDSTORE / QRESYNC modseq tracking per folder.
+const SCHEMA_V10: &str =
+    "alter table folders add column highest_modseq integer not null default 0;";
 
 /// Create or upgrade the database to [`SCHEMA_VERSION`].
 pub fn ensure_schema(conn: &Connection) -> Result<()> {
@@ -126,6 +130,14 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
             }
         }
     }
+    if current < 10 {
+        if let Err(e) = conn.execute_batch(SCHEMA_V10) {
+            let msg = e.to_string().to_ascii_lowercase();
+            if !(msg.contains("duplicate column") || msg.contains("already exists")) {
+                return Err(e.into());
+            }
+        }
+    }
     if current != SCHEMA_VERSION {
         conn.execute(
             "update schema_meta set value = ?1 where key = 'version'",
@@ -190,11 +202,37 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(version, "9");
+        assert_eq!(version, "10");
         conn.execute(
             "select raw_mime, envelope_from, envelope_to from send_queue",
             [],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn v10_migration_adds_highest_modseq_column() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_FULL).unwrap();
+        conn.execute(
+            "insert into schema_meta (key, value) values ('version', '9')",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch("alter table folders drop column highest_modseq;")
+            .unwrap();
+
+        ensure_schema(&conn).unwrap();
+
+        let version: String = conn
+            .query_row(
+                "select value from schema_meta where key = 'version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, "10");
+        conn.execute("select highest_modseq from folders", [])
+            .unwrap();
     }
 }

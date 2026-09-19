@@ -4,14 +4,14 @@ use cxx_qt_lib::QString;
 use mailcore::store::accounts;
 
 use crate::bridge::qobject;
-use crate::bridge::session::{current_account, with_imap};
+use crate::bridge::session::{checkout_session, current_account};
 use crate::bridge::worker::spawn_job;
 
 impl qobject::Bridge {
     pub fn refresh_server_capabilities(self: Pin<&mut Self>, account_id: i64) -> QString {
-        spawn_job(self, "Capabilities", move |db, _progress| {
+        spawn_job(self, "Capabilities", move |db, _progress| async move {
             let acc = if account_id >= 0 {
-                match accounts::get(db, account_id) {
+                match accounts::get(&db, account_id) {
                     Ok(a) => a,
                     Err(e) => {
                         let payload = serde_json::json!({
@@ -26,7 +26,7 @@ impl qobject::Bridge {
                     }
                 }
             } else {
-                match current_account(db, account_id) {
+                match current_account(&db, account_id) {
                     Ok(a) => a,
                     Err(e) => {
                         let payload = serde_json::json!({
@@ -41,9 +41,14 @@ impl qobject::Bridge {
                     }
                 }
             };
-            let payload = match with_imap(&acc, |imap| {
-                imap.capabilities_list().map_err(|e| e.to_string())
-            }) {
+            let caps_res = async {
+                let mut imap = checkout_session(&acc).await?;
+                let caps = imap.capabilities_list().await.map_err(|e| e.to_string())?;
+                imap.checkin();
+                Ok::<_, String>(caps)
+            }
+            .await;
+            let payload = match caps_res {
                 Ok(caps) => serde_json::json!({
                     "account_id": acc.id,
                     "email": acc.email_address,

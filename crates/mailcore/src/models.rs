@@ -111,6 +111,7 @@ pub struct Folder {
     pub uid_next: Option<u32>,
     /// Message count last reported by the server during a successful SELECT.
     pub server_total: Option<u64>,
+    pub highest_modseq: u64,
     pub subscribed: bool,
     pub last_sync_at: Option<String>,
 }

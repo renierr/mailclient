@@ -629,10 +629,13 @@ pub(crate) fn assemble_message(
 }
 
 impl MailSender for SmtpSender {
-    fn send_raw(&mut self, db: &Db, account_id: i64, req: &SendRequest<'_>) -> Result<()> {
+    async fn send_raw(&mut self, db: &Db, account_id: i64, req: &SendRequest<'_>) -> Result<()> {
         let raw = self.submit(db, account_id, req)?;
         // Never fails the send itself (kept for the harness path).
-        if let Err(e) = self.save_sent_copy(db, account_id, req.imap_password, &raw) {
+        if let Err(e) = self
+            .save_sent_copy(db, account_id, req.imap_password, &raw)
+            .await
+        {
             log::warn!("smtp: sent copy failed (send itself succeeded): {e}");
         }
         Ok(())
@@ -814,7 +817,7 @@ impl SmtpSender {
     /// its retry budget ran out. Errors are logged per row; one is returned
     /// only when nothing at all got through, so a partial flush still reports
     /// what it delivered.
-    pub fn flush_outbox(
+    pub async fn flush_outbox(
         &self,
         db: &Db,
         account_id: i64,
@@ -839,7 +842,10 @@ impl SmtpSender {
                         }
                     }
                     if let Some(raw) = row.raw_mime.as_deref() {
-                        if let Err(e) = self.save_sent_copy(db, account_id, imap_password, raw) {
+                        if let Err(e) = self
+                            .save_sent_copy(db, account_id, imap_password, raw)
+                            .await
+                        {
                             log::warn!("smtp: outbox sent copy failed: {e}");
                         }
                     }
@@ -877,7 +883,7 @@ impl SmtpSender {
     /// failure); every genuine failure is returned so the caller can tell
     /// the user the Sent copy is missing instead of looking sent-but-unsaved.
     /// Never fails the send itself — callers run this after SMTP accepted.
-    pub fn save_sent_copy(
+    pub async fn save_sent_copy(
         &self,
         db: &Db,
         account_id: i64,
@@ -915,13 +921,14 @@ impl SmtpSender {
             StoreError::InvalidInput(format!("cannot load account, skipping sent copy: {e}"))
         })?;
         let mut imap = ImapSync::new(&account);
-        imap.connect(imap_password).map_err(|e| {
+        imap.connect(imap_password).await.map_err(|e| {
             StoreError::InvalidInput(format!("IMAP connect failed, skipping sent copy: {e}"))
         })?;
         imap.append_to_folder(&sent_path, raw)
+            .await
             .map_err(|e| StoreError::InvalidInput(format!("APPEND to {sent_path} failed: {e}")))?;
-        log::info!("smtp: saved copy to {sent_path}");
         imap.disconnect();
+        log::info!("smtp: saved copy to {sent_path}");
         Ok(())
     }
 }

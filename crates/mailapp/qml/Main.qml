@@ -530,6 +530,8 @@ ApplicationWindow {
             // the desktop's "not responding" watchdog. Startup, auto-check
             // and the toolbar Sync button refresh the server separately.
             root.statusText = qsTr("Folder: %1").arg(path)
+            if (!root.busy)
+                backend.sync_folder_now(path)
         } else {
             root.statusText = r
         }

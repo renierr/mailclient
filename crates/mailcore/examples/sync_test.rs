@@ -25,7 +25,8 @@ fn var(name: &str) -> Result<String, String> {
     env::var(name).map_err(|_| format!("missing env var {name} (see .env.example)"))
 }
 
-fn main() -> Result<(), String> {
+#[tokio::main]
+async fn main() -> Result<(), String> {
     if !env::args().any(|a| a == "--live") {
         return Err(
             "refusing live run without explicit consent: re-run with `-- --live`".to_string(),
@@ -95,9 +96,10 @@ fn main() -> Result<(), String> {
 
     // IMAP sync.
     let mut imap = ImapSync::new(&account);
-    imap.connect(&imap_pass).map_err(|e| e.to_string())?;
+    imap.connect(&imap_pass).await.map_err(|e| e.to_string())?;
     let synced = imap
         .sync_folders(&db, account_id)
+        .await
         .map_err(|e| e.to_string())?;
     println!("--- folders ({}) ---", synced.len());
     for f in folders::list_by_account(&db, account_id).map_err(|e| e.to_string())? {
@@ -111,7 +113,10 @@ fn main() -> Result<(), String> {
     }
     println!("--- messages ---");
     for f in synced {
-        let report = imap.sync_folder(&db, f.id).map_err(|e| e.to_string())?;
+        let report = imap
+            .sync_folder(&db, f.id)
+            .await
+            .map_err(|e| e.to_string())?;
         let unread = messages::count_unread(&db, f.id).map_err(|e| e.to_string())?;
         println!(
             "  {}: +{} fetched, -{} expunged, {} unread",
@@ -158,6 +163,7 @@ fn main() -> Result<(), String> {
                     request_mdn: false,
                 },
             )
+            .await
             .map_err(|e| e.to_string())?;
         println!("sent test mail to {to}");
     } else {

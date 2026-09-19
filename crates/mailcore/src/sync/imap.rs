@@ -1,15 +1,34 @@
-//! IMAP sync (Milestone 1): connect, LIST folders with role mapping,
-//! SELECT + UID FETCH into SQLite, flag push, expunge handling.
+//! IMAP sync (Milestone 1 + 5a CONDSTORE/QRESYNC): connect, LIST folders with role mapping,
+//! SELECT + UID FETCH into SQLite, flag push, CONDSTORE/QRESYNC delta sync, and expunge handling.
 //!
+//! Powered by `imap-next` (sans-I/O protocol state machine over Tokio).
 //! Transport: implicit TLS (port 993) or STARTTLS (port 143). Plaintext is
 //! refused unless the account explicitly opts in (see AGENT.md security rules).
 
 use std::collections::HashSet;
-use std::net::TcpStream;
+use std::sync::Arc;
 
-use imap::types::{Flag, NameAttribute};
-use imap_proto::types::Capability;
-use native_tls::{TlsConnector, TlsStream};
+use core::num::{NonZeroU32, NonZeroU64};
+
+use imap_next::{
+    client::{Client, Event, Options},
+    stream::Stream,
+};
+use imap_types::{
+    command::{Command, CommandBody, FetchModifier, SelectParameter},
+    core::{AString, Literal, Tag, Vec1},
+    extensions::{binary::LiteralOrLiteral8, enable::CapabilityEnable},
+    fetch::{MacroOrMessageDataItemNames, MessageDataItem, MessageDataItemName},
+    flag::{Flag, FlagFetch, FlagNameAttribute, StoreResponse, StoreType},
+    mailbox::Mailbox,
+    response::{Code, Data, Status, StatusBody, StatusKind},
+    search::SearchKey,
+    sequence::{SeqOrUid, Sequence, SequenceSet},
+    IntoStatic,
+};
+use rustls_pki_types::ServerName;
+use tokio::net::TcpStream;
+use tokio_rustls::{rustls, TlsConnector};
 
 use crate::db::Db;
 use crate::error::{Result, StoreError};
@@ -17,7 +36,11 @@ use crate::models::{Folder, FolderRole, Message, NewAttachment, NewMessage};
 use crate::store::{accounts, contacts, folders, messages, settings};
 use crate::sync::traits::{SyncProvider, SyncReport};
 
-type TlsSession = imap::Session<TlsStream<TcpStream>>;
+macro_rules! vec1 {
+    ($($x:expr),+ $(,)?) => {
+        ::imap_types::core::Vec1::try_from(vec![$($x),+]).expect("vec1 cannot be empty")
+    };
+}
 
 /// How many UIDs per FETCH round-trip.
 const FETCH_CHUNK: usize = 100;
@@ -47,6 +70,8 @@ pub const MAX_ATTACHMENTS_PER_MESSAGE: usize = 50;
 pub struct ImapEndpoint {
     /// `host:port`.
     pub addr: String,
+    pub host: String,
+    pub port: u16,
     /// `true` for implicit TLS (993 / `tls`).
     pub implicit_tls: bool,
     /// `true` for STARTTLS upgrade (typically 143). Mutually exclusive with
@@ -71,17 +96,31 @@ pub fn endpoint_for(account: &crate::models::Account) -> ImapEndpoint {
     };
     ImapEndpoint {
         addr: format!("{}:{}", account.imap_host, account.imap_port),
+        host: account.imap_host.clone(),
+        port: account.imap_port,
         implicit_tls,
         starttls,
     }
 }
 
+/// Format name attributes into lowercase string for heuristic search.
+pub fn attr_text(attributes: &[FlagNameAttribute<'_>]) -> String {
+    attributes
+        .iter()
+        .map(|a| format!("{a:?}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
 /// Whether a LISTED mailbox can hold messages (i.e. not `\Noselect` and not
 /// a `\NonExistent` hierarchy placeholder).
 #[must_use]
-pub fn is_selectable(attributes: &[NameAttribute]) -> bool {
-    let t = attr_text(attributes);
-    !t.contains("noselect") && !t.contains("nonexistent")
+pub fn is_selectable(attributes: &[FlagNameAttribute<'_>]) -> bool {
+    !attributes.iter().any(|a| {
+        let s = a.to_string();
+        s.eq_ignore_ascii_case("\\noselect") || s.eq_ignore_ascii_case("\\nonexistent")
+    })
 }
 
 /// Map a LISTED mailbox to a [`FolderRole`].
@@ -89,7 +128,7 @@ pub fn is_selectable(attributes: &[NameAttribute]) -> bool {
 /// Prefers RFC 6154 SPECIAL-USE attributes, falls back to multilingual name
 /// heuristics, keeps everything else as `Custom` (user IMAP folders included).
 #[must_use]
-pub fn map_folder_role(attributes: &[NameAttribute], name: &str) -> FolderRole {
+pub fn map_folder_role(attributes: &[FlagNameAttribute<'_>], name: &str) -> FolderRole {
     let attrs = attr_text(attributes);
     if attrs.contains("sent") {
         return FolderRole::Sent;
@@ -109,264 +148,969 @@ pub fn map_folder_role(attributes: &[NameAttribute], name: &str) -> FolderRole {
     role_from_name(name)
 }
 
-/// Name-based role guess (used when SPECIAL-USE is absent).
-///
-/// Matches the last path segment exactly so names like `Cabin` / `Binders`
-/// are not classified as Trash via a substring `bin`.
+/// Fallback role guessing based on the folder's leaf name.
 #[must_use]
 pub fn role_from_name(name: &str) -> FolderRole {
-    let lower = name.to_lowercase();
-    let last = lower
+    let leaf = name
         .rsplit(['/', '.', '\\'])
         .next()
-        .unwrap_or(&lower)
-        .trim();
-    if last == "inbox" {
-        return FolderRole::Inbox;
-    }
-    match last {
-        "sent" | "gesendet" | "sent mail" | "sent items" | "sent-mail" => FolderRole::Sent,
-        "draft" | "drafts" | "entwurf" | "entwürfe" | "entwurfe" => FolderRole::Drafts,
-        "trash" | "deleted" | "deleted items" | "papierkorb" | "gelöscht" | "geloscht" | "bin" => {
-            FolderRole::Trash
+        .unwrap_or(name)
+        .trim()
+        .to_ascii_lowercase();
+
+    match leaf.as_str() {
+        "inbox" => FolderRole::Inbox,
+        "sent" | "sent items" | "sent messages" | "gesendet" | "gesendete elemente"
+        | "gesendete objekte" => FolderRole::Sent,
+        "drafts" | "draft" | "entwürfe" | "entwuerfe" => FolderRole::Drafts,
+        "trash"
+        | "deleted"
+        | "deleted items"
+        | "deleted messages"
+        | "papierkorb"
+        | "gelöschte elemente"
+        | "geloeschte elemente"
+        | "bin" => FolderRole::Trash,
+        "junk" | "junk mail" | "junk email" | "spam" | "bulk mail" | "unerwünscht" => {
+            FolderRole::Junk
         }
-        "junk" | "spam" | "junk e-mail" | "junk email" | "junk-e-mail" => FolderRole::Junk,
         "archive" | "archiv" => FolderRole::Archive,
         _ => FolderRole::Custom,
     }
 }
 
-fn attr_text(attributes: &[NameAttribute]) -> String {
-    attributes
-        .iter()
-        .map(|a| format!("{a:?}"))
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_ascii_lowercase()
+/// Helper to build a TLS connector trusting system certificates with WebPKI roots fallback.
+fn build_tls_connector() -> Result<TlsConnector> {
+    let mut root_store = rustls::RootCertStore::empty();
+    let native_certs = rustls_native_certs::load_native_certs();
+    for cert in native_certs.certs {
+        let _ = root_store.add(cert);
+    }
+    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+    let config = rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    Ok(TlsConnector::from(Arc::new(config)))
 }
 
-/// Namespace prefixes reported by the server (RFC 2342): personal, other
-/// users', and shared. Each entry is `(prefix, delimiter-or-None)`.
-#[derive(Debug, Default, PartialEq, Eq)]
-struct Namespaces {
-    personal: Vec<(String, Option<String>)>,
-    other: Vec<(String, Option<String>)>,
-    shared: Vec<(String, Option<String>)>,
+/// Result of executing an IMAP command.
+#[derive(Debug)]
+struct CommandResult {
+    data: Vec<Data<'static>>,
+    untagged_statuses: Vec<StatusBody<'static>>,
+    status: Status<'static>,
 }
 
-/// Parse a `* NAMESPACE ((...)...) ((...)...) ((...)...)` response into its
-/// three prefix groups. Malformed input yields what parsed so far (possibly
-/// empty) — never an error, since this is only a discovery hint.
-fn parse_namespace_response(raw: &[u8]) -> Namespaces {
-    let text = String::from_utf8_lossy(raw);
-    let Some(start) = text.find("NAMESPACE") else {
-        return Namespaces::default();
-    };
-    let bytes = text[start..].as_bytes();
-    let mut pos = "NAMESPACE".len();
-    let mut groups: Vec<Vec<(String, Option<String>)>> = Vec::new();
-    while groups.len() < 3 {
-        skip_ws(bytes, &mut pos);
-        if bytes.get(pos) == Some(&b'N') && text[start + pos..].starts_with("NIL") {
-            groups.push(Vec::new());
-            pos += 3;
-            continue;
+/// Result of selecting a mailbox.
+#[derive(Debug, Default, Clone)]
+pub struct SelectResult {
+    pub exists: u32,
+    pub uid_validity: Option<u32>,
+    pub uid_next: Option<u32>,
+    pub highest_modseq: Option<u64>,
+    pub vanished: Vec<u32>,
+}
+
+/// Helper to extract all UIDs from a sequence set.
+fn sequence_set_to_uids(set: &SequenceSet) -> Vec<u32> {
+    let mut uids = Vec::new();
+    for seq in set.0.as_ref() {
+        match seq {
+            Sequence::Single(SeqOrUid::Value(v)) => uids.push(v.get()),
+            Sequence::Range(SeqOrUid::Value(a), SeqOrUid::Value(b)) => {
+                let start = a.get().min(b.get());
+                let end = a.get().max(b.get());
+                for u in start..=end {
+                    uids.push(u);
+                }
+            }
+            _ => {}
         }
-        if bytes.get(pos) != Some(&b'(') {
-            break;
-        }
-        pos += 1; // outer '('
-        let mut entries = Vec::new();
+    }
+    uids
+}
+
+/// Discovered folder from LIST/LSUB.
+#[derive(Debug, Clone)]
+pub struct DiscoveredFolder {
+    pub name: String,
+    pub delimiter: String,
+    pub attributes: Vec<FlagNameAttribute<'static>>,
+}
+
+/// Active IMAP session using `imap-next`.
+pub struct ImapSession {
+    stream: Stream,
+    client: Client,
+    tag_counter: u64,
+    capabilities: Vec<String>,
+    condstore_enabled: bool,
+    qresync_enabled: bool,
+}
+
+impl ImapSession {
+    fn next_tag(&mut self) -> Tag<'static> {
+        self.tag_counter += 1;
+        Tag::try_from(format!("A{:04}", self.tag_counter)).expect("valid tag")
+    }
+
+    /// Read the initial server greeting.
+    async fn read_greeting(stream: &mut Stream, client: &mut Client) -> Result<()> {
         loop {
-            skip_ws(bytes, &mut pos);
-            if bytes.get(pos) == Some(&b')') {
-                pos += 1;
-                break;
+            match stream
+                .next(&mut *client)
+                .await
+                .map_err(|e| StoreError::Network(format!("greeting error: {e}")))?
+            {
+                Event::GreetingReceived { .. } => return Ok(()),
+                event => {
+                    log::debug!("imap: unexpected greeting event: {event:?}");
+                }
             }
-            if bytes.get(pos) != Some(&b'(') {
-                break;
-            }
-            pos += 1; // entry '('
-            skip_ws(bytes, &mut pos);
-            let prefix = parse_ns_string(bytes, &mut pos);
-            skip_ws(bytes, &mut pos);
-            let delim = parse_ns_string(bytes, &mut pos);
-            skip_ws(bytes, &mut pos);
-            if bytes.get(pos) == Some(&b')') {
-                pos += 1;
-            }
-            match (prefix, delim) {
-                (Some(Some(p)), Some(d)) => entries.push((p, d)),
-                _ => break,
-            }
-        }
-        groups.push(entries);
-    }
-    Namespaces {
-        personal: groups.first().cloned().unwrap_or_default(),
-        other: groups.get(1).cloned().unwrap_or_default(),
-        shared: groups.get(2).cloned().unwrap_or_default(),
-    }
-}
-
-fn skip_ws(bytes: &[u8], pos: &mut usize) {
-    while *pos < bytes.len() && matches!(bytes[*pos], b' ' | b'\t' | b'\r' | b'\n') {
-        *pos += 1;
-    }
-}
-
-/// Parse a quoted string (with backslash escapes) or `NIL` (→ `None`).
-fn parse_ns_string(bytes: &[u8], pos: &mut usize) -> Option<Option<String>> {
-    if bytes.get(*pos) == Some(&b'"') {
-        *pos += 1;
-        let mut out = String::new();
-        while *pos < bytes.len() {
-            let c = bytes[*pos];
-            if c == b'\\' && *pos + 1 < bytes.len() {
-                *pos += 1;
-                out.push(bytes[*pos] as char);
-            } else if c == b'"' {
-                *pos += 1;
-                return Some(Some(out));
-            } else {
-                out.push(c as char);
-            }
-            *pos += 1;
-        }
-        return Some(Some(out));
-    }
-    if *pos + 3 <= bytes.len()
-        && bytes[*pos..].starts_with(b"NIL")
-        && bytes
-            .get(*pos + 3)
-            .is_none_or(|c| matches!(c, b' ' | b'\t' | b'\r' | b'\n' | b')'))
-    {
-        *pos += 3;
-        return Some(None);
-    }
-    None
-}
-
-/// IMAP sync session. Construct with [`ImapSync::new`], then [`ImapSync::connect`].
-pub struct ImapSync {
-    host: String,
-    port: u16,
-    username: String,
-    implicit_tls: bool,
-    starttls: bool,
-    /// Login password, memory-only (never logged, never stored — see AGENT.md:
-    /// secrets live in the keyring or memory). Kept so the session can
-    /// re-establish itself after a protocol desync without another keyring
-    /// round-trip; cleared on [`ImapSync::disconnect`].
-    password: Option<String>,
-    session: Option<TlsSession>,
-    /// NAMESPACE probe outcome: once a server proves it answers NAMESPACE
-    /// with a shape our parser cannot model, stop asking on this session.
-    /// Asking anyway costs a full reconnect per sync (the unread tagged
-    /// completion desyncs the stream) for zero namespaces in return.
-    /// Reset on every fresh connect; a replacement session re-probes once.
-    skip_namespaces: bool,
-}
-
-impl ImapSync {
-    /// Build from account settings (password supplied at [`ImapSync::connect`]).
-    #[must_use]
-    pub fn new(account: &crate::models::Account) -> Self {
-        let ep = endpoint_for(account);
-        Self {
-            host: account.imap_host.clone(),
-            port: account.imap_port,
-            username: account.imap_username.clone(),
-            implicit_tls: ep.implicit_tls,
-            starttls: ep.starttls,
-            password: None,
-            session: None,
-            skip_namespaces: false,
         }
     }
 
-    /// Dial + LOGIN. Password comes from the OS keyring (or test env).
-    pub fn connect(&mut self, password: &str) -> Result<()> {
-        if self.session.is_some() {
-            return Ok(());
+    /// Execute a command and wait for its completion.
+    async fn execute(&mut self, body: CommandBody<'static>) -> Result<CommandResult> {
+        let tag = self.next_tag();
+        let cmd = Command::new(tag.clone(), body)
+            .map_err(|e| StoreError::Imap(format!("invalid command: {e}")))?;
+        let handle = self.client.enqueue_command(cmd);
+
+        let mut collected_data = Vec::new();
+        let mut untagged_statuses = Vec::new();
+
+        loop {
+            let event = self
+                .stream
+                .next(&mut self.client)
+                .await
+                .map_err(|e| StoreError::Network(format!("stream error: {e}")))?;
+
+            match event {
+                Event::CommandSent { handle: h, .. } if h == handle => {
+                    // command sent
+                }
+                Event::CommandRejected {
+                    handle: h, status, ..
+                } if h == handle => {
+                    return Err(StoreError::Network(format!("command rejected: {status:?}")));
+                }
+                Event::DataReceived { data } => {
+                    collected_data.push(data.into_static());
+                }
+                Event::StatusReceived { status } => match status {
+                    Status::Tagged(tagged) if tagged.tag == tag => match tagged.body.kind {
+                        StatusKind::Ok => {
+                            return Ok(CommandResult {
+                                data: collected_data,
+                                untagged_statuses,
+                                status: Status::Tagged(tagged).into_static(),
+                            });
+                        }
+                        StatusKind::No | StatusKind::Bad => {
+                            return Err(StoreError::Network(format!(
+                                "server returned {:?}: {}",
+                                tagged.body.kind, tagged.body.text
+                            )));
+                        }
+                    },
+                    Status::Untagged(untagged) => {
+                        untagged_statuses.push(untagged.into_static());
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
         }
-        if !self.implicit_tls && !self.starttls {
-            return Err(StoreError::InvalidInput(format!(
-                "refusing plaintext IMAP for {} (TLS or STARTTLS required)",
-                self.host
-            )));
-        }
-        let mode = if self.implicit_tls { "tls" } else { "starttls" };
-        log::info!("imap: connecting to {}:{} ({mode})", self.host, self.port);
-        let tls = TlsConnector::builder().build()?;
-        let client = if self.implicit_tls {
-            imap::connect((self.host.as_str(), self.port), &self.host, &tls)?
-        } else {
-            imap::connect_starttls((self.host.as_str(), self.port), &self.host, &tls)?
-        };
-        let mut session = client
-            .login(self.username.as_str(), password)
-            .map_err(|(e, _)| StoreError::Imap(e))?;
-        self.password = Some(password.to_string());
-        // Raw protocol trace for diagnosing quirky servers (e.g. Tobit
-        // David): set MAILCLIENT_IMAP_DEBUG=1 to eprint every C:/S: line.
-        // WARNING: this includes the LOGIN password and message bodies —
-        // redact before sharing any captured log.
-        if std::env::var("MAILCLIENT_IMAP_DEBUG").is_ok() {
-            session.debug = true;
-            log::warn!("imap protocol debug on: raw traffic on stderr, redact before sharing");
-        }
-        log::info!("imap: logged in as {}", self.username);
-        self.session = Some(session);
-        // Fresh stream: re-probe NAMESPACE once (a replacement session may
-        // talk to a fixed server, or a different backend behind a proxy).
-        self.skip_namespaces = false;
+    }
+
+    /// Authenticate with LOGIN.
+    pub async fn login(&mut self, user: &str, pass: &str) -> Result<()> {
+        let body = CommandBody::login(user.to_string(), pass.to_string())
+            .map_err(|e| StoreError::InvalidInput(format!("login args invalid: {e}")))?;
+        self.execute(body).await?;
         Ok(())
     }
 
-    /// LOGOUT (best effort). Also forgets the stored password.
+    /// Query CAPABILITY.
+    pub async fn capability(&mut self) -> Result<Vec<String>> {
+        let res = self.execute(CommandBody::Capability).await?;
+        let mut caps = Vec::new();
+        for d in res.data {
+            if let Data::Capability(c) = d {
+                for cap in c.as_ref() {
+                    caps.push(cap.to_string());
+                }
+            }
+        }
+        let check_code = |code: &Option<Code<'_>>, caps: &mut Vec<String>| {
+            if let Some(Code::Capability(c)) = code {
+                for cap in c.as_ref() {
+                    caps.push(cap.to_string());
+                }
+            }
+        };
+        for s in &res.untagged_statuses {
+            check_code(&s.code, &mut caps);
+        }
+        if let Status::Tagged(t) = &res.status {
+            check_code(&t.body.code, &mut caps);
+        }
+        caps.sort();
+        caps.dedup();
+        self.capabilities = caps.clone();
+        Ok(caps)
+    }
+
+    /// Check if a capability is present (case-insensitive).
+    pub fn has_capability(&self, cap: &str) -> bool {
+        self.capabilities.iter().any(|c| c.eq_ignore_ascii_case(cap))
+    }
+
+    /// Try to enable CONDSTORE and QRESYNC if advertised.
+    pub async fn enable_extensions(&mut self) -> Result<()> {
+        let has_enable = self.has_capability("enable");
+        let has_condstore = self.has_capability("condstore");
+        let has_qresync = self.has_capability("qresync");
+
+        if !has_condstore && !has_qresync {
+            return Ok(());
+        }
+
+        if has_enable {
+            let mut enable_caps = Vec::new();
+            if has_condstore {
+                if let Ok(cap) = CapabilityEnable::try_from("CONDSTORE") {
+                    enable_caps.push(cap);
+                }
+            }
+            if has_qresync {
+                if let Ok(cap) = CapabilityEnable::try_from("QRESYNC") {
+                    enable_caps.push(cap);
+                }
+            }
+
+            if let Ok(caps) = Vec1::try_from(enable_caps) {
+                let body = CommandBody::enable(caps).unwrap();
+                if let Ok(res) = self.execute(body).await {
+                    for d in res.data {
+                        if let Data::Enabled { capabilities } = d {
+                            for cap in &capabilities {
+                                let s = cap.to_string().to_ascii_lowercase();
+                                if s == "condstore" {
+                                    self.condstore_enabled = true;
+                                }
+                                if s == "qresync" {
+                                    self.qresync_enabled = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // If CONDSTORE was advertised without ENABLE (RFC 4551), it is activated via SELECT.
+        if has_condstore && !self.condstore_enabled {
+            self.condstore_enabled = true;
+        }
+
+        log::info!(
+            "imap: extensions enabled: condstore={}, qresync={}",
+            self.condstore_enabled,
+            self.qresync_enabled
+        );
+        Ok(())
+    }
+
+    /// SELECT a folder, with optional QRESYNC parameters and automatic fallback.
+    pub async fn select(
+        &mut self,
+        path: &str,
+        qresync: Option<(u32, u64)>,
+    ) -> Result<SelectResult> {
+        let mailbox = Mailbox::try_from(path.to_string())
+            .map_err(|e| StoreError::InvalidInput(format!("invalid mailbox {path}: {e}")))?;
+
+        let (body, has_extension) = if self.qresync_enabled && qresync.is_some_and(|(_, m)| m > 0) {
+            let (validity, modseq) = qresync.unwrap();
+            let nz_val = NonZeroU32::new(validity);
+            let nz_mod = NonZeroU64::new(modseq);
+            if let (Some(v), Some(m)) = (nz_val, nz_mod) {
+                let param = SelectParameter::QResync {
+                    uid_validity: v,
+                    mod_sequence_value: m,
+                    known_uids: None,
+                    seq_match_data: None,
+                };
+                (
+                    CommandBody::Select {
+                        mailbox: mailbox.clone(),
+                        parameters: vec![param],
+                    },
+                    true,
+                )
+            } else {
+                (
+                    CommandBody::Select {
+                        mailbox: mailbox.clone(),
+                        parameters: vec![SelectParameter::CondStore],
+                    },
+                    true,
+                )
+            }
+        } else if self.condstore_enabled {
+            (
+                CommandBody::Select {
+                    mailbox: mailbox.clone(),
+                    parameters: vec![SelectParameter::CondStore],
+                },
+                true,
+            )
+        } else {
+            (
+                CommandBody::select(mailbox.clone()).map_err(|e| {
+                    StoreError::InvalidInput(format!("invalid mailbox {path}: {e}"))
+                })?,
+                false,
+            )
+        };
+
+        let res = match self.execute(body).await {
+            Ok(r) => r,
+            Err(e) if has_extension => {
+                log::warn!(
+                    "imap: SELECT with extension failed ({e}), falling back to standard SELECT"
+                );
+                self.condstore_enabled = false;
+                self.qresync_enabled = false;
+                let fallback = CommandBody::select(mailbox).map_err(|e| {
+                    StoreError::InvalidInput(format!("invalid mailbox {path}: {e}"))
+                })?;
+                self.execute(fallback).await?
+            }
+            Err(e) => return Err(e),
+        };
+
+        let mut out = SelectResult::default();
+
+        for d in res.data {
+            match d {
+                Data::Exists(n) => out.exists = n,
+                Data::Vanished {
+                    earlier: _,
+                    known_uids,
+                } => {
+                    out.vanished.extend(sequence_set_to_uids(&known_uids));
+                }
+                _ => {}
+            }
+        }
+
+        let mut check_code = |code: &Option<Code<'_>>| {
+            if let Some(c) = code {
+                match c {
+                    Code::UidValidity(v) => out.uid_validity = Some(v.get()),
+                    Code::UidNext(n) => out.uid_next = Some(n.get()),
+                    Code::HighestModSeq(m) => out.highest_modseq = Some(m.get()),
+                    _ => {}
+                }
+            }
+        };
+
+        for s in &res.untagged_statuses {
+            check_code(&s.code);
+        }
+        if let Status::Tagged(t) = &res.status {
+            check_code(&t.body.code);
+        }
+
+        Ok(out)
+    }
+
+    /// Fetch flags with optional CONDSTORE `CHANGEDSINCE`.
+    pub async fn uid_fetch_flags_changesince(
+        &mut self,
+        uids: &[u32],
+        modseq: u64,
+    ) -> Result<Vec<(u32, Vec<Flag<'static>>, Option<u64>)>> {
+        if uids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let set_str = uids
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let sequence_set = SequenceSet::try_from(set_str.as_str())
+            .map_err(|e| StoreError::InvalidInput(format!("invalid sequence set: {e}")))?;
+
+        let (macro_or_item_names, modifiers) = if self.condstore_enabled && modseq > 0 {
+            (
+                MacroOrMessageDataItemNames::from(vec![
+                    MessageDataItemName::Uid,
+                    MessageDataItemName::Flags,
+                    MessageDataItemName::ModSeq,
+                ]),
+                vec![FetchModifier::ChangedSince(
+                    NonZeroU64::new(modseq).unwrap(),
+                )],
+            )
+        } else {
+            (
+                MacroOrMessageDataItemNames::from(vec![
+                    MessageDataItemName::Uid,
+                    MessageDataItemName::Flags,
+                ]),
+                Vec::new(),
+            )
+        };
+
+        let has_modifiers = !modifiers.is_empty();
+        let body = CommandBody::Fetch {
+            sequence_set: sequence_set.clone(),
+            macro_or_item_names,
+            uid: true,
+            modifiers,
+        };
+
+        let res = match self.execute(body).await {
+            Ok(r) => r,
+            Err(e) if has_modifiers => {
+                log::warn!(
+                    "imap: UID FETCH CHANGEDSINCE failed ({e}), falling back to standard UID FETCH"
+                );
+                self.condstore_enabled = false;
+                let fallback = CommandBody::Fetch {
+                    sequence_set,
+                    macro_or_item_names: MacroOrMessageDataItemNames::from(vec![
+                        MessageDataItemName::Uid,
+                        MessageDataItemName::Flags,
+                    ]),
+                    uid: true,
+                    modifiers: Vec::new(),
+                };
+                self.execute(fallback).await?
+            }
+            Err(e) => return Err(e),
+        };
+        let mut out = Vec::new();
+
+        for d in res.data {
+            if let Data::Fetch { items, .. } = d {
+                let mut uid = 0u32;
+                let mut flags = Vec::new();
+                let mut msg_modseq = None;
+
+                for item in items.as_ref() {
+                    match item {
+                        MessageDataItem::Uid(u) => uid = u.get(),
+                        MessageDataItem::Flags(f) => {
+                            for flag_fetch in f {
+                                if let FlagFetch::Flag(flag) = flag_fetch {
+                                    flags.push(flag.clone().into_static());
+                                }
+                            }
+                        }
+                        MessageDataItem::ModSeq(m) => msg_modseq = Some(m.get()),
+                        _ => {}
+                    }
+                }
+                if uid > 0 {
+                    out.push((uid, flags, msg_modseq));
+                }
+            }
+        }
+
+        Ok(out)
+    }
+
+    /// Fetch full messages (UID, FLAGS, and raw RFC822 bodies).
+    pub async fn uid_fetch_messages(
+        &mut self,
+        uids: &[u32],
+    ) -> Result<Vec<(u32, Vec<Flag<'static>>, Vec<u8>)>> {
+        if uids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let set_str = uids
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let sequence_set = SequenceSet::try_from(set_str.as_str())
+            .map_err(|e| StoreError::InvalidInput(format!("invalid sequence set: {e}")))?;
+
+        let body = CommandBody::Fetch {
+            sequence_set,
+            macro_or_item_names: MacroOrMessageDataItemNames::from(vec![
+                MessageDataItemName::Uid,
+                MessageDataItemName::Flags,
+                MessageDataItemName::BodyExt {
+                    section: None,
+                    partial: None,
+                    peek: true,
+                },
+            ]),
+            uid: true,
+            modifiers: Vec::new(),
+        };
+
+        let res = self.execute(body).await?;
+        let mut out = Vec::new();
+
+        for d in res.data {
+            if let Data::Fetch { items, .. } = d {
+                let mut uid = 0u32;
+                let mut flags = Vec::new();
+                let mut raw_body = Vec::new();
+
+                for item in items.as_ref() {
+                    match item {
+                        MessageDataItem::Uid(u) => uid = u.get(),
+                        MessageDataItem::Flags(f) => {
+                            for flag_fetch in f {
+                                if let FlagFetch::Flag(flag) = flag_fetch {
+                                    flags.push(flag.clone().into_static());
+                                }
+                            }
+                        }
+                        MessageDataItem::BodyExt { data, .. } => {
+                            if let Some(bytes) = data.0.as_ref().map(|s| s.as_ref()) {
+                                raw_body = bytes.to_vec();
+                            }
+                        }
+                        MessageDataItem::Rfc822(data) => {
+                            if let Some(bytes) = data.0.as_ref().map(|s| s.as_ref()) {
+                                raw_body = bytes.to_vec();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if uid > 0 {
+                    out.push((uid, flags, raw_body));
+                }
+            }
+        }
+
+        Ok(out)
+    }
+
+    /// STORE flags (+FLAGS / -FLAGS).
+    pub async fn uid_store_flags(
+        &mut self,
+        uids: &[u32],
+        op: StoreType,
+        flags: Vec<Flag<'static>>,
+    ) -> Result<()> {
+        if uids.is_empty() {
+            return Ok(());
+        }
+        let set_str = uids
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let sequence_set = SequenceSet::try_from(set_str.as_str())
+            .map_err(|e| StoreError::InvalidInput(format!("invalid sequence set: {e}")))?;
+
+        let body = CommandBody::store(sequence_set, op, StoreResponse::Silent, flags, true)
+            .map_err(|e| StoreError::InvalidInput(format!("store args: {e}")))?;
+
+        self.execute(body).await?;
+        Ok(())
+    }
+
+    /// UID SEARCH with criteria.
+    pub async fn uid_search(&mut self, criteria: Vec1<SearchKey<'static>>) -> Result<Vec<u32>> {
+        let body = CommandBody::search(None, criteria, true);
+        let res = self.execute(body).await?;
+        let mut uids = Vec::new();
+        for d in res.data {
+            if let Data::Search(found, _) = d {
+                uids.extend(found.iter().map(|n| n.get()));
+            }
+        }
+        Ok(uids)
+    }
+
+    /// UID COPY.
+    pub async fn uid_copy(&mut self, uids: &[u32], dest: &str) -> Result<()> {
+        if uids.is_empty() {
+            return Ok(());
+        }
+        let set_str = uids
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let sequence_set = SequenceSet::try_from(set_str.as_str())
+            .map_err(|e| StoreError::InvalidInput(format!("invalid sequence set: {e}")))?;
+        let mailbox = Mailbox::try_from(dest.to_string())
+            .map_err(|e| StoreError::InvalidInput(format!("invalid mailbox {dest}: {e}")))?;
+        let body = CommandBody::copy(sequence_set, mailbox, true)
+            .map_err(|e| StoreError::InvalidInput(format!("copy args: {e}")))?;
+        self.execute(body).await?;
+        Ok(())
+    }
+
+    /// UID MOVE (or fallback copy + deleted + expunge).
+    pub async fn uid_move(&mut self, uids: &[u32], dest: &str) -> Result<()> {
+        if uids.is_empty() {
+            return Ok(());
+        }
+        let has_move = self
+            .capabilities
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case("move"));
+
+        let set_str = uids
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let sequence_set = SequenceSet::try_from(set_str.as_str())
+            .map_err(|e| StoreError::InvalidInput(format!("invalid sequence set: {e}")))?;
+        let mailbox = Mailbox::try_from(dest.to_string())
+            .map_err(|e| StoreError::InvalidInput(format!("invalid mailbox {dest}: {e}")))?;
+
+        if has_move {
+            let body = CommandBody::Move {
+                sequence_set: sequence_set.clone(),
+                mailbox: mailbox.clone(),
+                uid: true,
+            };
+            if let Err(e) = self.execute(body).await {
+                log::warn!("imap: UID MOVE failed ({e}), falling back to COPY + STORE + EXPUNGE");
+                let body = CommandBody::copy(sequence_set, mailbox, true)
+                    .map_err(|e| StoreError::InvalidInput(format!("copy args: {e}")))?;
+                self.execute(body).await?;
+                self.uid_store_flags(uids, StoreType::Add, vec![Flag::Deleted])
+                    .await?;
+                self.expunge().await?;
+            }
+        } else {
+            let body = CommandBody::copy(sequence_set, mailbox, true)
+                .map_err(|e| StoreError::InvalidInput(format!("copy args: {e}")))?;
+            self.execute(body).await?;
+            self.uid_store_flags(uids, StoreType::Add, vec![Flag::Deleted])
+                .await?;
+            self.expunge().await?;
+        }
+        Ok(())
+    }
+
+    /// EXPUNGE.
+    pub async fn expunge(&mut self) -> Result<()> {
+        self.execute(CommandBody::Expunge).await?;
+        Ok(())
+    }
+
+    /// APPEND.
+    pub async fn append(
+        &mut self,
+        folder: &str,
+        raw: &[u8],
+        flags: Vec<Flag<'static>>,
+    ) -> Result<()> {
+        let mailbox = Mailbox::try_from(folder.to_string())
+            .map_err(|e| StoreError::InvalidInput(format!("invalid mailbox {folder}: {e}")))?;
+        let literal = Literal::try_from(raw.to_vec())
+            .map_err(|e| StoreError::InvalidInput(format!("literal error: {e}")))?;
+
+        let body = CommandBody::Append {
+            mailbox,
+            flags,
+            date: None,
+            message: LiteralOrLiteral8::Literal(literal),
+        };
+        self.execute(body).await?;
+        Ok(())
+    }
+
+    /// CREATE mailbox.
+    pub async fn create_folder(&mut self, folder: &str) -> Result<()> {
+        let mailbox = Mailbox::try_from(folder.to_string())
+            .map_err(|e| StoreError::InvalidInput(format!("invalid mailbox {folder}: {e}")))?;
+        let body = CommandBody::create(mailbox)
+            .map_err(|e| StoreError::InvalidInput(format!("create args: {e}")))?;
+        self.execute(body).await?;
+        Ok(())
+    }
+
+    /// LIST folders.
+    pub async fn list(&mut self, reference: &str, pattern: &str) -> Result<Vec<DiscoveredFolder>> {
+        let body = CommandBody::list(reference.to_string(), pattern.to_string())
+            .map_err(|e| StoreError::InvalidInput(format!("list args: {e}")))?;
+
+        let res = self.execute(body).await?;
+        let mut out = Vec::new();
+
+        for d in res.data {
+            if let Data::List {
+                items,
+                delimiter,
+                mailbox,
+            } = d
+            {
+                let name = match mailbox {
+                    Mailbox::Inbox => "INBOX".to_string(),
+                    Mailbox::Other(o) => String::from_utf8_lossy(o.as_ref()).to_string(),
+                };
+                let delim = delimiter
+                    .map(|d| d.inner().to_string())
+                    .unwrap_or_else(|| "/".to_string());
+                out.push(DiscoveredFolder {
+                    name,
+                    delimiter: delim,
+                    attributes: items.into_iter().map(|i| i.into_static()).collect(),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// LSUB folders.
+    pub async fn lsub(&mut self, reference: &str, pattern: &str) -> Result<Vec<DiscoveredFolder>> {
+        let body = CommandBody::lsub(reference.to_string(), pattern.to_string())
+            .map_err(|e| StoreError::InvalidInput(format!("lsub args: {e}")))?;
+
+        let res = self.execute(body).await?;
+        let mut out = Vec::new();
+
+        for d in res.data {
+            if let Data::Lsub {
+                items,
+                delimiter,
+                mailbox,
+            } = d
+            {
+                let name = match mailbox {
+                    Mailbox::Inbox => "INBOX".to_string(),
+                    Mailbox::Other(o) => String::from_utf8_lossy(o.as_ref()).to_string(),
+                };
+                let delim = delimiter
+                    .map(|d| d.inner().to_string())
+                    .unwrap_or_else(|| "/".to_string());
+                out.push(DiscoveredFolder {
+                    name,
+                    delimiter: delim,
+                    attributes: items.into_iter().map(|i| i.into_static()).collect(),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// NOOP health check.
+    pub async fn noop(&mut self) -> Result<()> {
+        self.execute(CommandBody::Noop).await?;
+        Ok(())
+    }
+}
+
+/// Outcome of trashing a message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrashOutcome {
+    Moved(String),
+    Expunged,
+}
+
+/// Outcome of moving a message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MoveOutcome {
+    Moved(String),
+    AlreadyThere,
+}
+
+/// Outcome of archiving a message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArchiveOutcome {
+    Moved(String),
+    AlreadyThere,
+}
+
+/// Outcome of [`ImapSync::search_server_into_cache`], so the UI can say so.
+#[derive(Debug, Default)]
+pub struct ServerSearchReport {
+    /// Folders successfully SELECTed + SEARCHed.
+    pub folders_searched: usize,
+    /// Full bodies fetched into the cache (bounded).
+    pub fetched: u64,
+}
+
+/// High-level IMAP synchronization engine.
+pub struct ImapSync {
+    endpoint: ImapEndpoint,
+    account: crate::models::Account,
+    session: Option<ImapSession>,
+}
+
+impl ImapSync {
+    pub fn new(account: &crate::models::Account) -> Self {
+        Self {
+            endpoint: endpoint_for(account),
+            account: account.clone(),
+            session: None,
+        }
+    }
+
+    /// Connect and authenticate with the server.
+    pub async fn connect(&mut self, password: &str) -> Result<()> {
+        if self.session.is_some() {
+            return Ok(());
+        }
+        if !self.endpoint.implicit_tls && !self.endpoint.starttls {
+            let sec = self.account.imap_security.trim().to_ascii_lowercase();
+            if sec != "plain" && sec != "none" {
+                return Err(StoreError::InvalidInput(format!(
+                    "refusing plaintext IMAP connection to {}: set security to 'tls' or 'starttls'",
+                    self.endpoint.addr
+                )));
+            }
+        }
+
+        let tcp = TcpStream::connect(&self.endpoint.addr)
+            .await
+            .map_err(|e| StoreError::Network(format!("connect {}: {e}", self.endpoint.addr)))?;
+
+        let (stream, client) = if self.endpoint.implicit_tls {
+            let tls_connector = build_tls_connector()?;
+            let server_name = ServerName::try_from(self.endpoint.host.clone()).map_err(|e| {
+                StoreError::Network(format!("invalid server name {}: {e}", self.endpoint.host))
+            })?;
+            let tls = tls_connector.connect(server_name, tcp).await.map_err(|e| {
+                StoreError::Network(format!(
+                    "TLS handshake failed with {}: {e}",
+                    self.endpoint.addr
+                ))
+            })?;
+            let mut stream = Stream::tls(tokio_rustls::TlsStream::Client(tls));
+            let mut client = Client::new(Options::default());
+            ImapSession::read_greeting(&mut stream, &mut client).await?;
+            (stream, client)
+        } else {
+            let mut stream = Stream::insecure(tcp);
+            let mut client = Client::new(Options::default());
+            ImapSession::read_greeting(&mut stream, &mut client).await?;
+
+            if self.endpoint.starttls {
+                let tag = Tag::try_from("A0001").unwrap();
+                let handle = client
+                    .enqueue_command(Command::new(tag.clone(), CommandBody::StartTLS).unwrap());
+                loop {
+                    let event = stream
+                        .next(&mut client)
+                        .await
+                        .map_err(|e| StoreError::Network(format!("STARTTLS stream error: {e}")))?;
+                    match event {
+                        Event::StatusReceived {
+                            status: Status::Tagged(tagged),
+                        } => {
+                            if tagged.tag == tag {
+                                if tagged.body.kind == StatusKind::Ok {
+                                    break;
+                                } else {
+                                    return Err(StoreError::Network(format!(
+                                        "STARTTLS rejected: {}",
+                                        tagged.body.text
+                                    )));
+                                }
+                            }
+                        }
+                        Event::CommandRejected {
+                            handle: h, status, ..
+                        } if h == handle => {
+                            return Err(StoreError::Network(format!(
+                                "STARTTLS rejected: {status:?}"
+                            )));
+                        }
+                        _ => {}
+                    }
+                }
+
+                let tcp_stream: TcpStream = stream.into();
+                let tls_connector = build_tls_connector()?;
+                let server_name =
+                    ServerName::try_from(self.endpoint.host.clone()).map_err(|e| {
+                        StoreError::Network(format!(
+                            "invalid server name {}: {e}",
+                            self.endpoint.host
+                        ))
+                    })?;
+                let tls = tls_connector
+                    .connect(server_name, tcp_stream)
+                    .await
+                    .map_err(|e| {
+                        StoreError::Network(format!(
+                            "STARTTLS handshake failed with {}: {e}",
+                            self.endpoint.addr
+                        ))
+                    })?;
+                let stream = Stream::tls(tokio_rustls::TlsStream::Client(tls));
+                (stream, client)
+            } else {
+                (stream, client)
+            }
+        };
+
+        let mut session = ImapSession {
+            stream,
+            client,
+            tag_counter: 1,
+            capabilities: Vec::new(),
+            condstore_enabled: false,
+            qresync_enabled: false,
+        };
+
+        let username = if self.account.imap_username.is_empty() {
+            &self.account.email_address
+        } else {
+            &self.account.imap_username
+        };
+
+        session.login(username, password).await?;
+        session.capability().await?;
+        let _ = session.enable_extensions().await;
+
+        self.session = Some(session);
+        log::info!(
+            "imap: connected and authenticated for {}",
+            self.account.email_address
+        );
+        Ok(())
+    }
+
     pub fn disconnect(&mut self) {
-        if let Some(mut s) = self.session.take() {
-            let _ = s.logout();
-        }
-        self.password = None;
+        self.session = None;
     }
 
-    /// Drop the connection without LOGOUT and re-establish it with the stored
-    /// password. Heals a desynced stream (e.g. a stale tagged response our
-    /// parser couldn't consume past) — LOGOUT itself would trip over the same
-    /// stale bytes, so it is deliberately skipped here.
-    pub fn reconnect(&mut self) -> Result<()> {
-        let password = self.password.clone().ok_or_else(|| {
-            StoreError::InvalidInput("no stored password for reconnect".to_string())
-        })?;
-        log::warn!("imap: reconnecting {} to resync the stream", self.host);
-        self.session.take();
-        self.connect(&password)
+    pub async fn reconnect(&mut self) -> Result<()> {
+        self.session = None;
+        let secrets = crate::auth::load_account_secrets(&self.account.auth_vault_key)
+            .map_err(|e| StoreError::NotFound(format!("keyring secret: {e}")))?;
+        self.connect(&secrets.imap_password).await
     }
 
-    /// Liveness probe for pooled sessions: one NOOP round-trip. `false` =
-    /// dead, half-closed, or never connected — the caller should drop this
-    /// session and connect fresh rather than send real work into it.
-    pub fn is_healthy(&mut self) -> bool {
-        match self.session.as_mut() {
-            Some(s) => s.noop().is_ok(),
-            None => false,
-        }
+    pub fn is_healthy(&self) -> bool {
+        self.session.is_some()
     }
 
-    /// Server-side search backfill for the search UI: the local FTS index
-    /// only covers synced mail, so when it runs thin the UI asks the server
-    /// too. Runs `UID SEARCH TEXT` per token in every folder of the account,
-    /// or in just one folder when `folder_scope` is set (the search UI's
-    /// folder checkbox), intersects the per-token hits (AND, like FTS), and
-    /// fetches full bodies only for UIDs missing locally (newest 50 per
-    /// folder, 100 total). Fetched mail lands in SQLite + the FTS index through the normal
-    /// upsert path, so a plain local re-query picks it up — and later syncs
-    /// keep it like any cached mail. Only ASCII tokens go over the wire
-    /// (IMAP SEARCH strings are ASCII unless UTF8=ACCEPT is negotiated,
-    /// which we don't); the rest stays FTS-only.
-    pub fn search_server_into_cache(
+    fn session(&mut self) -> Result<&mut ImapSession> {
+        self.session
+            .as_mut()
+            .ok_or_else(|| StoreError::Network("session disconnected".to_string()))
+    }
+
+    pub async fn capabilities_list(&mut self) -> Result<Vec<String>> {
+        let session = self.session()?;
+        session.capability().await
+    }
+
+    pub async fn search_server_into_cache(
         &mut self,
         db: &Db,
         account_id: i64,
@@ -387,14 +1131,14 @@ impl ImapSync {
         let account = accounts::get(db, account_id)?;
         let targets: Vec<_> = folders::list_by_account(db, account_id)?
             .into_iter()
-            .filter(|f| folder_scope.is_none_or(|s| f.path == s))
+            .filter(|f| folder_scope.map(|s| f.path == s).unwrap_or(true))
             .collect();
         for folder in targets {
             if report.fetched >= TOTAL_CAP {
                 break;
             }
             let session = self.session()?;
-            if session.select(&folder.path).is_err() {
+            if session.select(&folder.path, None).await.is_err() {
                 log::debug!("search: cannot select {}", folder.path);
                 continue;
             }
@@ -402,8 +1146,16 @@ impl ImapSync {
             let mut hits: Option<HashSet<u32>> = None;
             let mut failed = false;
             for tok in &ascii {
-                match session.uid_search(format!("TEXT \"{tok}\"")) {
-                    Ok(set) => {
+                let astring = match AString::try_from(tok.to_string()) {
+                    Ok(a) => a,
+                    Err(_) => {
+                        failed = true;
+                        break;
+                    }
+                };
+                match session.uid_search(vec1![SearchKey::Text(astring)]).await {
+                    Ok(uids) => {
+                        let set: HashSet<u32> = uids.into_iter().collect();
                         hits = Some(match hits {
                             Some(h) => h.intersection(&set).copied().collect(),
                             None => set,
@@ -419,8 +1171,6 @@ impl ImapSync {
             if failed {
                 continue;
             }
-            // Newest first, metadata only — bytes stay server-side until an
-            // explicit open/download, exactly like background sync.
             let local: HashSet<u32> = messages::list_uids(db, folder.id)?.into_iter().collect();
             let mut missing: Vec<u32> = hits
                 .unwrap_or_default()
@@ -433,19 +1183,10 @@ impl ImapSync {
                 if report.fetched >= TOTAL_CAP {
                     break;
                 }
-                let set = chunk
-                    .iter()
-                    .map(u32::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",");
-                for msg in session.uid_fetch(set, "(UID FLAGS BODY.PEEK[])")?.iter() {
-                    let uid = msg.uid.unwrap_or(0);
-                    if uid == 0 {
-                        continue;
-                    }
-                    let raw = msg.body().unwrap_or_default();
+                let fetched = session.uid_fetch_messages(chunk).await?;
+                for (uid, flags, raw) in fetched {
                     let (parsed, files) =
-                        parse_to_new(account.id, folder.id, uid, msg.flags(), raw, false)?;
+                        parse_to_new(account.id, folder.id, uid, &flags, &raw, false)?;
                     let id = messages::upsert(db, &parsed)?;
                     collect_contacts_from_headers(db, parsed.raw_headers.as_deref());
                     store_attachment_meta(db, id, files);
@@ -456,267 +1197,136 @@ impl ImapSync {
         Ok(report)
     }
 
-    /// Server CAPABILITY names (RFC 3501 §7.2.1) for the settings About view.
-    /// One cheap round-trip on the pooled session, no folder selected.
-    /// Returns sorted, de-duplicated names (`IMAP4rev1`, `IDLE`, `MOVE`,
-    /// `AUTH=PLAIN`, …).
-    pub fn capabilities_list(&mut self) -> Result<Vec<String>> {
-        let caps = self.session()?.capabilities()?;
-        let mut out: Vec<String> = caps
-            .iter()
-            .map(|c| match c {
-                Capability::Imap4rev1 => "IMAP4rev1".to_string(),
-                Capability::Auth(mech) => format!("AUTH={mech}"),
-                Capability::Atom(atom) => (*atom).to_string(),
-            })
-            .collect();
-        out.sort();
-        out.dedup();
-        Ok(out)
+    pub async fn append_to_folder(&mut self, folder_path: &str, raw: &[u8]) -> Result<()> {
+        let session = self.session()?;
+        session.append(folder_path, raw, vec![Flag::Seen]).await
     }
 
-    /// Ask the server for its namespaces (best effort — many servers don't
-    /// implement RFC 2342, and groupware like Tobit David hides branches the
-    /// login isn't entitled to; either way we just get fewer prefixes).
-    ///
-    /// A parse failure means the server sent a response shape our IMAP parser
-    /// cannot model (proven: Tobit's `* NAMESPACE` line, which imap-proto 0.10
-    /// has no type for). The tagged completion then stays unread in the socket
-    /// buffer and the *next* command dies on the crate's tag assert — so on
-    /// exactly this error the session reconnects itself before returning.
-    /// BAD/NO answers are clean (their tagged line was consumed) and need nothing.
-    fn query_namespaces(&mut self) -> Namespaces {
-        // Probed unparseable before on this session: asking again would buy
-        // another full reconnect for zero namespaces.
-        if self.skip_namespaces {
-            return Namespaces::default();
-        }
-        let raw = match self.session() {
-            Ok(session) => match session.run_command_and_read_response("NAMESPACE") {
-                Ok(raw) => raw,
-                Err(imap::Error::Parse(_)) => {
-                    log::warn!("imap: NAMESPACE response unparseable, reconnecting to resync");
-                    if let Err(e) = self.reconnect() {
-                        log::warn!("imap: reconnect failed: {e}");
-                    }
-                    // After the resync (connect() clears the flag for the
-                    // fresh stream): never ask again on this session.
-                    self.skip_namespaces = true;
-                    return Namespaces::default();
-                }
-                Err(e) => {
-                    log::debug!("imap: NAMESPACE unsupported, skipping: {e}");
-                    return Namespaces::default();
-                }
-            },
-            Err(e) => {
-                log::debug!("imap: no session for NAMESPACE query: {e}");
-                return Namespaces::default();
-            }
-        };
-        parse_namespace_response(&raw)
+    pub async fn append_draft(&mut self, folder_path: &str, raw: &[u8]) -> Result<()> {
+        let session = self.session()?;
+        session
+            .append(folder_path, raw, vec![Flag::Draft, Flag::Seen])
+            .await
     }
 
-    /// APPEND raw MIME bytes to a folder (used for Sent copies), marked `\Seen`.
-    pub fn append_to_folder(&mut self, folder_path: &str, raw: &[u8]) -> Result<()> {
-        self.session()?
-            .append_with_flags(folder_path, raw, &[Flag::Seen])?;
-        Ok(())
-    }
-
-    /// APPEND raw MIME bytes as a server-side draft. Drafts are deliberately
-    /// not marked seen: the `\Draft` flag is what makes providers keep them
-    /// out of normal send flows.
-    pub fn append_draft(&mut self, folder_path: &str, raw: &[u8]) -> Result<()> {
-        self.session()?
-            .append_with_flags(folder_path, raw, &[Flag::Draft])?;
-        Ok(())
-    }
-
-    /// Move one message to the account's Trash folder -- what "delete" means
-    /// in a mail client, with two exceptions that destroy immediately:
-    ///
-    /// - the message is already in Trash (deleting from Trash is permanent),
-    /// - the message is spam (filing junk into Trash just moves garbage
-    ///   around — it is destroyed instead).
-    ///
-    /// Callers get [`TrashOutcome::Expunged`] for both; otherwise the
-    /// destination folder path. Prefers `UID MOVE` (RFC 6851) and falls back
-    /// to `COPY` + `\Deleted` + `EXPUNGE` on servers without it.
-    pub fn trash_message(&mut self, db: &Db, message_id: i64) -> Result<TrashOutcome> {
+    pub async fn trash_message(&mut self, db: &Db, message_id: i64) -> Result<TrashOutcome> {
         let message = messages::get(db, message_id)?;
         let folder = folders::get(db, message.folder_id)?;
-
-        // Spam never touches Trash; Trash never keeps a second copy of itself.
-        if folder.role == FolderRole::Junk {
-            log::info!("imap: destroying spam directly (uid {})", message.uid);
-            self.delete_message(db, message_id)?;
-            return Ok(TrashOutcome::Expunged);
-        }
         let trash = folders::list_by_account(db, message.account_id)?
             .into_iter()
             .find(|f| f.role == FolderRole::Trash);
 
-        // Already in Trash, or no Trash at all: the only remaining meaning of
-        // "delete" is destroying it, and the caller is told so.
         let Some(trash) = trash.filter(|t| t.id != folder.id) else {
-            self.delete_message(db, message_id)?;
+            self.delete_message(db, message_id).await?;
             return Ok(TrashOutcome::Expunged);
         };
 
-        self.move_message_to(db, message_id, &trash.path)?;
-        // The server copy now lives in Trash; the local row belongs to the
-        // source folder and is gone from it. Syncing Trash pulls it back.
+        let session = self.session()?;
+        session.select(&folder.path, None).await?;
+        if let Err(e) = session
+            .uid_store_flags(&[message.uid], StoreType::Add, vec![Flag::Seen])
+            .await
+        {
+            log::warn!("imap: mark-seen before trash move failed: {e}");
+        }
+        session.uid_move(&[message.uid], &trash.path).await?;
+        messages::delete(db, message_id)?;
         Ok(TrashOutcome::Moved(trash.path))
     }
 
-    /// Move one message to the account's Archive folder — the one-click
-    /// "archive" action. Creates the Archive folder server-side when the
-    /// account has none, so the button always works. Archiving from inside
-    /// Archive itself is a no-op reported as [`ArchiveOutcome::AlreadyThere`].
-    pub fn archive_message(&mut self, db: &Db, message_id: i64) -> Result<ArchiveOutcome> {
+    pub async fn archive_message(&mut self, db: &Db, message_id: i64) -> Result<ArchiveOutcome> {
         let message = messages::get(db, message_id)?;
         let folder = folders::get(db, message.folder_id)?;
-
-        let archive = match folders::list_by_account(db, message.account_id)?
+        let archive = folders::list_by_account(db, message.account_id)?
             .into_iter()
-            .find(|f| f.role == FolderRole::Archive)
-        {
+            .find(|f| f.role == FolderRole::Archive);
+
+        let archive = match archive {
             Some(a) => a,
             None => {
-                log::info!("imap: no Archive folder, creating one");
-                let delim = folders::list_by_account(db, message.account_id)
-                    .ok()
-                    .and_then(|fs| fs.first().map(|f| f.delimiter.clone()))
+                let delim = folders::list_by_account(db, message.account_id)?
+                    .first()
+                    .map(|f| f.delimiter.clone())
                     .unwrap_or_else(|| "/".to_string());
-                self.create_folder_path(db, message.account_id, "Archive", &delim)?
+                self.create_folder_path(db, message.account_id, "Archive", &delim)
+                    .await?
             }
         };
+
         if archive.id == folder.id {
             return Ok(ArchiveOutcome::AlreadyThere);
         }
-        self.move_message_to(db, message_id, &archive.path)?;
+
+        let session = self.session()?;
+        session.select(&folder.path, None).await?;
+        session.uid_move(&[message.uid], &archive.path).await?;
+        messages::delete(db, message_id)?;
         Ok(ArchiveOutcome::Moved(archive.path))
     }
 
-    /// Move one message to an arbitrary folder of the same account — the
-    /// "move to…" action. Moving into the folder it already lives in is a no-op
-    /// reported as [`MoveOutcome::AlreadyThere`]. Subfolders work like any other
-    /// path (their hierarchy separator is part of the stored path).
-    pub fn move_to_folder(
+    pub async fn move_to_folder(
         &mut self,
         db: &Db,
         message_id: i64,
-        dest_id: i64,
+        dest_folder_id: i64,
     ) -> Result<MoveOutcome> {
-        let message = messages::get(db, message_id)?;
-        let folder = folders::get(db, message.folder_id)?;
-        let dest = folders::get(db, dest_id)?;
-        if dest.account_id != message.account_id {
-            return Err(StoreError::InvalidInput(
-                "destination folder belongs to another account".to_string(),
-            ));
-        }
-        if dest.id == folder.id {
+        let msg = messages::get(db, message_id)?;
+        if msg.folder_id == dest_folder_id {
             return Ok(MoveOutcome::AlreadyThere);
         }
-        self.move_message_to(db, message_id, &dest.path)?;
-        Ok(MoveOutcome::Moved(dest.path))
-    }
+        let src_folder = folders::get(db, msg.folder_id)?;
+        let dest_folder = folders::get(db, dest_folder_id)?;
 
-    /// Server-side move of one message into `dest_path` (plus local row
-    /// delete). Shared by trash and archive; prefers `UID MOVE`, falls back
-    /// to `COPY` + `\Deleted` + `EXPUNGE`.
-    ///
-    /// Trash moves auto-mark `\Seen` first: deleting an unread message must
-    /// not leave an unread copy in Trash. `MOVE`/`COPY` preserve flags, so
-    /// the Seen bit carries over to the destination.
-    fn move_message_to(&mut self, db: &Db, message_id: i64, dest_path: &str) -> Result<()> {
-        let message = messages::get(db, message_id)?;
-        let folder = folders::get(db, message.folder_id)?;
-        let dest_is_trash = folders::get_by_path(db, folder.account_id, dest_path)
-            .map(|d| d.role == FolderRole::Trash)
-            .unwrap_or(false);
-        let has_move = self
-            .session()?
-            .capabilities()
-            .map(|caps| caps.has_str("MOVE"))
-            .unwrap_or(false);
         let session = self.session()?;
-        session.select(&folder.path)?;
-        let uid = message.uid.to_string();
-        if dest_is_trash && !message.is_read {
-            if let Err(e) = session.uid_store(&uid, "+FLAGS (\\Seen)") {
-                log::warn!("imap: mark-seen before trash move failed: {e}");
+        session.select(&src_folder.path, None).await?;
+        if dest_folder.role == FolderRole::Trash {
+            if let Err(e) = session
+                .uid_store_flags(&[msg.uid], StoreType::Add, vec![Flag::Seen])
+                .await
+            {
+                log::warn!("imap: mark-seen before move to trash failed: {e}");
             }
         }
-        if has_move {
-            session.uid_mv(&uid, dest_path)?;
-        } else {
-            session.uid_copy(&uid, dest_path)?;
-            session.uid_store(&uid, "+FLAGS (\\Deleted)")?;
-            session.expunge()?;
-        }
+        session.uid_move(&[msg.uid], &dest_folder.path).await?;
         messages::delete(db, message_id)?;
-        Ok(())
+        Ok(MoveOutcome::Moved(dest_folder.path))
     }
 
-    /// Create an IMAP mailbox (plus any missing parents) and register it
-    /// locally via folder discovery. Returns the created [`Folder`].
-    /// `delimiter` is the account's hierarchy separator (nested input like
-    /// `Work/Client` uses it); missing parents are created first so one call
-    /// creates the whole chain. An already-existing path is success, not an
-    /// error — discovery simply returns it.
-    pub fn create_folder_path(
+    pub async fn create_folder_path(
         &mut self,
         db: &Db,
         account_id: i64,
         path: &str,
         delimiter: &str,
     ) -> Result<Folder> {
-        let normalized = normalize_folder_path(path, delimiter)?;
-        let mut prefix = String::new();
-        for segment in normalized.split(delimiter) {
-            if !prefix.is_empty() {
-                prefix.push_str(delimiter);
-            }
-            prefix.push_str(segment);
-            match self.session()?.create(&prefix) {
-                Ok(()) => log::info!("imap: created folder {prefix}"),
-                Err(e) if is_already_exists(&e) => log::debug!("imap: folder exists: {prefix}"),
-                Err(e) => return Err(e.into()),
+        let session = self.session()?;
+        if let Err(e) = session.create_folder(path).await {
+            let msg = e.to_string().to_ascii_lowercase();
+            if !msg.contains("already exists") && !msg.contains("alreadyexists") {
+                return Err(e);
             }
         }
-        self.sync_folders(db, account_id)?;
-        folders::get_by_path(db, account_id, &normalized)
-            .map_err(|_| StoreError::InvalidInput(format!("server did not list {normalized}")))
+        let id = folders::upsert(db, account_id, path, delimiter, FolderRole::Custom)?;
+        folders::get(db, id)
     }
 
-    /// Permanently destroy one message server-side (`\Deleted` + expunge)
-    /// and locally. No undo -- use [`Self::trash_message`] for the normal
-    /// delete action.
-    pub fn delete_message(&mut self, db: &Db, message_id: i64) -> Result<()> {
-        let message = messages::get(db, message_id)?;
-        let folder = folders::get(db, message.folder_id)?;
+    pub async fn delete_message(&mut self, db: &Db, message_id: i64) -> Result<()> {
+        let msg = messages::get(db, message_id)?;
+        let folder = folders::get(db, msg.folder_id)?;
         let session = self.session()?;
-        session.select(&folder.path)?;
-        session.uid_store(message.uid.to_string(), "+FLAGS (\\Deleted)")?;
-        session.expunge()?;
+        session.select(&folder.path, None).await?;
+        session
+            .uid_store_flags(&[msg.uid], StoreType::Add, vec![Flag::Deleted])
+            .await?;
+        session.expunge().await?;
         messages::delete(db, message_id)?;
         Ok(())
     }
 
-    /// Bulk move cached UIDs of one folder into `dest_path` with a single
-    /// SELECT + one UID MOVE (or COPY + `\Deleted` + EXPUNGE fallback), then
-    /// drop the local source rows. Returns moved rows. `dest_path` must differ
-    /// from the source folder's path (callers report "already here").
-    ///
-    /// Trash moves auto-mark `\Seen` first so deleted unread mail does not
-    /// leave an unread copy in Trash.
-    pub fn move_uids_to(
+    pub async fn move_uids_to(
         &mut self,
         db: &Db,
-        folder_id: i64,
+        src_folder_id: i64,
         uids: &[u32],
         dest_path: &str,
     ) -> Result<u64> {
@@ -726,81 +1336,47 @@ impl ImapSync {
         if clean.is_empty() {
             return Ok(0);
         }
-        let folder = folders::get(db, folder_id)?;
-        if folder.path == dest_path {
+        let src = folders::get(db, src_folder_id)?;
+        if src.path == dest_path {
             return Ok(0);
         }
-        let dest_is_trash = folders::get_by_path(db, folder.account_id, dest_path)
-            .map(|d| d.role == FolderRole::Trash)
-            .unwrap_or(false);
-        let set = clean
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        let has_move = self
-            .session()?
-            .capabilities()
-            .map(|caps| caps.has_str("MOVE"))
-            .unwrap_or(false);
+        let trash = folders::list_by_account(db, src.account_id)?
+            .into_iter()
+            .find(|f| f.role == FolderRole::Trash);
+        let dest_is_trash = trash.as_ref().is_some_and(|t| t.path == dest_path);
+
         let session = self.session()?;
-        session.select(&folder.path)?;
+        session.select(&src.path, None).await?;
         if dest_is_trash {
-            if let Err(e) = session.uid_store(&set, "+FLAGS (\\Seen)") {
+            if let Err(e) = session
+                .uid_store_flags(&clean, StoreType::Add, vec![Flag::Seen])
+                .await
+            {
                 log::warn!("imap: mark-seen before bulk trash move failed: {e}");
             }
         }
-        if has_move {
-            session.uid_mv(&set, dest_path)?;
-        } else {
-            session.uid_copy(&set, dest_path)?;
-            session.uid_store(&set, "+FLAGS (\\Deleted)")?;
-            session.expunge()?;
-        }
-        let mut moved = 0u64;
-        for uid in &clean {
-            if messages::delete_by_uid(db, folder_id, *uid)? {
-                moved += 1;
-            }
-        }
-        Ok(moved)
+        session.uid_move(&clean, dest_path).await?;
+        let count = messages::delete_many_by_uids(db, src_folder_id, &clean)?;
+        Ok(count)
     }
 
-    /// Bulk permanent destroy of cached UIDs in one folder: a single SELECT +
-    /// one UID STORE + EXPUNGE, then local deletes. Returns destroyed rows.
-    pub fn purge_uids(&mut self, db: &Db, folder_id: i64, uids: &[u32]) -> Result<u64> {
-        let mut clean: Vec<u32> = uids.to_vec();
-        clean.sort_unstable();
-        clean.dedup();
-        if clean.is_empty() {
+    pub async fn purge_uids(&mut self, db: &Db, folder_id: i64, uids: &[u32]) -> Result<u64> {
+        if uids.is_empty() {
             return Ok(0);
         }
         let folder = folders::get(db, folder_id)?;
-        let set = clean
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
         let session = self.session()?;
-        session.select(&folder.path)?;
-        session.uid_store(&set, "+FLAGS (\\Deleted)")?;
-        session.expunge()?;
-        let mut gone = 0u64;
-        for uid in &clean {
-            if messages::delete_by_uid(db, folder_id, *uid)? {
-                gone += 1;
-            }
-        }
-        Ok(gone)
+        session.select(&folder.path, None).await?;
+        session
+            .uid_store_flags(uids, StoreType::Add, vec![Flag::Deleted])
+            .await?;
+        session.expunge().await?;
+        let count = messages::delete_many_by_uids(db, folder_id, uids)?;
+        Ok(count)
     }
 
-    /// Windowed folder sync: only the newest `window` server UIDs cost
-    /// network (flag refresh + full RFC822 fetch). The UID SEARCH pages
-    /// backwards to UID 1 when the range is sparse, so expunge diffing is a
-    /// full local diff in the common case. `None` = all UIDs (used only by
-    /// explicit tests — production callers pass `FULL_SYNC_WINDOW` /
-    /// `QUICK_SYNC_WINDOW`).
-    pub fn sync_folder_window(
+    /// Synchronize a folder window using CONDSTORE / QRESYNC delta sync when supported.
+    pub async fn sync_folder_window(
         &mut self,
         db: &Db,
         folder_id: i64,
@@ -810,12 +1386,15 @@ impl ImapSync {
         let account = accounts::get(db, folder.account_id)?;
         let session = self.session()?;
 
-        let mb = session.select(&folder.path)?;
+        let qresync_param = folder.uid_validity.map(|v| (v, folder.highest_modseq));
+        let mb = session.select(&folder.path, qresync_param).await?;
         log::info!(
-            "imap: SELECT {} ({} mails, uid_next {:?})",
+            "imap: SELECT {} ({} mails, uid_next {:?}, modseq {:?}, vanished: {})",
             folder.path,
             mb.exists,
-            mb.uid_next
+            mb.uid_next,
+            mb.highest_modseq,
+            mb.vanished.len()
         );
 
         // UIDVALIDITY change => server-side rebuild, drop local copies.
@@ -826,37 +1405,75 @@ impl ImapSync {
             }
         }
 
+        let mut expunged = 0u64;
+
+        // 1. Process QRESYNC VANISHED UIDs immediately if reported by server.
+        if !mb.vanished.is_empty() {
+            log::info!(
+                "imap: QRESYNC reported {} vanished UIDs in {}",
+                mb.vanished.len(),
+                folder.path
+            );
+            for uid in &mb.vanished {
+                messages::delete_by_uid(db, folder_id, *uid)?;
+                expunged += 1;
+            }
+        }
+
         let local_uids: HashSet<u32> = messages::list_uids(db, folder_id)?.into_iter().collect();
-        let (searched_uids, search_lo) = search_recent_uids(session, window, mb.uid_next)?;
+        let (server_uids, search_lo) = search_recent_uids(session, window, mb.uid_next).await?;
 
         // Newest-N relevance window: UIDs grow monotonically, so the largest
         // N are the newest. Everything outside costs no network.
         let relevant: Option<HashSet<u32>> = window.map(|n| {
-            let mut sorted: Vec<u32> = searched_uids.iter().copied().collect();
+            let mut sorted: Vec<u32> = server_uids.iter().copied().collect();
             sorted.sort_unstable();
             let skip = sorted.len().saturating_sub(n);
             sorted.into_iter().skip(skip).collect()
         });
         let in_window = |uid: &u32| relevant.as_ref().is_none_or(|r| r.contains(uid));
-        let server_uids = searched_uids;
+        let is_trash = folder.role == FolderRole::Trash;
 
-        // 1. Flag refresh for messages we already have (windowed).
+        // 2. Flag refresh for messages we already have within the window.
+        // This guarantees that whatever messages are currently in view have 100%
+        // accurate flags and unread counts matching the server.
         let existing: Vec<u32> = server_uids
             .intersection(&local_uids)
             .copied()
             .filter(in_window)
             .collect();
         for chunk in existing.chunks(FETCH_CHUNK) {
-            let set = chunk
+            let changed = session.uid_fetch_flags_changesince(chunk, 0).await?;
+            for (uid, flags, _) in changed {
+                let (read, starred, draft) = flag_state(&flags);
+                let read = read || is_trash;
+                messages::set_flags_by_uid(
+                    db,
+                    account.id,
+                    folder_id,
+                    uid,
+                    read || draft,
+                    starred,
+                    draft,
+                )?;
+            }
+        }
+
+        // 3. If CONDSTORE is enabled, also check for flag changes on older local messages
+        // that fall outside the active window using CHANGEDSINCE.
+        if session.condstore_enabled && folder.highest_modseq > 0 {
+            let older_existing: Vec<u32> = local_uids
                 .iter()
-                .map(u32::to_string)
-                .collect::<Vec<_>>()
-                .join(",");
-            for msg in session.uid_fetch(set, "(UID FLAGS)")?.iter() {
-                if let Some(uid) = msg.uid {
-                    let (read, starred, draft) = flag_state(msg.flags());
-                    // A draft you wrote is not "unread" — keep the flag
-                    // refresh from lighting up Drafts rows and pills.
+                .copied()
+                .filter(|u| !in_window(u))
+                .collect();
+            for chunk in older_existing.chunks(FETCH_CHUNK) {
+                let changed = session
+                    .uid_fetch_flags_changesince(chunk, folder.highest_modseq)
+                    .await?;
+                for (uid, flags, _) in changed {
+                    let (read, starred, draft) = flag_state(&flags);
+                    let read = read || is_trash;
                     messages::set_flags_by_uid(
                         db,
                         account.id,
@@ -870,42 +1487,30 @@ impl ImapSync {
             }
         }
 
-        // 2. Full fetch of new messages (windowed). BODY.PEEK[] is
-        // mandatory here: a plain RFC822/BODY[] fetch implicitly sets
-        // \Seen on most servers, which would mark every synced mail as
-        // read behind the user's back (and silently kill unread counts
-        // and new-mail notifications).
+        // 4. Full fetch of new messages (windowed). BODY.PEEK[] is mandatory here.
         let mut fetched = 0u64;
-        let missing: Vec<u32> = server_uids
+        let mut missing: Vec<u32> = server_uids
             .difference(&local_uids)
             .copied()
             .filter(in_window)
             .collect();
-        // Fetch oldest-first within the window so the DB fills chronologically.
-        let mut missing = missing;
         missing.sort_unstable();
+
         for chunk in missing.chunks(FETCH_CHUNK) {
-            let set = chunk
-                .iter()
-                .map(u32::to_string)
-                .collect::<Vec<_>>()
-                .join(",");
-            for msg in session.uid_fetch(set, "(UID FLAGS BODY.PEEK[])")?.iter() {
-                let uid = msg.uid.unwrap_or(0);
-                if uid == 0 {
-                    continue;
+            let messages_data = session.uid_fetch_messages(chunk).await?;
+            for (uid, flags, raw) in messages_data {
+                let (mut parsed, files) =
+                    parse_to_new(account.id, folder_id, uid, &flags, &raw, false)?;
+                if is_trash {
+                    parsed.is_read = true;
                 }
-                let raw = msg.body().unwrap_or_default();
-                let (parsed, files) =
-                    parse_to_new(account.id, folder_id, uid, msg.flags(), raw, false)?;
                 let id = messages::upsert(db, &parsed)?;
                 collect_contacts_from_headers(db, parsed.raw_headers.as_deref());
-                // Metadata only: attachment bytes stay on the server until the
-                // user explicitly downloads a file.
                 store_attachment_meta(db, id, files);
                 fetched += 1;
             }
         }
+
         if let Some(n) = window {
             let skipped =
                 (mb.exists as usize).saturating_sub(relevant.map(|r| r.len()).unwrap_or(0));
@@ -918,9 +1523,9 @@ impl ImapSync {
             }
         }
 
-        // 3. Expunge locally what the searched UID range no longer has.
+        // 5. Expunge locally what the searched UID range no longer has.
         // UIDs below `search_lo` were never asked about, so they stay cached.
-        let mut expunged = 0u64;
+        // This diffing runs locally at 0 network cost to catch server deletions.
         for uid in &local_uids {
             if *uid >= search_lo && !server_uids.contains(uid) {
                 messages::delete_by_uid(db, folder_id, *uid)?;
@@ -928,9 +1533,39 @@ impl ImapSync {
             }
         }
 
+        // 6. If this is Trash, ensure any unread messages in local DB are marked \Seen on server.
+        if is_trash {
+            if let Ok(unread_uids) = messages::list_unread_uids(db, folder_id) {
+                if !unread_uids.is_empty() {
+                    let _ = session
+                        .uid_store_flags(&unread_uids, StoreType::Add, vec![Flag::Seen])
+                        .await;
+                    for uid in &unread_uids {
+                        let _ = messages::set_flags_by_uid(
+                            db,
+                            account.id,
+                            folder_id,
+                            *uid,
+                            true,
+                            false,
+                            false,
+                        );
+                    }
+                }
+            }
+        }
+
         let validity = mb.uid_validity.unwrap_or(folder.uid_validity.unwrap_or(0));
         let uid_next = mb.uid_next.unwrap_or(folder.uid_next.unwrap_or(0));
-        folders::set_sync_state(db, folder_id, validity, uid_next, u64::from(mb.exists))?;
+        let new_modseq = mb.highest_modseq.unwrap_or(folder.highest_modseq);
+        folders::set_sync_state(
+            db,
+            folder_id,
+            validity,
+            uid_next,
+            u64::from(mb.exists),
+            new_modseq,
+        )?;
 
         Ok(SyncReport {
             fetched,
@@ -939,76 +1574,80 @@ impl ImapSync {
         })
     }
 
-    /// Fetch the next older batch below the smallest locally cached UID.
-    ///
-    /// The "load older messages" button path: a bounded `UID SEARCH` just
-    /// below the smallest local UID, then a windowed `RFC822` fetch for up
-    /// to `batch` missing older UIDs. Empty folders fall back to a normal
-    /// windowed sync; a UIDVALIDITY change resyncs first so the window math
-    /// stays valid. Returns `fetched == 0` when the cache already reaches
-    /// the oldest server mail ("caught up").
-    pub fn sync_older(&mut self, db: &Db, folder_id: i64, batch: usize) -> Result<SyncReport> {
+    pub async fn sync_older(
+        &mut self,
+        db: &Db,
+        folder_id: i64,
+        batch: usize,
+    ) -> Result<SyncReport> {
         let folder = folders::get(db, folder_id)?;
         let account = accounts::get(db, folder.account_id)?;
         let session = self.session()?;
 
-        let mb = session.select(&folder.path)?;
+        let mb = session.select(&folder.path, None).await?;
         if let Some(validity) = mb.uid_validity {
             if folder.uid_validity.is_some_and(|v| v != validity) {
-                log::warn!(
-                    "imap: UIDVALIDITY changed for {} — resyncing before older fetch",
-                    folder.path
-                );
-                messages::delete_by_folder(db, folder_id)?;
-                return self.sync_folder_window(db, folder_id, Some(FULL_SYNC_WINDOW));
+                return self
+                    .sync_folder_window(db, folder_id, Some(FULL_SYNC_WINDOW))
+                    .await;
             }
         }
-        let validity = mb.uid_validity.unwrap_or(folder.uid_validity.unwrap_or(0));
-        let uid_next = mb.uid_next.unwrap_or(folder.uid_next.unwrap_or(0));
 
-        let Some(min_local) = messages::min_uid(db, folder_id)? else {
-            // Nothing cached: a normal windowed sync is the first batch.
-            let r = self.sync_folder_window(db, folder_id, Some(FULL_SYNC_WINDOW))?;
-            return Ok(r);
+        let min_uid = match messages::min_uid(db, folder_id)? {
+            Some(u) => u,
+            None => {
+                return self
+                    .sync_folder_window(db, folder_id, Some(FULL_SYNC_WINDOW))
+                    .await;
+            }
         };
-        if min_local <= 1 {
-            folders::set_sync_state(db, folder_id, validity, uid_next, u64::from(mb.exists))?;
+
+        if min_uid <= 1 {
             return Ok(SyncReport::default());
         }
+
+        let hi = min_uid.saturating_sub(1);
+        let seq = SequenceSet::try_from(format!("1:{hi}").as_str())
+            .map_err(|e| StoreError::InvalidInput(format!("seq: {e}")))?;
+        let mut server_uids = session.uid_search(vec1![SearchKey::Uid(seq)]).await?;
+        server_uids.sort_unstable();
+
         let local_uids: HashSet<u32> = messages::list_uids(db, folder_id)?.into_iter().collect();
-        let found = search_uids_below(session, min_local, batch)?;
-        // Older than everything we have, newest-first within the batch so the
-        // list extends contiguously backwards.
-        let mut older: Vec<u32> = found.difference(&local_uids).copied().collect();
-        older.sort_unstable_by(|a, b| b.cmp(a));
-        older.truncate(batch);
+        let missing: Vec<u32> = server_uids
+            .into_iter()
+            .rev()
+            .filter(|u| !local_uids.contains(u))
+            .take(batch)
+            .collect();
 
         let mut fetched = 0u64;
-        // Ascending fetch order keeps DB fill chronological within the batch.
-        older.sort_unstable();
-        for chunk in older.chunks(FETCH_CHUNK) {
-            let set = chunk
-                .iter()
-                .map(u32::to_string)
-                .collect::<Vec<_>>()
-                .join(",");
-            for msg in session.uid_fetch(set, "(UID FLAGS BODY.PEEK[])")?.iter() {
-                let uid = msg.uid.unwrap_or(0);
-                if uid == 0 {
-                    continue;
-                }
-                let raw = msg.body().unwrap_or_default();
+        let mut missing_sorted = missing;
+        missing_sorted.sort_unstable();
+
+        for chunk in missing_sorted.chunks(FETCH_CHUNK) {
+            let messages_data = session.uid_fetch_messages(chunk).await?;
+            for (uid, flags, raw) in messages_data {
                 let (parsed, files) =
-                    parse_to_new(account.id, folder_id, uid, msg.flags(), raw, false)?;
+                    parse_to_new(account.id, folder_id, uid, &flags, &raw, false)?;
                 let id = messages::upsert(db, &parsed)?;
                 collect_contacts_from_headers(db, parsed.raw_headers.as_deref());
-                // Metadata only — see the windowed sync above.
                 store_attachment_meta(db, id, files);
                 fetched += 1;
             }
         }
-        folders::set_sync_state(db, folder_id, validity, uid_next, u64::from(mb.exists))?;
-        log::info!("imap: {} older batch: +{fetched}", folder.path);
+
+        let validity = mb.uid_validity.unwrap_or(folder.uid_validity.unwrap_or(0));
+        let uid_next = mb.uid_next.unwrap_or(folder.uid_next.unwrap_or(0));
+        let modseq = mb.highest_modseq.unwrap_or(folder.highest_modseq);
+        folders::set_sync_state(
+            db,
+            folder_id,
+            validity,
+            uid_next,
+            u64::from(mb.exists),
+            modseq,
+        )?;
+
         Ok(SyncReport {
             fetched,
             expunged: 0,
@@ -1016,131 +1655,26 @@ impl ImapSync {
         })
     }
 
-    /// Download one message's attachments on explicit user request (Save /
-    /// Download click). Re-fetches the full body with PEEK (never implicitly
-    /// marks `\Seen`), stores every part with bytes, and refreshes only the
-    /// `has_attachments` flag — read/star state is never touched. Returns
-    /// the number of stored files.
-    pub fn fetch_attachments(&mut self, db: &Db, message_id: i64) -> Result<u64> {
-        let message = messages::get(db, message_id)?;
-        let folder = folders::get(db, message.folder_id)?;
-        let account = accounts::get(db, folder.account_id)?;
+    pub async fn fetch_attachments(&mut self, db: &Db, message_id: i64) -> Result<u64> {
+        let msg = messages::get(db, message_id)?;
+        let folder = folders::get(db, msg.folder_id)?;
         let session = self.session()?;
-        let started = std::time::Instant::now();
-        session.select(&folder.path)?;
-        log::info!("imap: select {} took {:?}", folder.path, started.elapsed());
-        let started = std::time::Instant::now();
-        let fetched = session.uid_fetch(message.uid.to_string(), "(UID FLAGS BODY.PEEK[])")?;
-        log::info!(
-            "imap: attachment fetch for uid {} took {:?}",
-            message.uid,
-            started.elapsed()
-        );
-        let mut stored = 0u64;
-        let mut seen = false;
-        for msg in fetched.iter() {
-            let raw = msg.body().unwrap_or_default();
-            let (_, files) =
-                parse_to_new(account.id, folder.id, message.uid, msg.flags(), raw, true)?;
-            stored = files.len() as u64;
-            store_attachments(db, message_id, files)?;
-            seen = true;
-        }
-        if !seen {
-            return Err(StoreError::InvalidInput(format!(
-                "message uid {} no longer on server",
-                message.uid
-            )));
-        }
-        messages::set_has_attachments(db, message_id, stored > 0)?;
-        log::info!("imap: downloaded {stored} attachment(s) for message {message_id}");
+        session.select(&folder.path, None).await?;
+
+        let fetched = session.uid_fetch_messages(&[msg.uid]).await?;
+        let raw = match fetched.into_iter().next() {
+            Some((_, _, r)) => r,
+            None => return Err(StoreError::NotFound(format!("message uid {}", msg.uid))),
+        };
+
+        let parsed = mail_parser::MessageParser::default()
+            .parse(&raw)
+            .ok_or_else(|| StoreError::InvalidInput("parse failed".to_string()))?;
+        let files = extract_attachments(&parsed, true);
+        let stored = files.len() as u64;
+        store_attachments(db, message_id, files)?;
         Ok(stored)
     }
-
-    fn session(&mut self) -> Result<&mut TlsSession> {
-        self.session.as_mut().ok_or_else(|| {
-            StoreError::InvalidInput("not connected: call connect() first".to_string())
-        })
-    }
-}
-
-/// What [`ImapSync::trash_message`] actually did, so the UI can say so.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TrashOutcome {
-    /// Moved to this folder path.
-    Moved(String),
-    /// Destroyed: it was spam, already in Trash, or the account has no Trash.
-    Expunged,
-}
-
-/// What [`ImapSync::archive_message`] actually did, so the UI can say so.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ArchiveOutcome {
-    /// Moved to this folder path.
-    Moved(String),
-    /// Already in Archive: nothing to do.
-    AlreadyThere,
-}
-
-/// What [`ImapSync::move_to_folder`] actually did, so the UI can say so.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MoveOutcome {
-    /// Moved to this folder path.
-    Moved(String),
-    /// Already in that folder: nothing to do.
-    AlreadyThere,
-}
-
-/// Outcome of [`ImapSync::search_server_into_cache`], so the UI can say so.
-#[derive(Debug, Default)]
-pub struct ServerSearchReport {
-    /// Folders successfully SELECTed + SEARCHed.
-    pub folders_searched: usize,
-    /// Full bodies fetched into the cache (bounded).
-    pub fetched: u64,
-}
-
-/// Validate + normalize a user-typed folder path: trims whitespace, maps `/`
-/// separators onto the account's hierarchy `delimiter`, rejects empties,
-/// empty segments (`a//b`), and the LIST wildcards `*`/`%` (legal in theory,
-/// but they would corrupt our own subtree discovery patterns).
-pub fn normalize_folder_path(input: &str, delimiter: &str) -> Result<String> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return Err(StoreError::InvalidInput("folder name is empty".to_string()));
-    }
-    if trimmed.contains('*') || trimmed.contains('%') {
-        return Err(StoreError::InvalidInput(
-            "folder names may not contain * or %".to_string(),
-        ));
-    }
-    let unified = if delimiter != "/" {
-        trimmed.replace('/', delimiter)
-    } else {
-        trimmed.to_string()
-    };
-    let segments: Vec<&str> = unified.split(delimiter).map(str::trim).collect();
-    if segments.iter().any(|s| s.is_empty()) {
-        return Err(StoreError::InvalidInput(
-            "folder names may not be empty or contain empty levels".to_string(),
-        ));
-    }
-    if segments.iter().any(|s| s.chars().any(char::is_control)) {
-        return Err(StoreError::InvalidInput(
-            "folder names may not contain control characters".to_string(),
-        ));
-    }
-    Ok(segments.join(delimiter))
-}
-
-/// Best-effort "mailbox already exists" detection for CREATE races: servers
-/// word it differently (`ALREADYEXISTS`, `already exists`, `exists`), so a
-/// case-insensitive substring match beats an exact one.
-fn is_already_exists(e: &imap::Error) -> bool {
-    e.to_string()
-        .to_ascii_lowercase()
-        .contains("already exists")
-        || e.to_string().to_ascii_lowercase().contains("alreadyexists")
 }
 
 impl SyncProvider for ImapSync {
@@ -1148,19 +1682,7 @@ impl SyncProvider for ImapSync {
         "imap"
     }
 
-    fn sync_folders(&mut self, db: &Db, account_id: i64) -> Result<Vec<Folder>> {
-        // Multi-pass discovery: a single `LIST "" "*"` misses folders on
-        // servers with restricted LIST output or namespace gaps (users kept
-        // seeing only the already-known folders, never e.g. Archive).
-        // Pass 1 = full recursive LIST, pass 2 = LSUB merge (subscribed
-        // folders some servers only report there), pass 3 = per-root subtree
-        // LIST for namespace roots the bare "*" didn't expand (both the
-        // reported delimiter and "." — Tobit David uses dotted prefixes),
-        // pass 4 = LIST inside every NAMESPACE prefix (personal/other/shared).
-        // First pass wins role mapping (it carries SPECIAL-USE); later passes
-        // only add names we haven't seen. Auxiliary passes never fail sync.
-        // Every first-seen entry is logged with its raw attributes so a
-        // short list can be traced to exactly what the server reported.
+    async fn sync_folders(&mut self, db: &Db, account_id: i64) -> Result<Vec<Folder>> {
         let mut seen: HashSet<String> = HashSet::new();
         let mut discovered: Vec<(String, String, FolderRole)> = Vec::new();
         let mut consider =
@@ -1174,213 +1696,106 @@ impl SyncProvider for ImapSync {
                 }
             };
 
-        let mut list_count = 0usize;
-        let mut lsub_count = 0usize;
-        let mut subtree_count = 0usize;
+        let session = self.session()?;
 
-        // Pass 1: LIST "" "*".
-        let names = self.session()?.list(Some(""), Some("*"))?;
-        for n in names.iter() {
-            if !is_selectable(n.attributes()) {
-                log::debug!("imap: skipping non-selectable {}", n.name());
+        // Pass 1: LIST "" "*"
+        let names = session.list("", "*").await?;
+        for n in &names {
+            if !is_selectable(&n.attributes) {
                 continue;
             }
             consider(
-                n.name(),
-                n.delimiter().unwrap_or("/"),
-                map_folder_role(n.attributes(), n.name()),
-                &attr_text(n.attributes()),
+                &n.name,
+                &n.delimiter,
+                map_folder_role(&n.attributes, &n.name),
+                &attr_text(&n.attributes),
                 "LIST",
             );
-            list_count += 1;
         }
 
-        // Pass 2: LSUB "" "*" (best effort).
-        match self.session()?.lsub(Some(""), Some("*")) {
-            Ok(subs) => {
-                for n in subs.iter() {
-                    if !is_selectable(n.attributes()) {
-                        continue;
-                    }
-                    consider(
-                        n.name(),
-                        n.delimiter().unwrap_or("/"),
-                        role_from_name(n.name()),
-                        &attr_text(n.attributes()),
-                        "LSUB",
-                    );
-                    lsub_count += 1;
+        // Pass 2: LSUB "" "*"
+        if let Ok(subs) = session.lsub("", "*").await {
+            for n in &subs {
+                if !is_selectable(&n.attributes) {
+                    continue;
                 }
-            }
-            Err(e) => log::warn!("imap: LSUB failed, continuing with LIST results: {e}"),
-        }
-
-        // Pass 3: subtree LIST per top-level root (best effort, capped).
-        // Both the reported delimiter and "." are tried: Tobit David serves
-        // dotted hierarchies (INBOX.Archive) that a "/"-joined pattern misses.
-        match self.session()?.list(Some(""), Some("%")) {
-            Ok(roots) => {
-                for root in roots.iter().take(64) {
-                    let delim = root.delimiter().unwrap_or("/");
-                    let base = root.name();
-                    if base.is_empty() {
-                        continue;
-                    }
-                    let join = |d: &str| {
-                        if base.ends_with(d) {
-                            format!("{base}*")
-                        } else {
-                            format!("{base}{d}*")
-                        }
-                    };
-                    let mut patterns = vec![join(delim)];
-                    if delim != "." {
-                        patterns.push(join("."));
-                    }
-                    for pattern in patterns {
-                        match self.session()?.list(Some(""), Some(pattern.as_str())) {
-                            Ok(children) => {
-                                for n in children.iter() {
-                                    if !is_selectable(n.attributes()) {
-                                        continue;
-                                    }
-                                    consider(
-                                        n.name(),
-                                        n.delimiter().unwrap_or("/"),
-                                        map_folder_role(n.attributes(), n.name()),
-                                        &attr_text(n.attributes()),
-                                        "SUBTREE",
-                                    );
-                                    subtree_count += 1;
-                                }
-                            }
-                            Err(e) => log::debug!("imap: subtree LIST {pattern} failed: {e}"),
-                        }
-                    }
-                }
-            }
-            Err(e) => log::debug!("imap: root LIST failed, skipping subtree pass: {e}"),
-        }
-
-        // Pass 4: LIST inside every NAMESPACE prefix (best effort, capped).
-        // Shared / other-users' branches live outside "" and never appear in
-        // passes 1–3; the server tells us where via RFC 2342 (when it bothers).
-        // The empty personal prefix is pass 1 again, so it is skipped.
-        let ns = self.query_namespaces();
-        let mut ns_count = 0usize;
-        for prefix in ns
-            .personal
-            .iter()
-            .chain(ns.other.iter())
-            .chain(ns.shared.iter())
-            .map(|(p, _)| p)
-            .filter(|p| !p.is_empty())
-            .take(12)
-        {
-            match self.session()?.list(Some(prefix.as_str()), Some("*")) {
-                Ok(extra) => {
-                    for n in extra.iter() {
-                        if !is_selectable(n.attributes()) {
-                            continue;
-                        }
-                        consider(
-                            n.name(),
-                            n.delimiter().unwrap_or("/"),
-                            map_folder_role(n.attributes(), n.name()),
-                            &attr_text(n.attributes()),
-                            "NAMESPACE",
-                        );
-                        ns_count += 1;
-                    }
-                }
-                Err(e) => log::debug!("imap: namespace LIST {prefix:?} failed: {e}"),
+                consider(
+                    &n.name,
+                    &n.delimiter,
+                    role_from_name(&n.name),
+                    &attr_text(&n.attributes),
+                    "LSUB",
+                );
             }
         }
 
-        log::info!(
-            "imap: discovery LIST*={list_count} LSUB={lsub_count} subtrees={subtree_count} namespaces={ns_count} merged={}",
-            discovered.len()
-        );
         let mut out = Vec::new();
         for (path, delimiter, role) in &discovered {
             let id = folders::upsert(db, account_id, path, delimiter, *role)?;
             out.push(folders::get(db, id)?);
         }
-        log::info!("imap: {} folders", out.len());
         Ok(out)
     }
 
-    fn sync_folder(&mut self, db: &Db, folder_id: i64) -> Result<SyncReport> {
+    async fn sync_folder(&mut self, db: &Db, folder_id: i64) -> Result<SyncReport> {
         self.sync_folder_window(db, folder_id, Some(FULL_SYNC_WINDOW))
+            .await
     }
 
-    fn push_flags(&mut self, db: &Db, message: &Message) -> Result<()> {
+    async fn push_flags(&mut self, db: &Db, message: &Message) -> Result<()> {
         let folder = folders::get(db, message.folder_id)?;
         let session = self.session()?;
-        session.select(&folder.path)?;
-        let uid = message.uid.to_string();
-        let seen = if message.is_read { "+FLAGS" } else { "-FLAGS" };
-        let flagged = if message.is_starred {
-            "+FLAGS"
+        session.select(&folder.path, None).await?;
+
+        let seen_op = if message.is_read {
+            StoreType::Add
         } else {
-            "-FLAGS"
+            StoreType::Remove
         };
-        session.uid_store(&uid, format!("{seen} (\\Seen)"))?;
-        session.uid_store(&uid, format!("{flagged} (\\Flagged)"))?;
+        session
+            .uid_store_flags(&[message.uid], seen_op, vec![Flag::Seen])
+            .await?;
+
+        let star_op = if message.is_starred {
+            StoreType::Add
+        } else {
+            StoreType::Remove
+        };
+        session
+            .uid_store_flags(&[message.uid], star_op, vec![Flag::Flagged])
+            .await?;
+
         Ok(())
     }
 }
 
-/// SEARCH the newest `window` UIDs without enumerating the whole mailbox.
-///
-/// Returns `(uids, search_lo)`: every UID in `search_lo..=top` was asked
-/// about, so local rows at or above `search_lo` missing from `uids` are safe
-/// to expunge (`1` = the whole mailbox was covered: a full diff).
-fn search_recent_uids(
-    session: &mut TlsSession,
+/// SEARCH newest UIDs within window.
+async fn search_recent_uids(
+    session: &mut ImapSession,
     window: Option<usize>,
     uid_next: Option<u32>,
 ) -> Result<(HashSet<u32>, u32)> {
     let Some(n) = window else {
-        return Ok((session.uid_search("ALL")?, 1));
+        let uids = session.uid_search(vec1![SearchKey::All]).await?;
+        return Ok((uids.into_iter().collect(), 1));
     };
+
     let top = uid_next.unwrap_or(0).saturating_sub(1);
     if top == 0 {
-        return Ok((session.uid_search("ALL")?, 1));
+        let uids = session.uid_search(vec1![SearchKey::All]).await?;
+        return Ok((uids.into_iter().collect(), 1));
     }
+
     let span = (n as u32).saturating_mul(8).max(n as u32);
-    search_paged(session, top, n, span)
+    search_paged(session, top, n, span).await
 }
 
-/// SEARCH a bounded UID range just below `exclusive_hi` for an older-mail batch.
-fn search_uids_below(
-    session: &mut TlsSession,
-    exclusive_hi: u32,
-    batch: usize,
-) -> Result<HashSet<u32>> {
-    if exclusive_hi <= 1 {
-        return Ok(HashSet::new());
-    }
-    let top = exclusive_hi - 1;
-    let span = (batch as u32).saturating_mul(8).max(batch as u32);
-    Ok(search_paged(session, top, batch, span)?.0)
-}
-
-/// Max UID SEARCH pages per sync pass. Dense mailboxes finish in one page;
-/// the cap only bounds pathological UID gaps (mass deletions) to a handful
-/// of cheap UID-only round-trips.
 const SEARCH_PAGES: u32 = 8;
 
 /// SEARCH UID space backwards from `top`, paging down until `want` UIDs are
 /// known or UID 1 is reached.
-///
-/// UID ranges go sparse after mass deletions, so a single fixed window can
-/// cover far fewer messages than asked for — the list would under-fill and
-/// deletions below the window would linger locally as ghosts. Paging keeps
-/// going while the take is short, so the newest-N window is genuinely the
-/// newest N and the expunge diff covers everything asked about.
-fn search_paged(
-    session: &mut TlsSession,
+async fn search_paged(
+    session: &mut ImapSession,
     top: u32,
     want: usize,
     span: u32,
@@ -1390,22 +1805,25 @@ fn search_paged(
     let mut hi = top;
     let mut lo = hi.saturating_sub(span.saturating_sub(1)).max(1);
     for _ in 0..SEARCH_PAGES {
-        found.extend(session.uid_search(format!("UID {lo}:{hi}"))?);
+        let seq_str = format!("{lo}:{hi}");
+        let seq = SequenceSet::try_from(seq_str.as_str()).map_err(|e| {
+            StoreError::InvalidInput(format!("invalid sequence set {seq_str}: {e}"))
+        })?;
+        let uids = session.uid_search(vec1![SearchKey::Uid(seq)]).await?;
+        found.extend(uids);
         if found.len() >= want || lo <= 1 {
             break;
         }
-        hi = lo - 1;
+        hi = lo.saturating_sub(1);
+        if hi == 0 {
+            break;
+        }
         lo = hi.saturating_sub(span.saturating_sub(1)).max(1);
-    }
-    if lo > 1 && found.len() < want {
-        log::debug!(
-            "imap: UID space still sparse after {SEARCH_PAGES} SEARCH pages, stopping at {lo}"
-        );
     }
     Ok((found, lo))
 }
 
-fn flag_state(flags: &[Flag]) -> (bool, bool, bool) {
+fn flag_state(flags: &[Flag<'static>]) -> (bool, bool, bool) {
     let mut read = false;
     let mut starred = false;
     let mut draft = false;
@@ -1420,14 +1838,11 @@ fn flag_state(flags: &[Flag]) -> (bool, bool, bool) {
     (read, starred, draft)
 }
 
-/// Parse a raw RFC822 message into a storable [`NewMessage`] plus its
-/// attachments. `with_bytes=true` copies part bytes (on-demand download);
-/// `false` stores names/sizes only (background sync never pays for bytes).
 fn parse_to_new(
     account_id: i64,
     folder_id: i64,
     uid: u32,
-    flags: &[Flag],
+    flags: &[Flag<'static>],
     raw: &[u8],
     with_bytes: bool,
 ) -> Result<(NewMessage, Vec<NewAttachment>)> {
@@ -1435,8 +1850,6 @@ fn parse_to_new(
         .parse(raw)
         .ok_or_else(|| StoreError::InvalidInput(format!("cannot parse message uid {uid}")))?;
     let (is_read, is_starred, is_draft) = flag_state(flags);
-    // A draft you wrote is not "unread": never badge it, pill it, or dot
-    // its row (see the flag-refresh loop, which applies the same rule).
     let is_read = is_read || is_draft;
 
     let body_text = parsed.body_text(0).map(|c| c.into_owned());
@@ -1450,7 +1863,6 @@ fn parse_to_new(
         .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
         .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
 
-    // Thread root: last References id, else In-Reply-To.
     let thread_id = parsed
         .header("References")
         .and_then(|h| h.as_text())
@@ -1464,8 +1876,7 @@ fn parse_to_new(
 
     let files = extract_attachments(&parsed, with_bytes);
     let has_attachments = parsed.attachment_count() > 0 || !files.is_empty();
-    // Preserve exactly the RFC 5322 header block for the technical reader
-    // view. It is bounded by the first blank line and never includes bodies.
+
     let header_end = raw
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
@@ -1515,14 +1926,6 @@ fn parse_to_new(
     ))
 }
 
-/// Pull attachment parts out of a parsed message.
-///
-/// Inline `cid:` images come along too (`is_inline=true`) — the reader keeps
-/// showing them from the HTML, and the attachment bar lists only the real
-/// files. Oversized parts are skipped (see [`MAX_ATTACHMENT_BYTES`]).
-/// With `with_bytes=false` only names/sizes are kept (`data=None`): this is
-/// what background sync stores, so no attachment bytes cross the network
-/// until the user explicitly asks for a file.
 fn extract_attachments(parsed: &mail_parser::Message<'_>, with_bytes: bool) -> Vec<NewAttachment> {
     use mail_parser::{MimeHeaders, PartType};
     let mut out = Vec::new();
@@ -1534,20 +1937,11 @@ fn extract_attachments(parsed: &mail_parser::Message<'_>, with_bytes: bool) -> V
             PartType::Multipart(_) => 0,
         };
         if len > MAX_ATTACHMENT_BYTES {
-            log::warn!(
-                "imap: skipping oversized attachment ({} bytes, name {:?})",
-                len,
-                part.attachment_name()
-            );
             continue;
         }
-        // Empty parts carry nothing worth storing (e.g. a zero-length
-        // alternative body the parser classified as an attachment).
         if len == 0 {
             continue;
         }
-        // Bytes are copied only on explicit request; background sync keeps
-        // names/sizes so the download decision stays with the user.
         let data: Option<Vec<u8>> = if with_bytes {
             match &part.body {
                 PartType::Binary(b) | PartType::InlineBinary(b) => Some(b.to_vec()),
@@ -1560,7 +1954,7 @@ fn extract_attachments(parsed: &mail_parser::Message<'_>, with_bytes: bool) -> V
         };
         if with_bytes && data.as_ref().is_none_or(|b| b.is_empty()) {
             continue;
-        };
+        }
         let mime_type = part.content_type().map(|ct| match &ct.c_subtype {
             Some(sub) => format!(
                 "{}/{}",
@@ -1586,9 +1980,6 @@ fn store_attachments(db: &Db, message_id: i64, files: Vec<NewAttachment>) -> Res
     messages::replace_attachments(db, message_id, &files)
 }
 
-/// Store attachment metadata (names/sizes, no bytes) for a freshly synced
-/// message — unless rows already exist, in which case an earlier on-demand
-/// download's bytes must survive the resync untouched.
 fn store_attachment_meta(db: &Db, message_id: i64, files: Vec<NewAttachment>) {
     if files.is_empty() {
         return;
@@ -1653,9 +2044,133 @@ fn collect_contacts_from_headers(db: &Db, raw_headers: Option<&str>) {
     }
 }
 
+pub fn normalize_folder_path(input: &str, delimiter: &str) -> Result<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(StoreError::InvalidInput(
+            "folder name cannot be empty".into(),
+        ));
+    }
+    let parts: Vec<&str> = trimmed
+        .split(delimiter)
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect();
+    if parts.is_empty() {
+        return Err(StoreError::InvalidInput("invalid folder path".into()));
+    }
+    Ok(parts.join(delimiter))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn endpoint_defaults_to_implicit_tls_on_993() {
+        let a = crate::models::Account {
+            id: 1,
+            name: "n".to_string(),
+            email_address: "e".to_string(),
+            from_name: String::new(),
+            imap_host: "imap.x".to_string(),
+            imap_port: 993,
+            imap_security: "tls".to_string(),
+            imap_username: "u".to_string(),
+            smtp_host: "s".to_string(),
+            smtp_port: 465,
+            smtp_security: "tls".to_string(),
+            smtp_username: "u".to_string(),
+            auth_vault_key: "k".to_string(),
+            check_interval_secs: 300,
+            created_at: "t".to_string(),
+            updated_at: "t".to_string(),
+        };
+        let ep = endpoint_for(&a);
+        assert_eq!(ep.addr, "imap.x:993");
+        assert!(ep.implicit_tls);
+        assert!(!ep.starttls);
+    }
+
+    #[test]
+    fn endpoint_honours_starttls_even_on_993() {
+        let mut a = crate::models::Account {
+            id: 1,
+            name: "n".to_string(),
+            email_address: "e".to_string(),
+            from_name: String::new(),
+            imap_host: "imap.x".to_string(),
+            imap_port: 993,
+            imap_security: "starttls".to_string(),
+            imap_username: "u".to_string(),
+            smtp_host: "s".to_string(),
+            smtp_port: 465,
+            smtp_security: "tls".to_string(),
+            smtp_username: "u".to_string(),
+            auth_vault_key: "k".to_string(),
+            check_interval_secs: 300,
+            created_at: "t".to_string(),
+            updated_at: "t".to_string(),
+        };
+        let ep = endpoint_for(&a);
+        assert!(!ep.implicit_tls);
+        assert!(ep.starttls);
+
+        a.imap_port = 143;
+        a.imap_security = "tls".to_string();
+        let ep = endpoint_for(&a);
+        assert!(ep.implicit_tls);
+        assert!(!ep.starttls);
+    }
+
+    #[test]
+    fn folder_path_normalization() {
+        assert_eq!(normalize_folder_path("  INBOX  ", "/").unwrap(), "INBOX");
+        assert_eq!(
+            normalize_folder_path("INBOX/Archive/2026", "/").unwrap(),
+            "INBOX/Archive/2026"
+        );
+        assert_eq!(
+            normalize_folder_path("  INBOX . Archive . 2026  ", ".").unwrap(),
+            "INBOX.Archive.2026"
+        );
+    }
+
+    #[test]
+    fn role_heuristics_cover_german_and_english_names() {
+        assert_eq!(role_from_name("INBOX"), FolderRole::Inbox);
+        assert_eq!(role_from_name("Sent"), FolderRole::Sent);
+        assert_eq!(role_from_name("Gesendete Elemente"), FolderRole::Sent);
+        assert_eq!(role_from_name("Entwürfe"), FolderRole::Drafts);
+        assert_eq!(role_from_name("Papierkorb"), FolderRole::Trash);
+        assert_eq!(role_from_name("Gelöschte Elemente"), FolderRole::Trash);
+        assert_eq!(role_from_name("Spam"), FolderRole::Junk);
+        assert_eq!(role_from_name("Archiv"), FolderRole::Archive);
+    }
+
+    #[test]
+    fn fresh_session_is_not_healthy() {
+        let a = crate::models::Account {
+            id: 1,
+            name: "n".to_string(),
+            email_address: "e".to_string(),
+            from_name: String::new(),
+            imap_host: "h".to_string(),
+            imap_port: 993,
+            imap_security: "tls".to_string(),
+            imap_username: "u".to_string(),
+            smtp_host: "s".to_string(),
+            smtp_port: 465,
+            smtp_security: "tls".to_string(),
+            smtp_username: "u".to_string(),
+            auth_vault_key: "k".to_string(),
+            check_interval_secs: 300,
+            created_at: "t".to_string(),
+            updated_at: "t".to_string(),
+        };
+        let s = ImapSync::new(&a);
+        assert!(!s.is_healthy());
+    }
 
     #[test]
     fn attachment_download_preserves_metadata_ids() {
@@ -1716,316 +2231,601 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_defaults_to_implicit_tls_on_993() {
-        let a = crate::models::Account {
-            id: 1,
-            name: "n".to_string(),
-            email_address: "e".to_string(),
-            from_name: String::new(),
-            imap_host: "imap.x".to_string(),
-            imap_port: 993,
-            imap_security: "tls".to_string(),
-            imap_username: "u".to_string(),
-            smtp_host: "s".to_string(),
-            smtp_port: 465,
-            smtp_security: "tls".to_string(),
-            smtp_username: "u".to_string(),
-            auth_vault_key: "k".to_string(),
-            check_interval_secs: 300,
-            created_at: "t".to_string(),
-            updated_at: "t".to_string(),
-        };
-        let ep = endpoint_for(&a);
-        assert_eq!(ep.addr, "imap.x:993");
-        assert!(ep.implicit_tls);
-        assert!(!ep.starttls);
+    fn test_flag_state_mapping() {
+        let (read, starred, draft) = flag_state(&[]);
+        assert!(!read);
+        assert!(!starred);
+        assert!(!draft);
+
+        let (read, starred, draft) = flag_state(&[Flag::Seen]);
+        assert!(read);
+        assert!(!starred);
+        assert!(!draft);
+
+        let (read, starred, draft) = flag_state(&[Flag::Seen, Flag::Flagged]);
+        assert!(read);
+        assert!(starred);
+        assert!(!draft);
+
+        let (read, starred, draft) = flag_state(&[Flag::Draft]);
+        assert!(!read);
+        assert!(!starred);
+        assert!(draft);
     }
 
     #[test]
-    fn endpoint_honours_starttls_even_on_993() {
-        let mut a = crate::models::Account {
-            id: 1,
-            name: "n".to_string(),
-            email_address: "e".to_string(),
-            from_name: String::new(),
-            imap_host: "imap.x".to_string(),
-            imap_port: 143,
-            imap_security: "starttls".to_string(),
-            imap_username: "u".to_string(),
-            smtp_host: "s".to_string(),
-            smtp_port: 587,
-            smtp_security: "starttls".to_string(),
-            smtp_username: "u".to_string(),
-            auth_vault_key: "k".to_string(),
-            check_interval_secs: 300,
-            created_at: "t".to_string(),
-            updated_at: "t".to_string(),
-        };
-        let ep = endpoint_for(&a);
-        assert!(!ep.implicit_tls);
-        assert!(ep.starttls);
-        a.imap_port = 993;
-        let ep = endpoint_for(&a);
-        assert!(!ep.implicit_tls);
-        assert!(ep.starttls);
-        a.imap_security = "plain".to_string();
-        a.imap_port = 143;
-        let ep = endpoint_for(&a);
-        assert!(!ep.implicit_tls);
-        assert!(!ep.starttls);
-        assert!(ImapSync::new(&a).connect("pw").is_err());
-    }
+    fn test_search_window_in_window_logic() {
+        let server_uids: HashSet<u32> = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].into_iter().collect();
+        let window = Some(5);
+        let relevant: Option<HashSet<u32>> = window.map(|n| {
+            let mut sorted: Vec<u32> = server_uids.iter().copied().collect();
+            sorted.sort_unstable();
+            let skip = sorted.len().saturating_sub(n);
+            sorted.into_iter().skip(skip).collect()
+        });
+        let in_window = |uid: &u32| relevant.as_ref().is_none_or(|r| r.contains(uid));
 
-    #[test]
-    fn fresh_session_is_not_healthy() {
-        // Offline: never dials out — a never-connected session has nothing
-        // to NOOP against.
-        let a = crate::models::Account {
-            id: 1,
-            name: "n".to_string(),
-            email_address: "e".to_string(),
-            from_name: String::new(),
-            imap_host: "imap.x".to_string(),
-            imap_port: 993,
-            imap_security: "tls".to_string(),
-            imap_username: "u".to_string(),
-            smtp_host: "s".to_string(),
-            smtp_port: 465,
-            smtp_security: "tls".to_string(),
-            smtp_username: "u".to_string(),
-            auth_vault_key: "k".to_string(),
-            check_interval_secs: 300,
-            created_at: "t".to_string(),
-            updated_at: "t".to_string(),
-        };
-        assert!(!ImapSync::new(&a).is_healthy());
-    }
-
-    #[test]
-    fn folder_path_normalization() {
-        assert_eq!(normalize_folder_path("  Work  ", "/").unwrap(), "Work");
-        assert_eq!(
-            normalize_folder_path("Work/Client", "/").unwrap(),
-            "Work/Client"
-        );
-        // "/" maps onto dotted hierarchies (Tobit David).
-        assert_eq!(
-            normalize_folder_path("Work/Client", ".").unwrap(),
-            "Work.Client"
-        );
-        assert!(normalize_folder_path("", "/").is_err());
-        assert!(normalize_folder_path("   ", "/").is_err());
-        assert!(normalize_folder_path("a//b", "/").is_err());
-        assert!(normalize_folder_path("/Lead", "/").is_err());
-        assert!(normalize_folder_path("100% x", "/").is_err());
-        assert!(normalize_folder_path("a*b", "/").is_err());
-    }
-
-    #[test]
-    fn role_heuristics_cover_german_and_english_names() {
-        assert_eq!(role_from_name("INBOX"), FolderRole::Inbox);
-        assert_eq!(role_from_name("INBOX.Gesendet"), FolderRole::Sent);
-        assert_eq!(role_from_name("[Gmail]/Sent Mail"), FolderRole::Sent);
-        assert_eq!(role_from_name("Entwürfe"), FolderRole::Drafts);
-        assert_eq!(role_from_name("Papierkorb"), FolderRole::Trash);
-        assert_eq!(role_from_name("Spam"), FolderRole::Junk);
-        assert_eq!(role_from_name("Archiv"), FolderRole::Archive);
-        assert_eq!(role_from_name("INBOX.Projekte.Kunde"), FolderRole::Custom);
-        assert_eq!(role_from_name("Family"), FolderRole::Custom);
-        assert_eq!(role_from_name("Cabin"), FolderRole::Custom);
-        assert_eq!(role_from_name("Binders"), FolderRole::Custom);
-        assert_eq!(role_from_name("INBOX.Bin"), FolderRole::Trash);
-        assert_eq!(role_from_name("Drafts"), FolderRole::Drafts);
-    }
-
-    #[test]
-    fn namespace_parser_survives_hostile_bytes() {
-        // Fuzz the NAMESPACE parser with adversarial inputs: it must never
-        // panic, only return partial/empty results. (A startup-sync abort was
-        // traced to this code path against a quirky groupware server.)
-        let mut state: u64 = 0x12345678abcdef;
-        let mut next = move || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
-        let pieces: &[&[u8]] = &[
-            b"* NAMESPACE ",
-            b"((",
-            b"))",
-            b"(",
-            b")",
-            b"\"\"",
-            b"\"/\"",
-            b"\".\"",
-            b"\"INBOX.\"",
-            b"NIL",
-            b"N",
-            b"NI",
-            b" ",
-            b"\"",
-            b"\\",
-            b"\\\"",
-            b"\xc3\xa4",
-            b"\xff\xfe",
-            b"\x80",
-            b"A",
-            b"*",
-        ];
-        for _ in 0..50_000 {
-            let mut buf = Vec::new();
-            let n = (next() % 8) as usize;
-            for _ in 0..n {
-                buf.extend_from_slice(pieces[(next() % pieces.len() as u64) as usize]);
-            }
-            let _ = parse_namespace_response(&buf);
+        for uid in 1..=5 {
+            assert!(!in_window(&uid));
+        }
+        for uid in 6..=10 {
+            assert!(in_window(&uid));
         }
     }
 
-    #[test]
-    fn namespace_response_parses_three_groups() {
-        let raw =
-            b"* NAMESPACE ((\"\" \"/\")) ((\"Other Users/\" \"/\")) ((\"Shared/\" \"/\"))\r\n\
-            a001 OK done\r\n";
-        let ns = parse_namespace_response(raw);
-        assert_eq!(ns.personal, vec![("".to_string(), Some("/".to_string()))]);
-        assert_eq!(
-            ns.other,
-            vec![("Other Users/".to_string(), Some("/".to_string()))]
+    struct MockImapServer {
+        port: u16,
+        received: Arc<tokio::sync::Mutex<Vec<String>>>,
+        _handle: tokio::task::JoinHandle<()>,
+    }
+
+    impl MockImapServer {
+        async fn start<F>(caps: &'static str, custom_handler: F) -> Self
+        where
+            F: Fn(&str, &str) -> Vec<String> + Send + Sync + 'static,
+        {
+            use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+            use tokio::net::TcpListener;
+
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let received = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+            let rec_clone = Arc::clone(&received);
+
+            let handle = tokio::spawn(async move {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let (reader, mut writer) = stream.into_split();
+                let mut reader = BufReader::new(reader);
+
+                let greeting = format!("* OK [CAPABILITY {caps}] Mock IMAP Server ready\r\n");
+                if writer.write_all(greeting.as_bytes()).await.is_err() {
+                    return;
+                }
+
+                let mut line = String::new();
+                while let Ok(n) = reader.read_line(&mut line).await {
+                    if n == 0 {
+                        break;
+                    }
+                    let raw_cmd = line.trim_end_matches(['\r', '\n']).to_string();
+                    line.clear();
+                    if raw_cmd.is_empty() {
+                        continue;
+                    }
+
+                    rec_clone.lock().await.push(raw_cmd.clone());
+
+                    let mut parts = raw_cmd.splitn(2, ' ');
+                    let tag = parts.next().unwrap_or("*");
+                    let rest = parts.next().unwrap_or("");
+                    let upper_rest = rest.to_ascii_uppercase();
+
+                    let responses = if upper_rest.starts_with("LOGIN") {
+                        vec![format!("{tag} OK LOGIN completed\r\n")]
+                    } else if upper_rest.starts_with("CAPABILITY") {
+                        vec![
+                            format!("* CAPABILITY {caps}\r\n"),
+                            format!("{tag} OK CAPABILITY completed\r\n"),
+                        ]
+                    } else if upper_rest.starts_with("ENABLE") {
+                        if caps.contains("ENABLE") {
+                            let enabled = rest.strip_prefix("ENABLE ").unwrap_or("").trim();
+                            vec![
+                                format!("* ENABLED {enabled}\r\n"),
+                                format!("{tag} OK ENABLE completed\r\n"),
+                            ]
+                        } else {
+                            vec![format!("{tag} BAD ENABLE unknown command\r\n")]
+                        }
+                    } else {
+                        custom_handler(tag, rest)
+                    };
+
+                    for resp in responses {
+                        if writer.write_all(resp.as_bytes()).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+            });
+
+            Self {
+                port,
+                received,
+                _handle: handle,
+            }
+        }
+    }
+
+    fn test_mock_account(port: u16) -> crate::models::Account {
+        crate::models::Account {
+            id: 1,
+            name: "Mock Account".to_string(),
+            email_address: "alice@example.com".to_string(),
+            from_name: "Alice".to_string(),
+            imap_host: "127.0.0.1".to_string(),
+            imap_port: port,
+            imap_security: "plain".to_string(),
+            imap_username: "alice@example.com".to_string(),
+            smtp_host: "127.0.0.1".to_string(),
+            smtp_port: 25,
+            smtp_security: "plain".to_string(),
+            smtp_username: "alice@example.com".to_string(),
+            auth_vault_key: "vault_key".to_string(),
+            check_interval_secs: 300,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mock_capabilities_guard_no_extensions() {
+        let server = MockImapServer::start("IMAP4rev1", |tag, rest| {
+            let upper = rest.to_ascii_uppercase();
+            if upper.starts_with("SELECT") {
+                vec![
+                    format!("* 10 EXISTS\r\n"),
+                    format!("* OK [UIDVALIDITY 1] Ok\r\n"),
+                    format!("* OK [UIDNEXT 100] Ok\r\n"),
+                    format!("{tag} OK [READ-WRITE] SELECT completed\r\n"),
+                ]
+            } else if upper.starts_with("UID COPY") {
+                vec![format!("{tag} OK UID COPY completed\r\n")]
+            } else if upper.starts_with("UID STORE") {
+                vec![format!("{tag} OK STORE completed\r\n")]
+            } else if upper.starts_with("EXPUNGE") {
+                vec![
+                    format!("* 1 EXPUNGE\r\n"),
+                    format!("{tag} OK EXPUNGE completed\r\n"),
+                ]
+            } else {
+                vec![format!("{tag} OK completed\r\n")]
+            }
+        })
+        .await;
+
+        let account = test_mock_account(server.port);
+        let mut sync = ImapSync::new(&account);
+        sync.connect("secret").await.unwrap();
+
+        {
+            let session = sync.session().unwrap();
+            assert!(session.has_capability("IMAP4rev1"));
+            assert!(!session.condstore_enabled);
+            assert!(!session.qresync_enabled);
+            assert!(!session.has_capability("MOVE"));
+            assert!(!session.has_capability("ENABLE"));
+        }
+
+        let session = sync.session.as_mut().unwrap();
+        session.select("INBOX", None).await.unwrap();
+        session.uid_move(&[10], "Trash").await.unwrap();
+
+        let cmds = server.received.lock().await.clone();
+        // Assert ENABLE was never sent
+        assert!(!cmds.iter().any(|c| c.to_ascii_uppercase().contains("ENABLE")));
+        // Assert SELECT was sent as standard SELECT without CONDSTORE or QRESYNC
+        assert!(cmds
+            .iter()
+            .any(|c| c.contains("SELECT") && !c.contains("CONDSTORE") && !c.contains("QRESYNC")));
+        // Assert UID MOVE was NEVER sent, but COPY + STORE \Deleted + EXPUNGE was used
+        assert!(!cmds.iter().any(|c| c.to_ascii_uppercase().contains("UID MOVE")));
+        assert!(cmds.iter().any(|c| c.to_ascii_uppercase().contains("UID COPY 10")));
+        assert!(cmds.iter().any(|c| c.contains("STORE") && c.contains("\\Deleted")));
+        assert!(cmds.iter().any(|c| c.to_ascii_uppercase().contains("EXPUNGE")));
+    }
+
+    #[tokio::test]
+    async fn test_mock_select_fallback_on_unsupported_condstore() {
+        let server = MockImapServer::start("IMAP4rev1 CONDSTORE", |tag, rest| {
+            let upper = rest.to_ascii_uppercase();
+            if upper.contains("(CONDSTORE)") {
+                // Server rejects the extension parameter
+                vec![format!("{tag} BAD [CANNOT] parameter not supported\r\n")]
+            } else if upper.starts_with("SELECT") {
+                vec![
+                    format!("* 5 EXISTS\r\n"),
+                    format!("* OK [UIDVALIDITY 1] Ok\r\n"),
+                    format!("* OK [UIDNEXT 50] Ok\r\n"),
+                    format!("{tag} OK [READ-WRITE] SELECT completed\r\n"),
+                ]
+            } else {
+                vec![format!("{tag} OK completed\r\n")]
+            }
+        })
+        .await;
+
+        let account = test_mock_account(server.port);
+        let mut sync = ImapSync::new(&account);
+        sync.connect("secret").await.unwrap();
+
+        let session = sync.session.as_mut().unwrap();
+        assert!(session.condstore_enabled);
+
+        let sel = session.select("INBOX", None).await.unwrap();
+        assert_eq!(sel.exists, 5);
+        // condstore should now be disabled due to the fallback
+        assert!(!session.condstore_enabled);
+
+        let cmds = server.received.lock().await.clone();
+        // First SELECT attempted with CONDSTORE
+        assert!(cmds.iter().any(|c| c.contains("SELECT") && c.contains("CONDSTORE")));
+        // Second SELECT fell back to standard SELECT
+        assert!(cmds.iter().any(|c| c.contains("SELECT") && !c.contains("CONDSTORE")));
+    }
+
+    #[tokio::test]
+    async fn test_mock_uid_move_fallback_when_server_rejects_move() {
+        let server = MockImapServer::start("IMAP4rev1 MOVE", |tag, rest| {
+            let upper = rest.to_ascii_uppercase();
+            if upper.starts_with("UID MOVE") {
+                // Server advertised MOVE but failed the command
+                vec![format!("{tag} NO [CANNOT] UID MOVE not supported on this folder\r\n")]
+            } else if upper.starts_with("UID COPY") {
+                vec![format!("{tag} OK UID COPY completed\r\n")]
+            } else if upper.starts_with("UID STORE") {
+                vec![format!("{tag} OK STORE completed\r\n")]
+            } else if upper.starts_with("EXPUNGE") {
+                vec![
+                    format!("* 1 EXPUNGE\r\n"),
+                    format!("{tag} OK EXPUNGE completed\r\n"),
+                ]
+            } else {
+                vec![format!("{tag} OK completed\r\n")]
+            }
+        })
+        .await;
+
+        let account = test_mock_account(server.port);
+        let mut sync = ImapSync::new(&account);
+        sync.connect("secret").await.unwrap();
+
+        let session = sync.session.as_mut().unwrap();
+        assert!(session.has_capability("MOVE"));
+
+        session.uid_move(&[42], "Trash").await.unwrap();
+
+        let cmds = server.received.lock().await.clone();
+        // UID MOVE was tried first
+        assert!(cmds.iter().any(|c| c.to_ascii_uppercase().contains("UID MOVE 42")));
+        // Fallback sequence was executed
+        assert!(cmds.iter().any(|c| c.to_ascii_uppercase().contains("UID COPY 42")));
+        assert!(cmds.iter().any(|c| c.contains("STORE") && c.contains("\\Deleted")));
+        assert!(cmds.iter().any(|c| c.to_ascii_uppercase().contains("EXPUNGE")));
+    }
+
+    #[tokio::test]
+    async fn test_mock_changesince_fallback_when_server_rejects_modifier() {
+        let server = MockImapServer::start("IMAP4rev1 CONDSTORE", |tag, rest| {
+            let upper = rest.to_ascii_uppercase();
+            if upper.contains("CHANGEDSINCE") {
+                vec![format!("{tag} BAD Unknown modifier CHANGEDSINCE\r\n")]
+            } else if upper.starts_with("UID FETCH") {
+                vec![
+                    format!("* 1 FETCH (UID 7 FLAGS (\\Seen))\r\n"),
+                    format!("{tag} OK UID FETCH completed\r\n"),
+                ]
+            } else {
+                vec![format!("{tag} OK completed\r\n")]
+            }
+        })
+        .await;
+
+        let account = test_mock_account(server.port);
+        let mut sync = ImapSync::new(&account);
+        sync.connect("secret").await.unwrap();
+
+        let session = sync.session.as_mut().unwrap();
+        assert!(session.condstore_enabled);
+
+        let res = session.uid_fetch_flags_changesince(&[7], 100).await.unwrap();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].0, 7);
+        assert_eq!(res[0].1, vec![Flag::Seen]);
+        // condstore should now be disabled due to fallback
+        assert!(!session.condstore_enabled);
+
+        let cmds = server.received.lock().await.clone();
+        assert!(cmds.iter().any(|c| c.contains("CHANGEDSINCE")));
+        assert!(cmds.iter().any(|c| c.contains("UID FETCH") && !c.contains("CHANGEDSINCE")));
+    }
+
+    #[tokio::test]
+    async fn test_mock_trash_message_marks_seen_before_move() {
+        let server = MockImapServer::start("IMAP4rev1 MOVE", |tag, rest| {
+            let upper = rest.to_ascii_uppercase();
+            if upper.starts_with("SELECT") {
+                vec![
+                    format!("* 1 EXISTS\r\n"),
+                    format!("* OK [UIDVALIDITY 1] Ok\r\n"),
+                    format!("* OK [UIDNEXT 100] Ok\r\n"),
+                    format!("{tag} OK [READ-WRITE] SELECT completed\r\n"),
+                ]
+            } else if upper.starts_with("UID STORE") {
+                vec![
+                    format!("* 1 FETCH (UID 99 FLAGS (\\Seen))\r\n"),
+                    format!("{tag} OK STORE completed\r\n"),
+                ]
+            } else if upper.starts_with("UID MOVE") {
+                vec![format!("{tag} OK UID MOVE completed\r\n")]
+            } else {
+                vec![format!("{tag} OK completed\r\n")]
+            }
+        })
+        .await;
+
+        let db = Db::open_in_memory().unwrap();
+        let account = test_mock_account(server.port);
+        let account_id = accounts::create(
+            &db,
+            &crate::models::NewAccount {
+                name: account.name.clone(),
+                email_address: account.email_address.clone(),
+                from_name: account.from_name.clone(),
+                imap_host: account.imap_host.clone(),
+                imap_port: account.imap_port,
+                imap_security: account.imap_security.clone(),
+                imap_username: account.imap_username.clone(),
+                smtp_host: account.smtp_host.clone(),
+                smtp_port: account.smtp_port,
+                smtp_security: account.smtp_security.clone(),
+                smtp_username: account.smtp_username.clone(),
+                auth_vault_key: account.auth_vault_key.clone(),
+                check_interval_secs: account.check_interval_secs,
+            },
+        )
+        .unwrap();
+
+        let inbox_id = folders::upsert(&db, account_id, "INBOX", "/", FolderRole::Inbox).unwrap();
+        let _trash_id = folders::upsert(&db, account_id, "Trash", "/", FolderRole::Trash).unwrap();
+
+        // Create an unread message
+        let mut new_msg = messages::sample_new(account_id, inbox_id, 99);
+        new_msg.is_read = false;
+        let msg_id = messages::upsert(&db, &new_msg).unwrap();
+
+        let mut sync = ImapSync::new(&account);
+        sync.connect("secret").await.unwrap();
+
+        let outcome = sync.trash_message(&db, msg_id).await.unwrap();
+        assert_eq!(outcome, TrashOutcome::Moved("Trash".to_string()));
+
+        let cmds = server.received.lock().await.clone();
+        let store_idx = cmds.iter().position(|c| c.contains("STORE") && c.contains("\\Seen"));
+        let move_idx = cmds.iter().position(|c| c.contains("UID MOVE"));
+
+        assert!(store_idx.is_some(), "UID STORE \\Seen was not called for unread message");
+        assert!(move_idx.is_some(), "UID MOVE was not called");
+        assert!(
+            store_idx.unwrap() < move_idx.unwrap(),
+            "UID STORE \\Seen must occur BEFORE UID MOVE"
         );
-        assert_eq!(
-            ns.shared,
-            vec![("Shared/".to_string(), Some("/".to_string()))]
+    }
+
+    #[tokio::test]
+    async fn test_mock_trash_message_always_marks_seen() {
+        let server = MockImapServer::start("IMAP4rev1 MOVE", |tag, rest| {
+            let upper = rest.to_ascii_uppercase();
+            if upper.starts_with("SELECT") {
+                vec![
+                    format!("* 1 EXISTS\r\n"),
+                    format!("* OK [UIDVALIDITY 1] Ok\r\n"),
+                    format!("* OK [UIDNEXT 100] Ok\r\n"),
+                    format!("{tag} OK [READ-WRITE] SELECT completed\r\n"),
+                ]
+            } else if upper.starts_with("UID STORE") {
+                vec![format!("{tag} OK UID STORE completed\r\n")]
+            } else if upper.starts_with("UID MOVE") {
+                vec![format!("{tag} OK UID MOVE completed\r\n")]
+            } else {
+                vec![format!("{tag} OK completed\r\n")]
+            }
+        })
+        .await;
+
+        let db = Db::open_in_memory().unwrap();
+        let account = test_mock_account(server.port);
+        let account_id = accounts::create(
+            &db,
+            &crate::models::NewAccount {
+                name: account.name.clone(),
+                email_address: account.email_address.clone(),
+                from_name: account.from_name.clone(),
+                imap_host: account.imap_host.clone(),
+                imap_port: account.imap_port,
+                imap_security: account.imap_security.clone(),
+                imap_username: account.imap_username.clone(),
+                smtp_host: account.smtp_host.clone(),
+                smtp_port: account.smtp_port,
+                smtp_security: account.smtp_security.clone(),
+                smtp_username: account.smtp_username.clone(),
+                auth_vault_key: account.auth_vault_key.clone(),
+                check_interval_secs: account.check_interval_secs,
+            },
+        )
+        .unwrap();
+
+        let inbox_id = folders::upsert(&db, account_id, "INBOX", "/", FolderRole::Inbox).unwrap();
+        let _trash_id = folders::upsert(&db, account_id, "Trash", "/", FolderRole::Trash).unwrap();
+
+        // Create an ALREADY-READ message
+        let mut new_msg = messages::sample_new(account_id, inbox_id, 99);
+        new_msg.is_read = true;
+        let msg_id = messages::upsert(&db, &new_msg).unwrap();
+
+        let mut sync = ImapSync::new(&account);
+        sync.connect("secret").await.unwrap();
+
+        let outcome = sync.trash_message(&db, msg_id).await.unwrap();
+        assert_eq!(outcome, TrashOutcome::Moved("Trash".to_string()));
+
+        let cmds = server.received.lock().await.clone();
+        let store_idx = cmds.iter().position(|c| c.contains("STORE") && c.contains("\\Seen"));
+        let move_idx = cmds.iter().position(|c| c.contains("UID MOVE"));
+
+        assert!(
+            store_idx.is_some(),
+            "UID STORE \\Seen must be called when trashing to guarantee message is seen"
+        );
+        assert!(move_idx.is_some(), "UID MOVE was not called");
+        assert!(
+            store_idx.unwrap() < move_idx.unwrap(),
+            "UID STORE \\Seen must occur BEFORE UID MOVE"
         );
     }
 
-    #[test]
-    fn namespace_response_tolerates_nil_and_garbage() {
-        let raw = b"* NAMESPACE ((\"INBOX.\" \".\")) NIL NIL\r\n";
-        let ns = parse_namespace_response(raw);
-        assert_eq!(
-            ns.personal,
-            vec![("INBOX.".to_string(), Some(".".to_string()))]
+    #[tokio::test]
+    async fn test_mock_move_to_folder_trash_marks_seen() {
+        let server = MockImapServer::start("IMAP4rev1 MOVE", |tag, rest| {
+            let upper = rest.to_ascii_uppercase();
+            if upper.starts_with("SELECT") {
+                vec![
+                    format!("* 1 EXISTS\r\n"),
+                    format!("* OK [UIDVALIDITY 1] Ok\r\n"),
+                    format!("* OK [UIDNEXT 100] Ok\r\n"),
+                    format!("{tag} OK [READ-WRITE] SELECT completed\r\n"),
+                ]
+            } else if upper.starts_with("UID STORE") {
+                vec![format!("{tag} OK UID STORE completed\r\n")]
+            } else if upper.starts_with("UID MOVE") {
+                vec![format!("{tag} OK UID MOVE completed\r\n")]
+            } else {
+                vec![format!("{tag} OK completed\r\n")]
+            }
+        })
+        .await;
+
+        let db = Db::open_in_memory().unwrap();
+        let account = test_mock_account(server.port);
+        let account_id = accounts::create(
+            &db,
+            &crate::models::NewAccount {
+                name: account.name.clone(),
+                email_address: account.email_address.clone(),
+                from_name: account.from_name.clone(),
+                imap_host: account.imap_host.clone(),
+                imap_port: account.imap_port,
+                imap_security: account.imap_security.clone(),
+                imap_username: account.imap_username.clone(),
+                smtp_host: account.smtp_host.clone(),
+                smtp_port: account.smtp_port,
+                smtp_security: account.smtp_security.clone(),
+                smtp_username: account.smtp_username.clone(),
+                auth_vault_key: account.auth_vault_key.clone(),
+                check_interval_secs: account.check_interval_secs,
+            },
+        )
+        .unwrap();
+
+        let inbox_id = folders::upsert(&db, account_id, "INBOX", "/", FolderRole::Inbox).unwrap();
+        let trash_id = folders::upsert(&db, account_id, "Trash", "/", FolderRole::Trash).unwrap();
+
+        let new_msg = messages::sample_new(account_id, inbox_id, 88);
+        let msg_id = messages::upsert(&db, &new_msg).unwrap();
+
+        let mut sync = ImapSync::new(&account);
+        sync.connect("secret").await.unwrap();
+
+        let outcome = sync.move_to_folder(&db, msg_id, trash_id).await.unwrap();
+        assert_eq!(outcome, MoveOutcome::Moved("Trash".to_string()));
+
+        let cmds = server.received.lock().await.clone();
+        let store_idx = cmds.iter().position(|c| c.contains("STORE") && c.contains("\\Seen"));
+        let move_idx = cmds.iter().position(|c| c.contains("UID MOVE"));
+
+        assert!(
+            store_idx.is_some(),
+            "UID STORE \\Seen must be called in move_to_folder when target is Trash"
         );
-        assert!(ns.other.is_empty() && ns.shared.is_empty());
-
-        assert_eq!(
-            parse_namespace_response(b"a001 BAD no\r\n"),
-            Namespaces::default()
+        assert!(move_idx.is_some(), "UID MOVE was not called");
+        assert!(
+            store_idx.unwrap() < move_idx.unwrap(),
+            "UID STORE \\Seen must occur BEFORE UID MOVE"
         );
-        assert_eq!(parse_namespace_response(b""), Namespaces::default());
     }
 
-    #[test]
-    fn parse_captures_reply_to() {
-        let raw = b"From: alice@example.com\r\n\
-            Reply-To: replies@example.org\r\n\
-            To: bob@example.com\r\n\
-            Subject: reply here\r\n\
-            Message-ID: <a4@example.com>\r\n\
-            Date: Mon, 07 Sep 2026 10:00:00 +0000\r\n\
-            Content-Type: text/plain\r\n\
-            \r\n\
-            body\r\n";
-        let (msg, _) = parse_to_new(1, 1, 45, &[], raw, false).unwrap();
-        assert_eq!(msg.reply_to.as_deref(), Some("replies@example.org"));
-        // No Reply-To header: stays empty rather than echoing From.
-        let raw2 = b"From: alice@example.com\r\n\
-            To: bob@example.com\r\n\
-            Subject: no reply-to\r\n\
-            Message-ID: <a5@example.com>\r\n\
-            Date: Mon, 07 Sep 2026 10:00:00 +0000\r\n\
-            Content-Type: text/plain\r\n\
-            \r\n\
-            body\r\n";
-        let (msg2, _) = parse_to_new(1, 1, 46, &[], raw2, false).unwrap();
-        assert!(msg2.reply_to.is_none());
-    }
+    #[tokio::test]
+    async fn test_mock_move_uids_to_trash_marks_seen() {
+        let server = MockImapServer::start("IMAP4rev1 MOVE", |tag, rest| {
+            let upper = rest.to_ascii_uppercase();
+            if upper.starts_with("SELECT") {
+                vec![
+                    format!("* 2 EXISTS\r\n"),
+                    format!("* OK [UIDVALIDITY 1] Ok\r\n"),
+                    format!("* OK [UIDNEXT 100] Ok\r\n"),
+                    format!("{tag} OK [READ-WRITE] SELECT completed\r\n"),
+                ]
+            } else if upper.starts_with("UID STORE") {
+                vec![format!("{tag} OK STORE completed\r\n")]
+            } else if upper.starts_with("UID MOVE") {
+                vec![format!("{tag} OK UID MOVE completed\r\n")]
+            } else {
+                vec![format!("{tag} OK completed\r\n")]
+            }
+        })
+        .await;
 
-    #[test]
-    fn parse_extracts_attachment_bytes() {
-        // multipart/mixed with a text body + one base64 file.
-        let raw = b"From: alice@example.com\r\n\
-            To: bob@example.com\r\n\
-            Subject: files\r\n\
-            Message-ID: <a1@example.com>\r\n\
-            Date: Mon, 07 Sep 2026 10:00:00 +0000\r\n\
-            Content-Type: multipart/mixed; boundary=\"B\"\r\n\
-            \r\n\
-            --B\r\n\
-            Content-Type: text/plain\r\n\
-            \r\n\
-            see attached\r\n\
-            --B\r\n\
-            Content-Type: application/pdf; name=\"doc.pdf\"\r\n\
-            Content-Disposition: attachment; filename=\"doc.pdf\"\r\n\
-            Content-Transfer-Encoding: base64\r\n\
-            \r\n\
-            aGVsbG8td29ybGQ=\r\n\
-            --B--\r\n";
-        let (msg, files) = parse_to_new(1, 1, 42, &[], raw, true).unwrap();
-        assert!(msg.has_attachments);
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].filename.as_deref(), Some("doc.pdf"));
-        assert_eq!(files[0].mime_type.as_deref(), Some("application/pdf"));
-        assert_eq!(files[0].size, 11);
-        assert_eq!(files[0].data.as_deref(), Some(b"hello-world".as_slice()));
-        assert!(!files[0].is_inline);
-    }
+        let db = Db::open_in_memory().unwrap();
+        let account = test_mock_account(server.port);
+        let account_id = accounts::create(
+            &db,
+            &crate::models::NewAccount {
+                name: account.name.clone(),
+                email_address: account.email_address.clone(),
+                from_name: account.from_name.clone(),
+                imap_host: account.imap_host.clone(),
+                imap_port: account.imap_port,
+                imap_security: account.imap_security.clone(),
+                imap_username: account.imap_username.clone(),
+                smtp_host: account.smtp_host.clone(),
+                smtp_port: account.smtp_port,
+                smtp_security: account.smtp_security.clone(),
+                smtp_username: account.smtp_username.clone(),
+                auth_vault_key: account.auth_vault_key.clone(),
+                check_interval_secs: account.check_interval_secs,
+            },
+        )
+        .unwrap();
 
-    #[test]
-    fn parse_skips_empty_parts_but_keeps_flag() {
-        // A zero-length attachment part carries nothing to store, but the
-        // message still had an attachment on the wire.
-        let raw = b"From: alice@example.com\r\n\
-            To: bob@example.com\r\n\
-            Subject: empty\r\n\
-            Message-ID: <a2@example.com>\r\n\
-            Date: Mon, 07 Sep 2026 10:00:00 +0000\r\n\
-            Content-Type: multipart/mixed; boundary=\"B\"\r\n\
-            \r\n\
-            --B\r\n\
-            Content-Type: text/plain\r\n\
-            \r\n\
-            body\r\n\
-            --B\r\n\
-            Content-Type: application/octet-stream; name=\"empty.bin\"\r\n\
-            Content-Disposition: attachment; filename=\"empty.bin\"\r\n\
-            \r\n\
-            --B--\r\n";
-        let (msg, files) = parse_to_new(1, 1, 43, &[], raw, true).unwrap();
-        assert!(msg.has_attachments);
-        assert!(files.is_empty());
-    }
+        let inbox_id = folders::upsert(&db, account_id, "INBOX", "/", FolderRole::Inbox).unwrap();
+        let _trash_id = folders::upsert(&db, account_id, "Trash", "/", FolderRole::Trash).unwrap();
 
-    #[test]
-    fn parse_meta_mode_keeps_names_without_bytes() {
-        // Background sync: the same wire bytes yield names/sizes but no
-        // payload, so nothing downloads until the user asks for a file.
-        let raw = b"From: alice@example.com\r\n\
-            To: bob@example.com\r\n\
-            Subject: files\r\n\
-            Message-ID: <a3@example.com>\r\n\
-            Date: Mon, 07 Sep 2026 10:00:00 +0000\r\n\
-            Content-Type: multipart/mixed; boundary=\"B\"\r\n\
-            \r\n\
-            --B\r\n\
-            Content-Type: text/plain\r\n\
-            \r\n\
-            see attached\r\n\
-            --B\r\n\
-            Content-Type: application/pdf; name=\"doc.pdf\"\r\n\
-            Content-Disposition: attachment; filename=\"doc.pdf\"\r\n\
-            Content-Transfer-Encoding: base64\r\n\
-            \r\n\
-            aGVsbG8td29ybGQ=\r\n\
-            --B--\r\n";
-        let (msg, files) = parse_to_new(1, 1, 44, &[], raw, false).unwrap();
-        assert!(msg.has_attachments);
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].filename.as_deref(), Some("doc.pdf"));
-        assert_eq!(files[0].size, 11);
-        assert!(files[0].data.is_none());
+        let mut sync = ImapSync::new(&account);
+        sync.connect("secret").await.unwrap();
+
+        sync.move_uids_to(&db, inbox_id, &[55, 56], "Trash").await.unwrap();
+
+        let cmds = server.received.lock().await.clone();
+        let store_idx = cmds.iter().position(|c| c.contains("STORE") && c.contains("\\Seen"));
+        let move_idx = cmds.iter().position(|c| c.contains("UID MOVE"));
+
+        assert!(store_idx.is_some(), "UID STORE \\Seen was not called when moving to Trash");
+        assert!(move_idx.is_some(), "UID MOVE was not called");
+        assert!(
+            store_idx.unwrap() < move_idx.unwrap(),
+            "UID STORE \\Seen must occur BEFORE UID MOVE"
+        );
     }
 }

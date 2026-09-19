@@ -39,6 +39,7 @@ create table if not exists folders (
     uid_validity  integer,
     uid_next      integer,
     server_total  integer,
+    highest_modseq integer not null default 0,
     subscribed    integer not null default 1,
     last_sync_at  text,
     created_at    text not null,

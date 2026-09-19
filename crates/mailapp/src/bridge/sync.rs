@@ -7,7 +7,7 @@ use mailcore::sync::imap::{FULL_SYNC_WINDOW, OLDER_BATCH};
 use mailcore::sync::traits::SyncProvider;
 
 use crate::bridge::qobject;
-use crate::bridge::session::{current_account, drop_all_imap_sessions, with_imap};
+use crate::bridge::session::{checkout_session, current_account, drop_all_imap_sessions};
 use crate::bridge::worker::{spawn_job, JobRefresh};
 use crate::bridge::{open_db, push_feeds, qstring, DEFAULT_MESSAGE_LIMIT};
 
@@ -15,12 +15,14 @@ impl qobject::Bridge {
     pub fn sync_now(self: Pin<&mut Self>) -> QString {
         let wanted = *self.current_account_id();
         let current = *self.current_folder_id();
-        spawn_job(self, "Sync", move |db, _progress| {
-            let acc = current_account(db, wanted)?;
+        spawn_job(self, "Sync", move |db, _progress| async move {
+            let acc = current_account(&db, wanted)?;
             // Shared orchestration (outbox flush, flag push, folder sweep);
             // the GUI lends its pooled session, the CLI brings a fresh one.
-            let r = with_imap(&acc, |imap| Ok(headless::sync_account(db, &acc, imap)))?;
-            let all = folders::list_by_account(db, acc.id).map_err(|e| e.to_string())?;
+            let mut imap = checkout_session(&acc).await?;
+            let r = headless::sync_account(&db, &acc, &mut imap).await;
+            imap.checkin();
+            let all = folders::list_by_account(&db, acc.id).map_err(|e| e.to_string())?;
             let folder_id = all
                 .iter()
                 .find(|f| f.id == current)
@@ -65,18 +67,20 @@ impl qobject::Bridge {
     pub fn sync_folder_now(self: Pin<&mut Self>, path: &QString) -> QString {
         let wanted = *self.current_account_id();
         let path = path.to_string();
-        spawn_job(self, "Sync", move |db, _progress| {
-            let acc = current_account(db, wanted)?;
-            let folder = folders::get_by_path(db, acc.id, &path).map_err(|e| e.to_string())?;
-            let r = with_imap(&acc, |imap| {
-                for m in messages::list_flags_dirty(db, acc.id).unwrap_or_default() {
-                    if imap.push_flags(db, &m).is_ok() {
-                        let _ = messages::clear_flags_dirty(db, m.id);
-                    }
+        spawn_job(self, "Sync", move |db, _progress| async move {
+            let acc = current_account(&db, wanted)?;
+            let folder = folders::get_by_path(&db, acc.id, &path).map_err(|e| e.to_string())?;
+            let mut imap = checkout_session(&acc).await?;
+            for m in messages::list_flags_dirty(&db, acc.id).unwrap_or_default() {
+                if imap.push_flags(&db, &m).await.is_ok() {
+                    let _ = messages::clear_flags_dirty(&db, m.id);
                 }
-                imap.sync_folder_window(db, folder.id, Some(FULL_SYNC_WINDOW))
-                    .map_err(|e| e.to_string())
-            })?;
+            }
+            let r = imap
+                .sync_folder_window(&db, folder.id, Some(FULL_SYNC_WINDOW))
+                .await
+                .map_err(|e| e.to_string())?;
+            imap.checkin();
             Ok((
                 format!(
                     "Synced {}: +{} new, -{} removed",
@@ -93,16 +97,18 @@ impl qobject::Bridge {
         if folder_id < 0 {
             return qstring("no folder selected");
         }
-        spawn_job(self, "Sync", move |db, _progress| {
-            let acc = current_account(db, wanted)?;
-            let folder = folders::get(db, folder_id).map_err(|e| e.to_string())?;
+        spawn_job(self, "Sync", move |db, _progress| async move {
+            let acc = current_account(&db, wanted)?;
+            let folder = folders::get(&db, folder_id).map_err(|e| e.to_string())?;
             if folder.account_id != acc.id {
                 return Err("folder does not belong to this account".to_string());
             }
-            let r = with_imap(&acc, |imap| {
-                imap.sync_older(db, folder_id, OLDER_BATCH)
-                    .map_err(|e| e.to_string())
-            })?;
+            let mut imap = checkout_session(&acc).await?;
+            let r = imap
+                .sync_older(&db, folder_id, OLDER_BATCH)
+                .await
+                .map_err(|e| e.to_string())?;
+            imap.checkin();
             let status = if r.fetched > 0 {
                 format!("Loaded {} older messages", r.fetched)
             } else {
@@ -126,16 +132,19 @@ impl qobject::Bridge {
     pub fn refresh_folders(self: Pin<&mut Self>) -> QString {
         let wanted = *self.current_account_id();
         let current = *self.current_folder_id();
-        spawn_job(self, "Sync", move |db, _progress| {
-            let acc = current_account(db, wanted)?;
-            let list = with_imap(&acc, |imap| {
-                imap.sync_folders(db, acc.id).map_err(|e| e.to_string())
-            })?;
+        spawn_job(self, "Sync", move |db, _progress| async move {
+            let acc = current_account(&db, wanted)?;
+            let mut imap = checkout_session(&acc).await?;
+            let list = imap
+                .sync_folders(&db, acc.id)
+                .await
+                .map_err(|e| e.to_string())?;
+            imap.checkin();
             let still_there = list.iter().any(|f| f.id == current);
             let folder_id = if still_there {
                 current
             } else {
-                folders::list_by_account(db, acc.id)
+                folders::list_by_account(&db, acc.id)
                     .map_err(|e| e.to_string())?
                     .iter()
                     .find(|f| f.role == mailcore::models::FolderRole::Inbox)
@@ -154,17 +163,19 @@ impl qobject::Bridge {
         let current = *self.current_folder_id();
         let query = query.to_string();
         let folder = folder.to_string();
-        spawn_job(self, "Search", move |db, _progress| {
-            let acc = current_account(db, wanted)?;
+        spawn_job(self, "Search", move |db, _progress| async move {
+            let acc = current_account(&db, wanted)?;
             let tokens = mailcore::search::search_tokens(&query);
             if tokens.is_empty() {
                 return Ok(("Search: nothing searchable in that query".to_string(), None));
             }
             let scope = (!folder.is_empty()).then_some(folder.as_str());
-            let r = with_imap(&acc, |imap| {
-                imap.search_server_into_cache(db, acc.id, &tokens, scope)
-                    .map_err(|e| e.to_string())
-            })?;
+            let mut imap = checkout_session(&acc).await?;
+            let r = imap
+                .search_server_into_cache(&db, acc.id, &tokens, scope)
+                .await
+                .map_err(|e| e.to_string())?;
+            imap.checkin();
             Ok((
                 if r.fetched > 0 {
                     format!(
@@ -232,26 +243,28 @@ impl qobject::Bridge {
         let wanted = *self.current_account_id();
         let current = *self.current_folder_id();
         let path = path.to_string();
-        spawn_job(self, "Sync", move |db, _progress| {
-            let acc = current_account(db, wanted)?;
-            let delimiter = folders::list_by_account(db, acc.id)
+        spawn_job(self, "Sync", move |db, _progress| async move {
+            let acc = current_account(&db, wanted)?;
+            let delimiter = folders::list_by_account(&db, acc.id)
                 .unwrap_or_default()
                 .first()
                 .map(|f| f.delimiter.clone())
                 .unwrap_or_else(|| "/".to_string());
             let normalized = mailcore::sync::imap::normalize_folder_path(&path, &delimiter)
                 .map_err(|e| e.to_string())?;
-            if folders::get_by_path(db, acc.id, &normalized).is_ok() {
+            if folders::get_by_path(&db, acc.id, &normalized).is_ok() {
                 return Ok((
                     "Folder already exists".to_string(),
                     Some(JobRefresh::feeds(acc.id, current)),
                 ));
             }
-            let folder = with_imap(&acc, |imap| {
-                imap.create_folder_path(db, acc.id, &normalized, &delimiter)
-                    .map_err(|e| e.to_string())
-                    .map(|f| f.path)
-            })?;
+            let mut imap = checkout_session(&acc).await?;
+            let folder = imap
+                .create_folder_path(&db, acc.id, &normalized, &delimiter)
+                .await
+                .map_err(|e| e.to_string())
+                .map(|f| f.path)?;
+            imap.checkin();
             Ok((
                 format!("Created {folder}"),
                 Some(JobRefresh::feeds(acc.id, current)),

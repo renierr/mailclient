@@ -82,7 +82,7 @@ impl JobProgress {
     }
 }
 
-type JobFn = Box<dyn FnOnce() + Send>;
+type JobFn = Box<dyn FnOnce(&tokio::runtime::Runtime) + Send>;
 
 fn net_tx() -> &'static mpsc::Sender<JobFn> {
     static TX: OnceLock<mpsc::Sender<JobFn>> = OnceLock::new();
@@ -91,8 +91,13 @@ fn net_tx() -> &'static mpsc::Sender<JobFn> {
         std::thread::Builder::new()
             .name("mailclient-net".into())
             .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("tokio runtime for mailclient-net");
+                let _guard = rt.enter();
                 while let Ok(job) = rx.recv() {
-                    job();
+                    job(&rt);
                 }
             })
             .expect("mailclient-net thread");
@@ -104,13 +109,11 @@ fn net_tx() -> &'static mpsc::Sender<JobFn> {
 /// a busy message. Completion is [`qobject::Bridge::job_finished`]; `op`
 /// returns `None` for the refresh when it changed nothing the feeds show, so
 /// reading a draft or saving an attachment does not rebuild the message list.
-pub(crate) fn spawn_job(
-    mut bridge: Pin<&mut qobject::Bridge>,
-    kind: &str,
-    op: impl FnOnce(&mailcore::Db, &JobProgress) -> Result<(String, Option<JobRefresh>), String>
-        + Send
-        + 'static,
-) -> QString {
+pub(crate) fn spawn_job<F, Fut>(mut bridge: Pin<&mut qobject::Bridge>, kind: &str, op: F) -> QString
+where
+    F: FnOnce(mailcore::Db, JobProgress) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<(String, Option<JobRefresh>), String>> + 'static,
+{
     if *bridge.busy() {
         return qstring("busy — wait for the current action");
     }
@@ -125,10 +128,12 @@ pub(crate) fn spawn_job(
         qt: qt.clone(),
         kind: kind_owned.clone(),
     };
-    let _ = net_tx().send(Box::new(move || {
+    let _ = net_tx().send(Box::new(move |rt| {
         let outcome = guard_sync(&kind_owned, || {
-            let db = open_db()?;
-            op(&db, &progress)
+            rt.block_on(async {
+                let db = open_db()?;
+                op(db, progress).await
+            })
         });
         let (status, refresh) = match outcome {
             Ok((status, refresh)) => (status, refresh),

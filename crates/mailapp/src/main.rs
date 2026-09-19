@@ -181,14 +181,23 @@ fn run_headless(args: &[String]) -> i32 {
             Some(a) => {
                 let mut imap = mailcore::sync::imap::ImapSync::new(&a);
                 let mut r = headless::SyncAllReport::default();
-                match mailcore::auth::load_account_secrets(&a.auth_vault_key)
-                    .map_err(|e| e.to_string())
-                    .and_then(|s| {
-                        imap.connect(&s.imap_password).map_err(|e| e.to_string())?;
-                        Ok((s, headless::sync_account(&db, &a, &mut imap)))
-                    }) {
-                    Ok((_, ar)) => {
+                let rt_res = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| e.to_string());
+                match rt_res.and_then(|rt| {
+                    let s = mailcore::auth::load_account_secrets(&a.auth_vault_key)
+                        .map_err(|e| e.to_string())?;
+                    rt.block_on(async {
+                        imap.connect(&s.imap_password)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        let ar = headless::sync_account(&db, &a, &mut imap).await;
                         imap.disconnect();
+                        Ok((s, ar))
+                    })
+                }) {
+                    Ok((_, ar)) => {
                         r.total_unread = ar.unread;
                         r.errors.extend(
                             ar.errors
@@ -216,7 +225,7 @@ fn run_headless(args: &[String]) -> i32 {
                 }
                 r
             }
-            None => headless::sync_all_accounts(&db),
+            None => headless::sync_all_accounts_blocking(&db),
         }
     } else {
         let accounts = headless::unread_summary(&db);
