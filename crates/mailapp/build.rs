@@ -2,8 +2,8 @@
 //!
 //! Qt location: cxx-qt-build finds Qt via the `QMAKE` env var first, then
 //! `qmake` on PATH -- and that is deliberately all this script knows. Locating
-//! Qt is left to the wrapper scripts (`scripts/*.sh` on Linux, `*.ps1` on
-//! Windows), which export QMAKE plus `QT_VERSION_MAJOR=6`; there is no
+//! Qt is left to the wrapper scripts (`scripts/*.sh`, incl. Windows via
+//! MSYS2/Git Bash), which export QMAKE plus `QT_VERSION_MAJOR=6`; there is no
 //! OS-specific branching here, because a build script cannot install Qt and
 //! a per-OS path list inside it would just duplicate that discovery.
 //! On Arch/Omarchy qmake sits at `/usr/lib/qt6/bin/qmake` (off PATH); on

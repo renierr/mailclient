@@ -27,18 +27,19 @@ if you build by hand: `QMAKE=/usr/lib/qt6/bin/qmake cargo build -p mailapp`.
 
 ### Building on Windows
 
-Linux stays the primary target; Windows is a supported dev build. The build
-script itself is OS-agnostic -- cxx-qt only ever needs `QMAKE` (or a `qmake` on
-PATH), so the platform knowledge lives in the wrapper scripts:
+Linux stays the primary target; Windows is a supported dev build via
+MSYS2/Git Bash. The `dev.sh`/`build.sh` wrappers are OS-agnostic -- cxx-qt
+only ever needs `QMAKE` (or a `qmake` on PATH), so the platform knowledge
+lives in `scripts/qt-env.sh`:
 
-```powershell
-.\scripts\dev.ps1     # debug build + run against .\crates\mailapp\qml
-.\scripts\build.ps1   # release bundle -> dist\mailclient\ (+ windeployqt)
+```sh
+./dev.sh     # debug build + run against ./crates/mailapp/qml
+./build.sh   # release bundle -> dist/mailclient/ (+ windeployqt)
 ```
 
-`scripts\qt-env.ps1` (dot-sourced by both) resolves Qt in this order: `QMAKE`,
+`scripts/qt-env.sh` (sourced by both) resolves Qt in this order: `QMAKE`,
 `qmake.exe` on PATH, then the newest matching kit under `QT_ROOT_DIR`, `QTDIR`,
-`C:\Qt`, `D:\Qt`, `%USERPROFILE%\Qt`. It also prepends Qt's `bin\` to PATH,
+`C:/Qt`, `D:/Qt`, `$USERPROFILE/Qt`. It also prepends Qt's `bin/` to PATH,
 which Windows needs to load the Qt DLLs at runtime.
 
 Needed once:
@@ -74,7 +75,7 @@ come from the `directories` crate, so on Windows the SQLite cache lands under
 crates/mailcore/   pure-Rust core: db, models, store, sync, search
 crates/mailapp/    cxx-qt bridge binary (Qt models + main) + qml/ UI
 resources/         .desktop entry + icon + omarchy bar-widget plugin
-scripts/           helpers: install-local.sh, qt-env.sh (+ *.ps1 for Windows)
+scripts/           helpers: install-local.sh, qt-env.sh, smoke.sh
 dist/              gitignored build output
 ```
 
