@@ -131,6 +131,7 @@ AppDialog {
                         font.pixelSize: Theme.fontTiny
                         elide: Text.ElideRight
                         Layout.fillWidth: true
+                        Layout.minimumWidth: 0
                     }
                 }
 

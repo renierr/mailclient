@@ -753,11 +753,12 @@ Rectangle {
         // ColumnLayout next to each other as siblings, so they overlapped and
         // the expanded raw headers could not scroll.
         contentItem: ScrollView {
+            id: headersScroll
             clip: true
             contentWidth: availableWidth
 
             ColumnLayout {
-                width: parent.availableWidth
+                width: headersScroll.availableWidth
                 spacing: Theme.md
 
                 GridLayout {

@@ -140,6 +140,7 @@ AppDialog {
 
                     ColumnLayout {
                         Layout.fillWidth: true
+                        Layout.minimumWidth: 0
                         spacing: 0
                         Label {
                             text: folderRow.model.name

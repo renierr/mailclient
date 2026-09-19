@@ -648,7 +648,7 @@ Rectangle {
                                 font.pixelSize: Theme.fontBase
                                 font.bold: row.model.unread
                                 elide: Text.ElideRight
-                                width: parent.width - 66 - (row.model.has_attachments ? 18 : 0)
+                                width: parent.width - Math.round(66 * Theme.uiScale) - (row.model.has_attachments ? Math.round(18 * Theme.uiScale) : 0)
                             }
                             Label {
                                 text: row.model.has_attachments ? "📎" : ""
@@ -661,7 +661,7 @@ Rectangle {
                                 text: row.model.date
                                 color: Theme.textMuted
                                 font.pixelSize: Theme.fontTiny
-                                width: 58
+                                width: Math.round(58 * Theme.uiScale)
                                 horizontalAlignment: Text.AlignRight
                             }
                         }
