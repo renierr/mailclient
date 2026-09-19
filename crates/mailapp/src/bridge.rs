@@ -164,6 +164,13 @@ pub mod qobject {
         #[qinvokable]
         fn message_headers_json(&self, uid: i32) -> QString;
 
+        /// Account-wide FTS search over subject/from/body
+        /// (`[{uid, folder_id, folder, subject, from, date, snippet, unread,
+        /// starred, has_attachments}]`, FTS rank order across every folder of
+        /// the current account). Local SQLite read, no network. Returns `"[]"`
+        /// when the query is blank or has no usable terms.
+        #[qinvokable]
+        fn search_json(&self, query: &QString) -> QString;
         /// Copy one attachment to a temp file and return its `file://` URL
         /// so QML can open it with the system viewer (`Qt.openUrlExternally`).
         /// Downloads the bytes first when they are not cached yet (explicit

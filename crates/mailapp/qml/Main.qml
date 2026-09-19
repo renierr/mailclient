@@ -99,6 +99,12 @@ ApplicationWindow {
     // body and attachment records are fetched separately, on demand.
     property var currentMessage: undefined
 
+    // Account-wide FTS results (rank order) for the toolbar search. Short
+    // input keeps the instant current-folder substring filter; 3+ letters
+    // query the index across every folder of the account instead.
+    property var searchRows: []
+    property bool searching: false
+
     // --- feed plumbing ----------------------------------------------------
 
     function reloadFolders() {
@@ -170,6 +176,32 @@ ApplicationWindow {
 
     function showResult(okMessage, result) {
         root.statusText = result === "" ? okMessage : result
+    }
+
+    // Toolbar search: short input filters the loaded folder feed (see
+    // MessageList.matches); 3+ letters run the FTS index account-wide.
+    // Local SQLite read, cheap enough per keystroke.
+    function updateSearch() {
+        var q = searchField.text.trim()
+        if (q.length >= 3) {
+            root.searching = true
+            try {
+                root.searchRows = JSON.parse(backend.search_json(q))
+            } catch (e) {
+                root.searchRows = []
+            }
+        } else {
+            root.searching = false
+            root.searchRows = []
+        }
+    }
+
+    // Open a search hit: leave search mode, jump to its folder, open it.
+    function jumpToSearchResult(path, uid) {
+        searchField.text = ""
+        root.selectFolder(path)
+        if (root.currentFolder === path)
+            root.openMessage(uid)
     }
 
     // --- actions ----------------------------------------------------------
@@ -520,6 +552,10 @@ ApplicationWindow {
                 reloadFolders()
                 reloadMessages()
             }
+            // A sync can change what the index holds: re-run an active
+            // search so results never go stale behind a fresh feed.
+            if (root.searching)
+                root.updateSearch()
             if (kind === "Capabilities") {
                 // Owned by the Settings About pane (its own Connections parses
                 // the JSON payload); keep it off the status bar.
@@ -687,16 +723,18 @@ ApplicationWindow {
                 onClicked: composer.openBlank()
             }
 
-            // Live filter over the loaded feed (server-side FTS is M3).
+            // Live filter over the loaded feed (short input); 3+ letters run
+            // the account-wide FTS index instead (see updateSearch).
             TextField {
                 id: searchField
                 Layout.fillWidth: true
                 Layout.maximumWidth: 460
                 implicitHeight: Theme.controlHeight
-                placeholderText: qsTr("Search sender, subject or snippet…")
+                placeholderText: qsTr("Search mail… (3+ letters searches all folders)")
                 color: Theme.text
                 placeholderTextColor: Theme.textMuted
                 font.pixelSize: Theme.fontBase
+                onTextChanged: root.updateSearch()
                 leftPadding: Theme.sm
                 rightPadding: clearSearch.visible ? clearSearch.width + Theme.xs : Theme.sm
                 selectByMouse: true
@@ -798,7 +836,10 @@ ApplicationWindow {
             sortField: backend.sort_field
             sortDescending: backend.sort_descending
             density: appSettings.list_density
+            searching: root.searching
+            searchRows: root.searchRows
             onMessageSelected: uid => root.openMessage(uid)
+            onSearchJump: (path, uid) => root.jumpToSearchResult(path, uid)
             onStarToggled: uid => root.toggleStar(uid)
             onArchiveRequested: uid => root.archiveMessage(uid)
             onMoveRequested: uid => root.openMove(uid)

@@ -48,9 +48,9 @@ Secrets live in the OS keyring keyed by `accounts.auth_vault_key`, never in SQLi
 | 0 | Repo scaffold: workspace, `mailcore` schema + CRUD, `mailapp` cxx-qt skeleton, QML shell, `./dev.sh`/`./build.sh`/`scripts/install-local.sh`, `dist/` bundle | ✅ done |
 | 1 | Real IMAP sync + app wiring: account setup (keyring), LIST/SELECT/FETCH, UIDVALIDITY handling, flag push/delete, send + Sent-copy, live folder/message feeds in QML | ✅ done (verified live against test account) |
 | 2 | Composer polish: drafts, attachments, full rich-text editor (toolbar wraps selection today) | ✅ done (rich HTML compose + source view + Cc/Bcc + auto send-format + attachments; server drafts save/replace/open with close-time Save offer and Drafts auto-create) |
-| 3 | Reader/search: FTS search UI, remote-image handling polish | 🔶 partial (safe sanitized HTML reader + remote-block banner + show-once done; FTS UI still M3) |
-| 4 | Contacts, threading, notifications, settings UI extras | ⬜ planned |
-| 5 | Polish: background polling sync, offline/error states, onboarding, `.desktop`/icons, Windows feasibility | 🔶 partial (auto-check timer + pooled IMAP sessions done, manual ⟳ kept; IMAP IDLE push explicitly dropped — not needed, polling covers it; headless `--sync-once`/`--status` JSON + Omarchy bar widget `mailclient.unread` done, see below) |
+| 3 | Reader/search: FTS search UI, remote-image handling polish | ✅ done (safe sanitized HTML reader + remote-block banner + show-once; toolbar search runs the FTS5 index account-wide from 3+ letters with jump-to-message results, short input keeps the instant folder filter) |
+| 4 | Contacts + settings UI extras (threading, notifications explicitly dropped — not needed) | ✅ done (contacts manager, About with version/licence + server capabilities) |
+| 5 | Polish: background polling sync, offline/error states, onboarding, `.desktop`/icons, Windows feasibility | 🔶 partial (polling + pooled sessions + manual ⟳ done; offline-first cache + status-bar errors done; empty-state setup onboarding done; `.desktop`+icon installed; IDLE dropped; Windows code is portable but the documented `.ps1` scripts are missing; headless `--sync-once`/`--status` JSON + Omarchy bar widget `mailclient.unread` done, see below) |
 | 6 | Bar integration: shared `mailcore::sync::headless` (GUI + CLI same orchestration), `mailapp --sync-once/--status [--json]`, cross-process `.sync.lock`, `resources/omarchy/mailclient/` bar-widget plugin (status poll + sync timers, notify-on-rise, click-to-open) | ✅ done |
 
 Current state detail:

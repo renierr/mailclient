@@ -29,6 +29,13 @@ Rectangle {
     property int currentUid: -1
     property string folderName: ""
     property string filterText: ""
+    // Account-wide FTS mode: `searchRows` are index hits across every folder
+    // (rank order, each with folder/folder_id), shown instead of the folder
+    // feed. Rows are navigation-only here — every mutation below is scoped
+    // to the current folder, so acting on a foreign UID would hit the wrong
+    // message. Selecting a hit jumps to its folder and clears the search.
+    property bool searching: false
+    property var searchRows: []
     // `totalCount` is the local cache count; `serverTotal` is the count seen
     // during the last successful IMAP sync. All cached messages are displayed.
     property int totalCount: 0
@@ -51,6 +58,7 @@ Rectangle {
     property string density: "comfortable"
 
     signal messageSelected(int uid)
+    signal searchJump(string folderPath, int uid)
     signal starToggled(int uid)
     signal archiveRequested(int uid)
     signal moveRequested(int uid)
@@ -88,6 +96,7 @@ Rectangle {
     // parented to a row would be destroyed underneath itself as the model
     // rebuilds.
     property int menuUid: -1
+    property string menuFolderPath: ""
     property bool menuStarred: false
     property bool menuUnread: false
 
@@ -297,11 +306,14 @@ Rectangle {
             || (m.snippet || "").toLowerCase().indexOf(q) !== -1
     }
 
-    // Only the roles a row actually draws. The feed also carries the full
-    // bodies, which have no business in a list model.
+    // Only the roles a row actually draws. `key` is the ModelSync identity:
+    // plain UIDs in folder mode, folder-scoped keys for search hits (the
+    // same UID can hit in several folders at once).
     function displayRow(m) {
         return {
+            key: m.key !== undefined ? m.key : m.uid,
             uid: m.uid,
+            folder: m.folder || "",
             subject: m.subject,
             from: m.from,
             date: m.date,
@@ -314,10 +326,19 @@ Rectangle {
 
     function rebuildFiltered() {
         var rows = []
+        if (root.searching) {
+            var hits = root.searchRows || []
+            for (var i = 0; i < hits.length; i++) {
+                hits[i].key = hits[i].folder_id + ":" + hits[i].uid
+                rows.push(root.displayRow(hits[i]))
+            }
+            ModelSync.sync(filtered, rows, "key")
+            return
+        }
         var src = root.messages || []
-        for (var i = 0; i < src.length; i++) {
-            if (root.matches(src[i]))
-                rows.push(root.displayRow(src[i]))
+        for (var j = 0; j < src.length; j++) {
+            if (root.matches(src[j]))
+                rows.push(root.displayRow(src[j]))
         }
         // In place: clearing the model destroyed and rebuilt every delegate on
         // every click, including the one whose mouse handler was still running.
@@ -332,14 +353,29 @@ Rectangle {
         return -1
     }
 
-    // Move selection by one row (keyboard navigation from Main).
+    // Move selection by one row (keyboard navigation from Main). In search
+    // mode rows belong to foreign folders, so stepping jumps instead of
+    // selecting in place.
     function step(delta) {
         if (filtered.count === 0)
             return
-        var i = root.indexOfUid(root.currentUid)
-        var next = i < 0 ? 0 : Math.max(0, Math.min(filtered.count - 1, i + delta))
-        root.messageSelected(filtered.get(next).uid)
-        list.positionViewAtIndex(next, ListView.Contain)
+        if (root.searching) {
+            var k = 0
+            for (var i = 0; i < filtered.count; i++) {
+                if (filtered.get(i).uid === root.currentUid) {
+                    k = i
+                    break
+                }
+            }
+            var next = Math.max(0, Math.min(filtered.count - 1, k + delta))
+            var row = filtered.get(next)
+            root.searchJump(row.folder, row.uid)
+            list.positionViewAtIndex(next, ListView.Contain)
+            return
+        }
+        var at = root.indexOfUid(root.currentUid)
+        var following = at < 0 ? 0 : Math.max(0, Math.min(filtered.count - 1, at + delta))
+        root.messageSelected(filtered.get(following).uid)
     }
 
     ListModel {
@@ -351,6 +387,14 @@ Rectangle {
         root.scheduleRebuild()
     }
     onFilterTextChanged: root.scheduleRebuild()
+    onSearchRowsChanged: root.scheduleRebuild()
+    onSearchingChanged: {
+        // Search results are navigation-only: a stale checkbox set must
+        // never act on foreign-folder UIDs afterwards.
+        if (root.searching)
+            root.setSelectionMode(false)
+        root.scheduleRebuild()
+    }
 
     // Coalesced: a reload plus a filter keystroke in the same tick should cost
     // one rebuild, not two, and never one while a click handler is unwinding.
@@ -383,8 +427,10 @@ Rectangle {
                     spacing: 2
 
                     // Selection-mode toggle: checkboxes stay out of the way
-                    // until bulk actions are actually wanted.
+                    // until bulk actions are actually wanted. Hidden while
+                    // searching (results are navigation-only).
                     IconButton {
+                        visible: !root.searching
                         Layout.leftMargin: Theme.sm
                         text: "☑"
                         fontSize: Theme.fontSmall
@@ -435,26 +481,30 @@ Rectangle {
 
                     Label {
                         Layout.fillWidth: true
-                        text: root.folderName === "" ? qsTr("Messages") : root.folderName
+                        text: root.searching ? qsTr("Search results") : root.folderName === "" ? qsTr("Messages") : root.folderName
                         color: Theme.text
                         font.pixelSize: Theme.fontBase
                         font.bold: true
                         elide: Text.ElideRight
                     }
                     Label {
-                        text: root.filterText === ""
-                              ? qsTr("%1").arg(filtered.count)
-                              : qsTr("%1 of %2").arg(filtered.count).arg(root.messages ? root.messages.length : 0)
+                        text: root.searching
+                              ? qsTr("%n result(s) across this account", "", filtered.count)
+                              : root.filterText === ""
+                                ? qsTr("%1").arg(filtered.count)
+                                : qsTr("%1 of %2").arg(filtered.count).arg(root.messages ? root.messages.length : 0)
                         color: Theme.textMuted
                         font.pixelSize: Theme.fontSmall
                     }
                     IconButton {
+                        visible: !root.searching
                         text: "⇅"
                         fontSize: Theme.fontSmall
                         tooltip: qsTr("Sort: %1").arg(root.sortLabel())
                         onClicked: sortMenu.popup()
                     }
                     Label {
+                        visible: !root.searching
                         text: root.sortLabel()
                         color: Theme.textMuted
                         font.pixelSize: Theme.fontTiny
@@ -465,7 +515,7 @@ Rectangle {
                     }
                     IconButton {
                         Layout.rightMargin: Theme.sm
-                        visible: root.selectionMode
+                        visible: root.selectionMode && !root.searching
                         text: "▾"
                         fontSize: Theme.fontSmall
                         tooltip: qsTr("Select messages")
@@ -512,7 +562,7 @@ Rectangle {
             delegate: Item {
                 id: row
                 width: list.width
-                height: root.density === "compact" ? Math.round(58 * Theme.uiScale) : Theme.listItemHeight
+                height: (root.density === "compact" ? Math.round(58 * Theme.uiScale) : Theme.listItemHeight) + (root.searching ? Math.round(18 * Theme.uiScale) : 0)
 
                 required property int index
                 required property var model
@@ -551,6 +601,18 @@ Rectangle {
                     hoverEnabled: true
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     onClicked: mouse => {
+                        if (root.searching) {
+                            // Navigation-only: every mutation below is scoped
+                            // to the current folder.
+                            if (mouse.button === Qt.RightButton) {
+                                root.menuUid = row.model.uid
+                                root.menuFolderPath = row.model.folder
+                                rowMenu.popup()
+                            } else {
+                                root.emitLater2(root.searchJump, row.model.folder, row.model.uid)
+                            }
+                            return
+                        }
                         if (mouse.button === Qt.RightButton) {
                             root.menuUid = row.model.uid
                             root.menuStarred = row.model.starred
@@ -673,14 +735,23 @@ Rectangle {
                             elide: Text.ElideRight
                             width: parent.width
                         }
-                        Label {
-                            visible: root.density !== "compact"
-                            text: row.model.snippet
-                            color: Theme.textMuted
-                            font.pixelSize: Theme.fontSmall
-                            elide: Text.ElideRight
-                            width: parent.width
-                        }
+                    Label {
+                        visible: root.density !== "compact"
+                        text: row.model.snippet
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                        elide: Text.ElideRight
+                        width: parent.width
+                    }
+                    // Search hits live in foreign folders: say which one.
+                    Label {
+                        visible: root.searching
+                        text: row.model.folder || ""
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontTiny
+                        elide: Text.ElideRight
+                        width: parent.width
+                    }
                     }
 
                     // Star, always visible when set, on hover otherwise.
@@ -693,7 +764,12 @@ Rectangle {
                         text: row.model.starred ? "★" : "☆"
                         contentColor: row.model.starred ? Theme.star : Theme.textMuted
                         tooltip: row.model.starred ? qsTr("Remove star") : qsTr("Star")
-                        onClicked: root.emitLater(root.starToggled, row.model.uid)
+                        onClicked: {
+                            if (root.searching)
+                                root.emitLater2(root.searchJump, row.model.folder, row.model.uid)
+                            else
+                                root.emitLater(root.starToggled, row.model.uid)
+                        }
                     }
                 }
             }
@@ -757,28 +833,41 @@ Rectangle {
     AppMenu {
         id: rowMenu
 
+        // Search hits belong to foreign folders: the folder-scoped actions
+        // below would hit the wrong message, so search mode only opens.
         MenuItem {
+            visible: root.searching
+            text: qsTr("Open message")
+            onTriggered: Qt.callLater(root.searchJump, root.menuFolderPath, root.menuUid)
+        }
+        MenuItem {
+            visible: !root.searching
             text: root.menuUnread ? qsTr("Mark as read") : qsTr("Mark as unread")
             onTriggered: Qt.callLater(root.markReadRequested, root.menuUid, root.menuUnread)
         }
         MenuItem {
+            visible: !root.searching
             text: root.menuStarred ? qsTr("Remove star") : qsTr("Star")
             onTriggered: root.emitLater(root.starToggled, root.menuUid)
         }
         MenuItem {
+            visible: !root.searching
             text: qsTr("Archive")
             onTriggered: root.emitLater(root.archiveRequested, root.menuUid)
         }
         MenuItem {
+            visible: !root.searching
             text: qsTr("Move to…")
             onTriggered: root.emitLater(root.moveRequested, root.menuUid)
         }
         MenuItem {
+            visible: !root.searching
             text: qsTr("Move to Trash")
             onTriggered: root.emitLater(root.deleteRequested, root.menuUid)
         }
-        MenuSeparator {}
+        MenuSeparator { visible: !root.searching }
         MenuItem {
+            visible: !root.searching
             text: qsTr("Delete permanently…")
             onTriggered: root.emitLater(root.purgeRequested, root.menuUid)
         }
@@ -916,8 +1005,9 @@ Rectangle {
             anchors.horizontalCenter: parent.horizontalCenter
             color: Theme.textMuted
             font.pixelSize: Theme.fontBase
-            text: root.filterText !== "" ? qsTr("No message matches “%1”").arg(root.filterText)
-                                          : qsTr("This folder is empty")
+            text: root.searching ? qsTr("No matches in this account")
+                  : root.filterText !== "" ? qsTr("No message matches “%1”").arg(root.filterText)
+                  : qsTr("This folder is empty")
         }
         Label {
             anchors.horizontalCenter: parent.horizontalCenter

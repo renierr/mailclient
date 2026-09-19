@@ -366,6 +366,50 @@ pub fn messages_json(db: &Db, folder_id: i64) -> Result<String> {
     messages_json_paged(db, folder_id, FEED_LIMIT, 0)
 }
 
+/// Account-wide FTS search rows for the search UI: `[{uid, folder_id,
+/// folder, subject, from, date, snippet, unread, starred,
+/// has_attachments}]` in FTS rank order, across every folder of the
+/// account. `snippet` is plain match context (the empty-string `snippet()`
+/// markers produce it tag-free — the list renders plain rows). Blank or
+/// operator-only queries yield `[]`, never an error.
+pub fn search_json(db: &Db, account_id: i64, query: &str, limit: u64) -> Result<String> {
+    let Some(match_query) = crate::search::escape_fts_query(query) else {
+        return Ok("[]".to_string());
+    };
+    let mut stmt = db.conn().prepare(
+        "select m.uid, m.folder_id, f.path, m.subject, m.from_addr, m.date,
+                snippet(messages_fts, 2, '', '', '…', 12),
+                m.is_read, m.is_starred, m.has_attachments
+         from messages_fts
+         join messages m on m.id = messages_fts.rowid
+         join folders f on f.id = m.folder_id
+         where messages_fts match ?1 and m.account_id = ?2
+         order by rank limit ?3",
+    )?;
+    let mut arr = Vec::new();
+    let rows = stmt.query_map(
+        rusqlite::params![match_query, account_id, limit as i64],
+        |row| {
+            Ok(json!({
+                "uid": row.get::<_, u32>(0)?,
+                "folder_id": row.get::<_, i64>(1)?,
+                "folder": row.get::<_, String>(2)?,
+                "subject": row.get::<_, Option<String>>(3)?.unwrap_or_else(|| "(no subject)".to_string()),
+                "from": row.get::<_, Option<String>>(4)?.unwrap_or_else(|| "?".to_string()),
+                "date": short_date(row.get::<_, Option<String>>(5)?.as_deref()),
+                "snippet": row.get::<_, String>(6)?,
+                "unread": row.get::<_, i64>(7)? == 0,
+                "starred": row.get::<_, i64>(8)? != 0,
+                "has_attachments": row.get::<_, i64>(9)? != 0,
+            }))
+        },
+    )?;
+    for row in rows {
+        arr.push(row?);
+    }
+    Ok(serde_json::to_string(&arr)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -632,6 +676,33 @@ mod tests {
         let via_settings: serde_json::Value =
             serde_json::from_str(&messages_json_paged(&db, f, 10, 0).unwrap()).unwrap();
         assert_eq!(via_settings[0]["uid"], 42);
+    }
+
+    #[test]
+    fn search_rows_carry_folder_and_plain_snippet() {
+        let (db, acc, f) = setup();
+        let other = folders::upsert(&db, acc, "Archive", "/", FolderRole::Archive).unwrap();
+        let mut m = msg_store::sample_new(acc, f, 81);
+        m.body_text = Some("invoice for the archive project".to_string());
+        msg_store::upsert(&db, &m).unwrap();
+        let mut m2 = msg_store::sample_new(acc, other, 82);
+        m2.body_text = Some("unrelated note".to_string());
+        msg_store::upsert(&db, &m2).unwrap();
+
+        let hits: serde_json::Value =
+            serde_json::from_str(&search_json(&db, acc, "invoice", 50).unwrap()).unwrap();
+        assert_eq!(hits.as_array().unwrap().len(), 1);
+        assert_eq!(hits[0]["uid"], 81);
+        assert_eq!(hits[0]["folder"], "INBOX");
+        // Plain match context: no highlight tags leak into list rows.
+        let snippet = hits[0]["snippet"].as_str().unwrap();
+        assert!(snippet.contains("invoice"));
+        assert!(!snippet.contains('<'));
+        assert!(hits[0]["unread"].as_bool().unwrap());
+
+        // Blank / operator-only queries are `[]`, never an error.
+        assert_eq!(search_json(&db, acc, "", 50).unwrap(), "[]");
+        assert_eq!(search_json(&db, acc, "***", 50).unwrap(), "[]");
     }
 
     #[test]

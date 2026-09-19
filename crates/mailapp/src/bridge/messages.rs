@@ -255,6 +255,20 @@ impl qobject::Bridge {
             .map_or_else(|_| qstring("{}"), |j| qstring(&j))
     }
 
+    /// Account-wide FTS search for the toolbar (up to 50 hits, rank order).
+    /// Local SQLite read, no network — safe to call per keystroke.
+    pub fn search_json(&self, query: &QString) -> QString {
+        let Ok(db) = open_db() else {
+            return qstring("[]");
+        };
+        let acc_id = *self.current_account_id();
+        if acc_id < 0 {
+            return qstring("[]");
+        }
+        feed::search_json(&db, acc_id, &query.to_string(), 50)
+            .map_or_else(|_| qstring("[]"), |j| qstring(&j))
+    }
+
     pub fn open_attachment(self: Pin<&mut Self>, attachment_id: i32) -> QString {
         if attachment_id < 0 {
             return qstring("unknown attachment");
