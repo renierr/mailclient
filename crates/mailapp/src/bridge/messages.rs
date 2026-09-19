@@ -345,18 +345,23 @@ impl qobject::Bridge {
         })
     }
 
-    pub fn open_message(self: Pin<&mut Self>, uid: i32) -> QString {
+    pub fn open_message(mut self: Pin<&mut Self>, uid: i32) -> QString {
         let db = match open_db() {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        let folder_id = *self.current_folder_id();
+        let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
         let Ok(msg) = messages::get_by_uid(&db, folder_id, uid as u32) else {
             return qstring("");
         };
         if !msg.is_read {
             let _ = messages::set_flags(&db, msg.id, true, msg.is_starred);
         }
+        // Refresh the QML-bound feeds so the follow-up reloadMessages() /
+        // reloadFolders() in QML see the cleared unread flag immediately.
+        // Without this messages_json/folders_json stay stale and the marker
+        // only clears on the next folder switch (which pushes feeds).
+        push_feeds(&mut self, &db, acc_id, folder_id);
         qstring("")
     }
 
