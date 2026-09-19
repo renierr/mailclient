@@ -142,14 +142,72 @@ BarWidget {
         Repeater {
           model: mail.recent.slice(0, 5)
 
-          Button {
+          BorderSurface {
             required property var modelData
             width: parent.width
-            leftAlign: true
-            text: Model.elide(modelData.from, 28) + " — " + Model.elide(modelData.subject, 40)
-            onClicked: {
-              mail.openApp()
-              root.close()
+            radius: Style.cornerRadius
+            color: entryMouse.pressed ? Style.pressedFillFor(root.panelForeground, Color.accent)
+              : entryMouse.containsMouse ? Style.hoverFillFor(root.panelForeground, Color.accent)
+              : "transparent"
+
+            leftPadding: Style.spacing.controlPaddingX
+            rightPadding: Style.spacing.controlPaddingX
+            topPadding: Style.spacing.controlPaddingY
+            bottomPadding: Style.spacing.controlPaddingY
+
+            implicitHeight: entryColumn.implicitHeight + topPadding + bottomPadding
+
+            Behavior on color { ColorAnimation { duration: 120 } }
+
+            Column {
+              id: entryColumn
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.top: parent.top
+              anchors.leftMargin: parent.leftPadding
+              anchors.rightMargin: parent.rightPadding
+              anchors.topMargin: parent.topPadding
+              anchors.bottomMargin: parent.bottomPadding
+              spacing: Style.space(2)
+
+              Text {
+                textFormat: Text.PlainText
+                width: parent.width
+                text: Model.clean(modelData.from) || "(unknown)"
+                color: root.panelForeground
+                font.family: root.panelFontFamily
+                font.pixelSize: Style.font.body
+                elide: Text.ElideRight
+                maximumLineCount: 1
+              }
+
+              Text {
+                textFormat: Text.PlainText
+                width: parent.width
+                text: Model.clean(modelData.subject) || "(no subject)"
+                color: Qt.darker(root.panelForeground, 1.4)
+                font.family: root.panelFontFamily
+                font.pixelSize: Style.font.bodySmall
+                elide: Text.ElideRight
+                maximumLineCount: 1
+              }
+            }
+
+            MouseArea {
+              id: entryMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: {
+                mail.openApp()
+                root.close()
+              }
+            }
+
+            PanelToolTip {
+              visible: entryMouse.containsMouse
+              text: (Model.clean(modelData.from) || "(unknown)") + " — " + (Model.clean(modelData.subject) || "(no subject)")
+              fontFamily: root.panelFontFamily
             }
           }
         }

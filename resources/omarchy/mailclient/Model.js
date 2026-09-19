@@ -26,8 +26,12 @@ function badge(unread) {
   return n > 0 ? MAIL_GLYPH + " " + n : MAIL_GLYPH
 }
 
+function clean(text) {
+  return String(text || "").replace(/\s+/g, " ").trim()
+}
+
 function elide(text, max) {
-  var value = String(text || "").replace(/\s+/g, " ").trim()
+  var value = clean(text)
   if (value === "") return ""
   return value.length > max ? value.substring(0, max - 1) + "…" : value
 }
@@ -65,6 +69,7 @@ if (typeof module !== "undefined") {
     parseReport: parseReport,
     badge: badge,
     tooltip: tooltip,
+    clean: clean,
     elide: elide,
     lastSyncText: lastSyncText
   }
