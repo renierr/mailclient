@@ -4,7 +4,7 @@
 
 A **full-featured, modern, responsive desktop mail client** for **Omarchy Linux** first (Windows later):
 
-- Multiple IMAP/SMTP accounts, full folder trees, background sync (IDLE + polling).
+- Multiple IMAP/SMTP accounts, full folder trees, background sync (polling + instant navigation sync + Omarchy bar widget).
 - Send/receive **text + HTML** mail with a nice composer (rich-text editor, attachments, drafts).
 - Fast local SQLite cache + full-text search, offline-first.
 - Clean, modern QML UI: account/folder sidebar, message list, HTML reader, composer, search, contacts autocomplete.
@@ -95,38 +95,53 @@ cache-only so they render immediately.
    for offline use; resyncs never wipe downloaded bytes.
 - **Scaling (massive mailboxes)**: per-folder network is bounded by the window
   (a bounded handful of UID SEARCH pages + ≤200 flag FETCH + ≤200 RFC822 FETCH), not by mailbox size.
-  Planned next: larger chunks → CONDSTORE/QRESYNC deltas → IDLE push + polling.
+  Fast CONDSTORE/QRESYNC deltas with automatic RFC 3501 fallbacks, local expunge diffing, and polling. (IDLE dropped).
 
-## 5a. COMPLETED — CONDSTORE/QRESYNC delta sync & imap-next migration
+## 5a. COMPLETED — IMAP Resilience, imap-next Migration & Fallback Architecture
 
 **Status: Complete.**
 
 ### Architecture & Implementation
-- Upgraded from legacy `imap 2.4.1` / `imap-proto 0.10.2` to `imap-next 0.3.4` (backed by `imap-codec 2.0.0-alpha.9` and `imap-types 2.0.0-alpha.7`).
+- Upgraded from legacy `imap 2.4.1` / `imap-proto 0.10.2` to `imap-next 0.3.4` (backed by `imap-codec 2.0.0-alpha.9` and `imap-types 2.0.0-alpha.7`), adopting a sans-I/O state machine over Tokio.
 - Migrated TLS layer to `tokio-rustls 0.26` with `rustls-native-certs` / `webpki-roots`.
+- Plaintext connections are refused unless the account configuration explicitly specifies `imap_security = "plain"` or `"none"`.
 - Upgraded SQLite schema to version 10 (`crates/mailcore/src/db/schema.sql` and `migrations.rs`), adding `highest_modseq: u64` column to `folders`.
-- Implemented CONDSTORE and QRESYNC support in `ImapSession`:
-  - Automatic `ENABLE CONDSTORE` / `ENABLE QRESYNC` negotiation.
-  - Selective `SELECT` with `QRESYNC (uidvalidity modseq)` parameter handling.
-  - Delta flag sync using `CHANGEDSINCE <highest_modseq>` via `FetchModifier::ChangedSince`.
-  - Vanished expunge reporting with fallback backwards `UID SEARCH` diffing.
-- Preserved 100% of features across the application:
-  - Folder discovery, listing, and subscription.
-  - Interactive and background sync (`sync_now`, `sync_folder_now`, `load_older_messages`).
-  - Safe session checkout and pooling via `SessionLease` in `mailapp::bridge::session`.
-  - Headless CLI sync with single and multi-account sync reports (`mailapp --sync`).
-  - Attachment downloading on-demand (`ensure_attachment_data`).
-  - Sent copy saving (`SmtpSender::save_sent_copy`) and draft saving/discarding.
-  - FTS server search backfill (`search_server_into_cache`).
-- All 96 unit tests in `mailcore` and 3 unit tests in `mailapp` pass offline (in-memory SQLite, zero live network calls).
+- Implemented CONDSTORE and QRESYNC support with multi-source capability detection:
+  - Multi-source capability parsing (`Data::Capability`, untagged `* OK [CAPABILITY ...]`, and tagged `OK [CAPABILITY ...]`).
+  - RFC 5161 `ENABLE` guard: client only issues `ENABLE` if `has_capability("ENABLE")` is true.
+
+### Defensive Runtime Fallbacks
+- **`SELECT` Fallback**: Tries `SELECT (QRESYNC/CONDSTORE)` when enabled. If rejected with `BAD`, catches the failure, disables `qresync_enabled`/`condstore_enabled`, and retries with standard RFC 3501 `SELECT`.
+- **`CHANGEDSINCE` Fallback**: If `UID FETCH ... (CHANGEDSINCE)` is rejected with `BAD`, catches error, disables `condstore_enabled`, and retries with standard `UID FETCH (UID FLAGS)`.
+- **`MOVE` Fallback**: Checks `has_capability("MOVE")`. If absent or if `UID MOVE` fails at runtime, automatically executes `UID COPY` + `UID STORE \Deleted` + `EXPUNGE`.
+- **Local Expunge Diffing**: Always diffs queried server UIDs against local SQLite rows (`*uid >= search_lo && !server_uids.contains(uid)`), catching server-side expunges at zero extra network cost.
+
+### Trash "Always Seen" Semantics
+- **Immediate Server Sync**: When moving messages to Trash (via Delete, Bulk Delete, or "Move to..."), `UID STORE +FLAGS (\Seen)` is executed immediately on the server before moving.
+- **Trash Sync Enforcement**: During `sync_folder_window` on Trash, all messages are forced to `is_read = true`, and any unread UIDs found on the server are marked `\Seen` immediately.
+- **Feed Representation**: Sidebar feeds report `unread: 0` for Trash, and message feeds report `unread: false`.
+
+### Non-Blocking Composer & Delivery
+- Converted `save_sent_copy`, `flush_outbox`, and `send_raw` to fully `async` functions, removing `tokio::task::block_in_place` (which caused panics and UI lockups on Tokio's `current_thread` runtime).
+
+### Dropped Features (And Why)
+- **IMAP IDLE (RFC 2177)**: Dropped (not needed). Periodic background polling + instant navigation sync on folder click + Omarchy bar widget (`mailclient.unread`) completely satisfy real-time mail needs with zero TCP connection lifecycle management.
+- **Background System Daemon**: Dropped (not needed). The Omarchy bar widget already runs headless periodic syncs in the background, and the desktop app retries pending sends while open. An external system service/daemon is redundant.
+- **UIDPLUS (RFC 4315)**: Dropped (not needed). Standard folder refresh and local UID diffing discover new/moved messages uniformly without relying on optional server extensions.
+- **Streaming Partial MIME Parts (RFC 3516 / BINARY)**: Dropped (not needed). Single-roundtrip full RFC 822 body fetch is faster and simpler for normal desktop workloads; attachments are capped at 25MB and downloaded on demand.
+- **Optimistic Concurrency (`UNCHANGEDSINCE`)**: Dropped (not needed). Desktop user actions are authoritative; newest state reconciles on next fetch without conflict retry loops.
+
+### Verification
+- 107 unit and mock tests in `mailcore` (including in-memory raw IMAP wire-protocol mock server tests) and 3 unit tests in `mailapp` pass offline in `0.32s` (zero live network calls).
+- `cargo clippy -p mailcore -- -D warnings` clean with 0 warnings.
 - Release bundle builds cleanly via `./build.sh` into `dist/mailclient/bin/mailapp`.
 
 ## 6. Build / Run / Install
 
 ```sh
 ./dev.sh                # debug build + run (uses ./crates/mailapp/qml live)
-/build.sh              # release build → dist/mailclient/{bin/mailapp,qml/,resources/}
-/scripts/install-local.sh  # copy bundle to ~/.local/{bin,share/mailclient} + install .desktop
+./build.sh              # release build → dist/mailclient/{bin/mailapp,qml/,resources/}
+./scripts/install-local.sh  # copy bundle to ~/.local/{bin,share/mailclient} + install .desktop
 cargo test -p mailcore      # backend unit tests (SQLite in-memory)
 qmllint crates/mailapp/qml/*.qml crates/mailapp/qml/components/*.qml  # QML lint (uses /usr/lib/qt6/bin when on PATH)
 ```
@@ -140,8 +155,7 @@ UI iteration: `./dev.sh` runs the app against live `crates/mailapp/qml/` (embedd
 - Sync engine behind `SyncProvider` trait; IMAP first, JMAP/POP3 later without touching UI.
 - HTML compose editing: `TextArea` rich-text now, consider WebEngine-based editor in M2.
 - Windows: keep all paths via `directories`, no Linux-only calls outside `mailapp` platform shim.
-- See §5a for the CONDSTORE/QRESYNC delta-sync task (open decision: `imap 2.4.1`
-  hand-rolled vs. `imap-next` tokio migration).
+- Completed: CONDSTORE/QRESYNC delta sync, `imap-next` tokio migration, capability guards, fallbacks, and trash seen sync (see `docs/IMAP_SYNC_RESILIENCE.md` and §5a). IDLE, UIDPLUS, and a separate background daemon are explicitly dropped.
 
 ## 8. Known Flaws & Repair List (user-reported)
 
