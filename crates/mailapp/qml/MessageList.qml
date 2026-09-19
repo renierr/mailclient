@@ -743,6 +743,7 @@ Rectangle {
                         color: Theme.textMuted
                         font.pixelSize: Theme.fontSmall
                         elide: Text.ElideRight
+                        maximumLineCount: 1
                         width: parent.width
                     }
                     // Search hits live in foreign folders: say which one.

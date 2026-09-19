@@ -140,6 +140,14 @@ pub fn message_html(db: &Db, folder_id: i64, uid: u32, allow_remote: bool) -> Re
         sanitized_bodies(m.body_html.as_deref(), m.body_text.as_deref(), allow_remote);
     Ok(body_html)
 }
+
+/// List snippets are single-line by contract: the FTS `snippet()` context
+/// keeps the body's line breaks, which would paint past the fixed row
+/// height and overlap the next row. Collapse all whitespace runs.
+fn one_line(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// `[{uid, subject, from, date, snippet, unread, starred, body_text,
 /// body_html, is_html, has_remote_images, has_attachments, attachments,
 /// body}]`, in the user's sort order (see `message_sort_field` /
@@ -405,7 +413,7 @@ pub fn search_json(
                 "subject": row.get::<_, Option<String>>(3)?.unwrap_or_else(|| "(no subject)".to_string()),
                 "from": row.get::<_, Option<String>>(4)?.unwrap_or_else(|| "?".to_string()),
                 "date": short_date(row.get::<_, Option<String>>(5)?.as_deref()),
-                "snippet": row.get::<_, String>(6)?,
+                "snippet": one_line(&row.get::<_, String>(6)?),
                 "unread": row.get::<_, i64>(7)? == 0,
                 "starred": row.get::<_, i64>(8)? != 0,
                 "has_attachments": row.get::<_, i64>(9)? != 0,
@@ -691,7 +699,7 @@ mod tests {
         let (db, acc, f) = setup();
         let other = folders::upsert(&db, acc, "Archive", "/", FolderRole::Archive).unwrap();
         let mut m = msg_store::sample_new(acc, f, 81);
-        m.body_text = Some("invoice for the archive project".to_string());
+        m.body_text = Some("line one\ninvoice for the archive\nproject tail".to_string());
         msg_store::upsert(&db, &m).unwrap();
         let mut m2 = msg_store::sample_new(acc, other, 82);
         m2.body_text = Some("unrelated note".to_string());
@@ -706,6 +714,9 @@ mod tests {
         let snippet = hits[0]["snippet"].as_str().unwrap();
         assert!(snippet.contains("invoice"));
         assert!(!snippet.contains('<'));
+        // Single-line contract: body line breaks must not reach the list
+        // (they would paint past the fixed row height into the next row).
+        assert!(!snippet.contains('\n'));
         assert!(hits[0]["unread"].as_bool().unwrap());
 
         // Blank / operator-only queries are `[]`, never an error.
