@@ -151,7 +151,12 @@ pub fn sync_account(db: &Db, account: &Account, imap: &mut ImapSync) -> AccountS
         }
     }
 
-    out.unread = out.folders.iter().map(|f| f.unread).sum::<u64>();
+    out.unread = out
+        .folders
+        .iter()
+        .filter(|f| f.role == FolderRole::Inbox.as_str())
+        .map(|f| f.unread)
+        .sum::<u64>();
     if out.folders.is_empty() {
         // Folder list failed silently or nothing subscribed: fall back to cache.
         out.unread = unread_for_account(db, account.id);
@@ -217,11 +222,16 @@ pub fn sync_all_accounts(db: &Db) -> SyncAllReport {
 }
 
 /// Cached unread total for one account (no network).
+///
+/// Inbox-only: only folders with the Inbox role count as new mail.
+/// Trash/Sent/Drafts/Archive/Junk unread never affects the badge,
+/// popup, or notify-on-rise.
 #[must_use]
 pub fn unread_for_account(db: &Db, account_id: i64) -> u64 {
     folders::list_by_account(db, account_id)
         .unwrap_or_default()
         .iter()
+        .filter(|f| f.role == FolderRole::Inbox)
         .map(|f| messages::count_unread(db, f.id).unwrap_or(0))
         .sum()
 }
@@ -243,6 +253,9 @@ pub fn unread_summary(db: &Db) -> Vec<AccountSyncResult> {
 /// Newest unread messages (metadata only, no network). Ordered
 /// newest-first, capped at `limit`. When `account_id` is set, only that
 /// account is listed so the popup agrees with a filtered unread count.
+///
+/// Inbox-only: only Inbox-role folders are listed, so the popup agrees
+/// with the inbox-only badge.
 #[must_use]
 pub fn recent_unread(db: &Db, limit: u64, account_id: Option<i64>) -> Vec<RecentUnread> {
     let sql = "select m.account_id, a.email_address, f.path,
@@ -251,6 +264,7 @@ pub fn recent_unread(db: &Db, limit: u64, account_id: Option<i64>) -> Vec<Recent
                join accounts a on a.id = m.account_id
                join folders f on f.id = m.folder_id
                where m.is_read = 0
+                 and f.role = 'inbox'
                  and (?2 is null or m.account_id = ?2)
                order by m.date desc, m.id desc
                limit ?1";
@@ -350,5 +364,68 @@ impl Drop for SyncLock {
             self.done = true;
             let _ = std::fs::remove_file(&self.path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{FolderRole, NewAccount};
+    use crate::store::{accounts, folders, messages};
+
+    fn setup_db() -> (Db, i64, i64, i64) {
+        let db = Db::open_in_memory().unwrap();
+        let acc = accounts::create(
+            &db,
+            &NewAccount {
+                name: "a".to_string(),
+                email_address: "a@example.com".to_string(),
+                from_name: String::new(),
+                imap_host: "h".to_string(),
+                imap_port: 993,
+                imap_security: "tls".to_string(),
+                imap_username: "u".to_string(),
+                smtp_host: "h".to_string(),
+                smtp_port: 465,
+                smtp_security: "tls".to_string(),
+                smtp_username: "u".to_string(),
+                auth_vault_key: "k".to_string(),
+                check_interval_secs: 60,
+            },
+        )
+        .unwrap();
+        let inbox = folders::upsert(&db, acc, "INBOX", "/", FolderRole::Inbox).unwrap();
+        let trash = folders::upsert(&db, acc, "Trash", "/", FolderRole::Trash).unwrap();
+        (db, acc, inbox, trash)
+    }
+
+    #[test]
+    fn unread_counts_inbox_only() {
+        let (db, acc, inbox, trash) = setup_db();
+        let mut m1 = messages::sample_new(acc, inbox, 1);
+        m1.is_read = false;
+        messages::upsert(&db, &m1).unwrap();
+        let mut m2 = messages::sample_new(acc, trash, 2);
+        m2.is_read = false;
+        messages::upsert(&db, &m2).unwrap();
+        // Trash unread must not affect the badge.
+        assert_eq!(unread_for_account(&db, acc), 1);
+        assert_eq!(unread_summary(&db)[0].unread, 1);
+    }
+
+    #[test]
+    fn recent_unread_lists_inbox_only() {
+        let (db, acc, inbox, trash) = setup_db();
+        let mut m1 = messages::sample_new(acc, inbox, 1);
+        m1.is_read = false;
+        m1.subject = Some("inbox mail".to_string());
+        messages::upsert(&db, &m1).unwrap();
+        let mut m2 = messages::sample_new(acc, trash, 2);
+        m2.is_read = false;
+        m2.subject = Some("trash mail".to_string());
+        messages::upsert(&db, &m2).unwrap();
+        let recent = recent_unread(&db, 10, None);
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].subject, "inbox mail");
     }
 }

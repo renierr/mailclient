@@ -506,9 +506,16 @@ impl ImapSync {
     /// Server-side move of one message into `dest_path` (plus local row
     /// delete). Shared by trash and archive; prefers `UID MOVE`, falls back
     /// to `COPY` + `\Deleted` + `EXPUNGE`.
+    ///
+    /// Trash moves auto-mark `\Seen` first: deleting an unread message must
+    /// not leave an unread copy in Trash. `MOVE`/`COPY` preserve flags, so
+    /// the Seen bit carries over to the destination.
     fn move_message_to(&mut self, db: &Db, message_id: i64, dest_path: &str) -> Result<()> {
         let message = messages::get(db, message_id)?;
         let folder = folders::get(db, message.folder_id)?;
+        let dest_is_trash = folders::get_by_path(db, folder.account_id, dest_path)
+            .map(|d| d.role == FolderRole::Trash)
+            .unwrap_or(false);
         let has_move = self
             .session()?
             .capabilities()
@@ -517,6 +524,11 @@ impl ImapSync {
         let session = self.session()?;
         session.select(&folder.path)?;
         let uid = message.uid.to_string();
+        if dest_is_trash && !message.is_read {
+            if let Err(e) = session.uid_store(&uid, "+FLAGS (\\Seen)") {
+                log::warn!("imap: mark-seen before trash move failed: {e}");
+            }
+        }
         if has_move {
             session.uid_mv(&uid, dest_path)?;
         } else {
@@ -577,6 +589,9 @@ impl ImapSync {
     /// SELECT + one UID MOVE (or COPY + `\Deleted` + EXPUNGE fallback), then
     /// drop the local source rows. Returns moved rows. `dest_path` must differ
     /// from the source folder's path (callers report "already here").
+    ///
+    /// Trash moves auto-mark `\Seen` first so deleted unread mail does not
+    /// leave an unread copy in Trash.
     pub fn move_uids_to(
         &mut self,
         db: &Db,
@@ -594,6 +609,9 @@ impl ImapSync {
         if folder.path == dest_path {
             return Ok(0);
         }
+        let dest_is_trash = folders::get_by_path(db, folder.account_id, dest_path)
+            .map(|d| d.role == FolderRole::Trash)
+            .unwrap_or(false);
         let set = clean
             .iter()
             .map(u32::to_string)
@@ -606,6 +624,11 @@ impl ImapSync {
             .unwrap_or(false);
         let session = self.session()?;
         session.select(&folder.path)?;
+        if dest_is_trash {
+            if let Err(e) = session.uid_store(&set, "+FLAGS (\\Seen)") {
+                log::warn!("imap: mark-seen before bulk trash move failed: {e}");
+            }
+        }
         if has_move {
             session.uid_mv(&set, dest_path)?;
         } else {

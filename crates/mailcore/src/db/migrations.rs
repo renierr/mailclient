@@ -23,12 +23,6 @@ const SCHEMA_V2: &str = "create table if not exists settings (
 /// push, so flag toggles never block the UI on the network.
 const SCHEMA_V3: &str = "alter table messages add column flags_dirty integer not null default 0;";
 
-/// v4 DDL: attachment bytes in SQLite (`attachments.data` BLOB) plus an
-/// `is_inline` marker, so files travel with the single DB file instead of a
-/// sidecar directory. `storage_path` stays for old rows (unused by new code).
-const SCHEMA_V4: &str = "alter table attachments add column data blob;
-    alter table attachments add column is_inline integer not null default 0;";
-
 /// Create or upgrade the database to [`SCHEMA_VERSION`].
 pub fn ensure_schema(conn: &Connection) -> Result<()> {
     let current: u32 = conn
@@ -60,6 +54,7 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         // `ALTER TABLE ... ADD COLUMN` errors when the column already exists
         // (e.g. a fresh v4 `schema.sql` install that still carries version 3
         // in `schema_meta`); those are benign — anything else aborts.
+        // v4 DDL: `attachments.data` BLOB + `is_inline` marker.
         for stmt in [
             "alter table attachments add column data blob;",
             "alter table attachments add column is_inline integer not null default 0;",
@@ -71,7 +66,6 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
                 }
             }
         }
-        let _ = SCHEMA_V4;
     }
     if current < 5 {
         // `accounts.from_name`: sender display name (`""` = address only).
@@ -109,10 +103,14 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
                 return Err(e.into());
             }
         }
-        let _ = conn.execute_batch(
+        if let Err(e) = conn.execute_batch(
             "update contacts set alias = name where alias is null and name is not null;",
-        );
-        let _ = crate::store::contacts::seed_contacts_from_connection(conn);
+        ) {
+            log::warn!("migration v8: alias backfill failed: {e}");
+        }
+        if let Err(e) = crate::store::contacts::seed_contacts_from_connection(conn) {
+            log::warn!("migration v8: contact seeding failed: {e}");
+        }
     }
     if current < 9 {
         for stmt in [
