@@ -358,9 +358,10 @@ impl ImapSync {
     /// Server-side search backfill for the search UI: the local FTS index
     /// only covers synced mail, so when it runs thin the UI asks the server
     /// too. Runs `UID SEARCH TEXT` per token in every folder of the account,
-    /// intersects the per-token hits (AND, like FTS), and fetches full bodies
-    /// only for UIDs missing locally (newest 50 per folder, 100 total).
-    /// Fetched mail lands in SQLite + the FTS index through the normal
+    /// or in just one folder when `folder_scope` is set (the search UI's
+    /// folder checkbox), intersects the per-token hits (AND, like FTS), and
+    /// fetches full bodies only for UIDs missing locally (newest 50 per
+    /// folder, 100 total). Fetched mail lands in SQLite + the FTS index through the normal
     /// upsert path, so a plain local re-query picks it up — and later syncs
     /// keep it like any cached mail. Only ASCII tokens go over the wire
     /// (IMAP SEARCH strings are ASCII unless UTF8=ACCEPT is negotiated,
@@ -370,6 +371,7 @@ impl ImapSync {
         db: &Db,
         account_id: i64,
         tokens: &[String],
+        folder_scope: Option<&str>,
     ) -> Result<ServerSearchReport> {
         const PER_FOLDER_CAP: usize = 50;
         const TOTAL_CAP: u64 = 100;
@@ -383,7 +385,11 @@ impl ImapSync {
             return Ok(report);
         }
         let account = accounts::get(db, account_id)?;
-        for folder in folders::list_by_account(db, account_id)? {
+        let targets: Vec<_> = folders::list_by_account(db, account_id)?
+            .into_iter()
+            .filter(|f| folder_scope.is_none_or(|s| f.path == s))
+            .collect();
+        for folder in targets {
             if report.fetched >= TOTAL_CAP {
                 break;
             }

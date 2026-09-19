@@ -255,9 +255,10 @@ impl qobject::Bridge {
             .map_or_else(|_| qstring("{}"), |j| qstring(&j))
     }
 
-    /// Account-wide FTS search for the toolbar (up to 50 hits, rank order).
-    /// Local SQLite read, no network — safe to call per keystroke.
-    pub fn search_json(&self, query: &QString) -> QString {
+    /// FTS search for the toolbar (up to 50 hits, rank order). `folder`
+    /// scopes to one folder path (empty = whole account). Local SQLite
+    /// read, no network — safe to call per keystroke.
+    pub fn search_json(&self, query: &QString, folder: &QString) -> QString {
         let Ok(db) = open_db() else {
             return qstring("[]");
         };
@@ -265,7 +266,7 @@ impl qobject::Bridge {
         if acc_id < 0 {
             return qstring("[]");
         }
-        feed::search_json(&db, acc_id, &query.to_string(), 50)
+        feed::search_json(&db, acc_id, &query.to_string(), 50, &folder.to_string())
             .map_or_else(|_| qstring("[]"), |j| qstring(&j))
     }
 

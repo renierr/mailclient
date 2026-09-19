@@ -185,17 +185,18 @@ ApplicationWindow {
     }
 
     // Toolbar search: short input filters the loaded folder feed (see
-    // MessageList.matches); 3+ letters run the FTS index account-wide.
-    // Local SQLite read, cheap enough per keystroke. `fromTyping` marks a
-    // real keystroke: only those re-arm the server-search debounce — a
-    // job-finish refresh must not, or the finished job would retrigger
-    // itself forever.
+    // MessageList.matches); 3+ letters run the FTS index — account-wide,
+    // or limited to the selected folder while the toolbar checkbox is on
+    // (see searchScope). Local SQLite read, cheap enough per keystroke.
+    // `fromTyping` marks a real keystroke: only those re-arm the
+    // server-search debounce — a job-finish refresh must not, or the
+    // finished job would retrigger itself forever.
     function updateSearch(fromTyping) {
         var q = searchField.text.trim()
         if (q.length >= 3) {
             root.searching = true
             try {
-                root.searchRows = JSON.parse(backend.search_json(q))
+                root.searchRows = JSON.parse(backend.search_json(q, root.searchScope()))
             } catch (e) {
                 root.searchRows = []
             }
@@ -211,6 +212,15 @@ ApplicationWindow {
         }
     }
 
+    // Folder scope for search: the toolbar checkbox limits the local FTS
+    // index and the server backfill to the selected folder ("" means the
+    // whole account — also while no folder is selected yet).
+    function searchScope() {
+        if (folderScopeCheck.checked && root.currentFolder !== "")
+            return root.currentFolder
+        return ""
+    }
+
     // Ask the server too when the local index runs thin (full local pages
     // need no backfill). Retries while busy; the in-flight flag plus the
     // same-query guard stop overlapping or repeated jobs.
@@ -220,7 +230,7 @@ ApplicationWindow {
         var q = searchField.text.trim()
         if (q.length < 3 || q === root.lastServerQuery || root.searchRows.length >= 50)
             return
-        var r = backend.search_server(q)
+        var r = backend.search_server(q, root.searchScope())
         if (r === "") {
             root.lastServerQuery = q
             root.serverSearching = true
@@ -509,6 +519,11 @@ ApplicationWindow {
             root.currentFolder = path
             root.currentUid = -1
             reloadMessages()
+            // A folder-scoped search follows the selection: fresh scope,
+            // fresh server top-up for the newly shown folder.
+            if (folderScopeCheck.checked)
+                root.lastServerQuery = ""
+            root.updateSearch(true)
             // A folder click must only read the local cache. `sync_folder_now`
             // SELECTs, SEARCHes every server UID and can download a 200-mail
             // window; doing that synchronously here freezes Qt long enough for
@@ -773,13 +788,16 @@ ApplicationWindow {
             }
 
             // Live filter over the loaded feed (short input); 3+ letters run
-            // the account-wide FTS index instead (see updateSearch).
+            // the FTS index instead (account-wide, or this folder when the
+            // checkbox is on — see updateSearch).
             TextField {
                 id: searchField
                 Layout.fillWidth: true
                 Layout.maximumWidth: 460
                 implicitHeight: Theme.controlHeight
-                placeholderText: qsTr("Search mail… (3+ letters: account + server)")
+                placeholderText: folderScopeCheck.checked
+                    ? qsTr("Search this folder… (3+ letters: folder + server)")
+                    : qsTr("Search mail… (3+ letters: account + server)")
                 color: Theme.text
                 placeholderTextColor: Theme.textMuted
                 font.pixelSize: Theme.fontBase
@@ -808,6 +826,20 @@ ApplicationWindow {
                     onClicked: searchField.text = ""
                 }
                 Keys.onEscapePressed: searchField.text = ""
+            }
+
+            // Folder scope: limits the FTS index and the server backfill
+            // to the selected folder (off = whole account). Toggling
+            // re-runs an active search under the new scope.
+            CheckBox {
+                id: folderScopeCheck
+                text: root.width > 640 ? qsTr("Folder") : ""
+                ToolTip.text: qsTr("Search only the current folder")
+                ToolTip.visible: hovered
+                onToggled: {
+                    root.lastServerQuery = ""
+                    root.updateSearch(true)
+                }
             }
 
             Item { Layout.fillWidth: true }

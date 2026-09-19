@@ -149,18 +149,20 @@ impl qobject::Bridge {
         })
     }
 
-    pub fn search_server(self: Pin<&mut Self>, query: &QString) -> QString {
+    pub fn search_server(self: Pin<&mut Self>, query: &QString, folder: &QString) -> QString {
         let wanted = *self.current_account_id();
         let current = *self.current_folder_id();
         let query = query.to_string();
+        let folder = folder.to_string();
         spawn_job(self, "Search", move |db, _progress| {
             let acc = current_account(db, wanted)?;
             let tokens = mailcore::search::search_tokens(&query);
             if tokens.is_empty() {
                 return Ok(("Search: nothing searchable in that query".to_string(), None));
             }
+            let scope = (!folder.is_empty()).then_some(folder.as_str());
             let r = with_imap(&acc, |imap| {
-                imap.search_server_into_cache(db, acc.id, &tokens)
+                imap.search_server_into_cache(db, acc.id, &tokens, scope)
                     .map_err(|e| e.to_string())
             })?;
             Ok((

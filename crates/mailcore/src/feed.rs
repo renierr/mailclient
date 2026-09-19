@@ -368,11 +368,18 @@ pub fn messages_json(db: &Db, folder_id: i64) -> Result<String> {
 
 /// Account-wide FTS search rows for the search UI: `[{uid, folder_id,
 /// folder, subject, from, date, snippet, unread, starred,
-/// has_attachments}]` in FTS rank order, across every folder of the
-/// account. `snippet` is plain match context (the empty-string `snippet()`
-/// markers produce it tag-free — the list renders plain rows). Blank or
-/// operator-only queries yield `[]`, never an error.
-pub fn search_json(db: &Db, account_id: i64, query: &str, limit: u64) -> Result<String> {
+/// has_attachments}]` in FTS rank order. `folder` scopes the search to one
+/// folder path (empty = whole account). `snippet` is plain match context
+/// (the empty-string `snippet()` markers produce it tag-free — the list
+/// renders plain rows). Blank or operator-only queries yield `[]`, never an
+/// error.
+pub fn search_json(
+    db: &Db,
+    account_id: i64,
+    query: &str,
+    limit: u64,
+    folder: &str,
+) -> Result<String> {
     let Some(match_query) = crate::search::escape_fts_query(query) else {
         return Ok("[]".to_string());
     };
@@ -384,11 +391,12 @@ pub fn search_json(db: &Db, account_id: i64, query: &str, limit: u64) -> Result<
          join messages m on m.id = messages_fts.rowid
          join folders f on f.id = m.folder_id
          where messages_fts match ?1 and m.account_id = ?2
+           and (?4 = '' or f.path = ?4)
          order by rank limit ?3",
     )?;
     let mut arr = Vec::new();
     let rows = stmt.query_map(
-        rusqlite::params![match_query, account_id, limit as i64],
+        rusqlite::params![match_query, account_id, limit as i64, folder],
         |row| {
             Ok(json!({
                 "uid": row.get::<_, u32>(0)?,
@@ -690,7 +698,7 @@ mod tests {
         msg_store::upsert(&db, &m2).unwrap();
 
         let hits: serde_json::Value =
-            serde_json::from_str(&search_json(&db, acc, "invoice", 50).unwrap()).unwrap();
+            serde_json::from_str(&search_json(&db, acc, "invoice", 50, "").unwrap()).unwrap();
         assert_eq!(hits.as_array().unwrap().len(), 1);
         assert_eq!(hits[0]["uid"], 81);
         assert_eq!(hits[0]["folder"], "INBOX");
@@ -701,8 +709,18 @@ mod tests {
         assert!(hits[0]["unread"].as_bool().unwrap());
 
         // Blank / operator-only queries are `[]`, never an error.
-        assert_eq!(search_json(&db, acc, "", 50).unwrap(), "[]");
-        assert_eq!(search_json(&db, acc, "***", 50).unwrap(), "[]");
+        assert_eq!(search_json(&db, acc, "", 50, "").unwrap(), "[]");
+        assert_eq!(search_json(&db, acc, "***", 50, "").unwrap(), "[]");
+
+        // Folder scope: the Archive copy is invisible from INBOX and the
+        // INBOX hit is invisible from Archive.
+        let scoped: serde_json::Value =
+            serde_json::from_str(&search_json(&db, acc, "invoice", 50, "Archive").unwrap())
+                .unwrap();
+        assert_eq!(scoped.as_array().unwrap().len(), 0);
+        let scoped: serde_json::Value =
+            serde_json::from_str(&search_json(&db, acc, "invoice", 50, "INBOX").unwrap()).unwrap();
+        assert_eq!(scoped.as_array().unwrap().len(), 1);
     }
 
     #[test]

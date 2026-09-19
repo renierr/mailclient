@@ -164,23 +164,24 @@ pub mod qobject {
         #[qinvokable]
         fn message_headers_json(&self, uid: i32) -> QString;
 
-        /// Account-wide FTS search over subject/from/body
-        /// (`[{uid, folder_id, folder, subject, from, date, snippet, unread,
-        /// starred, has_attachments}]`, FTS rank order across every folder of
-        /// the current account). Local SQLite read, no network. Returns `"[]"`
-        /// when the query is blank or has no usable terms.
+        /// FTS search over subject/from/body (`[{uid, folder_id, folder,
+        /// subject, from, date, snippet, unread, starred, has_attachments}]`,
+        /// FTS rank order). `folder` scopes to one folder path (empty = whole
+        /// account). Local SQLite read, no network. Returns `"[]"` when the
+        /// query is blank or has no usable terms.
         #[qinvokable]
-        fn search_json(&self, query: &QString) -> QString;
+        fn search_json(&self, query: &QString, folder: &QString) -> QString;
 
         /// Server-side search backfill for thin local results: runs IMAP
-        /// `TEXT` search per token across the account's folders and fetches
-        /// missing hits into the cache (bounded, metadata only). Network runs
-        /// on the mailclient-net thread: returns `""` when queued (completion
-        /// arrives via `job_finished` with kind `"Search"`, which refreshes
-        /// the feeds so the local search re-query picks the hits up), or a
-        /// busy message when not queued.
+        /// `TEXT` search per token across the account's folders — or just one
+        /// folder when `folder` is set — and fetches missing hits into the
+        /// cache (bounded, metadata only). Network runs on the mailclient-net
+        /// thread: returns `""` when queued (completion arrives via
+        /// `job_finished` with kind `"Search"`, which refreshes the feeds so
+        /// the local search re-query picks the hits up), or a busy message
+        /// when not queued.
         #[qinvokable]
-        fn search_server(self: Pin<&mut Self>, query: &QString) -> QString;
+        fn search_server(self: Pin<&mut Self>, query: &QString, folder: &QString) -> QString;
 
         /// Copy one attachment to a temp file and return its `file://` URL
         /// so QML can open it with the system viewer (`Qt.openUrlExternally`).
