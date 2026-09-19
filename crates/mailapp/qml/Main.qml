@@ -502,7 +502,7 @@ ApplicationWindow {
         target: backend
         // Jobs that only read: nothing they did is visible in the feeds, so
         // reloading would throw away the list's scroll position for free.
-        readonly property var readOnlyKinds: ["Open", "Open draft", "Save"]
+        readonly property var readOnlyKinds: ["Open", "Open draft", "Save", "Capabilities"]
 
         // SMTP has accepted the message; the Sent copy and the folder
         // resync still have to run, but the user is done waiting.
@@ -519,6 +519,11 @@ ApplicationWindow {
                 reloadAccounts()
                 reloadFolders()
                 reloadMessages()
+            }
+            if (kind === "Capabilities") {
+                // Owned by the Settings About pane (its own Connections parses
+                // the JSON payload); keep it off the status bar.
+                return
             }
             if (kind === "Send") {
                 // Normally already closed when queued; closing an

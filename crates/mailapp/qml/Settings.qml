@@ -47,6 +47,16 @@ AppDialog {
     property string localSortField: "date"
     property bool localSortDesc: true
 
+    // About view: live IMAP CAPABILITY list per account (refreshed on demand
+    // over the pooled session; the JSON arrives via `job_finished`).
+    property var capsAccounts: []
+    property int capsAccountId: -1
+    property string capsEmail: ""
+    property string capsHost: ""
+    property var serverCaps: []
+    property string capsError: ""
+    property bool capsLoading: false
+
     // Caption + control + optional help, stacked full-width so nothing can
     // overflow on narrow panes.
     component ChoiceRow: ColumnLayout {
@@ -156,6 +166,63 @@ AppDialog {
         return best
     }
 
+    function loadCapsAccounts() {
+        var arr = []
+        try {
+            arr = JSON.parse(root.backend ? root.backend.accounts_json : "[]")
+        } catch (e) {
+            arr = []
+        }
+        root.capsAccounts = arr
+        if (arr.length === 0) {
+            root.capsAccountId = -1
+            return
+        }
+        var cur = root.backend ? root.backend.current_account_id : -1
+        for (var i = 0; i < arr.length; i++) {
+            if (arr[i].id === root.capsAccountId)
+                return  // keep the current selection
+        }
+        for (var j = 0; j < arr.length; j++) {
+            if (arr[j].id === cur) {
+                root.capsAccountId = cur
+                return
+            }
+        }
+        root.capsAccountId = arr[0].id
+    }
+
+    function capsAccountIndex() {
+        for (var i = 0; i < root.capsAccounts.length; i++) {
+            if (root.capsAccounts[i].id === root.capsAccountId)
+                return i
+        }
+        return 0
+    }
+
+    function capsAccountEmails() {
+        var out = []
+        for (var i = 0; i < root.capsAccounts.length; i++)
+            out.push(root.capsAccounts[i].email || root.capsAccounts[i].name || "")
+        return out
+    }
+
+    function refreshCaps() {
+        if (!root.backend || !root.backend.refresh_server_capabilities)
+            return
+        if (root.capsAccountId < 0) {
+            root.capsError = qsTr("Add an account first")
+            return
+        }
+        root.capsError = ""
+        root.capsLoading = true
+        var r = root.backend.refresh_server_capabilities(root.capsAccountId)
+        if (r !== "") {
+            root.capsLoading = false
+            root.capsError = r
+        }
+    }
+
     onOpened: {
         settingsBridge.load()
         root.localSentCopy = settingsBridge.sent_copy_enabled
@@ -176,6 +243,36 @@ AppDialog {
         root.localRequestMdn = settingsBridge.request_mdn
         root.localSortField = root.backend ? root.backend.sort_field : "date"
         root.localSortDesc = root.backend ? root.backend.sort_descending : true
+        root.loadCapsAccounts()
+        root.capsEmail = ""
+        root.capsHost = ""
+        root.serverCaps = []
+        root.capsError = ""
+        root.refreshCaps()
+    }
+
+    // The bridge exposes its signal under the Rust name, so the handler is
+    // `onJob_finished` (see Main.qml) — `onJobFinished` matches nothing.
+    Connections {
+        target: root.backend
+        function onJob_finished(kind, status) {
+            if (kind !== "Capabilities")
+                return
+            try {
+                var p = JSON.parse(status)
+                if (p.account_id !== undefined && p.account_id !== root.capsAccountId)
+                    return  // stale response for a previously selected account
+                root.capsLoading = false
+                root.capsEmail = p.email || ""
+                root.capsHost = p.imap_host || ""
+                root.serverCaps = p.capabilities || []
+                root.capsError = p.error || ""
+            } catch (e) {
+                root.capsLoading = false
+                root.capsError = status
+                root.serverCaps = []
+            }
+        }
     }
 
     RowLayout {
@@ -195,6 +292,7 @@ AppDialog {
                 ListElement { icon: "📖"; label: qsTr("Reading") }
                 ListElement { icon: "✏️"; label: qsTr("Composing") }
                 ListElement { icon: "☁️"; label: qsTr("Accounts & sync") }
+                ListElement { icon: "ℹ️"; label: qsTr("About") }
             }
             delegate: Item {
                 id: navItem
@@ -254,13 +352,14 @@ AppDialog {
 
             // Interface.
             ScrollView {
+                id: interfaceScroll
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
                 contentWidth: availableWidth
                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                 ColumnLayout {
-                    width: parent.availableWidth
+                    width: interfaceScroll.availableWidth
                     spacing: Theme.sm
 
                     SectionCaption { text: qsTr("INTERFACE") }
@@ -288,13 +387,14 @@ AppDialog {
 
             // Mailbox view.
             ScrollView {
+                id: mailboxScroll
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
                 contentWidth: availableWidth
                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                 ColumnLayout {
-                    width: parent.availableWidth
+                    width: mailboxScroll.availableWidth
                     spacing: Theme.sm
 
                     SectionCaption { text: qsTr("MAILBOX VIEW") }
@@ -339,13 +439,14 @@ AppDialog {
 
             // Reading mail.
             ScrollView {
+                id: readingScroll
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
                 contentWidth: availableWidth
                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                 ColumnLayout {
-                    width: parent.availableWidth
+                    width: readingScroll.availableWidth
                     spacing: Theme.sm
 
                     SectionCaption { text: qsTr("READING MAIL") }
@@ -381,13 +482,14 @@ AppDialog {
 
             // Composing mail.
             ScrollView {
+                id: composingScroll
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
                 contentWidth: availableWidth
                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                 ColumnLayout {
-                    width: parent.availableWidth
+                    width: composingScroll.availableWidth
                     spacing: Theme.sm
 
                     SectionCaption { text: qsTr("COMPOSING MAIL") }
@@ -462,13 +564,14 @@ AppDialog {
 
             // Accounts & sync.
             ScrollView {
+                id: accountsScroll
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
                 contentWidth: availableWidth
                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                 ColumnLayout {
-                    width: parent.availableWidth
+                    width: accountsScroll.availableWidth
                     spacing: Theme.sm
 
                     SectionCaption { text: qsTr("ACCOUNTS & SYNC") }
@@ -497,15 +600,125 @@ AppDialog {
                             root.localSyncInterval = syncMins(index)
                         }
                     }
+                }
+            }
+
+            // About: version + licence + per-account server capabilities.
+            ScrollView {
+                id: aboutScroll
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                contentWidth: availableWidth
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                ColumnLayout {
+                    width: aboutScroll.availableWidth
+                    spacing: Theme.sm
 
                     SectionCaption { text: qsTr("ABOUT") }
 
+                    Label {
+                        Layout.fillWidth: true
+                        text: qsTr("Mailclient %1").arg(root.backend ? root.backend.app_version : "")
+                        color: Theme.text
+                        font.pixelSize: Theme.fontMedium
+                        font.bold: true
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: qsTr("License: %1").arg(root.backend ? root.backend.app_license : "")
+                        color: Theme.text
+                        font.pixelSize: Theme.fontBase
+                    }
+                    HintLabel {
+                        text: qsTr("Free software under the MIT and Apache-2.0 licenses; see the source for the full texts.")
+                    }
                     Label {
                         Layout.fillWidth: true
                         text: qsTr("Database: %1").arg(root.dbPath)
                         color: Theme.textMuted
                         elide: Text.ElideLeft
                         font.pixelSize: Theme.fontSmall
+                    }
+
+                    SectionCaption { text: qsTr("SERVER CAPABILITIES") }
+
+                    HintLabel {
+                        text: qsTr("Live IMAP features reported by each account's server. Refresh contacts the server.")
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.sm
+                        AppComboBox {
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            enabled: root.capsAccounts.length > 0
+                            model: root.capsAccountEmails()
+                            currentIndex: root.capsAccountIndex()
+                            onActivated: index => {
+                                if (index >= 0 && index < root.capsAccounts.length) {
+                                    root.capsAccountId = root.capsAccounts[index].id
+                                    root.refreshCaps()
+                                }
+                            }
+                        }
+                        AppButton {
+                            text: qsTr("Refresh")
+                            enabled: !root.capsLoading && root.capsAccountId >= 0
+                            onClicked: root.refreshCaps()
+                        }
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        visible: root.capsEmail !== "" || root.capsHost !== ""
+                        text: root.capsEmail !== "" ? qsTr("%1 · %2").arg(root.capsEmail).arg(root.capsHost) : root.capsHost
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                        elide: Text.ElideRight
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        visible: root.capsLoading
+                        text: qsTr("Contacting server…")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        visible: root.capsError !== "" && !root.capsLoading
+                        text: root.capsError
+                        color: Theme.danger
+                        font.pixelSize: Theme.fontSmall
+                        wrapMode: Text.Wrap
+                    }
+                    Flow {
+                        Layout.fillWidth: true
+                        visible: !root.capsLoading && root.capsError === "" && root.serverCaps.length > 0
+                        spacing: Theme.xs
+                        Repeater {
+                            model: root.serverCaps
+                            delegate: Rectangle {
+                                required property var modelData
+                                radius: Theme.radius
+                                color: Theme.bgAlt
+                                border.width: 1
+                                border.color: Theme.border
+                                width: capLabel.implicitWidth + 2 * Theme.sm
+                                height: capLabel.implicitHeight + 2 * Theme.xs
+                                Label {
+                                    id: capLabel
+                                    anchors.centerIn: parent
+                                    text: parent.modelData
+                                    color: Theme.text
+                                    font.pixelSize: Theme.fontSmall
+                                    font.family: "monospace"
+                                }
+                            }
+                        }
+                    }
+                    HintLabel {
+                        visible: !root.capsLoading && root.capsError === "" && root.serverCaps.length === 0
+                        text: root.capsAccounts.length === 0 ? qsTr("Add an account first.") : qsTr("No capabilities loaded yet — press Refresh.")
                     }
                 }
             }

@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use std::net::TcpStream;
 
 use imap::types::{Flag, NameAttribute};
+use imap_proto::types::Capability;
 use native_tls::{TlsConnector, TlsStream};
 
 use crate::db::Db;
@@ -352,6 +353,25 @@ impl ImapSync {
             Some(s) => s.noop().is_ok(),
             None => false,
         }
+    }
+
+    /// Server CAPABILITY names (RFC 3501 §7.2.1) for the settings About view.
+    /// One cheap round-trip on the pooled session, no folder selected.
+    /// Returns sorted, de-duplicated names (`IMAP4rev1`, `IDLE`, `MOVE`,
+    /// `AUTH=PLAIN`, …).
+    pub fn capabilities_list(&mut self) -> Result<Vec<String>> {
+        let caps = self.session()?.capabilities()?;
+        let mut out: Vec<String> = caps
+            .iter()
+            .map(|c| match c {
+                Capability::Imap4rev1 => "IMAP4rev1".to_string(),
+                Capability::Auth(mech) => format!("AUTH={mech}"),
+                Capability::Atom(atom) => (*atom).to_string(),
+            })
+            .collect();
+        out.sort();
+        out.dedup();
+        Ok(out)
     }
 
     /// Ask the server for its namespaces (best effort — many servers don't

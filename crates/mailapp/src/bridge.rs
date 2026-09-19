@@ -33,6 +33,8 @@ pub mod qobject {
         #[qproperty(QString, sort_field)]
         #[qproperty(bool, sort_descending)]
         #[qproperty(bool, busy)]
+        #[qproperty(QString, app_version)]
+        #[qproperty(QString, app_license)]
         #[namespace = "mailclient"]
         type Bridge = super::BridgeRust;
 
@@ -295,6 +297,15 @@ pub mod qobject {
         /// reaps the server-side sessions, like any network drop.
         #[qinvokable]
         fn disconnect_all(&self);
+
+        /// Ask one account's IMAP server for its CAPABILITY list (About view).
+        /// Network runs on the mailclient-net thread: returns `""` when queued
+        /// (the JSON payload arrives via `job_finished` with kind
+        /// `"Capabilities"`), or a busy/error message when not queued.
+        /// The payload is always JSON:
+        /// `{account_id, email, imap_host, imap_port, capabilities[], error}`.
+        #[qinvokable]
+        fn refresh_server_capabilities(self: Pin<&mut Self>, account_id: i64) -> QString;
     }
 
     extern "RustQt" {
@@ -363,6 +374,8 @@ pub struct BridgeRust {
     sort_field: QString,
     sort_descending: bool,
     busy: bool,
+    app_version: QString,
+    app_license: QString,
 }
 
 /// Initial older-load batch size; cached messages are always rendered in full.
@@ -388,6 +401,8 @@ impl Default for BridgeRust {
             sort_field: qstring("date"),
             sort_descending: true,
             busy: false,
+            app_version: qstring(env!("CARGO_PKG_VERSION")),
+            app_license: qstring(env!("CARGO_PKG_LICENSE")),
         }
     }
 }
@@ -560,6 +575,7 @@ impl Default for SettingsBridgeRust {
 }
 
 mod accounts;
+mod capabilities;
 mod composer;
 mod messages;
 mod session;

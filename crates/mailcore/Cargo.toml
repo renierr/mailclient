@@ -17,6 +17,7 @@ directories = "6.0"
 # Mail protocols (wired up in Milestone 1-2; versions pinned early on purpose)
 lettre = "0.11"
 imap = "2.4"
+imap-proto = "0.10"
 native-tls = "0.2"
 mail-parser = "0.11"
 

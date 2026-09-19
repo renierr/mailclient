@@ -1126,6 +1126,7 @@ dependencies = [
  "dotenvy",
  "env_logger",
  "imap",
+ "imap-proto",
  "keyring",
  "lettre",
  "log",
