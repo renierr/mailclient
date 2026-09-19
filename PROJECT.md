@@ -47,10 +47,10 @@ Secrets live in the OS keyring keyed by `accounts.auth_vault_key`, never in SQLi
 |---|---|---|
 | 0 | Repo scaffold: workspace, `mailcore` schema + CRUD, `mailapp` cxx-qt skeleton, QML shell, `./dev.sh`/`./build.sh`/`scripts/install-local.sh`, `dist/` bundle | ✅ done |
 | 1 | Real IMAP sync + app wiring: account setup (keyring), LIST/SELECT/FETCH, UIDVALIDITY handling, flag push/delete, send + Sent-copy, live folder/message feeds in QML | ✅ done (verified live against test account) |
-| 2 | Composer polish: drafts, attachments, full rich-text editor (toolbar wraps selection today) | 🔶 partial (rich HTML compose + source view + Cc/Bcc + auto send-format + attachments done; drafts still M2) |
+| 2 | Composer polish: drafts, attachments, full rich-text editor (toolbar wraps selection today) | ✅ done (rich HTML compose + source view + Cc/Bcc + auto send-format + attachments; server drafts save/replace/open with close-time Save offer and Drafts auto-create) |
 | 3 | Reader/search: FTS search UI, remote-image handling polish | 🔶 partial (safe sanitized HTML reader + remote-block banner + show-once done; FTS UI still M3) |
 | 4 | Contacts, threading, notifications, settings UI extras | ⬜ planned |
-| 5 | Polish: background IDLE/polling sync, offline/error states, onboarding, `.desktop`/icons, Windows feasibility | 🔶 partial (auto-check timer + pooled IMAP sessions done, manual ⟳ kept; IDLE not yet; headless `--sync-once`/`--status` JSON + Omarchy bar widget `mailclient.unread` done, see below) |
+| 5 | Polish: background polling sync, offline/error states, onboarding, `.desktop`/icons, Windows feasibility | 🔶 partial (auto-check timer + pooled IMAP sessions done, manual ⟳ kept; IMAP IDLE push explicitly dropped — not needed, polling covers it; headless `--sync-once`/`--status` JSON + Omarchy bar widget `mailclient.unread` done, see below) |
 | 6 | Bar integration: shared `mailcore::sync::headless` (GUI + CLI same orchestration), `mailapp --sync-once/--status [--json]`, cross-process `.sync.lock`, `resources/omarchy/mailclient/` bar-widget plugin (status poll + sync timers, notify-on-rise, click-to-open) | ✅ done |
 
 Current state detail:

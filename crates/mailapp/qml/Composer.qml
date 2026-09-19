@@ -736,6 +736,15 @@ Dialog {
                 font.pixelSize: Theme.fontTiny
             }
             Item { Layout.fillWidth: true }
+            // Server drafts get an explicit delete: closing (Discard) only
+            // ever abandons local edits, it never destroys the server copy.
+            IconButton {
+                visible: root.draftUid >= 0
+                text: "🗑"
+                contentColor: Theme.danger
+                tooltip: qsTr("Delete this draft from the server…")
+                onClicked: deleteDraftConfirm.open()
+            }
             AppButton {
                 text: qsTr("Discard")
                 onClicked: root.requestClose()
@@ -861,13 +870,15 @@ Dialog {
         }
     }
 
-    // Flaw F5: never lose typed content without asking.
+    // Flaw F5: never lose typed content without asking. This dialog only
+    // ever abandons local edits — destroying a server draft is a separate
+    // explicit action (the 🗑 button → deleteDraftConfirm below).
     Dialog {
         id: discardConfirm
-        title: qsTr("Discard draft?")
+        title: qsTr("Unsent changes")
         modal: true
         anchors.centerIn: parent
-        width: 380
+        width: 440
         padding: Theme.lg
 
         background: Rectangle {
@@ -881,19 +892,29 @@ Dialog {
             spacing: Theme.sm
             Item { Layout.fillWidth: true }
             AppButton {
-                text: qsTr("Keep editing")
+                text: qsTr("Cancel")
                 onClicked: discardConfirm.close()
             }
             AppButton {
-                Layout.rightMargin: Theme.lg
-                Layout.bottomMargin: Theme.md
-                Layout.topMargin: Theme.sm
-                text: qsTr("Discard")
+                text: root.draftUid >= 0 ? qsTr("Discard changes") : qsTr("Discard")
                 intent: "danger"
                 onClicked: {
                     root.markClean()
                     discardConfirm.close()
                     root.close()
+                }
+            }
+            AppButton {
+                Layout.rightMargin: Theme.lg
+                Layout.bottomMargin: Theme.md
+                Layout.topMargin: Theme.sm
+                text: qsTr("Save draft")
+                intent: "primary"
+                onClicked: {
+                    // Stays open until the save job reports back (see
+                    // onSaveDraftRequested): a failure keeps the text.
+                    discardConfirm.close()
+                    root.requestSaveDraft()
                 }
             }
         }
@@ -903,7 +924,66 @@ Dialog {
             wrapMode: Text.Wrap
             color: Theme.text
             font.pixelSize: Theme.fontBase
-            text: qsTr("This message has not been sent. Discard it?")
+            text: root.draftUid >= 0
+                  ? qsTr("Discard your edits? The saved draft on the server is kept.")
+                  : qsTr("This message has not been sent. Save it as a draft on the server?")
+        }
+    }
+
+    // Destroying a server draft: permanent, so it says so out loud with
+    // its own Cancel. Reached only via the 🗑 button, never via Discard.
+    Dialog {
+        id: deleteDraftConfirm
+        title: qsTr("Delete draft?")
+        modal: true
+        anchors.centerIn: parent
+        width: 400
+        padding: Theme.lg
+
+        background: Rectangle {
+            color: Theme.bg
+            radius: Theme.radiusLg
+            border.width: 1
+            border.color: Theme.border
+        }
+
+        footer: RowLayout {
+            spacing: Theme.sm
+            Item { Layout.fillWidth: true }
+            AppButton {
+                text: qsTr("Cancel")
+                onClicked: deleteDraftConfirm.close()
+            }
+            AppButton {
+                Layout.rightMargin: Theme.lg
+                Layout.bottomMargin: Theme.md
+                Layout.topMargin: Theme.sm
+                text: qsTr("Delete draft")
+                intent: "danger"
+                onClicked: {
+                    if (root.backend && root.backend.delete_draft) {
+                        var uid = root.draftUid
+                        root.markClean()
+                        deleteDraftConfirm.close()
+                        root.close()
+                        var r = root.backend.delete_draft(uid)
+                        if (r !== "")
+                            root.statusMessage(r)
+                    } else {
+                        root.markClean()
+                        deleteDraftConfirm.close()
+                        root.close()
+                    }
+                }
+            }
+        }
+
+        Label {
+            width: parent.width
+            wrapMode: Text.Wrap
+            color: Theme.text
+            font.pixelSize: Theme.fontBase
+            text: qsTr("This draft will be permanently deleted from the server. This cannot be undone.")
         }
     }
 }

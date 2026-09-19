@@ -570,6 +570,12 @@ pub(crate) fn assemble_message(
             );
         }
     }
+    // No recipients at all: only a stored draft gets here (every send path
+    // requires ≥1 recipient before this). lettre refuses to build without an
+    // envelope, but a draft is stored, never submitted — and `formatted()`
+    // serializes headers + body only, so this envelope never persists.
+    // Point it at the sender to satisfy the builder.
+    let no_recipients = to_valid.is_empty() && cc.is_empty() && bcc.is_empty();
     for m in to_valid {
         builder = builder.to(m);
     }
@@ -578,6 +584,12 @@ pub(crate) fn assemble_message(
     }
     for b in bcc {
         builder = builder.bcc(b.parse()?);
+    }
+    if no_recipients {
+        builder = builder.envelope(
+            Envelope::new(Some(from.email.clone()), vec![from.email.clone()])
+                .map_err(|e| StoreError::InvalidInput(format!("cannot address draft: {e}")))?,
+        );
     }
     Ok(if files.is_empty() {
         match (format, html) {
@@ -973,6 +985,39 @@ mod tests {
         };
         let raw = String::from_utf8(format_draft(&account, &request).unwrap()).unwrap();
         assert!(raw.contains("Subject: unfinished"));
+        assert!(raw.contains("still writing"));
+    }
+
+    #[test]
+    fn a_draft_without_any_recipient_still_saves() {
+        // A half-written draft (no To/Cc/Bcc yet) must be storable: lettre
+        // refuses to build without an envelope, so the builder gets a
+        // sender-pointed placeholder — headers + body carry the real
+        // `To: undisclosed-recipients:;` line either way.
+        let account = test_account();
+        let empty: Vec<String> = Vec::new();
+        let files = Vec::new();
+        let request = SendRequest {
+            to: &empty,
+            cc: &empty,
+            bcc: &empty,
+            from: None,
+            from_name: None,
+            reply_to: None,
+            subject: "not yet addressed",
+            body_text: "<p>still writing</p>",
+            body_html: Some("<p>still writing</p>"),
+            attachments: &files,
+            format: SendFormat::Auto,
+            include_plain: true,
+            policy: &SendPolicy::TestAllowlist(Vec::new()),
+            password: "",
+            imap_password: None,
+            request_mdn: false,
+        };
+        let raw = String::from_utf8(format_draft(&account, &request).unwrap()).unwrap();
+        assert!(raw.contains("Subject: not yet addressed"));
+        assert!(raw.contains("To: undisclosed-recipients:;"));
         assert!(raw.contains("still writing"));
     }
 

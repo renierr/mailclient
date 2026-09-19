@@ -253,11 +253,27 @@ impl qobject::Bridge {
         let current_folder_id = *self.current_folder_id();
         spawn_job(self, "Save draft", move |db, _progress| {
             let acc = current_account(db, wanted)?;
-            let drafts = folders::list_by_account(db, acc.id)
+            let drafts = match folders::list_by_account(db, acc.id)
                 .map_err(|e| e.to_string())?
                 .into_iter()
                 .find(|f| f.role == mailcore::models::FolderRole::Drafts)
-                .ok_or_else(|| "no server Drafts folder found; sync folders first".to_string())?;
+            {
+                Some(d) => d,
+                None => {
+                    // No Drafts folder on this account yet: create one
+                    // server-side so saving always works (mirrors the
+                    // Archive auto-create on the archive path).
+                    let delimiter = folders::list_by_account(db, acc.id)
+                        .unwrap_or_default()
+                        .first()
+                        .map(|f| f.delimiter.clone())
+                        .unwrap_or_else(|| "/".to_string());
+                    with_imap(&acc, |imap| {
+                        imap.create_folder_path(db, acc.id, "Drafts", &delimiter)
+                            .map_err(|e| e.to_string())
+                    })?
+                }
+            };
             if source_uid >= 0 {
                 let source = messages::get_by_uid(db, drafts.id, source_uid as u32)
                     .map_err(|_| "source draft no longer exists".to_string())?;
@@ -354,6 +370,36 @@ impl qobject::Bridge {
                 // Read-only: opening a draft must not rebuild the feed under
                 // the list the user just clicked in.
                 None,
+            ))
+        })
+    }
+
+    pub fn delete_draft(self: Pin<&mut Self>, uid: i32) -> QString {
+        if uid < 0 {
+            return qstring("draft is no longer available");
+        }
+        let wanted = *self.current_account_id();
+        let current = *self.current_folder_id();
+        spawn_job(self, "Delete", move |db, _progress| {
+            let acc = current_account(db, wanted)?;
+            let drafts = folders::list_by_account(db, acc.id)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .find(|f| f.role == mailcore::models::FolderRole::Drafts)
+                .ok_or_else(|| "draft is no longer available".to_string())?;
+            let msg = messages::get_by_uid(db, drafts.id, uid as u32)
+                .map_err(|_| "draft is no longer available".to_string())?;
+            if !msg.is_draft {
+                return Err("message is not a draft".to_string());
+            }
+            // Drafts are destroyed outright, never filed to Trash:
+            // discarding an unsent draft means it is gone.
+            with_imap(&acc, |imap| {
+                imap.delete_message(db, msg.id).map_err(|e| e.to_string())
+            })?;
+            Ok((
+                "Draft deleted".to_string(),
+                Some(JobRefresh::feeds(acc.id, current)),
             ))
         })
     }

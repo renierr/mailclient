@@ -292,6 +292,12 @@ pub mod qobject {
         #[qinvokable]
         fn draft_form(self: Pin<&mut Self>, uid: i32) -> QString;
 
+        /// Destroy a server draft (`\Deleted` + expunge, never filed to
+        /// Trash). What the composer's Discard means for a draft opened
+        /// from the Drafts folder.
+        #[qinvokable]
+        fn delete_draft(self: Pin<&mut Self>, uid: i32) -> QString;
+
         /// Drop all pooled IMAP sessions (app quit). No LOGOUT round-trip,
         /// so quit never blocks on a dead connection — closing the sockets
         /// reaps the server-side sessions, like any network drop.

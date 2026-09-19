@@ -754,8 +754,16 @@ impl ImapSync {
             for msg in session.uid_fetch(set, "(UID FLAGS)")?.iter() {
                 if let Some(uid) = msg.uid {
                     let (read, starred, draft) = flag_state(msg.flags());
+                    // A draft you wrote is not "unread" — keep the flag
+                    // refresh from lighting up Drafts rows and pills.
                     messages::set_flags_by_uid(
-                        db, account.id, folder_id, uid, read, starred, draft,
+                        db,
+                        account.id,
+                        folder_id,
+                        uid,
+                        read || draft,
+                        starred,
+                        draft,
                     )?;
                 }
             }
@@ -1317,6 +1325,9 @@ fn parse_to_new(
         .parse(raw)
         .ok_or_else(|| StoreError::InvalidInput(format!("cannot parse message uid {uid}")))?;
     let (is_read, is_starred, is_draft) = flag_state(flags);
+    // A draft you wrote is not "unread": never badge it, pill it, or dot
+    // its row (see the flag-refresh loop, which applies the same rule).
+    let is_read = is_read || is_draft;
 
     let body_text = parsed.body_text(0).map(|c| c.into_owned());
     let snippet = body_text.as_deref().map(|t| {
