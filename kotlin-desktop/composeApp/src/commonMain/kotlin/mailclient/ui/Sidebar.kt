@@ -86,13 +86,13 @@ fun Sidebar(
                     Text(
                         text = if (currentEmail.isBlank()) "No account" else currentEmail,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
+                        fontSize = 14.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         text = if (accounts.size > 1) "${accounts.size} accounts — switch" else "Manage account",
-                        fontSize = 11.sp,
+                        fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -191,14 +191,14 @@ fun Sidebar(
                     // Folder icon based on role
                     Text(
                         text = folderIcon(f.role),
-                        fontSize = 14.sp,
+                        fontSize = 15.sp,
                     )
 
                     // Folder name
                     Text(
                         text = f.displayName(),
                         fontWeight = if (f.unread > 0 || active) FontWeight.Bold else FontWeight.Normal,
-                        fontSize = 13.sp,
+                        fontSize = 14.sp,
                         color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -209,8 +209,8 @@ fun Sidebar(
                     if (f.count > 0) {
                         Text(
                             text = "${f.count}",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
                         )
                     }
 
@@ -223,13 +223,13 @@ fun Sidebar(
                                     if (active) MaterialTheme.colorScheme.primary
                                     else MaterialTheme.colorScheme.outline.copy(alpha = 0.8f),
                                 )
-                                .padding(horizontal = 7.dp, vertical = 1.dp),
+                                .padding(horizontal = 7.dp, vertical = 2.dp),
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
                                 text = "${f.unread}",
                                 color = if (active) Color.White else MaterialTheme.colorScheme.onSurface,
-                                fontSize = 10.sp,
+                                fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                             )
                         }

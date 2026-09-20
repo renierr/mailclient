@@ -103,7 +103,7 @@ fun MessageViewPane(
             Text(
                 text = detail.subject.ifBlank { "(no subject)" },
                 fontWeight = FontWeight.Bold,
-                fontSize = 18.sp,
+                fontSize = 20.sp,
                 color = MaterialTheme.colorScheme.onSurface,
             )
 
@@ -115,28 +115,28 @@ fun MessageViewPane(
             ) {
                 SenderAvatar(
                     seed = detail.from,
-                    size = 36.dp,
-                    fontSize = 14.sp,
+                    size = 38.dp,
+                    fontSize = 15.sp,
                 )
 
                 Column(Modifier.weight(1f)) {
                     Text(
                         text = detail.from,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
+                        fontSize = 14.5.sp,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         text = detail.date,
-                        fontSize = 11.sp,
+                        fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     if (detail.reply_to.isNotBlank() && !detail.reply_to.equals(detail.from, ignoreCase = true)) {
                         Text(
                             text = "↩ Replies go to ${detail.reply_to}, not to sender",
-                            fontSize = 11.sp,
+                            fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.error,
                         )
                     }
@@ -153,7 +153,7 @@ fun MessageViewPane(
                 ) {
                     Text(
                         text = if (headerExpanded) "Details ⌃" else "Details ⌄",
-                        fontSize = 11.sp,
+                        fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -255,8 +255,8 @@ fun MessageViewPane(
         ) {
             Text(
                 text = detail.readableText(),
-                fontSize = 14.sp,
-                lineHeight = 22.sp,
+                fontSize = 15.sp,
+                lineHeight = 24.sp,
                 color = MaterialTheme.colorScheme.onSurface,
             )
         }
@@ -317,7 +317,7 @@ private fun DesktopActionButton(
     ) {
         Text(
             text = label,
-            fontSize = 12.sp,
+            fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
             color = textColor ?: MaterialTheme.colorScheme.onSurface,
         )

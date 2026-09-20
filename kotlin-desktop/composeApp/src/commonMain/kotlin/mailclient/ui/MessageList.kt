@@ -1,7 +1,6 @@
 package mailclient.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,7 +17,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -33,8 +31,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -44,8 +40,8 @@ import mailclient.models.MessageRow
 import mailclient.models.SearchHit
 
 /**
- * Middle pane: compact search bar + header bar + message rows (QML MessageList.qml).
- * Includes sender avatars, unread indicator, attachment indicators, and star toggles.
+ * Middle pane: header bar with folder name, count, sort dropdown, and message rows.
+ * (Search is located in the top toolbar, matching QML Main.qml).
  */
 @Composable
 fun MessageListPane(
@@ -53,8 +49,6 @@ fun MessageListPane(
     rows: List<MessageRow>,
     hits: List<SearchHit>,
     searching: Boolean,
-    query: String,
-    onQuery: (String) -> Unit,
     currentUid: Long?,
     currentFolderId: Long?,
     sortField: String,
@@ -72,8 +66,8 @@ fun MessageListPane(
         Row(
             Modifier
                 .fillMaxWidth()
-                .height(38.dp)
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                .height(40.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
                 .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -86,14 +80,14 @@ fun MessageListPane(
                 Text(
                     text = if (searching) "Search results" else folderName.ifBlank { "Messages" },
                     fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp,
+                    fontSize = 14.sp,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = if (searching) "${hits.size}" else "${rows.size}",
-                    fontSize = 11.sp,
+                    fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -111,12 +105,12 @@ fun MessageListPane(
                     Modifier
                         .clip(RoundedCornerShape(4.dp))
                         .clickable { sortMenuExpanded = true }
-                        .padding(horizontal = 6.dp, vertical = 3.dp),
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Text("⇅", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(sortLabel, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("⇅", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(sortLabel, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
 
                 DropdownMenu(
@@ -164,61 +158,7 @@ fun MessageListPane(
             }
         }
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-
-        // --- Compact Desktop Search Bar ---
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-        ) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .height(32.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
-                    .padding(horizontal = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Text("🔍", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Box(Modifier.weight(1f)) {
-                    if (query.isEmpty()) {
-                        Text(
-                            "Search (3+ letters: all folders)",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        )
-                    }
-                    BasicTextField(
-                        value = query,
-                        onValueChange = onQuery,
-                        singleLine = true,
-                        textStyle = TextStyle(
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        ),
-                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                if (query.isNotEmpty()) {
-                    Text(
-                        "✕",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .clickable { onQuery("") }
-                            .padding(2.dp),
-                    )
-                }
-            }
-        }
-
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
 
         // --- Message Rows ---
         if (searching) {
@@ -282,7 +222,7 @@ private fun MessageItemRow(
             .fillMaxWidth()
             .clickable { onSelect() }
             .background(
-                if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
                 else Color.Transparent,
             ),
     ) {
@@ -338,7 +278,7 @@ private fun MessageItemRow(
                     Text(
                         text = message.from.ifBlank { "(unknown)" },
                         fontWeight = if (message.unread) FontWeight.Bold else FontWeight.Medium,
-                        fontSize = 13.sp,
+                        fontSize = 14.sp,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -347,13 +287,13 @@ private fun MessageItemRow(
                     if (message.has_attachments) {
                         Text(
                             text = "📎 ",
-                            fontSize = 11.sp,
+                            fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     Text(
                         text = message.date,
-                        fontSize = 11.sp,
+                        fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.End,
                     )
@@ -363,7 +303,7 @@ private fun MessageItemRow(
                 Text(
                     text = message.subject.ifBlank { "(no subject)" },
                     fontWeight = if (message.unread) FontWeight.Bold else FontWeight.Normal,
-                    fontSize = 13.sp,
+                    fontSize = 14.sp,
                     color = if (message.unread) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -373,7 +313,7 @@ private fun MessageItemRow(
                 if (message.snippet.isNotBlank()) {
                     Text(
                         text = message.snippet,
-                        fontSize = 12.sp,
+                        fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -392,7 +332,7 @@ private fun MessageItemRow(
                 Text(
                     text = if (message.starred) "★" else "☆",
                     color = if (message.starred) StarOn else StarOff,
-                    fontSize = 15.sp,
+                    fontSize = 16.sp,
                 )
             }
         }
@@ -417,7 +357,7 @@ private fun SearchHitRow(
             .fillMaxWidth()
             .clickable { onSelect() }
             .background(
-                if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
                 else Color.Transparent,
             ),
     ) {
@@ -494,7 +434,6 @@ private fun SearchHitRow(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // Folder badge in search results (QML idiom)
                     Text(
                         text = "[${hit.folder}]",
                         fontSize = 10.sp,

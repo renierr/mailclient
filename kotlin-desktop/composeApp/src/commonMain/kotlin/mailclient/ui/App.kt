@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,7 +16,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -32,6 +36,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -70,6 +76,7 @@ fun MailApp(repo: MailRepository) {
     var composerSubject by remember { mutableStateOf("") }
     var composerBody by remember { mutableStateOf("") }
     var showAccounts by remember { mutableStateOf(false) }
+    var sidebarVisible by remember { mutableStateOf(true) }
 
     // Sorting state
     var sortField by remember { mutableStateOf("date") }
@@ -351,25 +358,92 @@ fun MailApp(repo: MailRepository) {
     }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        // --- Desktop Toolbar (Height 42dp, integrated styling) ---
+        // --- Desktop Toolbar (Height 44dp, integrated search bar matching QML) ---
         Row(
             Modifier
                 .fillMaxWidth()
-                .height(42.dp)
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-                .padding(horizontal = 12.dp),
+                .height(44.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // App Brand
-            Text(
-                "📬 Mailclient",
-                fontWeight = FontWeight.Bold,
-                fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurface,
+            // Toggle sidebar button (QML ☰)
+            Box(
+                Modifier
+                    .size(30.dp)
+                    .clip(RoundedCornerShape(5.dp))
+                    .clickable { sidebarVisible = !sidebarVisible }
+                    .padding(4.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "☰",
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+
+            // Compose Button (Primary intent)
+            ToolbarButton(
+                label = "✎  Compose",
+                isPrimary = true,
+                onClick = { startCompose() },
             )
 
-            Spacer(Modifier.width(8.dp))
+            // Search Bar (Centered, flexible width matching available toolbar space)
+            Box(
+                Modifier
+                    .weight(1f, fill = false)
+                    .widthIn(min = 160.dp, max = 380.dp)
+                    .height(30.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                    .padding(horizontal = 8.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("🔍", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Box(Modifier.weight(1f)) {
+                        if (query.isEmpty()) {
+                            Text(
+                                "Search mail… (3+ letters: all folders)",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            )
+                        }
+                        BasicTextField(
+                            value = query,
+                            onValueChange = { runSearch(it) },
+                            singleLine = true,
+                            textStyle = TextStyle(
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            ),
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    if (query.isNotEmpty()) {
+                        Text(
+                            "✕",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .clickable { runSearch("") }
+                                .padding(2.dp),
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.weight(1f))
 
             // Sync Button
             ToolbarButton(
@@ -378,14 +452,11 @@ fun MailApp(repo: MailRepository) {
                 onClick = { doSync() },
             )
 
-            // Compose Button
+            // Accounts button
             ToolbarButton(
-                label = "✎ Compose",
-                isPrimary = true,
-                onClick = { startCompose() },
+                label = "✉ Accounts",
+                onClick = { showAccounts = true },
             )
-
-            Spacer(Modifier.weight(1f))
 
             if (busy) {
                 CircularProgressIndicator(
@@ -399,6 +470,8 @@ fun MailApp(repo: MailRepository) {
                 text = statusText,
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             )
 
             if (unreadTotal > 0) {
@@ -406,93 +479,98 @@ fun MailApp(repo: MailRepository) {
             }
         }
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
 
-        // --- 3-Pane Layout ---
-        Row(Modifier.fillMaxSize().weight(1f)) {
-            // Sidebar
-            Sidebar(
-                accounts = accounts,
-                activeAccountId = accountId,
-                onSelectAccount = {
-                    accountId = it
-                    folderId = null
-                    currentUid = null
-                    detail = null
-                    query = ""
-                    hits = emptyList()
-                    launchReload("Switching account…")
-                },
-                onManageAccounts = { showAccounts = true },
-                folders = sortedFolders(folders.filter { it.subscribed }),
-                activeFolderId = folderId,
-                onSelectFolder = {
-                    folderId = it
-                    currentUid = null
-                    detail = null
-                    query = ""
-                    hits = emptyList()
-                    scope.launch {
-                        busy = true
-                        try {
-                            reloadRows()
-                        } finally {
-                            busy = false
+        // --- 3-Pane Layout with Responsive Sizing ---
+        BoxWithConstraints(Modifier.fillMaxSize().weight(1f)) {
+            val totalWidth = maxWidth
+            val sidebarW = if (totalWidth < 900.dp) 200.dp else 230.dp
+            val listW = if (totalWidth < 900.dp) 280.dp else 340.dp
+
+            Row(Modifier.fillMaxSize()) {
+                // Sidebar (toggled via ☰)
+                if (sidebarVisible) {
+                    Sidebar(
+                        accounts = accounts,
+                        activeAccountId = accountId,
+                        onSelectAccount = {
+                            accountId = it
+                            folderId = null
+                            currentUid = null
+                            detail = null
+                            query = ""
+                            hits = emptyList()
+                            launchReload("Switching account…")
+                        },
+                        onManageAccounts = { showAccounts = true },
+                        folders = sortedFolders(folders.filter { it.subscribed }),
+                        activeFolderId = folderId,
+                        onSelectFolder = {
+                            folderId = it
+                            currentUid = null
+                            detail = null
+                            query = ""
+                            hits = emptyList()
+                            scope.launch {
+                                busy = true
+                                try {
+                                    reloadRows()
+                                } finally {
+                                    busy = false
+                                }
+                            }
+                        },
+                        modifier = Modifier.width(sidebarW).fillMaxHeight(),
+                    )
+                    VerticalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), modifier = Modifier.fillMaxHeight().width(1.dp))
+                }
+
+                // Message List
+                MessageListPane(
+                    folderName = currentFolder?.displayName() ?: "",
+                    rows = sortedRows,
+                    hits = if (searching) hits else emptyList(),
+                    searching = searching,
+                    currentUid = currentUid,
+                    currentFolderId = folderId,
+                    sortField = sortField,
+                    sortDescending = sortDescending,
+                    onSortChange = { field, desc ->
+                        sortField = field
+                        sortDescending = desc
+                    },
+                    onSelect = { openMessage(it) },
+                    onToggleStar = { uid, starred -> toggleStar(uid, starred) },
+                    onOpenSearchHit = { hit ->
+                        folderId = hit.folder_id
+                        scope.launch {
+                            try {
+                                val d = withContext(Dispatchers.IO) { repo.message(hit.folder_id, hit.uid) }
+                                currentUid = hit.uid
+                                detail = d
+                            } catch (e: Exception) {
+                                statusText = "Open failed: ${e.message?.take(120)}"
+                            }
                         }
-                    }
-                },
-                modifier = Modifier.width(230.dp).fillMaxHeight(),
-            )
+                    },
+                    modifier = Modifier.width(listW).fillMaxHeight(),
+                )
 
-            VerticalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), modifier = Modifier.fillMaxHeight().width(1.dp))
+                VerticalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), modifier = Modifier.fillMaxHeight().width(1.dp))
 
-            // Message List
-            MessageListPane(
-                folderName = currentFolder?.displayName() ?: "",
-                rows = sortedRows,
-                hits = if (searching) hits else emptyList(),
-                searching = searching,
-                query = query,
-                onQuery = { runSearch(it) },
-                currentUid = currentUid,
-                currentFolderId = folderId,
-                sortField = sortField,
-                sortDescending = sortDescending,
-                onSortChange = { field, desc ->
-                    sortField = field
-                    sortDescending = desc
-                },
-                onSelect = { openMessage(it) },
-                onToggleStar = { uid, starred -> toggleStar(uid, starred) },
-                onOpenSearchHit = { hit ->
-                    folderId = hit.folder_id
-                    scope.launch {
-                        try {
-                            val d = withContext(Dispatchers.IO) { repo.message(hit.folder_id, hit.uid) }
-                            currentUid = hit.uid
-                            detail = d
-                        } catch (e: Exception) {
-                            statusText = "Open failed: ${e.message?.take(120)}"
-                        }
-                    }
-                },
-                modifier = Modifier.width(360.dp).fillMaxHeight(),
-            )
-
-            VerticalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), modifier = Modifier.fillMaxHeight().width(1.dp))
-
-            // Message Reader
-            MessageViewPane(
-                detail = detail,
-                onReply = { replyMessage(it) },
-                onReplyAll = { replyMessage(it, replyAll = true) },
-                onForward = { forwardMessage(it) },
-                onToggleStar = { uid, starred -> toggleStar(uid, starred) },
-                onDelete = { doDelete(it) },
-                onArchive = { doArchive(it) },
-                onOpenAttachment = { doOpenAttachment(it) },
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-            )
+                // Message Reader (Fills remaining width)
+                MessageViewPane(
+                    detail = detail,
+                    onReply = { replyMessage(it) },
+                    onReplyAll = { replyMessage(it, replyAll = true) },
+                    onForward = { forwardMessage(it) },
+                    onToggleStar = { uid, starred -> toggleStar(uid, starred) },
+                    onDelete = { doDelete(it) },
+                    onArchive = { doArchive(it) },
+                    onOpenAttachment = { doOpenAttachment(it) },
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                )
+            }
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
@@ -502,7 +580,7 @@ fun MailApp(repo: MailRepository) {
             Modifier
                 .fillMaxWidth()
                 .height(24.dp)
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
                 .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -560,7 +638,7 @@ private fun ToolbarButton(
     val bg = if (isPrimary) {
         MaterialTheme.colorScheme.primary
     } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)
+        MaterialTheme.colorScheme.surface
     }
     val contentColor = if (isPrimary) {
         Color.White
@@ -574,11 +652,11 @@ private fun ToolbarButton(
             .background(if (enabled) bg else bg.copy(alpha = 0.5f))
             .border(
                 1.dp,
-                if (isPrimary) Color.Transparent else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                if (isPrimary) Color.Transparent else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
                 RoundedCornerShape(5.dp),
             )
             .clickable(enabled = enabled) { onClick() }
-            .padding(horizontal = 10.dp, vertical = 4.dp),
+            .padding(horizontal = 10.dp, vertical = 5.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -586,25 +664,6 @@ private fun ToolbarButton(
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
             color = contentColor,
-        )
-    }
-}
-
-/** Rounded unread-count pill (sidebar + toolbar). */
-@Composable
-fun UnreadPill(text: String) {
-    Box(
-        Modifier
-            .clip(RoundedCornerShape(9.dp))
-            .background(UnreadAccent)
-            .padding(horizontal = 7.dp, vertical = 2.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = text,
-            color = Color.White,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Bold,
         )
     }
 }

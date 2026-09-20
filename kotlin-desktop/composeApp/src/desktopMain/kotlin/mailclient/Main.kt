@@ -14,6 +14,10 @@ import mailclient.ui.MailApp
 import mailclient.ui.MailDarkColors
 import mailclient.ui.MailLightColors
 
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+
 /**
  * Desktop entry point (Compose Multiplatform, JVM).
  * Uses in-process JNI (NativeMailRepository) for sub-millisecond execution,
@@ -33,8 +37,34 @@ fun main() = application {
         title = "Mailclient (Kotlin)",
         state = rememberWindowState(width = 1280.dp, height = 820.dp),
     ) {
-        MaterialTheme(colorScheme = if (isSystemInDarkTheme()) MailDarkColors else MailLightColors) {
-            MailApp(repo)
+        val density = LocalDensity.current
+        println("Compose LocalDensity: density=${density.density}, fontScale=${density.fontScale}")
+        val detectedScale = remember { detectSystemScale() }
+        val effectiveScale = if (density.density <= 1.05f) detectedScale else 1.0f
+        println("Applying effectiveScale: $effectiveScale")
+        CompositionLocalProvider(
+            LocalDensity provides Density(
+                density = density.density * effectiveScale,
+                fontScale = density.fontScale * effectiveScale,
+            ),
+        ) {
+            MaterialTheme(colorScheme = if (isSystemInDarkTheme()) MailDarkColors else MailLightColors) {
+                MailApp(repo)
+            }
         }
     }
+}
+
+private fun detectSystemScale(): Float {
+    System.getenv("MAILCLIENT_UI_SCALE")?.toFloatOrNull()?.let { return it }
+    try {
+        val proc = ProcessBuilder("hyprctl", "-j", "monitors").start()
+        val text = proc.inputStream.bufferedReader().readText()
+        val match = Regex("\"scale\":\\s*([0-9.]+)").find(text)
+        if (match != null) {
+            val scale = match.groupValues[1].toFloatOrNull()
+            if (scale != null && scale > 0f) return scale
+        }
+    } catch (_: Exception) {}
+    return 1.25f
 }

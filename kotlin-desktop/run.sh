@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build backend + start the Kotlin desktop mail client (Compose Multiplatform).
-# Honors MAILCLIENT_DB (same SQLite file as the QML app) and MAILFEED_BIN.
+# Build in-process JNI backend + start the Kotlin desktop mail client (Compose Multiplatform).
+# Honors MAILCLIENT_DB (same SQLite file as the QML app) and loads libmailcore_jni.so.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
@@ -21,11 +21,5 @@ fi
 echo "==> cargo build -p mailjni --release"
 cargo build --manifest-path "$ROOT/Cargo.toml" -p mailjni --release
 
-if [ -z "${MAILFEED_BIN:-}" ] || [ ! -x "${MAILFEED_BIN:-}" ]; then
-  echo "==> cargo build -p mailfeed --release"
-  cargo build --manifest-path "$ROOT/Cargo.toml" -p mailfeed --release
-  export MAILFEED_BIN="$ROOT/target/release/mailfeed"
-fi
-
-echo "==> starting Kotlin desktop app (mailfeed: $MAILFEED_BIN)"
+echo "==> starting Kotlin desktop app (in-process JNI)"
 exec "$HERE/gradlew" -p "$HERE" :composeApp:run
