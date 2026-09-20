@@ -43,3 +43,7 @@ Thumbs.db
 # Misc
 /tmp/
 *.log
+
+# Gradle & Kotlin
+.gradle/
+.kotlin/

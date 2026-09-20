@@ -1216,6 +1216,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mailfeed"
+version = "0.1.0"
+dependencies = [
+ "dotenvy",
+ "mailcore",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

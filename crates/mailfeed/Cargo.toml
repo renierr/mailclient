@@ -1,0 +1,16 @@
+[package]
+name = "mailfeed"
+version = "0.1.0"
+edition = "2021"
+description = "Qt-free JSON feed CLI over mailcore for the Kotlin desktop frontend (and later JNI replacement)."
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "mailfeed"
+path = "src/main.rs"
+
+[dependencies]
+mailcore = { path = "../mailcore" }
+serde_json = "1.0"
+dotenvy = "0.15"
+tokio = { version = "1", features = ["full"] }
