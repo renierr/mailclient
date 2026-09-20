@@ -15,14 +15,14 @@ async fn test_mock_trash_message_marks_seen_before_move() {
         let upper = rest.to_ascii_uppercase();
         if upper.starts_with("SELECT") {
             vec![
-                format!("* 1 EXISTS\r\n"),
-                format!("* OK [UIDVALIDITY 1] Ok\r\n"),
-                format!("* OK [UIDNEXT 100] Ok\r\n"),
+                "* 1 EXISTS\r\n".to_string(),
+                "* OK [UIDVALIDITY 1] Ok\r\n".to_string(),
+                "* OK [UIDNEXT 100] Ok\r\n".to_string(),
                 format!("{tag} OK [READ-WRITE] SELECT completed\r\n"),
             ]
         } else if upper.starts_with("UID STORE") {
             vec![
-                format!("* 1 FETCH (UID 99 FLAGS (\\Seen))\r\n"),
+                "* 1 FETCH (UID 99 FLAGS (\\Seen))\r\n".to_string(),
                 format!("{tag} OK STORE completed\r\n"),
             ]
         } else if upper.starts_with("UID MOVE") {
@@ -92,9 +92,9 @@ async fn test_mock_trash_message_always_marks_seen() {
         let upper = rest.to_ascii_uppercase();
         if upper.starts_with("SELECT") {
             vec![
-                format!("* 1 EXISTS\r\n"),
-                format!("* OK [UIDVALIDITY 1] Ok\r\n"),
-                format!("* OK [UIDNEXT 100] Ok\r\n"),
+                "* 1 EXISTS\r\n".to_string(),
+                "* OK [UIDVALIDITY 1] Ok\r\n".to_string(),
+                "* OK [UIDNEXT 100] Ok\r\n".to_string(),
                 format!("{tag} OK [READ-WRITE] SELECT completed\r\n"),
             ]
         } else if upper.starts_with("UID STORE") {
@@ -166,9 +166,9 @@ async fn test_mock_move_to_folder_trash_marks_seen() {
         let upper = rest.to_ascii_uppercase();
         if upper.starts_with("SELECT") {
             vec![
-                format!("* 1 EXISTS\r\n"),
-                format!("* OK [UIDVALIDITY 1] Ok\r\n"),
-                format!("* OK [UIDNEXT 100] Ok\r\n"),
+                "* 1 EXISTS\r\n".to_string(),
+                "* OK [UIDVALIDITY 1] Ok\r\n".to_string(),
+                "* OK [UIDNEXT 100] Ok\r\n".to_string(),
                 format!("{tag} OK [READ-WRITE] SELECT completed\r\n"),
             ]
         } else if upper.starts_with("UID STORE") {
@@ -238,9 +238,9 @@ async fn test_mock_move_uids_to_trash_marks_seen() {
         let upper = rest.to_ascii_uppercase();
         if upper.starts_with("SELECT") {
             vec![
-                format!("* 2 EXISTS\r\n"),
-                format!("* OK [UIDVALIDITY 1] Ok\r\n"),
-                format!("* OK [UIDNEXT 100] Ok\r\n"),
+                "* 2 EXISTS\r\n".to_string(),
+                "* OK [UIDVALIDITY 1] Ok\r\n".to_string(),
+                "* OK [UIDNEXT 100] Ok\r\n".to_string(),
                 format!("{tag} OK [READ-WRITE] SELECT completed\r\n"),
             ]
         } else if upper.starts_with("UID STORE") {

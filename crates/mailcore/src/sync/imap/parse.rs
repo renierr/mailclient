@@ -322,4 +322,55 @@ mod tests {
         assert!(!starred);
         assert!(draft);
     }
+
+    #[test]
+    fn snippet_collapses_multiline_bodies_to_one_line() {
+        let raw = b"From: a@x.y\r\nSubject: hi\r\nContent-Type: text/plain\r\n\r\nline one\nline two\r\n\tline three";
+        let (msg, _) = parse_to_new(1, 1, 7, &[], raw, false).unwrap();
+        let snippet = msg.snippet.expect("text body has a snippet");
+        assert!(!snippet.contains('\n'), "snippet must stay single-line");
+        assert_eq!(snippet, "line one line two line three");
+    }
+
+    #[test]
+    fn snippet_truncates_long_bodies_at_200_chars() {
+        let body = "w ".repeat(500);
+        let raw = format!("From: a@x.y\r\nContent-Type: text/plain\r\n\r\n{body}");
+        let (msg, _) = parse_to_new(1, 1, 7, &[], raw.as_bytes(), false).unwrap();
+        assert_eq!(msg.snippet.map(|s| s.chars().count()), Some(200));
+    }
+
+    #[test]
+    fn draft_flag_implies_read_and_headers_only_has_no_snippet() {
+        let raw = b"From: a@x.y\r\nTo: b@x.y\r\nSubject: draft\r\n\r\n";
+        let (msg, _) = parse_to_new(1, 1, 7, &[Flag::Draft], raw, false).unwrap();
+        assert!(msg.is_draft);
+        assert!(msg.is_read, "drafts count as read");
+        assert!(msg.snippet.as_deref().unwrap_or_default().is_empty());
+        assert_eq!(msg.from_addr.as_deref(), Some("a@x.y"));
+    }
+
+    #[test]
+    fn missing_from_header_yields_none_not_panic() {
+        let raw = b"Subject: no sender\r\nContent-Type: text/plain\r\n\r\nbody";
+        let (msg, _) = parse_to_new(1, 1, 7, &[], raw, false).unwrap();
+        assert!(msg.from_addr.is_none());
+        assert_eq!(msg.subject.as_deref(), Some("no sender"));
+        assert!(!msg.is_read);
+    }
+
+    #[test]
+    fn single_attachment_sets_flag_with_and_without_bytes() {
+        let raw = b"From: a@x.y\r\nTo: b@x.y\r\nSubject: files\r\nContent-Type: multipart/mixed; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\nsee attached\r\n--B\r\nContent-Type: text/plain; name=\"n.txt\"\r\nContent-Disposition: attachment; filename=\"n.txt\"\r\nContent-Transfer-Encoding: base64\r\n\r\naGk=\r\n--B--\r\n";
+        let (meta_msg, meta_files) = parse_to_new(1, 1, 7, &[], raw, false).unwrap();
+        assert!(meta_msg.has_attachments);
+        assert_eq!(meta_files.len(), 1);
+        assert!(
+            meta_files[0].data.is_none(),
+            "metadata pass stores no bytes"
+        );
+        let (_, full_files) = parse_to_new(1, 1, 7, &[], raw, true).unwrap();
+        assert_eq!(full_files.len(), 1);
+        assert_eq!(full_files[0].data.as_deref(), Some(b"hi".as_slice()));
+    }
 }

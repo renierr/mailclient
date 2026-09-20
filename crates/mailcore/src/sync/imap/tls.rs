@@ -31,3 +31,22 @@ pub(crate) fn server_name_for(host: &str) -> Result<ServerName<'static>> {
         .map(|s| s.to_owned())
         .map_err(|e| StoreError::Network(format!("invalid server name {host}: {e}")))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_name_accepts_dns_and_ip_literals() {
+        assert!(server_name_for("imap.example.com").is_ok());
+        assert!(server_name_for("127.0.0.1").is_ok());
+        assert!(server_name_for("::1").is_ok());
+        assert!(server_name_for("").is_err());
+        assert!(server_name_for("bad host!").is_err());
+    }
+
+    #[test]
+    fn tls_connector_builds() {
+        assert!(build_tls_connector().is_ok());
+    }
+}

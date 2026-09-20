@@ -13,9 +13,9 @@ async fn test_mock_capabilities_guard_no_extensions() {
         let upper = rest.to_ascii_uppercase();
         if upper.starts_with("SELECT") {
             vec![
-                format!("* 10 EXISTS\r\n"),
-                format!("* OK [UIDVALIDITY 1] Ok\r\n"),
-                format!("* OK [UIDNEXT 100] Ok\r\n"),
+                "* 10 EXISTS\r\n".to_string(),
+                "* OK [UIDVALIDITY 1] Ok\r\n".to_string(),
+                "* OK [UIDNEXT 100] Ok\r\n".to_string(),
                 format!("{tag} OK [READ-WRITE] SELECT completed\r\n"),
             ]
         } else if upper.starts_with("UID COPY") {
@@ -24,7 +24,7 @@ async fn test_mock_capabilities_guard_no_extensions() {
             vec![format!("{tag} OK STORE completed\r\n")]
         } else if upper.starts_with("EXPUNGE") {
             vec![
-                format!("* 1 EXPUNGE\r\n"),
+                "* 1 EXPUNGE\r\n".to_string(),
                 format!("{tag} OK EXPUNGE completed\r\n"),
             ]
         } else {
@@ -83,9 +83,9 @@ async fn test_mock_select_fallback_on_unsupported_condstore() {
             vec![format!("{tag} BAD [CANNOT] parameter not supported\r\n")]
         } else if upper.starts_with("SELECT") {
             vec![
-                format!("* 5 EXISTS\r\n"),
-                format!("* OK [UIDVALIDITY 1] Ok\r\n"),
-                format!("* OK [UIDNEXT 50] Ok\r\n"),
+                "* 5 EXISTS\r\n".to_string(),
+                "* OK [UIDVALIDITY 1] Ok\r\n".to_string(),
+                "* OK [UIDNEXT 50] Ok\r\n".to_string(),
                 format!("{tag} OK [READ-WRITE] SELECT completed\r\n"),
             ]
         } else {
@@ -132,7 +132,7 @@ async fn test_mock_uid_move_fallback_when_server_rejects_move() {
             vec![format!("{tag} OK STORE completed\r\n")]
         } else if upper.starts_with("EXPUNGE") {
             vec![
-                format!("* 1 EXPUNGE\r\n"),
+                "* 1 EXPUNGE\r\n".to_string(),
                 format!("{tag} OK EXPUNGE completed\r\n"),
             ]
         } else {
@@ -175,7 +175,7 @@ async fn test_mock_changesince_fallback_when_server_rejects_modifier() {
             vec![format!("{tag} BAD Unknown modifier CHANGEDSINCE\r\n")]
         } else if upper.starts_with("UID FETCH") {
             vec![
-                format!("* 1 FETCH (UID 7 FLAGS (\\Seen))\r\n"),
+                "* 1 FETCH (UID 7 FLAGS (\\Seen))\r\n".to_string(),
                 format!("{tag} OK UID FETCH completed\r\n"),
             ]
         } else {

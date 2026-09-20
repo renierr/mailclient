@@ -271,3 +271,26 @@ pub struct QueuedSend {
     pub created_at: String,
     pub updated_at: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn folder_role_string_roundtrip() {
+        for role in [
+            FolderRole::Inbox,
+            FolderRole::Sent,
+            FolderRole::Drafts,
+            FolderRole::Trash,
+            FolderRole::Junk,
+            FolderRole::Archive,
+            FolderRole::Custom,
+        ] {
+            assert_eq!(FolderRole::parse_role(role.as_str()), role);
+            assert_eq!(role.as_str().parse::<FolderRole>().unwrap(), role);
+        }
+        assert_eq!(FolderRole::parse_role("SPAM"), FolderRole::Junk);
+        assert_eq!(FolderRole::parse_role("whatever"), FolderRole::Custom);
+    }
+}

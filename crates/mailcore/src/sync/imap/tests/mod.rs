@@ -9,3 +9,5 @@
 mod discovery;
 mod ops;
 mod protocol;
+mod session;
+mod sync;
