@@ -8,7 +8,7 @@ use mailcore::sync::imap::{ArchiveOutcome, MoveOutcome, TrashOutcome};
 
 use crate::bridge::qobject;
 use crate::bridge::session::{checkout_session, current_account};
-use crate::bridge::worker::{spawn_job, JobRefresh};
+use crate::bridge::worker::{JobRefresh, spawn_flag_push, spawn_job};
 use crate::bridge::{open_db, push_feeds, qstring, MAX_MESSAGE_LIMIT};
 
 /// Turn save-dialog output into a plain path. Dialogs hand back `file://`
@@ -373,6 +373,9 @@ impl qobject::Bridge {
         };
         if !msg.is_read {
             let _ = messages::set_flags(&db, msg.id, true, msg.is_starred);
+            // Seen is pushed promptly in the background (plus again on the
+            // next sync), so closing the app right after reading loses nothing.
+            spawn_flag_push(acc_id);
         }
         // Refresh the QML-bound feeds so the follow-up reloadMessages() /
         // reloadFolders() in QML see the cleared unread flag immediately.
@@ -391,8 +394,9 @@ impl qobject::Bridge {
         let Ok(msg) = messages::get_by_uid(&db, folder_id, uid as u32) else {
             return qstring("");
         };
-        // Queued, not pushed: see open_message.
+        // Queued locally, pushed promptly in the background (see open_message).
         let _ = messages::set_flags(&db, msg.id, read, msg.is_starred);
+        spawn_flag_push(acc_id);
         push_feeds(&mut self, &db, acc_id, folder_id);
         qstring("")
     }
@@ -406,8 +410,9 @@ impl qobject::Bridge {
         let Ok(msg) = messages::get_by_uid(&db, folder_id, uid as u32) else {
             return qstring("");
         };
-        // Queued, not pushed: see open_message.
+        // Queued locally, pushed promptly in the background (see open_message).
         let _ = messages::set_flags(&db, msg.id, msg.is_read, !msg.is_starred);
+        spawn_flag_push(acc_id);
         push_feeds(&mut self, &db, acc_id, folder_id);
         qstring("")
     }
@@ -535,16 +540,19 @@ impl qobject::Bridge {
                 push_feeds(&mut self, &db, acc_id, folder_id);
                 if n == 0 {
                     qstring("No messages changed")
-                } else if n == 1 {
-                    qstring(if read {
-                        "Marked 1 as read"
-                    } else {
-                        "Marked 1 as unread"
-                    })
-                } else if read {
-                    qstring(&format!("Marked {n} as read"))
                 } else {
-                    qstring(&format!("Marked {n} as unread"))
+                    spawn_flag_push(acc_id);
+                    if n == 1 {
+                        qstring(if read {
+                            "Marked 1 as read"
+                        } else {
+                            "Marked 1 as unread"
+                        })
+                    } else if read {
+                        qstring(&format!("Marked {n} as read"))
+                    } else {
+                        qstring(&format!("Marked {n} as unread"))
+                    }
                 }
             }
             Err(e) => qstring(&e.to_string()),
@@ -569,12 +577,15 @@ impl qobject::Bridge {
                 push_feeds(&mut self, &db, acc_id, folder_id);
                 if n == 0 {
                     qstring("No messages changed")
-                } else if n == 1 {
-                    qstring(if starred { "Starred 1" } else { "Unstarred 1" })
-                } else if starred {
-                    qstring(&format!("Starred {n}"))
                 } else {
-                    qstring(&format!("Unstarred {n}"))
+                    spawn_flag_push(acc_id);
+                    if n == 1 {
+                        qstring(if starred { "Starred 1" } else { "Unstarred 1" })
+                    } else if starred {
+                        qstring(&format!("Starred {n}"))
+                    } else {
+                        qstring(&format!("Unstarred {n}"))
+                    }
                 }
             }
             Err(e) => qstring(&e.to_string()),

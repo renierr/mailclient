@@ -295,3 +295,77 @@ async fn trash_sweep_marks_unread_seen_on_server() {
     // is respected) even though the server copy is now Seen.
     assert!(!messages::get_by_uid(&db, trash_id, 5).unwrap().is_read);
 }
+
+#[tokio::test]
+async fn push_dirty_flags_clears_on_success() {
+    let server = MockImapServer::start("IMAP4rev1", |tag, rest| {
+        let upper = rest.to_ascii_uppercase();
+        if upper.starts_with("SELECT") {
+            select_ok(tag, 1, 1, 6)
+        } else if upper.starts_with("UID STORE") {
+            vec![format!("{tag} OK STORE completed\r\n")]
+        } else {
+            vec![format!("{tag} OK completed\r\n")]
+        }
+    })
+    .await;
+
+    let db = Db::open_in_memory().unwrap();
+    let account = test_mock_account(server.port);
+    let account_id = test_account_row(&db, &account);
+    let inbox_id = folders::upsert(&db, account_id, "INBOX", "/", FolderRole::Inbox).unwrap();
+    let mut m = messages::sample_new(account_id, inbox_id, 5);
+    m.is_read = true;
+    m.is_starred = true;
+    let id = messages::upsert(&db, &m).unwrap();
+    messages::set_flags(&db, id, true, true).unwrap();
+    assert_eq!(
+        messages::list_flags_dirty(&db, account_id).unwrap().len(),
+        1
+    );
+
+    let mut sync = ImapSync::new(&account);
+    sync.connect("secret").await.unwrap();
+    assert_eq!(sync.push_dirty_flags(&db, account_id).await, 1);
+    assert!(messages::list_flags_dirty(&db, account_id)
+        .unwrap()
+        .is_empty());
+
+    let cmds = server.received.lock().await.clone();
+    assert!(cmds
+        .iter()
+        .any(|c| c.contains("STORE") && c.contains("\\Seen")));
+    assert!(cmds
+        .iter()
+        .any(|c| c.contains("STORE") && c.contains("\\Flagged")));
+}
+
+#[tokio::test]
+async fn push_dirty_flags_keeps_rows_on_failure() {
+    let server = MockImapServer::start("IMAP4rev1", |tag, rest| {
+        let upper = rest.to_ascii_uppercase();
+        if upper.starts_with("SELECT") {
+            select_ok(tag, 1, 1, 6)
+        } else if upper.starts_with("UID STORE") {
+            vec![format!("{tag} NO STORE failed\r\n")]
+        } else {
+            vec![format!("{tag} OK completed\r\n")]
+        }
+    })
+    .await;
+
+    let db = Db::open_in_memory().unwrap();
+    let account = test_mock_account(server.port);
+    let account_id = test_account_row(&db, &account);
+    let inbox_id = folders::upsert(&db, account_id, "INBOX", "/", FolderRole::Inbox).unwrap();
+    let id = messages::upsert(&db, &messages::sample_new(account_id, inbox_id, 5)).unwrap();
+    messages::set_flags(&db, id, true, false).unwrap();
+
+    let mut sync = ImapSync::new(&account);
+    sync.connect("secret").await.unwrap();
+    assert_eq!(sync.push_dirty_flags(&db, account_id).await, 0);
+    assert_eq!(
+        messages::list_flags_dirty(&db, account_id).unwrap().len(),
+        1
+    );
+}

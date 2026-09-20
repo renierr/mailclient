@@ -878,6 +878,21 @@ impl ImapSync {
         log::info!("imap: downloaded {stored} attachment(s) for message {message_id}");
         Ok(stored)
     }
+
+    /// Push every locally-dirtied flag change, clearing each row on success.
+    /// Rows that fail stay dirty for the next run, so this never loses a
+    /// toggle (offline, quit mid-push, server error). Returns pushed count.
+    /// Used both by full syncs and by the quiet post-toggle push job.
+    pub async fn push_dirty_flags(&mut self, db: &Db, account_id: i64) -> u64 {
+        let mut pushed = 0u64;
+        for m in messages::list_flags_dirty(db, account_id).unwrap_or_default() {
+            if self.push_flags(db, &m).await.is_ok() {
+                let _ = messages::clear_flags_dirty(db, m.id);
+                pushed += 1;
+            }
+        }
+        pushed
+    }
 }
 
 impl SyncProvider for ImapSync {

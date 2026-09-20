@@ -110,12 +110,7 @@ pub async fn sync_account(db: &Db, account: &Account, imap: &mut ImapSync) -> Ac
         _ => {}
     }
 
-    for m in messages::list_flags_dirty(db, account.id).unwrap_or_default() {
-        if imap.push_flags(db, &m).await.is_ok() {
-            let _ = messages::clear_flags_dirty(db, m.id);
-            out.pushed_flags += 1;
-        }
-    }
+    out.pushed_flags += imap.push_dirty_flags(db, account.id).await;
 
     let remote = match imap.sync_folders(db, account.id).await {
         Ok(f) => f,

@@ -1,7 +1,7 @@
 use std::pin::Pin;
 
 use cxx_qt_lib::QString;
-use mailcore::store::{folders, messages};
+use mailcore::store::folders;
 use mailcore::sync::headless;
 use mailcore::sync::imap::{FULL_SYNC_WINDOW, OLDER_BATCH};
 use mailcore::sync::traits::SyncProvider;
@@ -71,11 +71,7 @@ impl qobject::Bridge {
             let acc = current_account(&db, wanted)?;
             let folder = folders::get_by_path(&db, acc.id, &path).map_err(|e| e.to_string())?;
             let mut imap = checkout_session(&acc).await?;
-            for m in messages::list_flags_dirty(&db, acc.id).unwrap_or_default() {
-                if imap.push_flags(&db, &m).await.is_ok() {
-                    let _ = messages::clear_flags_dirty(&db, m.id);
-                }
-            }
+            imap.push_dirty_flags(&db, acc.id).await;
             let r = imap
                 .sync_folder_window(&db, folder.id, Some(FULL_SYNC_WINDOW))
                 .await

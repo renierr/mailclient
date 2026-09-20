@@ -69,7 +69,9 @@ cache-only so they render immediately.
   the local feed. Auto-sync runs on startup (deferred past first paint), plus
   a best-effort Sent refresh after each send. The toolbar Sync refreshes the
   account explicitly. Read/star stay local + queued
-  (`flags_dirty`) and push on the next sync; delete/purge hit IMAP at once.
+  (`flags_dirty`) and push on the next sync; a quiet background job also
+  pushes them seconds after every toggle (no busy latch, failures stay dirty),
+  so quitting right after reading loses nothing. Delete/purge hit IMAP at once.
 - **What**: multi-pass folder discovery every run (recursive `LIST`, `LSUB`
   merge, per-root subtree `LIST` incl. dotted prefixes, `LIST` inside every
   `NAMESPACE` prefix — a single `LIST "*"` missed folders like Archive on

@@ -7,7 +7,7 @@ use cxx_qt::Threading;
 use cxx_qt_lib::QString;
 
 use crate::bridge::qobject;
-use crate::bridge::session::guard_sync;
+use crate::bridge::session::{checkout_session, current_account, guard_sync};
 use crate::bridge::{open_db, push_feeds, qstring};
 
 /// What to refresh on the GUI after a job.
@@ -83,6 +83,54 @@ impl JobProgress {
 }
 
 type JobFn = Box<dyn FnOnce(&tokio::runtime::Runtime) + Send>;
+
+/// Fire-and-forget push of locally-dirtied read/star flags, run after every
+/// toggle (open auto-read, mark read/unread, star, bulk variants) so Seen
+/// reaches the server within seconds instead of waiting for the next full
+/// sync — quitting right after reading loses nothing.
+///
+/// Deliberately outside [`spawn_job`]: no busy latch (a slow network must
+/// never block the next click), no status line, no feed rebuild (the feeds
+/// already show the local change). Exits early without touching the network
+/// when nothing is dirty. Failures stay dirty for the next regular sync.
+pub(crate) fn spawn_flag_push(account_id: i64) {
+    let _ = net_tx().send(Box::new(move |rt| {
+        rt.block_on(async {
+            let db = match open_db() {
+                Ok(d) => d,
+                Err(e) => {
+                    log::warn!("flag-push: cannot open db: {e}");
+                    return;
+                }
+            };
+            if mailcore::store::messages::list_flags_dirty(&db, account_id)
+                .unwrap_or_default()
+                .is_empty()
+            {
+                return;
+            }
+            let acc = match current_account(&db, account_id) {
+                Ok(a) => a,
+                Err(e) => {
+                    log::debug!("flag-push: {e}");
+                    return;
+                }
+            };
+            let mut imap = match checkout_session(&acc).await {
+                Ok(l) => l,
+                Err(e) => {
+                    log::debug!("flag-push: offline, staying dirty: {e}");
+                    return;
+                }
+            };
+            let pushed = imap.push_dirty_flags(&db, acc.id).await;
+            if pushed > 0 {
+                log::info!("flag-push: pushed {pushed} flag change(s)");
+            }
+            imap.checkin();
+        });
+    }));
+}
 
 fn net_tx() -> &'static mpsc::Sender<JobFn> {
     static TX: OnceLock<mpsc::Sender<JobFn>> = OnceLock::new();
