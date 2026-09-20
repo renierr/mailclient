@@ -23,7 +23,6 @@ tokio-rustls = "0.26"
 rustls-pki-types = "1.0"
 rustls-native-certs = "0.8"
 webpki-roots = "1.0"
-native-tls = "0.2"
 mail-parser = "0.11"
 
 # Keyring backend is per-OS: the `keyring` crate compiles to a useless mock

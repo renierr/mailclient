@@ -44,10 +44,13 @@ pub(crate) struct SessionLease {
 }
 
 impl SessionLease {
-    /// Return the session to the pool on clean completion.
+    /// Return the session to the pool on clean completion. This is a cheap
+    /// presence check only — it cannot await a NOOP round-trip. Stale
+    /// sessions are detected at the next checkout via `is_healthy().await`
+    /// and dropped there instead of serving work.
     pub fn checkin(mut self) {
         if let Some(s) = self.session.take() {
-            if s.is_healthy() {
+            if s.is_connected() {
                 imap_pool().insert(self.account_id, s);
             }
         }
@@ -91,14 +94,23 @@ pub(crate) async fn checkout_session(account: &Account) -> Result<SessionLease, 
         pool.remove(&id)
     };
     let session = match existing {
-        Some(s) if s.is_healthy() => {
-            log::info!("imap: reusing pooled session for account {id}");
-            s
-        }
-        Some(_) | None => {
-            if existing.is_some() {
+        Some(mut s) => {
+            if s.is_healthy().await {
+                log::info!("imap: reusing pooled session for account {id}");
+                s
+            } else {
                 log::info!("imap: pooled session for account {id} went stale, reconnecting");
+                let secrets = auth::load_account_secrets(&account.auth_vault_key)
+                    .map_err(|e| format!("no password in keyring: {e}"))?;
+                let mut fresh = ImapSync::new(account);
+                fresh
+                    .connect(&secrets.imap_password)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                fresh
             }
+        }
+        None => {
             let secrets = auth::load_account_secrets(&account.auth_vault_key)
                 .map_err(|e| format!("no password in keyring: {e}"))?;
             let mut fresh = ImapSync::new(account);

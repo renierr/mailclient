@@ -21,12 +21,13 @@ use imap_types::{
     fetch::{MacroOrMessageDataItemNames, MessageDataItem, MessageDataItemName},
     flag::{Flag, FlagFetch, FlagNameAttribute, StoreResponse, StoreType},
     mailbox::Mailbox,
-    response::{Code, Data, Status, StatusBody, StatusKind},
+    response::{Code, Data, GreetingKind, Status, StatusBody, StatusKind},
     search::SearchKey,
     sequence::{SeqOrUid, Sequence, SequenceSet},
     IntoStatic,
 };
 use rustls_pki_types::ServerName;
+use std::net::IpAddr;
 use tokio::net::TcpStream;
 use tokio_rustls::{rustls, TlsConnector};
 
@@ -44,6 +45,13 @@ macro_rules! vec1 {
 
 /// How many UIDs per FETCH round-trip.
 const FETCH_CHUNK: usize = 100;
+
+/// Timeout for a single IMAP command round-trip. Without this a dead
+/// half-open socket blocks the single `mailclient-net` worker thread forever:
+/// `stream.next()` would await a server reply that never arrives.
+const COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Timeout for TCP connect + TLS handshake each.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Newest-N window for a full folder sync (matches `feed::FEED_LIMIT`).
 /// Bounding the fetch keeps massive mailboxes fast: the list only shows 200,
@@ -104,10 +112,13 @@ pub fn endpoint_for(account: &crate::models::Account) -> ImapEndpoint {
 }
 
 /// Format name attributes into lowercase string for heuristic search.
+///
+/// Uses `Display` (wire text like `\Noselect`) rather than `Debug`, so the
+/// match does not depend on the `imap-types` `Debug` representation.
 pub fn attr_text(attributes: &[FlagNameAttribute<'_>]) -> String {
     attributes
         .iter()
-        .map(|a| format!("{a:?}"))
+        .map(|a| a.to_string())
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase()
@@ -149,31 +160,42 @@ pub fn map_folder_role(attributes: &[FlagNameAttribute<'_>], name: &str) -> Fold
 }
 
 /// Fallback role guessing based on the folder's leaf name.
+///
+/// Matches the last path segment exactly so names like `Cabin` / `Binders`
+/// are not classified as Trash via a substring `bin`. Uses Unicode
+/// `to_lowercase` so capitalized umlauts (`Entwürfe`, `Gelöschte …`) match.
+/// Covers both the pre-`imap-next` variant table and the newer
+/// `gesendete …` / `deleted messages` / `bulk mail` additions.
 #[must_use]
 pub fn role_from_name(name: &str) -> FolderRole {
-    let leaf = name
+    let lower = name.to_lowercase();
+    let leaf = lower
         .rsplit(['/', '.', '\\'])
         .next()
-        .unwrap_or(name)
-        .trim()
-        .to_ascii_lowercase();
+        .unwrap_or(&lower)
+        .trim();
 
-    match leaf.as_str() {
-        "inbox" => FolderRole::Inbox,
-        "sent" | "sent items" | "sent messages" | "gesendet" | "gesendete elemente"
-        | "gesendete objekte" => FolderRole::Sent,
-        "drafts" | "draft" | "entwürfe" | "entwuerfe" => FolderRole::Drafts,
+    if leaf == "inbox" {
+        return FolderRole::Inbox;
+    }
+    match leaf {
+        "sent" | "sent mail" | "sent-mail" | "sent items" | "sent messages" | "gesendet"
+        | "gesendete elemente" | "gesendete objekte" => FolderRole::Sent,
+        "draft" | "drafts" | "entwurf" | "entwürfe" | "entwurfe" | "entwuerfe" => {
+            FolderRole::Drafts
+        }
         "trash"
         | "deleted"
         | "deleted items"
         | "deleted messages"
         | "papierkorb"
+        | "gelöscht"
+        | "geloscht"
         | "gelöschte elemente"
         | "geloeschte elemente"
         | "bin" => FolderRole::Trash,
-        "junk" | "junk mail" | "junk email" | "spam" | "bulk mail" | "unerwünscht" => {
-            FolderRole::Junk
-        }
+        "junk" | "junk mail" | "junk e-mail" | "junk email" | "junk-e-mail" | "spam"
+        | "bulk mail" | "unerwünscht" => FolderRole::Junk,
         "archive" | "archiv" => FolderRole::Archive,
         _ => FolderRole::Custom,
     }
@@ -209,10 +231,17 @@ pub struct SelectResult {
     pub uid_validity: Option<u32>,
     pub uid_next: Option<u32>,
     pub highest_modseq: Option<u64>,
-    pub vanished: Vec<u32>,
+    /// QRESYNC VANISHED UID ranges (start, end) — kept as ranges so a
+    /// `VANISHED 1:100000` response never materializes 100k entries.
+    pub vanished: Vec<(u32, u32)>,
 }
 
 /// Helper to extract all UIDs from a sequence set.
+///
+/// Only used for small sets (tests). Production VANISHED handling must use
+/// [`vanished_ranges`] + range deletes instead: a server may report
+/// `VANISHED 1:100000`, which would allocate ~100k entries here.
+#[allow(dead_code)]
 fn sequence_set_to_uids(set: &SequenceSet) -> Vec<u32> {
     let mut uids = Vec::new();
     for seq in set.0.as_ref() {
@@ -221,6 +250,10 @@ fn sequence_set_to_uids(set: &SequenceSet) -> Vec<u32> {
             Sequence::Range(SeqOrUid::Value(a), SeqOrUid::Value(b)) => {
                 let start = a.get().min(b.get());
                 let end = a.get().max(b.get());
+                // Guard against pathological ranges even in tests.
+                if end.saturating_sub(start) > 100_000 {
+                    continue;
+                }
                 for u in start..=end {
                     uids.push(u);
                 }
@@ -229,6 +262,48 @@ fn sequence_set_to_uids(set: &SequenceSet) -> Vec<u32> {
         }
     }
     uids
+}
+
+/// Extract `(start, end)` ranges from a QRESYNC VANISHED sequence set without
+/// expanding them into individual UIDs.
+fn vanished_ranges(set: &SequenceSet) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
+    for seq in set.0.as_ref() {
+        match seq {
+            Sequence::Single(SeqOrUid::Value(v)) => out.push((v.get(), v.get())),
+            Sequence::Range(SeqOrUid::Value(a), SeqOrUid::Value(b)) => {
+                out.push((a.get().min(b.get()), a.get().max(b.get())));
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Build a `SequenceSet` from a UID slice (deduped, sorted). Shared by all
+/// FETCH/STORE/COPY call sites so the comma-join logic lives in one place.
+fn uids_to_sequence_set(uids: &[u32]) -> Result<SequenceSet> {
+    let mut clean: Vec<u32> = uids.to_vec();
+    clean.sort_unstable();
+    clean.dedup();
+    let set_str = clean
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    SequenceSet::try_from(set_str.as_str())
+        .map_err(|e| StoreError::InvalidInput(format!("invalid sequence set: {e}")))
+}
+
+/// Resolve a rustls [`ServerName`] for `host`, supporting DNS names and
+/// IP literals (test mocks dial `127.0.0.1`, which plain `try_from` rejects).
+fn server_name_for(host: &str) -> Result<ServerName<'static>> {
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return Ok(ServerName::IpAddress(ip.into()));
+    }
+    ServerName::try_from(host.to_string())
+        .map(|s| s.to_owned())
+        .map_err(|e| StoreError::Network(format!("invalid server name {host}: {e}")))
 }
 
 /// Discovered folder from LIST/LSUB.
@@ -252,18 +327,35 @@ pub struct ImapSession {
 impl ImapSession {
     fn next_tag(&mut self) -> Tag<'static> {
         self.tag_counter += 1;
-        Tag::try_from(format!("A{:04}", self.tag_counter)).expect("valid tag")
+        Tag::try_from(format!("A{:04}", self.tag_counter))
+            .expect("valid tag: A0000..A9999 with wrapping counter")
     }
 
-    /// Read the initial server greeting.
+    /// Read the initial server greeting, failing fast on `BYE` or timeout
+    /// instead of spinning until TCP error.
     async fn read_greeting(stream: &mut Stream, client: &mut Client) -> Result<()> {
         loop {
-            match stream
-                .next(&mut *client)
+            let event = tokio::time::timeout(COMMAND_TIMEOUT, stream.next(&mut *client))
                 .await
-                .map_err(|e| StoreError::Network(format!("greeting error: {e}")))?
-            {
-                Event::GreetingReceived { .. } => return Ok(()),
+                .map_err(|_| {
+                    StoreError::Network("timed out waiting for server greeting".to_string())
+                })?
+                .map_err(|e| StoreError::Network(format!("greeting error: {e}")))?;
+            match event {
+                Event::GreetingReceived { greeting } => match greeting.kind {
+                    GreetingKind::Bye => {
+                        return Err(StoreError::Network(format!(
+                            "server refused connection (BYE): {}",
+                            greeting.text
+                        )));
+                    }
+                    _ => {
+                        if std::env::var("MAILCLIENT_IMAP_DEBUG").is_ok() {
+                            log::warn!("imap S: greeting {greeting:?} (redact before sharing)");
+                        }
+                        return Ok(());
+                    }
+                },
                 event => {
                     log::debug!("imap: unexpected greeting event: {event:?}");
                 }
@@ -271,21 +363,24 @@ impl ImapSession {
         }
     }
 
-    /// Execute a command and wait for its completion.
+    /// Execute a command and wait for its completion. `BYE` (untagged or
+    /// tagged) is reported as an error immediately instead of looping on
+    /// `stream.next()` forever; every wait is bounded by [`COMMAND_TIMEOUT`].
     async fn execute(&mut self, body: CommandBody<'static>) -> Result<CommandResult> {
         let tag = self.next_tag();
         let cmd = Command::new(tag.clone(), body)
-            .map_err(|e| StoreError::Imap(format!("invalid command: {e}")))?;
+            .map_err(|e| StoreError::InvalidInput(format!("invalid command: {e}")))?;
         let handle = self.client.enqueue_command(cmd);
 
         let mut collected_data = Vec::new();
         let mut untagged_statuses = Vec::new();
 
         loop {
-            let event = self
-                .stream
-                .next(&mut self.client)
+            let event = tokio::time::timeout(COMMAND_TIMEOUT, self.stream.next(&mut self.client))
                 .await
+                .map_err(|_| {
+                    StoreError::Network(format!("timed out waiting for server reply to {tag:?}"))
+                })?
                 .map_err(|e| StoreError::Network(format!("stream error: {e}")))?;
 
             match event {
@@ -316,12 +411,34 @@ impl ImapSession {
                             )));
                         }
                     },
+                    Status::Tagged(tagged) => {
+                        // Tagged completion for some other command (e.g. a
+                        // stale STARTTLS tag): never silently swallow.
+                        log::debug!("imap: ignoring foreign tagged status: {tagged:?}");
+                    }
                     Status::Untagged(untagged) => {
                         untagged_statuses.push(untagged.into_static());
                     }
-                    _ => {}
+                    Status::Bye(bye) => {
+                        return Err(StoreError::Network(format!(
+                            "server sent BYE during {tag:?}: {}",
+                            bye.text
+                        )));
+                    }
                 },
-                _ => {}
+                Event::ContinuationRequestReceived { .. }
+                | Event::AuthenticateContinuationRequestReceived { .. }
+                | Event::AuthenticateStatusReceived { .. }
+                | Event::AuthenticateStarted { .. }
+                | Event::IdleCommandSent { .. }
+                | Event::IdleAccepted { .. }
+                | Event::IdleRejected { .. }
+                | Event::IdleDoneSent { .. } => {
+                    log::debug!("imap: unexpected auth/idle event during {tag:?}: {event:?}");
+                }
+                _ => {
+                    log::debug!("imap: ignoring event during {tag:?}: {event:?}");
+                }
             }
         }
     }
@@ -366,7 +483,9 @@ impl ImapSession {
 
     /// Check if a capability is present (case-insensitive).
     pub fn has_capability(&self, cap: &str) -> bool {
-        self.capabilities.iter().any(|c| c.eq_ignore_ascii_case(cap))
+        self.capabilities
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case(cap))
     }
 
     /// Try to enable CONDSTORE and QRESYNC if advertised.
@@ -393,7 +512,8 @@ impl ImapSession {
             }
 
             if let Ok(caps) = Vec1::try_from(enable_caps) {
-                let body = CommandBody::enable(caps).unwrap();
+                let body = CommandBody::enable(caps)
+                    .map_err(|e| StoreError::InvalidInput(format!("enable args invalid: {e}")))?;
                 if let Ok(res) = self.execute(body).await {
                     for d in res.data {
                         if let Data::Enabled { capabilities } = d {
@@ -503,7 +623,7 @@ impl ImapSession {
                     earlier: _,
                     known_uids,
                 } => {
-                    out.vanished.extend(sequence_set_to_uids(&known_uids));
+                    out.vanished.extend(vanished_ranges(&known_uids));
                 }
                 _ => {}
             }
@@ -539,25 +659,26 @@ impl ImapSession {
         if uids.is_empty() {
             return Ok(Vec::new());
         }
-        let set_str = uids
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        let sequence_set = SequenceSet::try_from(set_str.as_str())
-            .map_err(|e| StoreError::InvalidInput(format!("invalid sequence set: {e}")))?;
+        let sequence_set = uids_to_sequence_set(uids)?;
 
         let (macro_or_item_names, modifiers) = if self.condstore_enabled && modseq > 0 {
-            (
-                MacroOrMessageDataItemNames::from(vec![
-                    MessageDataItemName::Uid,
-                    MessageDataItemName::Flags,
-                    MessageDataItemName::ModSeq,
-                ]),
-                vec![FetchModifier::ChangedSince(
-                    NonZeroU64::new(modseq).unwrap(),
-                )],
-            )
+            match NonZeroU64::new(modseq) {
+                Some(nz) => (
+                    MacroOrMessageDataItemNames::from(vec![
+                        MessageDataItemName::Uid,
+                        MessageDataItemName::Flags,
+                        MessageDataItemName::ModSeq,
+                    ]),
+                    vec![FetchModifier::ChangedSince(nz)],
+                ),
+                None => (
+                    MacroOrMessageDataItemNames::from(vec![
+                        MessageDataItemName::Uid,
+                        MessageDataItemName::Flags,
+                    ]),
+                    Vec::new(),
+                ),
+            }
         } else {
             (
                 MacroOrMessageDataItemNames::from(vec![
@@ -635,13 +756,7 @@ impl ImapSession {
         if uids.is_empty() {
             return Ok(Vec::new());
         }
-        let set_str = uids
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        let sequence_set = SequenceSet::try_from(set_str.as_str())
-            .map_err(|e| StoreError::InvalidInput(format!("invalid sequence set: {e}")))?;
+        let sequence_set = uids_to_sequence_set(uids)?;
 
         let body = CommandBody::Fetch {
             sequence_set,
@@ -709,13 +824,7 @@ impl ImapSession {
         if uids.is_empty() {
             return Ok(());
         }
-        let set_str = uids
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        let sequence_set = SequenceSet::try_from(set_str.as_str())
-            .map_err(|e| StoreError::InvalidInput(format!("invalid sequence set: {e}")))?;
+        let sequence_set = uids_to_sequence_set(uids)?;
 
         let body = CommandBody::store(sequence_set, op, StoreResponse::Silent, flags, true)
             .map_err(|e| StoreError::InvalidInput(format!("store args: {e}")))?;
@@ -742,13 +851,7 @@ impl ImapSession {
         if uids.is_empty() {
             return Ok(());
         }
-        let set_str = uids
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        let sequence_set = SequenceSet::try_from(set_str.as_str())
-            .map_err(|e| StoreError::InvalidInput(format!("invalid sequence set: {e}")))?;
+        let sequence_set = uids_to_sequence_set(uids)?;
         let mailbox = Mailbox::try_from(dest.to_string())
             .map_err(|e| StoreError::InvalidInput(format!("invalid mailbox {dest}: {e}")))?;
         let body = CommandBody::copy(sequence_set, mailbox, true)
@@ -767,13 +870,7 @@ impl ImapSession {
             .iter()
             .any(|c| c.eq_ignore_ascii_case("move"));
 
-        let set_str = uids
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        let sequence_set = SequenceSet::try_from(set_str.as_str())
-            .map_err(|e| StoreError::InvalidInput(format!("invalid sequence set: {e}")))?;
+        let sequence_set = uids_to_sequence_set(uids)?;
         let mailbox = Mailbox::try_from(dest.to_string())
             .map_err(|e| StoreError::InvalidInput(format!("invalid mailbox {dest}: {e}")))?;
 
@@ -910,6 +1007,47 @@ impl ImapSession {
         self.execute(CommandBody::Noop).await?;
         Ok(())
     }
+
+    /// NAMESPACE (RFC 2342, best effort). Returns `(personal, other, shared)`
+    /// prefix strings. Servers that don't implement it, or answer with a
+    /// shape the codec can't model, yield empty vecs — discovery simply
+    /// covers fewer branches. Never fails sync.
+    pub async fn namespace(&mut self) -> Result<(Vec<String>, Vec<String>, Vec<String>)> {
+        let res = match self.execute(CommandBody::Namespace).await {
+            Ok(r) => r,
+            Err(e) => {
+                log::debug!("imap: NAMESPACE unsupported, skipping: {e}");
+                return Ok((Vec::new(), Vec::new(), Vec::new()));
+            }
+        };
+        let mut personal = Vec::new();
+        let mut other = Vec::new();
+        let mut shared = Vec::new();
+        for d in res.data {
+            if let Data::Namespace {
+                personal: p,
+                other: o,
+                shared: s,
+            } = d
+            {
+                fn prefix(ns: &imap_types::extensions::namespace::Namespace<'_>) -> String {
+                    String::from_utf8_lossy(ns.prefix.clone().into_inner().as_ref()).into_owned()
+                }
+                personal.extend(p.iter().map(prefix));
+                other.extend(o.iter().map(prefix));
+                shared.extend(s.iter().map(prefix));
+            }
+        }
+        Ok((personal, other, shared))
+    }
+}
+
+/// Best-effort "mailbox already exists" detection for CREATE races: servers
+/// word it differently (`ALREADYEXISTS`, `already exists`, `exists`), so a
+/// case-insensitive substring match beats an exact one.
+fn is_already_exists(e: &StoreError) -> bool {
+    let msg = e.to_string().to_ascii_lowercase();
+    msg.contains("already exists") || msg.contains("alreadyexists") || msg.contains("exists")
 }
 
 /// Outcome of trashing a message.
@@ -973,21 +1111,34 @@ impl ImapSync {
             }
         }
 
-        let tcp = TcpStream::connect(&self.endpoint.addr)
+        let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(&self.endpoint.addr))
             .await
+            .map_err(|_| {
+                StoreError::Network(format!(
+                    "connect timed out after {:?}: {}",
+                    CONNECT_TIMEOUT, self.endpoint.addr
+                ))
+            })?
             .map_err(|e| StoreError::Network(format!("connect {}: {e}", self.endpoint.addr)))?;
 
         let (stream, client) = if self.endpoint.implicit_tls {
             let tls_connector = build_tls_connector()?;
-            let server_name = ServerName::try_from(self.endpoint.host.clone()).map_err(|e| {
-                StoreError::Network(format!("invalid server name {}: {e}", self.endpoint.host))
-            })?;
-            let tls = tls_connector.connect(server_name, tcp).await.map_err(|e| {
-                StoreError::Network(format!(
-                    "TLS handshake failed with {}: {e}",
-                    self.endpoint.addr
-                ))
-            })?;
+            let server_name = server_name_for(&self.endpoint.host)?;
+            let tls =
+                tokio::time::timeout(CONNECT_TIMEOUT, tls_connector.connect(server_name, tcp))
+                    .await
+                    .map_err(|_| {
+                        StoreError::Network(format!(
+                            "TLS handshake timed out after {:?} with {}",
+                            CONNECT_TIMEOUT, self.endpoint.addr
+                        ))
+                    })?
+                    .map_err(|e| {
+                        StoreError::Network(format!(
+                            "TLS handshake failed with {}: {e}",
+                            self.endpoint.addr
+                        ))
+                    })?;
             let mut stream = Stream::tls(tokio_rustls::TlsStream::Client(tls));
             let mut client = Client::new(Options::default());
             ImapSession::read_greeting(&mut stream, &mut client).await?;
@@ -998,13 +1149,19 @@ impl ImapSync {
             ImapSession::read_greeting(&mut stream, &mut client).await?;
 
             if self.endpoint.starttls {
-                let tag = Tag::try_from("A0001").unwrap();
-                let handle = client
-                    .enqueue_command(Command::new(tag.clone(), CommandBody::StartTLS).unwrap());
+                let tag = Tag::try_from("A0001")
+                    .map_err(|e| StoreError::InvalidInput(format!("starttls tag invalid: {e}")))?;
+                let handle = client.enqueue_command(
+                    Command::new(tag.clone(), CommandBody::StartTLS).map_err(|e| {
+                        StoreError::InvalidInput(format!("starttls command invalid: {e}"))
+                    })?,
+                );
                 loop {
-                    let event = stream
-                        .next(&mut client)
+                    let event = tokio::time::timeout(COMMAND_TIMEOUT, stream.next(&mut client))
                         .await
+                        .map_err(|_| {
+                            StoreError::Network("timed out waiting for STARTTLS reply".to_string())
+                        })?
                         .map_err(|e| StoreError::Network(format!("STARTTLS stream error: {e}")))?;
                     match event {
                         Event::StatusReceived {
@@ -1019,7 +1176,17 @@ impl ImapSync {
                                         tagged.body.text
                                     )));
                                 }
+                            } else {
+                                log::debug!("imap: ignoring foreign tagged status: {tagged:?}");
                             }
+                        }
+                        Event::StatusReceived {
+                            status: Status::Bye(bye),
+                        } => {
+                            return Err(StoreError::Network(format!(
+                                "server sent BYE during STARTTLS: {}",
+                                bye.text
+                            )));
                         }
                         Event::CommandRejected {
                             handle: h, status, ..
@@ -1034,22 +1201,24 @@ impl ImapSync {
 
                 let tcp_stream: TcpStream = stream.into();
                 let tls_connector = build_tls_connector()?;
-                let server_name =
-                    ServerName::try_from(self.endpoint.host.clone()).map_err(|e| {
-                        StoreError::Network(format!(
-                            "invalid server name {}: {e}",
-                            self.endpoint.host
-                        ))
-                    })?;
-                let tls = tls_connector
-                    .connect(server_name, tcp_stream)
-                    .await
-                    .map_err(|e| {
-                        StoreError::Network(format!(
-                            "STARTTLS handshake failed with {}: {e}",
-                            self.endpoint.addr
-                        ))
-                    })?;
+                let server_name = server_name_for(&self.endpoint.host)?;
+                let tls = tokio::time::timeout(
+                    CONNECT_TIMEOUT,
+                    tls_connector.connect(server_name, tcp_stream),
+                )
+                .await
+                .map_err(|_| {
+                    StoreError::Network(format!(
+                        "STARTTLS handshake timed out after {:?} with {}",
+                        CONNECT_TIMEOUT, self.endpoint.addr
+                    ))
+                })?
+                .map_err(|e| {
+                    StoreError::Network(format!(
+                        "STARTTLS handshake failed with {}: {e}",
+                        self.endpoint.addr
+                    ))
+                })?;
                 let stream = Stream::tls(tokio_rustls::TlsStream::Client(tls));
                 (stream, client)
             } else {
@@ -1057,6 +1226,8 @@ impl ImapSync {
             }
         };
 
+        // STARTTLS consumed tag A0001 on this `client`; the first
+        // `next_tag()` below yields A0002, so tags never collide.
         let mut session = ImapSession {
             stream,
             client,
@@ -1084,18 +1255,48 @@ impl ImapSync {
         Ok(())
     }
 
+    /// Best-effort async LOGOUT (sends `LOGOUT`, waits briefly for `BYE`,
+    /// then drops the stream either way). Prefer this on explicit teardown;
+    /// [`Self::disconnect`] is the non-blocking drop used by `Drop` paths
+    /// where awaiting is impossible (a stale pooled connection would block
+    /// quit on the `BYE` wait — closing the socket reaps server state just
+    /// as well, like a network drop).
+    pub async fn logout(&mut self) {
+        if let Some(session) = self.session.as_mut() {
+            let _ =
+                tokio::time::timeout(COMMAND_TIMEOUT, session.execute(CommandBody::Logout)).await;
+        }
+        self.session = None;
+    }
+
     pub fn disconnect(&mut self) {
         self.session = None;
     }
 
-    pub async fn reconnect(&mut self) -> Result<()> {
+    pub async fn reconnect(&mut self, password: Option<&str>) -> Result<()> {
         self.session = None;
+        if let Some(pw) = password {
+            return self.connect(pw).await;
+        }
         let secrets = crate::auth::load_account_secrets(&self.account.auth_vault_key)
             .map_err(|e| StoreError::NotFound(format!("keyring secret: {e}")))?;
         self.connect(&secrets.imap_password).await
     }
 
-    pub fn is_healthy(&self) -> bool {
+    /// Liveness probe for pooled sessions: one NOOP round-trip. `false` =
+    /// dead, half-closed, or never connected — the caller should drop this
+    /// session and connect fresh rather than send real work into it.
+    pub async fn is_healthy(&mut self) -> bool {
+        match self.session.as_mut() {
+            Some(s) => s.noop().await.is_ok(),
+            None => false,
+        }
+    }
+
+    /// Cheap synchronous presence check for `Drop`/`checkin` paths that
+    /// cannot await a NOOP round-trip. Staleness is detected at checkout
+    /// via [`Self::is_healthy`].
+    pub fn is_connected(&self) -> bool {
         self.session.is_some()
     }
 
@@ -1204,18 +1405,33 @@ impl ImapSync {
 
     pub async fn append_draft(&mut self, folder_path: &str, raw: &[u8]) -> Result<()> {
         let session = self.session()?;
-        session
-            .append(folder_path, raw, vec![Flag::Draft, Flag::Seen])
-            .await
+        // Drafts are deliberately not marked seen: the `\Draft` flag is what
+        // makes providers keep them out of normal send flows.
+        session.append(folder_path, raw, vec![Flag::Draft]).await
     }
 
+    /// Move one message to the account's Trash folder -- what "delete" means
+    /// in a mail client, with two exceptions that destroy immediately:
+    ///
+    /// - the message is already in Trash (deleting from Trash is permanent),
+    /// - the message is spam (filing junk into Trash just moves garbage
+    ///   around — it is destroyed instead).
     pub async fn trash_message(&mut self, db: &Db, message_id: i64) -> Result<TrashOutcome> {
         let message = messages::get(db, message_id)?;
         let folder = folders::get(db, message.folder_id)?;
+
+        // Spam never touches Trash; Trash never keeps a second copy of itself.
+        if folder.role == FolderRole::Junk {
+            log::info!("imap: destroying spam directly (uid {})", message.uid);
+            self.delete_message(db, message_id).await?;
+            return Ok(TrashOutcome::Expunged);
+        }
         let trash = folders::list_by_account(db, message.account_id)?
             .into_iter()
             .find(|f| f.role == FolderRole::Trash);
 
+        // Already in Trash, or no Trash at all: the only remaining meaning of
+        // "delete" is destroying it, and the caller is told so.
         let Some(trash) = trash.filter(|t| t.id != folder.id) else {
             self.delete_message(db, message_id).await?;
             return Ok(TrashOutcome::Expunged);
@@ -1271,11 +1487,16 @@ impl ImapSync {
         dest_folder_id: i64,
     ) -> Result<MoveOutcome> {
         let msg = messages::get(db, message_id)?;
+        let src_folder = folders::get(db, msg.folder_id)?;
+        let dest_folder = folders::get(db, dest_folder_id)?;
+        if dest_folder.account_id != msg.account_id {
+            return Err(StoreError::InvalidInput(
+                "destination folder belongs to another account".to_string(),
+            ));
+        }
         if msg.folder_id == dest_folder_id {
             return Ok(MoveOutcome::AlreadyThere);
         }
-        let src_folder = folders::get(db, msg.folder_id)?;
-        let dest_folder = folders::get(db, dest_folder_id)?;
 
         let session = self.session()?;
         session.select(&src_folder.path, None).await?;
@@ -1292,6 +1513,10 @@ impl ImapSync {
         Ok(MoveOutcome::Moved(dest_folder.path))
     }
 
+    /// Create an IMAP mailbox (plus any missing parents) and register it
+    /// locally via folder discovery. Returns the created [`Folder`].
+    /// An already-existing path is success, not an error — discovery simply
+    /// returns it.
     pub async fn create_folder_path(
         &mut self,
         db: &Db,
@@ -1299,15 +1524,24 @@ impl ImapSync {
         path: &str,
         delimiter: &str,
     ) -> Result<Folder> {
-        let session = self.session()?;
-        if let Err(e) = session.create_folder(path).await {
-            let msg = e.to_string().to_ascii_lowercase();
-            if !msg.contains("already exists") && !msg.contains("alreadyexists") {
-                return Err(e);
+        let normalized = normalize_folder_path(path, delimiter)?;
+        let mut prefix = String::new();
+        for segment in normalized.split(delimiter) {
+            if !prefix.is_empty() {
+                prefix.push_str(delimiter);
+            }
+            prefix.push_str(segment);
+            match self.session()?.create_folder(&prefix).await {
+                Ok(()) => log::info!("imap: created folder {prefix}"),
+                Err(e) if is_already_exists(&e) => {
+                    log::debug!("imap: folder exists: {prefix}")
+                }
+                Err(e) => return Err(e),
             }
         }
-        let id = folders::upsert(db, account_id, path, delimiter, FolderRole::Custom)?;
-        folders::get(db, id)
+        self.sync_folders(db, account_id).await?;
+        folders::get_by_path(db, account_id, &normalized)
+            .map_err(|_| StoreError::InvalidInput(format!("server did not list {normalized}")))
     }
 
     pub async fn delete_message(&mut self, db: &Db, message_id: i64) -> Result<()> {
@@ -1407,16 +1641,22 @@ impl ImapSync {
 
         let mut expunged = 0u64;
 
-        // 1. Process QRESYNC VANISHED UIDs immediately if reported by server.
+        // 1. Process QRESYNC VANISHED ranges immediately, with range
+        // deletes so a `VANISHED 1:100000` never materializes 100k UIDs.
         if !mb.vanished.is_empty() {
+            let vanished_count: u64 = mb
+                .vanished
+                .iter()
+                .map(|(lo, hi)| u64::from(hi.saturating_sub(*lo).saturating_add(1)))
+                .sum();
             log::info!(
-                "imap: QRESYNC reported {} vanished UIDs in {}",
+                "imap: QRESYNC reported {} vanished range(s) ({} uids) in {}",
                 mb.vanished.len(),
+                vanished_count,
                 folder.path
             );
-            for uid in &mb.vanished {
-                messages::delete_by_uid(db, folder_id, *uid)?;
-                expunged += 1;
+            for (lo, hi) in &mb.vanished {
+                expunged += messages::delete_by_uid_range(db, folder_id, *lo, *hi)?;
             }
         }
 
@@ -1431,6 +1671,7 @@ impl ImapSync {
             let skip = sorted.len().saturating_sub(n);
             sorted.into_iter().skip(skip).collect()
         });
+        let relevant_len = relevant.as_ref().map(|r| r.len()).unwrap_or(0);
         let in_window = |uid: &u32| relevant.as_ref().is_none_or(|r| r.contains(uid));
         let is_trash = folder.role == FolderRole::Trash;
 
@@ -1512,8 +1753,7 @@ impl ImapSync {
         }
 
         if let Some(n) = window {
-            let skipped =
-                (mb.exists as usize).saturating_sub(relevant.map(|r| r.len()).unwrap_or(0));
+            let skipped = (mb.exists as usize).saturating_sub(relevant_len);
             if skipped > 0 {
                 log::info!(
                     "imap: {} skipped {} old mails outside window {n}",
@@ -1537,18 +1777,15 @@ impl ImapSync {
         if is_trash {
             if let Ok(unread_uids) = messages::list_unread_uids(db, folder_id) {
                 if !unread_uids.is_empty() {
-                    let _ = session
+                    if let Err(e) = session
                         .uid_store_flags(&unread_uids, StoreType::Add, vec![Flag::Seen])
-                        .await;
+                        .await
+                    {
+                        log::warn!("imap: trash seen sweep failed: {e}");
+                    }
                     for uid in &unread_uids {
                         let _ = messages::set_flags_by_uid(
-                            db,
-                            account.id,
-                            folder_id,
-                            *uid,
-                            true,
-                            false,
-                            false,
+                            db, account.id, folder_id, *uid, true, false, false,
                         );
                     }
                 }
@@ -1655,6 +1892,11 @@ impl ImapSync {
         })
     }
 
+    /// Download attachments for one message (attachment-download click).
+    /// Re-fetches the full body with PEEK (never implicitly marks `\Seen`),
+    /// stores every part with bytes, and refreshes only the
+    /// `has_attachments` flag — read/star state is never touched. Returns
+    /// the number of stored files.
     pub async fn fetch_attachments(&mut self, db: &Db, message_id: i64) -> Result<u64> {
         let msg = messages::get(db, message_id)?;
         let folder = folders::get(db, msg.folder_id)?;
@@ -1664,7 +1906,12 @@ impl ImapSync {
         let fetched = session.uid_fetch_messages(&[msg.uid]).await?;
         let raw = match fetched.into_iter().next() {
             Some((_, _, r)) => r,
-            None => return Err(StoreError::NotFound(format!("message uid {}", msg.uid))),
+            None => {
+                return Err(StoreError::InvalidInput(format!(
+                    "message uid {} no longer on server",
+                    msg.uid
+                )));
+            }
         };
 
         let parsed = mail_parser::MessageParser::default()
@@ -1673,6 +1920,8 @@ impl ImapSync {
         let files = extract_attachments(&parsed, true);
         let stored = files.len() as u64;
         store_attachments(db, message_id, files)?;
+        messages::set_has_attachments(db, message_id, stored > 0)?;
+        log::info!("imap: downloaded {stored} attachment(s) for message {message_id}");
         Ok(stored)
     }
 }
@@ -1683,6 +1932,15 @@ impl SyncProvider for ImapSync {
     }
 
     async fn sync_folders(&mut self, db: &Db, account_id: i64) -> Result<Vec<Folder>> {
+        // Multi-pass discovery: a single `LIST "" "*"` misses folders on
+        // servers with restricted LIST output or namespace gaps. Pass 1 =
+        // full recursive LIST, pass 2 = LSUB merge (subscribed folders some
+        // servers only report there), pass 3 = per-root subtree LIST for
+        // namespace roots the bare "*" didn't expand (both the reported
+        // delimiter and "." — Tobit David uses dotted prefixes), pass 4 =
+        // LIST inside every NAMESPACE prefix (personal/other/shared).
+        // First pass wins role mapping (it carries SPECIAL-USE); later passes
+        // only add names we haven't seen. Auxiliary passes never fail sync.
         let mut seen: HashSet<String> = HashSet::new();
         let mut discovered: Vec<(String, String, FolderRole)> = Vec::new();
         let mut consider =
@@ -1698,10 +1956,15 @@ impl SyncProvider for ImapSync {
 
         let session = self.session()?;
 
+        let mut list_count = 0usize;
+        let mut lsub_count = 0usize;
+        let mut subtree_count = 0usize;
+
         // Pass 1: LIST "" "*"
         let names = session.list("", "*").await?;
         for n in &names {
             if !is_selectable(&n.attributes) {
+                log::debug!("imap: skipping non-selectable {}", n.name);
                 continue;
             }
             consider(
@@ -1711,29 +1974,123 @@ impl SyncProvider for ImapSync {
                 &attr_text(&n.attributes),
                 "LIST",
             );
+            list_count += 1;
         }
 
-        // Pass 2: LSUB "" "*"
-        if let Ok(subs) = session.lsub("", "*").await {
-            for n in &subs {
-                if !is_selectable(&n.attributes) {
-                    continue;
+        // Pass 2: LSUB "" "*" (best effort).
+        match session.lsub("", "*").await {
+            Ok(subs) => {
+                for n in &subs {
+                    if !is_selectable(&n.attributes) {
+                        continue;
+                    }
+                    consider(
+                        &n.name,
+                        &n.delimiter,
+                        role_from_name(&n.name),
+                        &attr_text(&n.attributes),
+                        "LSUB",
+                    );
+                    lsub_count += 1;
                 }
-                consider(
-                    &n.name,
-                    &n.delimiter,
-                    role_from_name(&n.name),
-                    &attr_text(&n.attributes),
-                    "LSUB",
-                );
             }
+            Err(e) => log::warn!("imap: LSUB failed, continuing with LIST results: {e}"),
         }
 
+        // Pass 3: subtree LIST per top-level root (best effort, capped).
+        // Both the reported delimiter and "." are tried: Tobit David serves
+        // dotted hierarchies (INBOX.Archive) that a "/"-joined pattern misses.
+        match session.list("", "%").await {
+            Ok(roots) => {
+                for root in roots.iter().take(64) {
+                    let delim = root.delimiter.as_str();
+                    let base = root.name.as_str();
+                    if base.is_empty() {
+                        continue;
+                    }
+                    let join = |d: &str| {
+                        if base.ends_with(d) {
+                            format!("{base}*")
+                        } else {
+                            format!("{base}{d}*")
+                        }
+                    };
+                    let mut patterns = vec![join(delim)];
+                    if delim != "." {
+                        patterns.push(join("."));
+                    }
+                    for pattern in patterns {
+                        match session.list("", &pattern).await {
+                            Ok(children) => {
+                                for n in children.iter() {
+                                    if !is_selectable(&n.attributes) {
+                                        continue;
+                                    }
+                                    consider(
+                                        &n.name,
+                                        &n.delimiter,
+                                        map_folder_role(&n.attributes, &n.name),
+                                        &attr_text(&n.attributes),
+                                        "SUBTREE",
+                                    );
+                                    subtree_count += 1;
+                                }
+                            }
+                            Err(e) => log::debug!("imap: subtree LIST {pattern} failed: {e}"),
+                        }
+                    }
+                }
+            }
+            Err(e) => log::debug!("imap: root LIST failed, skipping subtree pass: {e}"),
+        }
+
+        // Pass 4: LIST inside every NAMESPACE prefix (best effort, capped).
+        // Shared / other-users' branches live outside "" and never appear in
+        // passes 1–3; the server tells us where via RFC 2342 (when it bothers).
+        // The empty personal prefix is pass 1 again, so it is skipped.
+        let mut ns_count = 0usize;
+        match session.namespace().await {
+            Ok((personal, other, shared)) => {
+                for prefix in personal
+                    .iter()
+                    .chain(other.iter())
+                    .chain(shared.iter())
+                    .filter(|p| !p.is_empty())
+                    .take(12)
+                {
+                    match session.list(prefix, "*").await {
+                        Ok(extra) => {
+                            for n in extra.iter() {
+                                if !is_selectable(&n.attributes) {
+                                    continue;
+                                }
+                                consider(
+                                    &n.name,
+                                    &n.delimiter,
+                                    map_folder_role(&n.attributes, &n.name),
+                                    &attr_text(&n.attributes),
+                                    "NAMESPACE",
+                                );
+                                ns_count += 1;
+                            }
+                        }
+                        Err(e) => log::debug!("imap: namespace LIST {prefix:?} failed: {e}"),
+                    }
+                }
+            }
+            Err(e) => log::debug!("imap: NAMESPACE query failed, skipping pass 4: {e}"),
+        }
+
+        log::info!(
+            "imap: discovery LIST*={list_count} LSUB={lsub_count} subtrees={subtree_count} namespaces={ns_count} merged={}",
+            discovered.len()
+        );
         let mut out = Vec::new();
         for (path, delimiter, role) in &discovered {
             let id = folders::upsert(db, account_id, path, delimiter, *role)?;
             out.push(folders::get(db, id)?);
         }
+        log::info!("imap: {} folders", out.len());
         Ok(out)
     }
 
@@ -2044,22 +2401,37 @@ fn collect_contacts_from_headers(db: &Db, raw_headers: Option<&str>) {
     }
 }
 
+/// Validate + normalize a user-typed folder path: trims whitespace, maps `/`
+/// separators onto the account's hierarchy `delimiter`, rejects empties,
+/// empty segments (`a//b`), and the LIST wildcards `*`/`%` (legal in theory,
+/// but they would corrupt our own subtree discovery patterns).
 pub fn normalize_folder_path(input: &str, delimiter: &str) -> Result<String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
+        return Err(StoreError::InvalidInput("folder name is empty".to_string()));
+    }
+    if trimmed.contains('*') || trimmed.contains('%') {
         return Err(StoreError::InvalidInput(
-            "folder name cannot be empty".into(),
+            "folder names may not contain * or %".to_string(),
         ));
     }
-    let parts: Vec<&str> = trimmed
-        .split(delimiter)
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .collect();
-    if parts.is_empty() {
-        return Err(StoreError::InvalidInput("invalid folder path".into()));
+    let unified = if delimiter != "/" {
+        trimmed.replace('/', delimiter)
+    } else {
+        trimmed.to_string()
+    };
+    let segments: Vec<&str> = unified.split(delimiter).map(str::trim).collect();
+    if segments.iter().any(|s| s.is_empty()) {
+        return Err(StoreError::InvalidInput(
+            "folder names may not be empty or contain empty levels".to_string(),
+        ));
     }
-    Ok(parts.join(delimiter))
+    if segments.iter().any(|s| s.chars().any(char::is_control)) {
+        return Err(StoreError::InvalidInput(
+            "folder names may not contain control characters".to_string(),
+        ));
+    }
+    Ok(segments.join(delimiter))
 }
 
 #[cfg(test)]
@@ -2169,7 +2541,31 @@ mod tests {
             updated_at: "t".to_string(),
         };
         let s = ImapSync::new(&a);
-        assert!(!s.is_healthy());
+        assert!(!s.is_connected());
+    }
+
+    #[tokio::test]
+    async fn fresh_session_is_not_healthy_async() {
+        let a = crate::models::Account {
+            id: 1,
+            name: "n".to_string(),
+            email_address: "e".to_string(),
+            from_name: String::new(),
+            imap_host: "h".to_string(),
+            imap_port: 993,
+            imap_security: "tls".to_string(),
+            imap_username: "u".to_string(),
+            smtp_host: "s".to_string(),
+            smtp_port: 465,
+            smtp_security: "tls".to_string(),
+            smtp_username: "u".to_string(),
+            auth_vault_key: "k".to_string(),
+            check_interval_secs: 300,
+            created_at: "t".to_string(),
+            updated_at: "t".to_string(),
+        };
+        let mut s = ImapSync::new(&a);
+        assert!(!s.is_healthy().await);
     }
 
     #[test]
@@ -2284,6 +2680,22 @@ mod tests {
         where
             F: Fn(&str, &str) -> Vec<String> + Send + Sync + 'static,
         {
+            Self::start_with_greeting(
+                caps,
+                format!("* OK [CAPABILITY {caps}] Mock IMAP Server ready\r\n"),
+                custom_handler,
+            )
+            .await
+        }
+
+        async fn start_with_greeting<F>(
+            caps: &'static str,
+            greeting: String,
+            custom_handler: F,
+        ) -> Self
+        where
+            F: Fn(&str, &str) -> Vec<String> + Send + Sync + 'static,
+        {
             use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
             use tokio::net::TcpListener;
 
@@ -2299,7 +2711,7 @@ mod tests {
                 let (reader, mut writer) = stream.into_split();
                 let mut reader = BufReader::new(reader);
 
-                let greeting = format!("* OK [CAPABILITY {caps}] Mock IMAP Server ready\r\n");
+                let greeting = greeting;
                 if writer.write_all(greeting.as_bytes()).await.is_err() {
                     return;
                 }
@@ -2425,16 +2837,26 @@ mod tests {
 
         let cmds = server.received.lock().await.clone();
         // Assert ENABLE was never sent
-        assert!(!cmds.iter().any(|c| c.to_ascii_uppercase().contains("ENABLE")));
+        assert!(!cmds
+            .iter()
+            .any(|c| c.to_ascii_uppercase().contains("ENABLE")));
         // Assert SELECT was sent as standard SELECT without CONDSTORE or QRESYNC
         assert!(cmds
             .iter()
             .any(|c| c.contains("SELECT") && !c.contains("CONDSTORE") && !c.contains("QRESYNC")));
         // Assert UID MOVE was NEVER sent, but COPY + STORE \Deleted + EXPUNGE was used
-        assert!(!cmds.iter().any(|c| c.to_ascii_uppercase().contains("UID MOVE")));
-        assert!(cmds.iter().any(|c| c.to_ascii_uppercase().contains("UID COPY 10")));
-        assert!(cmds.iter().any(|c| c.contains("STORE") && c.contains("\\Deleted")));
-        assert!(cmds.iter().any(|c| c.to_ascii_uppercase().contains("EXPUNGE")));
+        assert!(!cmds
+            .iter()
+            .any(|c| c.to_ascii_uppercase().contains("UID MOVE")));
+        assert!(cmds
+            .iter()
+            .any(|c| c.to_ascii_uppercase().contains("UID COPY 10")));
+        assert!(cmds
+            .iter()
+            .any(|c| c.contains("STORE") && c.contains("\\Deleted")));
+        assert!(cmds
+            .iter()
+            .any(|c| c.to_ascii_uppercase().contains("EXPUNGE")));
     }
 
     #[tokio::test]
@@ -2471,9 +2893,13 @@ mod tests {
 
         let cmds = server.received.lock().await.clone();
         // First SELECT attempted with CONDSTORE
-        assert!(cmds.iter().any(|c| c.contains("SELECT") && c.contains("CONDSTORE")));
+        assert!(cmds
+            .iter()
+            .any(|c| c.contains("SELECT") && c.contains("CONDSTORE")));
         // Second SELECT fell back to standard SELECT
-        assert!(cmds.iter().any(|c| c.contains("SELECT") && !c.contains("CONDSTORE")));
+        assert!(cmds
+            .iter()
+            .any(|c| c.contains("SELECT") && !c.contains("CONDSTORE")));
     }
 
     #[tokio::test]
@@ -2482,7 +2908,9 @@ mod tests {
             let upper = rest.to_ascii_uppercase();
             if upper.starts_with("UID MOVE") {
                 // Server advertised MOVE but failed the command
-                vec![format!("{tag} NO [CANNOT] UID MOVE not supported on this folder\r\n")]
+                vec![format!(
+                    "{tag} NO [CANNOT] UID MOVE not supported on this folder\r\n"
+                )]
             } else if upper.starts_with("UID COPY") {
                 vec![format!("{tag} OK UID COPY completed\r\n")]
             } else if upper.starts_with("UID STORE") {
@@ -2509,11 +2937,19 @@ mod tests {
 
         let cmds = server.received.lock().await.clone();
         // UID MOVE was tried first
-        assert!(cmds.iter().any(|c| c.to_ascii_uppercase().contains("UID MOVE 42")));
+        assert!(cmds
+            .iter()
+            .any(|c| c.to_ascii_uppercase().contains("UID MOVE 42")));
         // Fallback sequence was executed
-        assert!(cmds.iter().any(|c| c.to_ascii_uppercase().contains("UID COPY 42")));
-        assert!(cmds.iter().any(|c| c.contains("STORE") && c.contains("\\Deleted")));
-        assert!(cmds.iter().any(|c| c.to_ascii_uppercase().contains("EXPUNGE")));
+        assert!(cmds
+            .iter()
+            .any(|c| c.to_ascii_uppercase().contains("UID COPY 42")));
+        assert!(cmds
+            .iter()
+            .any(|c| c.contains("STORE") && c.contains("\\Deleted")));
+        assert!(cmds
+            .iter()
+            .any(|c| c.to_ascii_uppercase().contains("EXPUNGE")));
     }
 
     #[tokio::test]
@@ -2540,7 +2976,10 @@ mod tests {
         let session = sync.session.as_mut().unwrap();
         assert!(session.condstore_enabled);
 
-        let res = session.uid_fetch_flags_changesince(&[7], 100).await.unwrap();
+        let res = session
+            .uid_fetch_flags_changesince(&[7], 100)
+            .await
+            .unwrap();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].0, 7);
         assert_eq!(res[0].1, vec![Flag::Seen]);
@@ -2549,7 +2988,9 @@ mod tests {
 
         let cmds = server.received.lock().await.clone();
         assert!(cmds.iter().any(|c| c.contains("CHANGEDSINCE")));
-        assert!(cmds.iter().any(|c| c.contains("UID FETCH") && !c.contains("CHANGEDSINCE")));
+        assert!(cmds
+            .iter()
+            .any(|c| c.contains("UID FETCH") && !c.contains("CHANGEDSINCE")));
     }
 
     #[tokio::test]
@@ -2613,10 +3054,15 @@ mod tests {
         assert_eq!(outcome, TrashOutcome::Moved("Trash".to_string()));
 
         let cmds = server.received.lock().await.clone();
-        let store_idx = cmds.iter().position(|c| c.contains("STORE") && c.contains("\\Seen"));
+        let store_idx = cmds
+            .iter()
+            .position(|c| c.contains("STORE") && c.contains("\\Seen"));
         let move_idx = cmds.iter().position(|c| c.contains("UID MOVE"));
 
-        assert!(store_idx.is_some(), "UID STORE \\Seen was not called for unread message");
+        assert!(
+            store_idx.is_some(),
+            "UID STORE \\Seen was not called for unread message"
+        );
         assert!(move_idx.is_some(), "UID MOVE was not called");
         assert!(
             store_idx.unwrap() < move_idx.unwrap(),
@@ -2682,7 +3128,9 @@ mod tests {
         assert_eq!(outcome, TrashOutcome::Moved("Trash".to_string()));
 
         let cmds = server.received.lock().await.clone();
-        let store_idx = cmds.iter().position(|c| c.contains("STORE") && c.contains("\\Seen"));
+        let store_idx = cmds
+            .iter()
+            .position(|c| c.contains("STORE") && c.contains("\\Seen"));
         let move_idx = cmds.iter().position(|c| c.contains("UID MOVE"));
 
         assert!(
@@ -2752,7 +3200,9 @@ mod tests {
         assert_eq!(outcome, MoveOutcome::Moved("Trash".to_string()));
 
         let cmds = server.received.lock().await.clone();
-        let store_idx = cmds.iter().position(|c| c.contains("STORE") && c.contains("\\Seen"));
+        let store_idx = cmds
+            .iter()
+            .position(|c| c.contains("STORE") && c.contains("\\Seen"));
         let move_idx = cmds.iter().position(|c| c.contains("UID MOVE"));
 
         assert!(
@@ -2815,17 +3265,505 @@ mod tests {
         let mut sync = ImapSync::new(&account);
         sync.connect("secret").await.unwrap();
 
-        sync.move_uids_to(&db, inbox_id, &[55, 56], "Trash").await.unwrap();
+        sync.move_uids_to(&db, inbox_id, &[55, 56], "Trash")
+            .await
+            .unwrap();
 
         let cmds = server.received.lock().await.clone();
-        let store_idx = cmds.iter().position(|c| c.contains("STORE") && c.contains("\\Seen"));
+        let store_idx = cmds
+            .iter()
+            .position(|c| c.contains("STORE") && c.contains("\\Seen"));
         let move_idx = cmds.iter().position(|c| c.contains("UID MOVE"));
 
-        assert!(store_idx.is_some(), "UID STORE \\Seen was not called when moving to Trash");
+        assert!(
+            store_idx.is_some(),
+            "UID STORE \\Seen was not called when moving to Trash"
+        );
         assert!(move_idx.is_some(), "UID MOVE was not called");
         assert!(
             store_idx.unwrap() < move_idx.unwrap(),
             "UID STORE \\Seen must occur BEFORE UID MOVE"
         );
+    }
+
+    // ── Regression guards for the imap-next rewrite ────────────────────
+
+    #[test]
+    fn role_from_name_keeps_legacy_variants_and_unicode() {
+        // Legacy table (pre-rewrite) must keep working.
+        assert_eq!(role_from_name("INBOX"), FolderRole::Inbox);
+        assert_eq!(role_from_name("Sent"), FolderRole::Sent);
+        assert_eq!(role_from_name("Sent Mail"), FolderRole::Sent);
+        assert_eq!(role_from_name("Sent-Mail"), FolderRole::Sent);
+        assert_eq!(role_from_name("Entwurf"), FolderRole::Drafts);
+        assert_eq!(role_from_name("Entwurfe"), FolderRole::Drafts);
+        assert_eq!(role_from_name("Gelöscht"), FolderRole::Trash);
+        assert_eq!(role_from_name("Geloscht"), FolderRole::Trash);
+        assert_eq!(role_from_name("Junk E-Mail"), FolderRole::Junk);
+        assert_eq!(role_from_name("Junk-E-Mail"), FolderRole::Junk);
+        // Unicode capitals (to_lowercase, not to_ascii_lowercase).
+        assert_eq!(role_from_name("Entwürfe"), FolderRole::Drafts);
+        assert_eq!(role_from_name("Gelöschte Elemente"), FolderRole::Trash);
+        assert_eq!(role_from_name("Gesendete Elemente"), FolderRole::Sent);
+        // New additions keep working too.
+        assert_eq!(role_from_name("Sent Messages"), FolderRole::Sent);
+        assert_eq!(role_from_name("Deleted Messages"), FolderRole::Trash);
+        assert_eq!(role_from_name("Bulk Mail"), FolderRole::Junk);
+        // Exact leaf match: no substring false-positives.
+        assert_eq!(role_from_name("Cabin"), FolderRole::Custom);
+        assert_eq!(role_from_name("Binders"), FolderRole::Custom);
+        assert_eq!(role_from_name("INBOX.Archive"), FolderRole::Archive);
+    }
+
+    #[test]
+    fn normalize_folder_path_rejects_wildcards_and_empty_levels() {
+        assert_eq!(normalize_folder_path("  INBOX  ", "/").unwrap(), "INBOX");
+        assert_eq!(
+            normalize_folder_path("Work/Client", "/").unwrap(),
+            "Work/Client"
+        );
+        assert!(normalize_folder_path("", "/").is_err());
+        assert!(normalize_folder_path("   ", "/").is_err());
+        assert!(normalize_folder_path("a//b", "/").is_err());
+        assert!(normalize_folder_path("/Lead", "/").is_err());
+        assert!(normalize_folder_path("a*b", "/").is_err());
+        assert!(normalize_folder_path("a%b", "/").is_err());
+        // `/` maps onto a dotted delimiter.
+        assert_eq!(
+            normalize_folder_path("Work/Client", ".").unwrap(),
+            "Work.Client"
+        );
+    }
+
+    #[test]
+    fn selectable_and_special_use_mapping() {
+        use imap_types::flag::FlagNameAttribute;
+        assert!(is_selectable(&[]));
+        assert!(!is_selectable(&[FlagNameAttribute::Noselect]));
+        // Unknown server attributes arrive as Extension; `\Nonexistent`
+        // placeholders must still be skipped.
+        let nonexistent =
+            FlagNameAttribute::from(imap_types::core::Atom::try_from("Nonexistent").unwrap());
+        assert!(!is_selectable(&[nonexistent]));
+        // attr_text uses Display wire text, not Debug internals.
+        assert!(attr_text(&[FlagNameAttribute::Noselect]).contains("noselect"));
+        assert_eq!(
+            map_folder_role(&[FlagNameAttribute::Marked], "MyFolder"),
+            FolderRole::Custom
+        );
+    }
+
+    #[test]
+    fn vanished_ranges_do_not_expand() {
+        let set = SequenceSet::try_from("1:3,5,10:8").unwrap();
+        assert_eq!(vanished_ranges(&set), vec![(1, 3), (5, 5), (8, 10)]);
+        // Pathological range is skipped by the small-set helper …
+        let huge = SequenceSet::try_from("1:200000").unwrap();
+        assert!(sequence_set_to_uids(&huge).is_empty());
+        // … and deleted by a single BETWEEN statement, not 200k rows.
+        let db = Db::open_in_memory().unwrap();
+        let acc = accounts::create(
+            &db,
+            &crate::models::NewAccount {
+                name: "t".to_string(),
+                email_address: "a@x.y".to_string(),
+                from_name: String::new(),
+                imap_host: "h".to_string(),
+                imap_port: 993,
+                imap_security: "tls".to_string(),
+                imap_username: "u".to_string(),
+                smtp_host: "s".to_string(),
+                smtp_port: 465,
+                smtp_security: "tls".to_string(),
+                smtp_username: "u".to_string(),
+                auth_vault_key: "k".to_string(),
+                check_interval_secs: 60,
+            },
+        )
+        .unwrap();
+        let f = folders::upsert(&db, acc, "INBOX", "/", FolderRole::Inbox).unwrap();
+        for uid in [1u32, 2, 3, 50, 100] {
+            messages::upsert(&db, &messages::sample_new(acc, f, uid)).unwrap();
+        }
+        assert_eq!(messages::delete_by_uid_range(&db, f, 1, 3).unwrap(), 3);
+        assert_eq!(messages::list_uids(&db, f).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn uids_to_sequence_set_sorts_and_dedups() {
+        let set = uids_to_sequence_set(&[9, 3, 3, 7]).unwrap();
+        assert_eq!(sequence_set_to_uids(&set), vec![3, 7, 9]);
+    }
+
+    #[tokio::test]
+    async fn bye_during_command_is_an_error_not_a_hang() {
+        let server = MockImapServer::start("IMAP4rev1", |tag, rest| {
+            if rest.to_ascii_uppercase().starts_with("NOOP") {
+                vec![
+                    "* BYE server is shutting down\r\n".to_string(),
+                    format!("{tag} OK NOOP completed\r\n"),
+                ]
+            } else {
+                vec![format!("{tag} OK completed\r\n")]
+            }
+        })
+        .await;
+        let account = test_mock_account(server.port);
+        let mut sync = ImapSync::new(&account);
+        sync.connect("secret").await.unwrap();
+        let err = sync.session().unwrap().noop().await.unwrap_err();
+        assert!(
+            err.to_string().contains("BYE"),
+            "expected BYE error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bye_greeting_fails_connect_fast() {
+        let server = MockImapServer::start_with_greeting(
+            "IMAP4rev1",
+            "* BYE server is down\r\n".to_string(),
+            |tag, _| vec![format!("{tag} OK completed\r\n")],
+        )
+        .await;
+        let account = test_mock_account(server.port);
+        let mut sync = ImapSync::new(&account);
+        let err = sync.connect("secret").await.unwrap_err();
+        assert!(
+            err.to_string().contains("BYE"),
+            "expected BYE greeting error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn healthy_session_passes_noop_probe() {
+        let server = MockImapServer::start("IMAP4rev1", |tag, rest| {
+            if rest.to_ascii_uppercase().starts_with("NOOP") {
+                vec![format!("{tag} OK NOOP completed\r\n")]
+            } else {
+                vec![format!("{tag} OK completed\r\n")]
+            }
+        })
+        .await;
+        let account = test_mock_account(server.port);
+        let mut sync = ImapSync::new(&account);
+        assert!(!sync.is_healthy().await);
+        sync.connect("secret").await.unwrap();
+        assert!(sync.is_healthy().await);
+        sync.logout().await;
+        assert!(!sync.is_healthy().await);
+    }
+
+    #[tokio::test]
+    async fn discovery_finds_dotted_subtree_and_shared_namespace() {
+        let server = MockImapServer::start("IMAP4rev1 NAMESPACE", |tag, rest| {
+            let upper = rest.to_ascii_uppercase();
+            if upper.starts_with("NAMESPACE") {
+                return vec![
+                    "* NAMESPACE NIL NIL ((\"Shared/\" \"/\"))\r\n".to_string(),
+                    format!("{tag} OK NAMESPACE completed\r\n"),
+                ];
+            }
+            if upper.starts_with("LIST") {
+                // Roots for pass 3.
+                if rest.contains('"') && rest.contains('%') {
+                    return vec![
+                        "* LIST (\\HasNoChildren) \"/\" INBOX\r\n".to_string(),
+                        format!("{tag} OK LIST completed\r\n"),
+                    ];
+                }
+                // Dotted Tobit-style child (pass 3) and shared branch (pass 4).
+                if rest.contains("INBOX.") {
+                    return vec![
+                        "* LIST (\\HasNoChildren) \".\" INBOX.Archive\r\n".to_string(),
+                        format!("{tag} OK LIST completed\r\n"),
+                    ];
+                }
+                if rest.contains("Shared/") {
+                    return vec![
+                        "* LIST (\\HasNoChildren) \"/\" Shared/Team\r\n".to_string(),
+                        format!("{tag} OK LIST completed\r\n"),
+                    ];
+                }
+                return vec![
+                    "* LIST (\\HasNoChildren) \"/\" INBOX\r\n".to_string(),
+                    format!("{tag} OK LIST completed\r\n"),
+                ];
+            }
+            if upper.starts_with("LSUB") {
+                return vec![format!("{tag} OK LSUB completed\r\n")];
+            }
+            vec![format!("{tag} OK completed\r\n")]
+        })
+        .await;
+        let db = Db::open_in_memory().unwrap();
+        let account = test_mock_account(server.port);
+        let account_id = accounts::create(
+            &db,
+            &crate::models::NewAccount {
+                name: account.name.clone(),
+                email_address: account.email_address.clone(),
+                from_name: account.from_name.clone(),
+                imap_host: account.imap_host.clone(),
+                imap_port: account.imap_port,
+                imap_security: account.imap_security.clone(),
+                imap_username: account.imap_username.clone(),
+                smtp_host: account.smtp_host.clone(),
+                smtp_port: account.smtp_port,
+                smtp_security: account.smtp_security.clone(),
+                smtp_username: account.smtp_username.clone(),
+                auth_vault_key: account.auth_vault_key.clone(),
+                check_interval_secs: account.check_interval_secs,
+            },
+        )
+        .unwrap();
+        let mut sync = ImapSync::new(&account);
+        sync.connect("secret").await.unwrap();
+        let found = sync.sync_folders(&db, account_id).await.unwrap();
+        let paths: Vec<String> = found.into_iter().map(|f| f.path).collect();
+        assert!(
+            paths.contains(&"INBOX.Archive".to_string()),
+            "dotted subtree missing: {paths:?}"
+        );
+        assert!(
+            paths.contains(&"Shared/Team".to_string()),
+            "shared namespace missing: {paths:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_folder_path_creates_parents_and_discovers() {
+        let server = MockImapServer::start("IMAP4rev1", |tag, rest| {
+            let upper = rest.to_ascii_uppercase();
+            if upper.starts_with("CREATE") {
+                return vec![format!("{tag} OK CREATE completed\r\n")];
+            }
+            if upper.starts_with("LIST") {
+                return vec![
+                    "* LIST (\\HasNoChildren) \"/\" Work\r\n".to_string(),
+                    "* LIST (\\HasNoChildren) \"/\" Work/Client\r\n".to_string(),
+                    format!("{tag} OK LIST completed\r\n"),
+                ];
+            }
+            if upper.starts_with("LSUB") {
+                return vec![format!("{tag} OK LSUB completed\r\n")];
+            }
+            if upper.starts_with("NAMESPACE") {
+                return vec![
+                    "* NAMESPACE NIL NIL NIL\r\n".to_string(),
+                    format!("{tag} OK NAMESPACE completed\r\n"),
+                ];
+            }
+            vec![format!("{tag} OK completed\r\n")]
+        })
+        .await;
+        let db = Db::open_in_memory().unwrap();
+        let account = test_mock_account(server.port);
+        let account_id = accounts::create(
+            &db,
+            &crate::models::NewAccount {
+                name: account.name.clone(),
+                email_address: account.email_address.clone(),
+                from_name: account.from_name.clone(),
+                imap_host: account.imap_host.clone(),
+                imap_port: account.imap_port,
+                imap_security: account.imap_security.clone(),
+                imap_username: account.imap_username.clone(),
+                smtp_host: account.smtp_host.clone(),
+                smtp_port: account.smtp_port,
+                smtp_security: account.smtp_security.clone(),
+                smtp_username: account.smtp_username.clone(),
+                auth_vault_key: account.auth_vault_key.clone(),
+                check_interval_secs: account.check_interval_secs,
+            },
+        )
+        .unwrap();
+        let mut sync = ImapSync::new(&account);
+        sync.connect("secret").await.unwrap();
+        let folder = sync
+            .create_folder_path(&db, account_id, "Work/Client", "/")
+            .await
+            .unwrap();
+        assert_eq!(folder.path, "Work/Client");
+        let cmds = server.received.lock().await.clone();
+        let creates: Vec<&String> = cmds
+            .iter()
+            .filter(|c| c.to_ascii_uppercase().contains("CREATE"))
+            .collect();
+        assert!(
+            creates
+                .iter()
+                .any(|c| c.contains("Work\"") || c.ends_with("Work")),
+            "parent CREATE missing: {cmds:?}"
+        );
+        assert!(
+            creates.iter().any(|c| c.contains("Work/Client")),
+            "child CREATE missing: {cmds:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn trash_destroys_junk_directly() {
+        let server = MockImapServer::start("IMAP4rev1 MOVE", |tag, rest| {
+            let upper = rest.to_ascii_uppercase();
+            if upper.starts_with("SELECT") {
+                return vec![
+                    "* 1 EXISTS\r\n".to_string(),
+                    "* OK [UIDVALIDITY 1] Ok\r\n".to_string(),
+                    "* OK [UIDNEXT 100] Ok\r\n".to_string(),
+                    format!("{tag} OK [READ-WRITE] SELECT completed\r\n"),
+                ];
+            } else if upper.starts_with("UID STORE") {
+                return vec![format!("{tag} OK STORE completed\r\n")];
+            } else if upper.starts_with("EXPUNGE") {
+                return vec![
+                    "* 1 EXPUNGE\r\n".to_string(),
+                    format!("{tag} OK EXPUNGE completed\r\n"),
+                ];
+            }
+            vec![format!("{tag} OK completed\r\n")]
+        })
+        .await;
+        let db = Db::open_in_memory().unwrap();
+        let account = test_mock_account(server.port);
+        let account_id = accounts::create(
+            &db,
+            &crate::models::NewAccount {
+                name: account.name.clone(),
+                email_address: account.email_address.clone(),
+                from_name: account.from_name.clone(),
+                imap_host: account.imap_host.clone(),
+                imap_port: account.imap_port,
+                imap_security: account.imap_security.clone(),
+                imap_username: account.imap_username.clone(),
+                smtp_host: account.smtp_host.clone(),
+                smtp_port: account.smtp_port,
+                smtp_security: account.smtp_security.clone(),
+                smtp_username: account.smtp_username.clone(),
+                auth_vault_key: account.auth_vault_key.clone(),
+                check_interval_secs: account.check_interval_secs,
+            },
+        )
+        .unwrap();
+        let junk_id = folders::upsert(&db, account_id, "Junk", "/", FolderRole::Junk).unwrap();
+        let _trash_id = folders::upsert(&db, account_id, "Trash", "/", FolderRole::Trash).unwrap();
+        let msg_id = messages::upsert(&db, &messages::sample_new(account_id, junk_id, 7)).unwrap();
+        let mut sync = ImapSync::new(&account);
+        sync.connect("secret").await.unwrap();
+        let outcome = sync.trash_message(&db, msg_id).await.unwrap();
+        assert_eq!(outcome, TrashOutcome::Expunged);
+        let cmds = server.received.lock().await.clone();
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| c.to_ascii_uppercase().contains("UID MOVE")
+                    || c.to_ascii_uppercase().contains("UID COPY")),
+            "junk must not be moved/copied to Trash: {cmds:?}"
+        );
+        assert!(
+            cmds.iter().any(|c| c.contains("\\Deleted")),
+            "junk destroy must STORE \\Deleted: {cmds:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn move_to_folder_rejects_cross_account() {
+        let server = MockImapServer::start("IMAP4rev1 MOVE", |tag, _| {
+            vec![format!("{tag} OK completed\r\n")]
+        })
+        .await;
+        let db = Db::open_in_memory().unwrap();
+        let account = test_mock_account(server.port);
+        let mk = |email: &str| {
+            accounts::create(
+                &db,
+                &crate::models::NewAccount {
+                    name: "t".to_string(),
+                    email_address: email.to_string(),
+                    from_name: String::new(),
+                    imap_host: account.imap_host.clone(),
+                    imap_port: account.imap_port,
+                    imap_security: account.imap_security.clone(),
+                    imap_username: account.imap_username.clone(),
+                    smtp_host: account.smtp_host.clone(),
+                    smtp_port: account.smtp_port,
+                    smtp_security: account.smtp_security.clone(),
+                    smtp_username: account.smtp_username.clone(),
+                    auth_vault_key: format!("k-{email}"),
+                    check_interval_secs: 60,
+                },
+            )
+            .unwrap()
+        };
+        let acc_a = mk("a@x.y");
+        let acc_b = mk("b@x.y");
+        let inbox_a = folders::upsert(&db, acc_a, "INBOX", "/", FolderRole::Inbox).unwrap();
+        let inbox_b = folders::upsert(&db, acc_b, "INBOX", "/", FolderRole::Inbox).unwrap();
+        let msg_id = messages::upsert(&db, &messages::sample_new(acc_a, inbox_a, 9)).unwrap();
+        let mut sync = ImapSync::new(&account);
+        sync.connect("secret").await.unwrap();
+        let err = sync.move_to_folder(&db, msg_id, inbox_b).await.unwrap_err();
+        assert!(err.to_string().contains("another account"), "got: {err}");
+        let cmds = server.received.lock().await.clone();
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| c.to_ascii_uppercase().contains("UID MOVE")),
+            "no server move may happen cross-account: {cmds:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_attachments_missing_uid_errors_and_flag_writer_works() {
+        let server = MockImapServer::start("IMAP4rev1", |tag, rest| {
+            let upper = rest.to_ascii_uppercase();
+            if upper.starts_with("SELECT") {
+                return vec![
+                    "* 1 EXISTS\r\n".to_string(),
+                    "* OK [UIDVALIDITY 1] Ok\r\n".to_string(),
+                    "* OK [UIDNEXT 2] Ok\r\n".to_string(),
+                    format!("{tag} OK [READ-WRITE] SELECT completed\r\n"),
+                ];
+            }
+            // UID FETCH answers OK with no FETCH data: UID is gone server-side.
+            vec![format!("{tag} OK UID FETCH completed\r\n")]
+        })
+        .await;
+        let db = Db::open_in_memory().unwrap();
+        let account = test_mock_account(server.port);
+        let account_id = accounts::create(
+            &db,
+            &crate::models::NewAccount {
+                name: account.name.clone(),
+                email_address: account.email_address.clone(),
+                from_name: account.from_name.clone(),
+                imap_host: account.imap_host.clone(),
+                imap_port: account.imap_port,
+                imap_security: account.imap_security.clone(),
+                imap_username: account.imap_username.clone(),
+                smtp_host: account.smtp_host.clone(),
+                smtp_port: account.smtp_port,
+                smtp_security: account.smtp_security.clone(),
+                smtp_username: account.smtp_username.clone(),
+                auth_vault_key: account.auth_vault_key.clone(),
+                check_interval_secs: account.check_interval_secs,
+            },
+        )
+        .unwrap();
+        let inbox_id = folders::upsert(&db, account_id, "INBOX", "/", FolderRole::Inbox).unwrap();
+        let mut m = messages::sample_new(account_id, inbox_id, 11);
+        m.has_attachments = false;
+        let msg_id = messages::upsert(&db, &m).unwrap();
+        let mut sync = ImapSync::new(&account);
+        sync.connect("secret").await.unwrap();
+        // Gone server-side → InvalidInput "no longer on server" (not silent Ok(0)).
+        let err = sync.fetch_attachments(&db, msg_id).await.unwrap_err();
+        assert!(
+            err.to_string().contains("no longer on server"),
+            "got: {err}"
+        );
+        // And the flag writer the fetch path relies on works.
+        messages::set_has_attachments(&db, msg_id, true).unwrap();
+        assert!(messages::get(&db, msg_id).unwrap().has_attachments);
     }
 }

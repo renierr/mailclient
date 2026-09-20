@@ -927,7 +927,7 @@ impl SmtpSender {
         imap.append_to_folder(&sent_path, raw)
             .await
             .map_err(|e| StoreError::InvalidInput(format!("APPEND to {sent_path} failed: {e}")))?;
-        imap.disconnect();
+        imap.logout().await;
         log::info!("smtp: saved copy to {sent_path}");
         Ok(())
     }

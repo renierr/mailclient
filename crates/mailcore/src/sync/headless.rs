@@ -185,7 +185,7 @@ pub async fn sync_all_accounts(db: &Db) -> SyncAllReport {
             Ok(s) => match imap.connect(&s.imap_password).await {
                 Ok(()) => {
                     let r = sync_account(db, acc, &mut imap).await;
-                    imap.disconnect();
+                    imap.logout().await;
                     r
                 }
                 Err(e) => {

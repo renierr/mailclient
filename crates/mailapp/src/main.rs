@@ -193,7 +193,7 @@ fn run_headless(args: &[String]) -> i32 {
                             .await
                             .map_err(|e| e.to_string())?;
                         let ar = headless::sync_account(&db, &a, &mut imap).await;
-                        imap.disconnect();
+                        imap.logout().await;
                         Ok((s, ar))
                     })
                 }) {
