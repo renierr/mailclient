@@ -9,6 +9,9 @@ if [ -z "${JAVA_HOME:-}" ] && [ -d /opt/android-studio/jbr ]; then
   export PATH="$JAVA_HOME/bin:$PATH"
 fi
 
+echo "==> cargo build -p mailjni --release"
+cargo build --manifest-path "$ROOT/Cargo.toml" -p mailjni --release
+
 echo "==> cargo build -p mailfeed"
 cargo build --manifest-path "$ROOT/Cargo.toml" -p mailfeed --release
 export MAILFEED_BIN="${MAILFEED_BIN:-$ROOT/target/release/mailfeed}"

@@ -1,0 +1,19 @@
+[package]
+name = "mailjni"
+version = "0.1.0"
+edition = "2021"
+description = "In-process JNI shared library over mailcore for Kotlin desktop and mobile clients"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "mailcore_jni"
+crate-type = ["cdylib"]
+
+[dependencies]
+mailcore = { path = "../mailcore" }
+jni = "0.21"
+serde_json = "1.0"
+dotenvy = "0.15"
+tokio = { version = "1", features = ["full"] }
+once_cell = "1.19"
+log = "0.4"

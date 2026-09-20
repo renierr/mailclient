@@ -9,16 +9,25 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import mailclient.repo.CliMailRepository
 import mailclient.repo.MailfeedLocator
+import mailclient.repo.NativeMailRepository
 import mailclient.ui.MailApp
 import mailclient.ui.MailDarkColors
 import mailclient.ui.MailLightColors
 
 /**
- * Desktop entry point (Compose Multiplatform, JVM). Same SQLite file as
- * the QML app via MAILCLIENT_DB; backend binary via MAILFEED_BIN.
+ * Desktop entry point (Compose Multiplatform, JVM).
+ * Uses in-process JNI (NativeMailRepository) for sub-millisecond execution,
+ * with graceful fallback to CliMailRepository if needed.
  */
 fun main() = application {
-    val repo = remember { CliMailRepository(MailfeedLocator.find()) }
+    val repo = remember {
+        try {
+            NativeMailRepository()
+        } catch (e: Throwable) {
+            System.err.println("Native JNI unavailable (${e.message}), falling back to CLI repository.")
+            CliMailRepository(MailfeedLocator.find())
+        }
+    }
     Window(
         onCloseRequest = ::exitApplication,
         title = "Mailclient (Kotlin)",

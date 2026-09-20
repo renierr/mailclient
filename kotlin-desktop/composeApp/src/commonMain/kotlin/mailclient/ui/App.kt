@@ -1,6 +1,7 @@
 package mailclient.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,20 +15,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.VerticalDivider
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -38,15 +31,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import mailclient.models.Account
 import mailclient.models.Folder
 import mailclient.models.MessageDetail
 import mailclient.models.MessageRow
+import mailclient.models.SearchHit
 import mailclient.repo.MailRepository
 
 /**
@@ -57,16 +53,16 @@ import mailclient.repo.MailRepository
 @Composable
 fun MailApp(repo: MailRepository) {
     val scope = rememberCoroutineScope()
-    var accounts by remember { mutableStateOf(listOf<mailclient.models.Account>()) }
+    var accounts by remember { mutableStateOf(listOf<Account>()) }
     var accountId by remember { mutableStateOf<Long?>(null) }
     var folders by remember { mutableStateOf(listOf<Folder>()) }
     var folderId by remember { mutableStateOf<Long?>(null) }
-    var rows by remember { mutableStateOf(listOf<MessageRow>()) }
+    var rawRows by remember { mutableStateOf(listOf<MessageRow>()) }
     var currentUid by remember { mutableStateOf<Long?>(null) }
     var detail by remember { mutableStateOf<MessageDetail?>(null) }
     var query by remember { mutableStateOf("") }
-    var hits by remember { mutableStateOf(listOf<mailclient.models.SearchHit>()) }
-    var statusText by remember { mutableStateOf("Starting…") }
+    var hits by remember { mutableStateOf(listOf<SearchHit>()) }
+    var statusText by remember { mutableStateOf("Ready") }
     var busy by remember { mutableStateOf(false) }
     var unreadTotal by remember { mutableStateOf(0L) }
     var showComposer by remember { mutableStateOf(false) }
@@ -74,7 +70,10 @@ fun MailApp(repo: MailRepository) {
     var composerSubject by remember { mutableStateOf("") }
     var composerBody by remember { mutableStateOf("") }
     var showAccounts by remember { mutableStateOf(false) }
-    var accountMenu by remember { mutableStateOf(false) }
+
+    // Sorting state
+    var sortField by remember { mutableStateOf("date") }
+    var sortDescending by remember { mutableStateOf(true) }
 
     suspend fun reloadFolders() {
         val id = accountId ?: return
@@ -83,10 +82,9 @@ fun MailApp(repo: MailRepository) {
 
     suspend fun reloadRows() {
         val id = folderId ?: return
-        rows = withContext(Dispatchers.IO) { repo.messages(id) }
-        // Selection survives feed rebuilds by UID; drop it if gone.
+        rawRows = withContext(Dispatchers.IO) { repo.messages(id) }
         val uid = currentUid
-        if (uid != null && rows.none { it.uid == uid }) {
+        if (uid != null && rawRows.none { it.uid == uid }) {
             currentUid = null
             detail = null
         }
@@ -245,7 +243,7 @@ fun MailApp(repo: MailRepository) {
 
     fun openMessage(uid: Long) {
         val fid = folderId ?: return
-        if (uid == currentUid && detail != null) return // re-click is a no-op (F14)
+        if (uid == currentUid && detail != null) return
         scope.launch {
             try {
                 val d = withContext(Dispatchers.IO) { repo.message(fid, uid) }
@@ -326,62 +324,109 @@ fun MailApp(repo: MailRepository) {
     LaunchedEffect(Unit) { launchReload() }
 
     val activeAccount = accounts.firstOrNull { it.id == accountId }
+    val currentFolder = folders.firstOrNull { it.id == folderId }
     val searching = query.length >= 3
-    val visibleRows = if (searching) {
-        emptyList() // search hits render instead (account-wide FTS, like QML)
+
+    // Filter & Sort
+    val filteredRows = if (searching) {
+        emptyList()
     } else if (query.isEmpty()) {
-        rows
+        rawRows
     } else {
-        rows.filter {
+        rawRows.filter {
             it.subject.contains(query, ignoreCase = true) ||
                 it.from.contains(query, ignoreCase = true) ||
                 it.snippet.contains(query, ignoreCase = true)
         }
     }
 
-    Column(Modifier.fillMaxSize()) {
-        // Toolbar (QML header bar: sync, search, composer, accounts).
+    val sortedRows = remember(filteredRows, sortField, sortDescending) {
+        val comparator = when (sortField) {
+            "from" -> compareBy<MessageRow> { it.from.lowercase() }
+            "subject" -> compareBy<MessageRow> { it.subject.lowercase() }
+            else -> compareBy<MessageRow> { it.date }
+        }
+        if (sortDescending) filteredRows.sortedWith(comparator.reversed())
+        else filteredRows.sortedWith(comparator)
+    }
+
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        // --- Desktop Toolbar (Height 42dp, integrated styling) ---
         Row(
-            Modifier.fillMaxWidth().padding(8.dp),
+            Modifier
+                .fillMaxWidth()
+                .height(42.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // Account picker.
-            Box {
-                OutlinedButton(onClick = { accountMenu = true }) {
-                    Text(activeAccount?.email ?: "No account")
-                }
-                DropdownMenu(expanded = accountMenu, onDismissRequest = { accountMenu = false }) {
-                    accounts.forEach { a ->
-                        DropdownMenuItem(
-                            text = { Text("${a.name} <${a.email}>") },
-                            onClick = {
-                                accountMenu = false
-                                accountId = a.id
-                                folderId = null
-                                currentUid = null
-                                detail = null
-                                launchReload("Switching account…")
-                            },
-                        )
-                    }
-                }
-            }
-            Button(onClick = { doSync() }, enabled = !busy) { Text("⟳ Sync") }
-            Button(onClick = { startCompose() }) { Text("✎ Compose") }
-            OutlinedButton(onClick = { showAccounts = true }) { Text("Accounts") }
-            Spacer(Modifier.weight(1f))
-            if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-            if (unreadTotal > 0) UnreadPill(unreadTotal.toString())
-        }
-        HorizontalDivider()
+            // App Brand
+            Text(
+                "📬 Mailclient",
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
 
-        // 3 panes.
+            Spacer(Modifier.width(8.dp))
+
+            // Sync Button
+            ToolbarButton(
+                label = if (busy) "⟳ Syncing…" else "⟳ Sync",
+                enabled = !busy,
+                onClick = { doSync() },
+            )
+
+            // Compose Button
+            ToolbarButton(
+                label = "✎ Compose",
+                isPrimary = true,
+                onClick = { startCompose() },
+            )
+
+            Spacer(Modifier.weight(1f))
+
+            if (busy) {
+                CircularProgressIndicator(
+                    Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+
+            Text(
+                text = statusText,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            if (unreadTotal > 0) {
+                UnreadPill("$unreadTotal")
+            }
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+
+        // --- 3-Pane Layout ---
         Row(Modifier.fillMaxSize().weight(1f)) {
+            // Sidebar
             Sidebar(
+                accounts = accounts,
+                activeAccountId = accountId,
+                onSelectAccount = {
+                    accountId = it
+                    folderId = null
+                    currentUid = null
+                    detail = null
+                    query = ""
+                    hits = emptyList()
+                    launchReload("Switching account…")
+                },
+                onManageAccounts = { showAccounts = true },
                 folders = sortedFolders(folders.filter { it.subscribed }),
-                activeId = folderId,
-                onSelect = {
+                activeFolderId = folderId,
+                onSelectFolder = {
                     folderId = it
                     currentUid = null
                     detail = null
@@ -398,15 +443,25 @@ fun MailApp(repo: MailRepository) {
                 },
                 modifier = Modifier.width(230.dp).fillMaxHeight(),
             )
-            VerticalDivider(modifier = Modifier.fillMaxHeight().width(1.dp))
+
+            VerticalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), modifier = Modifier.fillMaxHeight().width(1.dp))
+
+            // Message List
             MessageListPane(
-                rows = visibleRows,
+                folderName = currentFolder?.displayName() ?: "",
+                rows = sortedRows,
                 hits = if (searching) hits else emptyList(),
                 searching = searching,
                 query = query,
                 onQuery = { runSearch(it) },
                 currentUid = currentUid,
                 currentFolderId = folderId,
+                sortField = sortField,
+                sortDescending = sortDescending,
+                onSortChange = { field, desc ->
+                    sortField = field
+                    sortDescending = desc
+                },
                 onSelect = { openMessage(it) },
                 onToggleStar = { uid, starred -> toggleStar(uid, starred) },
                 onOpenSearchHit = { hit ->
@@ -421,9 +476,12 @@ fun MailApp(repo: MailRepository) {
                         }
                     }
                 },
-                modifier = Modifier.width(340.dp).fillMaxHeight(),
+                modifier = Modifier.width(360.dp).fillMaxHeight(),
             )
-            VerticalDivider(modifier = Modifier.fillMaxHeight().width(1.dp))
+
+            VerticalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), modifier = Modifier.fillMaxHeight().width(1.dp))
+
+            // Message Reader
             MessageViewPane(
                 detail = detail,
                 onReply = { replyMessage(it) },
@@ -436,13 +494,29 @@ fun MailApp(repo: MailRepository) {
                 modifier = Modifier.weight(1f).fillMaxHeight(),
             )
         }
-        HorizontalDivider()
-        // Status bar.
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+
+        // Status Bar
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
+            Modifier
+                .fillMaxWidth()
+                .height(24.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(statusText, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                text = activeAccount?.let { "${it.name} <${it.email}>" } ?: "No active account",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = "In-Process Native Backend (JNI)",
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            )
         }
     }
 
@@ -458,6 +532,7 @@ fun MailApp(repo: MailRepository) {
             onClose = { showComposer = false },
         )
     }
+
     if (showAccounts) {
         AccountsDialog(
             accounts = accounts,
@@ -475,13 +550,61 @@ fun MailApp(repo: MailRepository) {
     }
 }
 
+@Composable
+private fun ToolbarButton(
+    label: String,
+    isPrimary: Boolean = false,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    val bg = if (isPrimary) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)
+    }
+    val contentColor = if (isPrimary) {
+        Color.White
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(5.dp))
+            .background(if (enabled) bg else bg.copy(alpha = 0.5f))
+            .border(
+                1.dp,
+                if (isPrimary) Color.Transparent else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                RoundedCornerShape(5.dp),
+            )
+            .clickable(enabled = enabled) { onClick() }
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = contentColor,
+        )
+    }
+}
+
 /** Rounded unread-count pill (sidebar + toolbar). */
 @Composable
 fun UnreadPill(text: String) {
     Box(
-        Modifier.clip(RoundedCornerShape(10.dp)).background(UnreadAccent).padding(horizontal = 8.dp, vertical = 2.dp),
+        Modifier
+            .clip(RoundedCornerShape(9.dp))
+            .background(UnreadAccent)
+            .padding(horizontal = 7.dp, vertical = 2.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, color = androidx.compose.ui.graphics.Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Text(
+            text = text,
+            color = Color.White,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+        )
     }
 }
