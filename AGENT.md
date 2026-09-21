@@ -13,7 +13,7 @@ This file is normative for all coding agents (human or AI) working in this repo.
   `crates/mailapp/qml/`, embedded via the `Mailclient` QML module
   (`CxxQtBuilder::new_qml_module`). HTML mail rendered via `QtWebEngine`.
 - Storage: **SQLite** via `rusqlite` (bundled). One DB file per user: `~/.local/share/mailclient/mailclient.sqlite`.
-- Mail protocols: IMAP (`imap` / `async-imap` + TLS), SMTP send (`lettre`), MIME parse/build (`mail-parser`, `mail-builder`). Future protocols (POP3/JMAP/EWS/Graph) must go behind traits in `mailcore::sync`.
+- Mail protocols: IMAP on `imap-next` + `imap-types`, async over `tokio` with `tokio-rustls` for TLS. SMTP send via `lettre`, which also builds the outgoing MIME; incoming MIME is parsed by `mail-parser`. Future protocols (POP3/JMAP/EWS/Graph) must go behind traits in `mailcore::sync`.
 
 ## 2. Boundaries — what agents MUST / MUST NOT do
 
@@ -44,7 +44,12 @@ This file is normative for all coding agents (human or AI) working in this repo.
 
 ## 3. Code Style
 
-- Rust: `rustfmt` defaults, `clippy` clean, `thiserror` for errors, `serde` for JSON fields, `chrono` (UTC/RFC3339) for times, `log` + `env_logger` for logging. Network is blocking (`imap`/`lettre` + `native-tls`) on a dedicated `mailclient-net` thread in `mailapp` — no async runtime in use.
+- Rust: `rustfmt` defaults, `clippy` clean, `thiserror` for errors, `serde` for JSON fields, `chrono` (UTC/RFC3339) for times, `log` + `env_logger` for logging.
+- Networking is async and never runs on the Qt GUI thread. `mailapp` owns one
+  dedicated `mailclient-net` thread holding a current-thread Tokio runtime, and
+  every IMAP/SMTP job is queued onto it; the GUI hears back through
+  `CxxQtThread`. Keep it that way — a blocking call on the GUI thread freezes
+  the window, and a second runtime is a dependency decision (see §4).
 - SQL: lowercase keywords, `snake_case` tables/columns, explicit `FOREIGN KEY … ON DELETE CASCADE`, indexes for every `(account_id, folder_id, uid)`-style lookup and for date-descending list queries. Every table has `created_at`/`updated_at` (UTC ISO8601 text) unless it is a pure FTS/virtual table.
 - QML: one component per file in `crates/mailapp/qml/`, `PascalCase.qml` filenames, `qmllint`-clean, no inline JS business logic beyond formatting. All user-visible strings ready for `qsTr()`. Rust objects reach QML via `#[qml_element]` in the `Mailclient` module — never duplicate QML outside the crate.
 - QML must stay responsive: dialogs are resizable (`AppDialog` with geometry memory) and windows vary in width, so every pane has to adapt instead of clipping. Rules: wrapping text gets `wrapMode` + a width bound (`Layout.fillWidth`); content inside a `ScrollView` binds its width to the ScrollView's own `availableWidth` via an explicit `id` (never `parent.availableWidth` — ScrollView reparents its children, so `parent` is not the ScrollView and the column falls back to its implicit width, which disables wrapping and pushes trailing controls off-screen); items in a `RowLayout` that must yield get `Layout.minimumWidth: 0` (e.g. a ComboBox next to a button); `Flow` only wraps when its own width is constrained. Verify resizable dialogs at narrow widths, not just the default size.
@@ -80,9 +85,21 @@ responsibility. Treat these as prompts to look, not as hard gates:
 
 ## 4. Dependency Policy
 
-Allowed without asking (pinned in `Cargo.toml`):
-`rusqlite`, `thiserror`, `anyhow` (binaries only), `serde`/`serde_json`, `chrono`, `uuid`, `log`/`env_logger`, `imap`, `native-tls`, `lettre`, `mail-parser`, `keyring`, `directories`, `cxx-qt`/`cxx-qt-lib`/`cxx-qt-build`, `cxx`.
-Anything else (new crypto, new runtime, new Qt modules beyond Core/Gui/Qml/Quick/QuickControls2/Network/WebEngine) → ask first.
+Allowed without asking: **whatever is already pinned in the workspace's
+`Cargo.toml` files.** Those are the source of truth — read them rather than a
+list here, which goes stale the moment a dependency is swapped. Broadly they
+cover storage (`rusqlite`, bundled), errors (`thiserror`), serialisation
+(`serde`/`serde_json`), time and ids (`chrono`, `uuid`), logging
+(`log`/`env_logger`), the IMAP stack (`imap-next`, `imap-types`, `tokio`,
+`tokio-rustls` and its `rustls-*` / `webpki-roots` trust roots), `lettre`,
+`mail-parser`, `keyring`, `directories`, `tempfile`, the Qt bridge (`cxx`,
+`cxx-qt`, `cxx-qt-lib`, `cxx-qt-build`) and `winresource` for the Windows
+executable resources.
+
+Anything else (new crypto, a second async runtime, new Qt modules beyond
+Core/Gui/Qml/Quick/QuickControls2/Network/WebEngine) → ask first. Removing or
+replacing a pinned dependency is the same kind of decision as adding one, so
+it needs the same ask.
 
 ## 5. Workflows
 
