@@ -15,10 +15,43 @@
 //! embedded via the `Mailclient` QML module (`qrc:/qt/qml/Mailclient/...`).
 //! At runtime `main.rs` prefers an explicit `$MAILCLIENT_QML_DIR` override
 //! (designer iteration) and falls back to the embedded module.
+//!
+//! The app icon is a build-time concern on Windows only: the shell reads it
+//! from a Win32 resource linked into the exe, and Qt's windows plugin reads
+//! the same resource for the title-bar icon. Linux takes it from the
+//! `.desktop` file instead, so there is nothing to embed there.
 
 use cxx_qt_build::{CxxQtBuilder, QmlFile, QmlModule};
 
+/// Link `resources/mailclient.ico` into the exe.
+///
+/// Two resource names, because two consumers look for different ones:
+/// `1` is the lowest-id icon, which is what Explorer and the taskbar show for
+/// the executable, and `IDI_ICON1` is the literal name Qt's windows platform
+/// plugin passes to `LoadImage` when it registers the window class -- without
+/// it the window and its Alt-Tab entry fall back to the generic Qt icon.
+///
+/// A failure here is a warning, not an error: compiling the resource needs
+/// `rc.exe` (Windows SDK) or `windres`, and a missing icon must not be the
+/// reason a build fails.
+#[cfg(windows)]
+fn embed_icon() {
+    let icon = concat!(env!("CARGO_MANIFEST_DIR"), "/../../resources/mailclient.ico");
+    println!("cargo:rerun-if-changed={icon}");
+    let mut res = winresource::WindowsResource::new();
+    res.set_icon_with_id(icon, "1")
+        .set_icon_with_id(icon, "IDI_ICON1");
+    if let Err(e) = res.compile() {
+        println!("cargo:warning=app icon not embedded: {e}");
+    }
+}
+
+#[cfg(not(windows))]
+fn embed_icon() {}
+
 fn main() {
+    embed_icon();
+
     CxxQtBuilder::new_qml_module(
         QmlModule::new("Mailclient")
             // Design tokens, registered as a singleton so every pane reads
