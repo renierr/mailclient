@@ -14,7 +14,7 @@ use mailcore::store::{accounts, folders, messages};
 use crate::bridge::qobject;
 use crate::bridge::session::{checkout_session, current_account};
 use crate::bridge::worker::{spawn_flag_push, spawn_job, JobRefresh};
-use crate::bridge::{open_db, push_feeds, qstring};
+use crate::bridge::{push_feeds, qstring, shared_db};
 
 use super::parse_uids_json;
 
@@ -24,7 +24,7 @@ impl qobject::Bridge {
             Ok(u) => u,
             Err(e) => return qstring(&e),
         };
-        let db = match open_db() {
+        let db = match shared_db() {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
@@ -32,9 +32,9 @@ impl qobject::Bridge {
         if folder_id < 0 {
             return qstring("no folder selected");
         }
-        match messages::set_read_many_by_uids(&db, folder_id, &uids, read) {
+        match messages::set_read_many_by_uids(db, folder_id, &uids, read) {
             Ok(n) => {
-                push_feeds(&mut self, &db, acc_id, folder_id);
+                push_feeds(&mut self, db, acc_id, folder_id);
                 if n == 0 {
                     qstring("No messages changed")
                 } else {
@@ -61,7 +61,7 @@ impl qobject::Bridge {
             Ok(u) => u,
             Err(e) => return qstring(&e),
         };
-        let db = match open_db() {
+        let db = match shared_db() {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
@@ -69,9 +69,9 @@ impl qobject::Bridge {
         if folder_id < 0 {
             return qstring("no folder selected");
         }
-        match messages::set_star_many_by_uids(&db, folder_id, &uids, starred) {
+        match messages::set_star_many_by_uids(db, folder_id, &uids, starred) {
             Ok(n) => {
-                push_feeds(&mut self, &db, acc_id, folder_id);
+                push_feeds(&mut self, db, acc_id, folder_id);
                 if n == 0 {
                     qstring("No messages changed")
                 } else {
@@ -97,34 +97,34 @@ impl qobject::Bridge {
         let acc_id = *self.current_account_id();
         let folder_id = *self.current_folder_id();
         spawn_job(self, "Delete", move |db, _progress| async move {
-            let folder = folders::get(&db, folder_id).map_err(|e| e.to_string())?;
-            let acc = accounts::get(&db, acc_id).map_err(|e| e.to_string())?;
+            let folder = folders::get(db, folder_id).map_err(|e| e.to_string())?;
+            let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
             if folder.account_id != acc.id {
                 return Err("folder does not belong to this account".to_string());
             }
             let mut imap = checkout_session(&acc).await?;
             let summary = if folder.role == FolderRole::Junk {
                 let n = imap
-                    .purge_uids(&db, folder_id, &uids)
+                    .purge_uids(db, folder_id, &uids)
                     .await
                     .map_err(|e| e.to_string())?;
                 format!("Deleted {n} permanently")
             } else {
-                let trash = folders::list_by_account(&db, acc.id)
+                let trash = folders::list_by_account(db, acc.id)
                     .map_err(|e| e.to_string())?
                     .into_iter()
                     .find(|f| f.role == FolderRole::Trash);
                 match trash.filter(|t| t.id != folder.id) {
                     Some(t) => {
                         let n = imap
-                            .move_uids_to(&db, folder_id, &uids, &t.path)
+                            .move_uids_to(db, folder_id, &uids, &t.path)
                             .await
                             .map_err(|e| e.to_string())?;
                         format!("Moved {n} to {}", t.path)
                     }
                     None => {
                         let n = imap
-                            .purge_uids(&db, folder_id, &uids)
+                            .purge_uids(db, folder_id, &uids)
                             .await
                             .map_err(|e| e.to_string())?;
                         format!("Deleted {n} permanently")
@@ -144,22 +144,22 @@ impl qobject::Bridge {
         let acc_id = *self.current_account_id();
         let folder_id = *self.current_folder_id();
         spawn_job(self, "Archive", move |db, _progress| async move {
-            let folder = folders::get(&db, folder_id).map_err(|e| e.to_string())?;
-            let acc = accounts::get(&db, acc_id).map_err(|e| e.to_string())?;
+            let folder = folders::get(db, folder_id).map_err(|e| e.to_string())?;
+            let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
             let mut imap = checkout_session(&acc).await?;
-            let archive = match folders::list_by_account(&db, acc.id)
+            let archive = match folders::list_by_account(db, acc.id)
                 .map_err(|e| e.to_string())?
                 .into_iter()
                 .find(|f| f.role == FolderRole::Archive)
             {
                 Some(a) => a,
                 None => {
-                    let delim = folders::list_by_account(&db, acc.id)
+                    let delim = folders::list_by_account(db, acc.id)
                         .unwrap_or_default()
                         .first()
                         .map(|f| f.delimiter.clone())
                         .unwrap_or_else(|| "/".to_string());
-                    imap.create_folder_path(&db, acc.id, "Archive", &delim)
+                    imap.create_folder_path(db, acc.id, "Archive", &delim)
                         .await
                         .map_err(|e| e.to_string())?
                 }
@@ -168,7 +168,7 @@ impl qobject::Bridge {
                 "Already in Archive".to_string()
             } else {
                 let n = imap
-                    .move_uids_to(&db, folder_id, &uids, &archive.path)
+                    .move_uids_to(db, folder_id, &uids, &archive.path)
                     .await
                     .map_err(|e| e.to_string())?;
                 format!("Archived {n} to {}", archive.path)
@@ -187,21 +187,21 @@ impl qobject::Bridge {
         let current = *self.current_folder_id();
         let path = path.to_string();
         spawn_job(self, "Move", move |db, _progress| async move {
-            let acc = current_account(&db, wanted)?;
-            let dest = folders::get_by_path(&db, acc.id, &path).map_err(|e| e.to_string())?;
+            let acc = current_account(db, wanted)?;
+            let dest = folders::get_by_path(db, acc.id, &path).map_err(|e| e.to_string())?;
             if dest.id == current {
                 return Ok((
                     "Already here".to_string(),
                     Some(JobRefresh::feeds(acc.id, current)),
                 ));
             }
-            let folder = folders::get(&db, current).map_err(|e| e.to_string())?;
+            let folder = folders::get(db, current).map_err(|e| e.to_string())?;
             if folder.account_id != acc.id {
                 return Err("folder does not belong to this account".to_string());
             }
             let mut imap = checkout_session(&acc).await?;
             let n = imap
-                .move_uids_to(&db, current, &uids, &dest.path)
+                .move_uids_to(db, current, &uids, &dest.path)
                 .await
                 .map_err(|e| e.to_string())?;
             imap.checkin();
@@ -220,10 +220,10 @@ impl qobject::Bridge {
         let acc_id = *self.current_account_id();
         let folder_id = *self.current_folder_id();
         spawn_job(self, "Delete", move |db, _progress| async move {
-            let acc = accounts::get(&db, acc_id).map_err(|e| e.to_string())?;
+            let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
             let mut imap = checkout_session(&acc).await?;
             let n = imap
-                .purge_uids(&db, folder_id, &uids)
+                .purge_uids(db, folder_id, &uids)
                 .await
                 .map_err(|e| e.to_string())?;
             imap.checkin();

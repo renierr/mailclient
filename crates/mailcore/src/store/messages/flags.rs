@@ -72,6 +72,11 @@ pub fn clear_flags_dirty(
 }
 
 /// Update flags of one UID in a folder (no-op if unknown).
+///
+/// Sync calls this for every message in the window on every pass, and the
+/// flags are almost always the ones already stored. The trailing inequality
+/// makes that case update no rows at all, which keeps `updated_at` honest
+/// and -- the reason it is here -- stops the FTS update trigger firing.
 pub fn set_flags_by_uid(
     db: &Db,
     account_id: i64,
@@ -84,7 +89,8 @@ pub fn set_flags_by_uid(
     db.conn().execute(
         "update messages set is_read = ?1, is_starred = ?2, is_draft = ?3,
             updated_at = ?4
-         where account_id = ?5 and folder_id = ?6 and uid = ?7 and flags_dirty = 0",
+         where account_id = ?5 and folder_id = ?6 and uid = ?7 and flags_dirty = 0
+           and (is_read <> ?1 or is_starred <> ?2 or is_draft <> ?3)",
         params![
             i64::from(is_read),
             i64::from(is_starred),

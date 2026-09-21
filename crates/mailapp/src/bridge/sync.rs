@@ -9,20 +9,20 @@ use mailcore::sync::traits::SyncProvider;
 use crate::bridge::qobject;
 use crate::bridge::session::{checkout_session, current_account, drop_all_imap_sessions};
 use crate::bridge::worker::{spawn_job, JobRefresh};
-use crate::bridge::{open_db, push_feeds, qstring, DEFAULT_MESSAGE_LIMIT};
+use crate::bridge::{push_feeds, qstring, shared_db, DEFAULT_MESSAGE_LIMIT};
 
 impl qobject::Bridge {
     pub fn sync_now(self: Pin<&mut Self>) -> QString {
         let wanted = *self.current_account_id();
         let current = *self.current_folder_id();
         spawn_job(self, "Sync", move |db, _progress| async move {
-            let acc = current_account(&db, wanted)?;
+            let acc = current_account(db, wanted)?;
             // Shared orchestration (outbox flush, flag push, folder sweep);
             // the GUI lends its pooled session, the CLI brings a fresh one.
             let mut imap = checkout_session(&acc).await?;
-            let r = headless::sync_account(&db, &acc, &mut imap).await;
+            let r = headless::sync_account(db, &acc, &mut imap).await;
             imap.checkin();
-            let all = folders::list_by_account(&db, acc.id).map_err(|e| e.to_string())?;
+            let all = folders::list_by_account(db, acc.id).map_err(|e| e.to_string())?;
             let folder_id = all
                 .iter()
                 .find(|f| f.id == current)
@@ -68,12 +68,12 @@ impl qobject::Bridge {
         let wanted = *self.current_account_id();
         let path = path.to_string();
         spawn_job(self, "Sync", move |db, _progress| async move {
-            let acc = current_account(&db, wanted)?;
-            let folder = folders::get_by_path(&db, acc.id, &path).map_err(|e| e.to_string())?;
+            let acc = current_account(db, wanted)?;
+            let folder = folders::get_by_path(db, acc.id, &path).map_err(|e| e.to_string())?;
             let mut imap = checkout_session(&acc).await?;
-            imap.push_dirty_flags(&db, acc.id).await;
+            imap.push_dirty_flags(db, acc.id).await;
             let r = imap
-                .sync_folder_window(&db, folder.id, Some(FULL_SYNC_WINDOW))
+                .sync_folder_window(db, folder.id, Some(FULL_SYNC_WINDOW))
                 .await
                 .map_err(|e| e.to_string())?;
             imap.checkin();
@@ -94,14 +94,14 @@ impl qobject::Bridge {
             return qstring("no folder selected");
         }
         spawn_job(self, "Sync", move |db, _progress| async move {
-            let acc = current_account(&db, wanted)?;
-            let folder = folders::get(&db, folder_id).map_err(|e| e.to_string())?;
+            let acc = current_account(db, wanted)?;
+            let folder = folders::get(db, folder_id).map_err(|e| e.to_string())?;
             if folder.account_id != acc.id {
                 return Err("folder does not belong to this account".to_string());
             }
             let mut imap = checkout_session(&acc).await?;
             let r = imap
-                .sync_older(&db, folder_id, OLDER_BATCH)
+                .sync_older(db, folder_id, OLDER_BATCH)
                 .await
                 .map_err(|e| e.to_string())?;
             imap.checkin();
@@ -129,10 +129,10 @@ impl qobject::Bridge {
         let wanted = *self.current_account_id();
         let current = *self.current_folder_id();
         spawn_job(self, "Sync", move |db, _progress| async move {
-            let acc = current_account(&db, wanted)?;
+            let acc = current_account(db, wanted)?;
             let mut imap = checkout_session(&acc).await?;
             let list = imap
-                .sync_folders(&db, acc.id)
+                .sync_folders(db, acc.id)
                 .await
                 .map_err(|e| e.to_string())?;
             imap.checkin();
@@ -140,7 +140,7 @@ impl qobject::Bridge {
             let folder_id = if still_there {
                 current
             } else {
-                folders::list_by_account(&db, acc.id)
+                folders::list_by_account(db, acc.id)
                     .map_err(|e| e.to_string())?
                     .iter()
                     .find(|f| f.role == mailcore::models::FolderRole::Inbox)
@@ -160,7 +160,7 @@ impl qobject::Bridge {
         let query = query.to_string();
         let folder = folder.to_string();
         spawn_job(self, "Search", move |db, _progress| async move {
-            let acc = current_account(&db, wanted)?;
+            let acc = current_account(db, wanted)?;
             let tokens = mailcore::search::search_tokens(&query);
             if tokens.is_empty() {
                 return Ok(("Search: nothing searchable in that query".to_string(), None));
@@ -168,7 +168,7 @@ impl qobject::Bridge {
             let scope = (!folder.is_empty()).then_some(folder.as_str());
             let mut imap = checkout_session(&acc).await?;
             let r = imap
-                .search_server_into_cache(&db, acc.id, &tokens, scope)
+                .search_server_into_cache(db, acc.id, &tokens, scope)
                 .await
                 .map_err(|e| e.to_string())?;
             imap.checkin();
@@ -193,42 +193,42 @@ impl qobject::Bridge {
         path: &QString,
         subscribed: bool,
     ) -> QString {
-        let db = match open_db() {
+        let db = match shared_db() {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
         let wanted = *self.current_account_id();
-        let acc = match current_account(&db, wanted) {
+        let acc = match current_account(db, wanted) {
             Ok(a) => a,
             Err(e) => return qstring(&e),
         };
-        let folder = match folders::get_by_path(&db, acc.id, &path.to_string()) {
+        let folder = match folders::get_by_path(db, acc.id, &path.to_string()) {
             Ok(f) => f,
             Err(e) => return qstring(&e.to_string()),
         };
-        if let Err(e) = folders::set_subscribed(&db, folder.id, subscribed) {
+        if let Err(e) = folders::set_subscribed(db, folder.id, subscribed) {
             return qstring(&e.to_string());
         }
         let current = *self.current_folder_id();
-        push_feeds(&mut self, &db, acc.id, current);
+        push_feeds(&mut self, db, acc.id, current);
         qstring("")
     }
 
     pub fn select_folder(mut self: Pin<&mut Self>, path: &QString) -> QString {
-        let db = match open_db() {
+        let db = match shared_db() {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
         let wanted = *self.current_account_id();
-        let acc = match current_account(&db, wanted) {
+        let acc = match current_account(db, wanted) {
             Ok(a) => a,
             Err(e) => return qstring(&e),
         };
-        match folders::get_by_path(&db, acc.id, &path.to_string()) {
+        match folders::get_by_path(db, acc.id, &path.to_string()) {
             Ok(f) => {
                 // New folder context: restart paging from the first page.
                 self.as_mut().set_message_limit(DEFAULT_MESSAGE_LIMIT);
-                push_feeds(&mut self, &db, acc.id, f.id);
+                push_feeds(&mut self, db, acc.id, f.id);
                 qstring("")
             }
             Err(e) => qstring(&e.to_string()),
@@ -240,15 +240,15 @@ impl qobject::Bridge {
         let current = *self.current_folder_id();
         let path = path.to_string();
         spawn_job(self, "Sync", move |db, _progress| async move {
-            let acc = current_account(&db, wanted)?;
-            let delimiter = folders::list_by_account(&db, acc.id)
+            let acc = current_account(db, wanted)?;
+            let delimiter = folders::list_by_account(db, acc.id)
                 .unwrap_or_default()
                 .first()
                 .map(|f| f.delimiter.clone())
                 .unwrap_or_else(|| "/".to_string());
             let normalized = mailcore::sync::imap::normalize_folder_path(&path, &delimiter)
                 .map_err(|e| e.to_string())?;
-            if folders::get_by_path(&db, acc.id, &normalized).is_ok() {
+            if folders::get_by_path(db, acc.id, &normalized).is_ok() {
                 return Ok((
                     "Folder already exists".to_string(),
                     Some(JobRefresh::feeds(acc.id, current)),
@@ -256,7 +256,7 @@ impl qobject::Bridge {
             }
             let mut imap = checkout_session(&acc).await?;
             let folder = imap
-                .create_folder_path(&db, acc.id, &normalized, &delimiter)
+                .create_folder_path(db, acc.id, &normalized, &delimiter)
                 .await
                 .map_err(|e| e.to_string())
                 .map(|f| f.path)?;

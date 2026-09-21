@@ -7,31 +7,30 @@ use mailcore::store::{accounts, folders, settings};
 
 use crate::bridge::qobject;
 use crate::bridge::session::evict_imap_session;
-use crate::bridge::{open_db, push_feeds, qstring, DEFAULT_MESSAGE_LIMIT};
+use crate::bridge::{push_feeds, qstring, shared_db, DEFAULT_MESSAGE_LIMIT};
 
 impl qobject::Bridge {
     pub fn refresh_accounts(mut self: Pin<&mut Self>) -> QString {
-        let db = match open_db() {
+        let db = match shared_db() {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        let list = match accounts::list(&db) {
+        let list = match accounts::list(db) {
             Ok(l) => l,
             Err(e) => return qstring(&e.to_string()),
         };
         self.as_mut().set_account_count(list.len() as i32);
-        let wanted =
-            settings::get_last_active_account_id(&db).unwrap_or(*self.current_account_id());
+        let wanted = settings::get_last_active_account_id(db).unwrap_or(*self.current_account_id());
         let Some(acc) = list
             .into_iter()
             .find(|a| a.id == wanted)
-            .or_else(|| accounts::list(&db).ok().and_then(|l| l.into_iter().next()))
+            .or_else(|| accounts::list(db).ok().and_then(|l| l.into_iter().next()))
         else {
-            push_feeds(&mut self, &db, -1, -1);
+            push_feeds(&mut self, db, -1, -1);
             return qstring("no account — add one first");
         };
         // Prefer inbox, else first folder.
-        let folder_id = folders::list_by_account(&db, acc.id)
+        let folder_id = folders::list_by_account(db, acc.id)
             .ok()
             .and_then(|fs| {
                 fs.iter()
@@ -42,8 +41,8 @@ impl qobject::Bridge {
             .unwrap_or(-1);
         // Fresh account context: restart paging from the first page.
         self.as_mut().set_message_limit(DEFAULT_MESSAGE_LIMIT);
-        push_feeds(&mut self, &db, acc.id, folder_id);
-        let _ = settings::set_last_active_account_id(&db, acc.id);
+        push_feeds(&mut self, db, acc.id, folder_id);
+        let _ = settings::set_last_active_account_id(db, acc.id);
         qstring("")
     }
 
@@ -81,7 +80,7 @@ impl qobject::Bridge {
         if smtp_user.is_empty() {
             smtp_user.clone_from(&imap_user);
         }
-        let db = match open_db() {
+        let db = match shared_db() {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
@@ -103,13 +102,13 @@ impl qobject::Bridge {
         };
         // Re-saving an existing email updates it (also migrates its secrets
         // into the current keyring backend); otherwise a fresh row is created.
-        let id = match accounts::list(&db)
+        let id = match accounts::list(db)
             .unwrap_or_default()
             .into_iter()
             .find(|a| a.email_address == email)
         {
             Some(existing) => {
-                if let Err(e) = accounts::update_connection(&db, existing.id, &form_account) {
+                if let Err(e) = accounts::update_connection(db, existing.id, &form_account) {
                     return qstring(&e.to_string());
                 }
                 // Host/user/password may have changed: drop the pooled
@@ -140,50 +139,50 @@ impl qobject::Bridge {
                 }
                 let mut with_vault = form_account;
                 with_vault.auth_vault_key = vault;
-                match accounts::create(&db, &with_vault) {
+                match accounts::create(db, &with_vault) {
                     Ok(id) => id,
                     Err(e) => return qstring(&e.to_string()),
                 }
             }
         };
-        push_feeds(&mut self, &db, id, -1);
-        if let Err(e) = settings::set_last_active_account_id(&db, id) {
+        push_feeds(&mut self, db, id, -1);
+        if let Err(e) = settings::set_last_active_account_id(db, id) {
             return qstring(&e.to_string());
         }
         self.as_mut()
-            .set_account_count(accounts::list(&db).map(|l| l.len() as i32).unwrap_or(1));
+            .set_account_count(accounts::list(db).map(|l| l.len() as i32).unwrap_or(1));
         qstring("")
     }
 
     pub fn select_account(mut self: Pin<&mut Self>, id: i64) -> QString {
-        let db = match open_db() {
+        let db = match shared_db() {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        let Ok(acc) = accounts::get(&db, id) else {
+        let Ok(acc) = accounts::get(db, id) else {
             return qstring("unknown account");
         };
         // Prefer the inbox of the account we switch to.
-        let folder_id = folders::list_by_account(&db, acc.id)
+        let folder_id = folders::list_by_account(db, acc.id)
             .unwrap_or_default()
             .into_iter()
             .find(|f| f.role == mailcore::models::FolderRole::Inbox)
             .map(|f| f.id)
             .unwrap_or(-1);
         self.as_mut().set_message_limit(DEFAULT_MESSAGE_LIMIT);
-        push_feeds(&mut self, &db, acc.id, folder_id);
-        if let Err(e) = settings::set_last_active_account_id(&db, acc.id) {
+        push_feeds(&mut self, db, acc.id, folder_id);
+        if let Err(e) = settings::set_last_active_account_id(db, acc.id) {
             return qstring(&e.to_string());
         }
         qstring("")
     }
 
     pub fn delete_account(mut self: Pin<&mut Self>, id: i64) -> QString {
-        let db = match open_db() {
+        let db = match shared_db() {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        let Ok(acc) = accounts::get(&db, id) else {
+        let Ok(acc) = accounts::get(db, id) else {
             return qstring("unknown account");
         };
         // Drop the keyring entry first: if the row went away and this failed,
@@ -191,15 +190,15 @@ impl qobject::Bridge {
         if let Err(e) = auth::delete_account_secrets(&acc.auth_vault_key) {
             log::warn!("keyring entry for {} not removed: {e}", acc.email_address);
         }
-        if let Err(e) = accounts::delete(&db, id) {
+        if let Err(e) = accounts::delete(db, id) {
             return qstring(&e.to_string());
         }
         // The account is gone: don't keep a live session for it.
         evict_imap_session(id);
         // Fall back to whichever account remains, if any.
-        match accounts::list(&db).unwrap_or_default().first() {
+        match accounts::list(db).unwrap_or_default().first() {
             Some(next) => {
-                let folder_id = folders::list_by_account(&db, next.id)
+                let folder_id = folders::list_by_account(db, next.id)
                     .unwrap_or_default()
                     .into_iter()
                     .find(|f| f.role == mailcore::models::FolderRole::Inbox)
@@ -207,25 +206,25 @@ impl qobject::Bridge {
                     .unwrap_or(-1);
                 let next_id = next.id;
                 self.as_mut().set_message_limit(DEFAULT_MESSAGE_LIMIT);
-                push_feeds(&mut self, &db, next_id, folder_id);
-                let _ = settings::set_last_active_account_id(&db, next_id);
+                push_feeds(&mut self, db, next_id, folder_id);
+                let _ = settings::set_last_active_account_id(db, next_id);
             }
             None => {
-                push_feeds(&mut self, &db, -1, -1);
+                push_feeds(&mut self, db, -1, -1);
                 self.as_mut().set_current_account_email(qstring(""));
-                let _ = settings::set_last_active_account_id(&db, 0);
+                let _ = settings::set_last_active_account_id(db, 0);
             }
         }
         self.as_mut()
-            .set_account_count(accounts::list(&db).map(|l| l.len() as i32).unwrap_or(0));
+            .set_account_count(accounts::list(db).map(|l| l.len() as i32).unwrap_or(0));
         qstring("")
     }
 
     pub fn account_form(&self, id: i64) -> QString {
-        let Ok(db) = open_db() else {
+        let Ok(db) = shared_db() else {
             return qstring("{}");
         };
-        let Ok(a) = accounts::get(&db, id) else {
+        let Ok(a) = accounts::get(db, id) else {
             return qstring("{}");
         };
         // Passwords stay in the keyring; the dialog leaves the field blank and

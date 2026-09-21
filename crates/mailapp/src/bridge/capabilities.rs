@@ -11,7 +11,7 @@ impl qobject::Bridge {
     pub fn refresh_server_capabilities(self: Pin<&mut Self>, account_id: i64) -> QString {
         spawn_job(self, "Capabilities", move |db, _progress| async move {
             let acc = if account_id >= 0 {
-                match accounts::get(&db, account_id) {
+                match accounts::get(db, account_id) {
                     Ok(a) => a,
                     Err(e) => {
                         let payload = serde_json::json!({
@@ -26,7 +26,7 @@ impl qobject::Bridge {
                     }
                 }
             } else {
-                match current_account(&db, account_id) {
+                match current_account(db, account_id) {
                     Ok(a) => a,
                     Err(e) => {
                         let payload = serde_json::json!({

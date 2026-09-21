@@ -92,19 +92,18 @@ impl qobject::Bridge {
         // file reads), so mistakes report instantly with the composer still
         // open, and the close below never waits on the network. The password
         // fields stay empty — no secret is needed before the SMTP submit.
-        let db = match crate::bridge::open_db() {
+        let db = match crate::bridge::shared_db() {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        let acc = match current_account(&db, wanted) {
+        let acc = match current_account(db, wanted) {
             Ok(a) => a,
             Err(e) => return qstring(&e),
         };
         let sender = SmtpSender::new(&acc);
-        let format = SendFormat::parse(&settings::get_send_format(&db));
-        let include_plain =
-            settings::get_bool(&db, settings::COMPOSE_INCLUDE_PLAIN).unwrap_or(true);
-        let request_mdn = settings::get_bool(&db, settings::REQUEST_MDN).unwrap_or(false);
+        let format = SendFormat::parse(&settings::get_send_format(db));
+        let include_plain = settings::get_bool(db, settings::COMPOSE_INCLUDE_PLAIN).unwrap_or(true);
+        let request_mdn = settings::get_bool(db, settings::REQUEST_MDN).unwrap_or(false);
         let from_name = from_name_composed.or_else(|| {
             let n = acc.from_name.trim().to_string();
             if n.is_empty() {
@@ -137,29 +136,29 @@ impl qobject::Bridge {
             imap_password: None,
             request_mdn,
         };
-        let (queue_id, raw) = match sender.enqueue_send(&db, acc.id, &req) {
+        let (queue_id, raw) = match sender.enqueue_send(db, acc.id, &req) {
             Ok(v) => v,
             Err(e) => return qstring(&e.to_string()),
         };
         spawn_job(self, "Send", move |db, progress| async move {
-            let acc = current_account(&db, wanted)?;
+            let acc = current_account(db, wanted)?;
             let secrets = auth::load_account_secrets(&acc.auth_vault_key)
                 .map_err(|e| format!("no password in keyring: {e}"))?;
             let sender = SmtpSender::new(&acc);
-            if let Err(e) = sender.submit_queued(&db, queue_id, &secrets.smtp_password) {
+            if let Err(e) = sender.submit_queued(db, queue_id, &secrets.smtp_password) {
                 // Same no-duplicate rule as an interactive failure: the user
                 // sees this error and owns the retry.
-                let _ = queue::discard_mime(&db, queue_id);
+                let _ = queue::discard_mime(db, queue_id);
                 return Err(format!("send failed: {e}"));
             }
-            if settings::get_bool(&db, settings::COLLECT_SENT_CONTACTS).unwrap_or(true) {
+            if settings::get_bool(db, settings::COLLECT_SENT_CONTACTS).unwrap_or(true) {
                 let mut all_rcpts = mailcore::sync::sender::valid_mailboxes(&to);
                 all_rcpts.extend(mailcore::sync::sender::valid_mailboxes(&cc));
                 all_rcpts.extend(mailcore::sync::sender::valid_mailboxes(&bcc));
                 for mb in all_rcpts {
                     let addr = mb.email.to_string();
                     let name = mb.name.as_deref();
-                    if let Err(e) = contacts::seen(&db, &addr, name) {
+                    if let Err(e) = contacts::seen(db, &addr, name) {
                         log::warn!("contacts: could not collect recipient: {e}");
                     }
                 }
@@ -177,7 +176,7 @@ impl qobject::Bridge {
             // already gone.
             let copy_res = async {
                 let mut imap = checkout_session(&acc).await?;
-                SmtpSender::save_sent_copy_via(&db, acc.id, &mut imap, &raw)
+                SmtpSender::save_sent_copy_via(db, acc.id, &mut imap, &raw)
                     .await
                     .map_err(|e| e.to_string())?;
                 imap.checkin();
@@ -189,7 +188,7 @@ impl qobject::Bridge {
                 notes.push(format!("sent, but the Sent copy failed: {e}"));
             }
             if draft_uid >= 0 {
-                let draft_folder = folders::list_by_account(&db, acc.id)
+                let draft_folder = folders::list_by_account(db, acc.id)
                     .map_err(|e| e.to_string())?
                     .into_iter()
                     .find(|f| f.role == mailcore::models::FolderRole::Drafts);
@@ -199,11 +198,11 @@ impl qobject::Bridge {
                             .to_string(),
                     ),
                     Some(draft_folder) => {
-                        match messages::get_by_uid(&db, draft_folder.id, draft_uid as u32) {
+                        match messages::get_by_uid(db, draft_folder.id, draft_uid as u32) {
                             Ok(source) if source.is_draft => {
                                 let del_res = async {
                                     let mut imap = checkout_session(&acc).await?;
-                                    imap.delete_message(&db, source.id)
+                                    imap.delete_message(db, source.id)
                                         .await
                                         .map_err(|e| e.to_string())?;
                                     imap.checkin();
@@ -224,7 +223,7 @@ impl qobject::Bridge {
                     }
                 }
             }
-            sent_resync(&db, &acc, folder_id, notes).await
+            sent_resync(db, &acc, folder_id, notes).await
         })
     }
 
@@ -269,8 +268,8 @@ impl qobject::Bridge {
         let wanted = *self.current_account_id();
         let current_folder_id = *self.current_folder_id();
         spawn_job(self, "Save draft", move |db, _progress| async move {
-            let acc = current_account(&db, wanted)?;
-            let drafts = match folders::list_by_account(&db, acc.id)
+            let acc = current_account(db, wanted)?;
+            let drafts = match folders::list_by_account(db, acc.id)
                 .map_err(|e| e.to_string())?
                 .into_iter()
                 .find(|f| f.role == mailcore::models::FolderRole::Drafts)
@@ -280,14 +279,14 @@ impl qobject::Bridge {
                     // No Drafts folder on this account yet: create one
                     // server-side so saving always works (mirrors the
                     // Archive auto-create on the archive path).
-                    let delimiter = folders::list_by_account(&db, acc.id)
+                    let delimiter = folders::list_by_account(db, acc.id)
                         .unwrap_or_default()
                         .first()
                         .map(|f| f.delimiter.clone())
                         .unwrap_or_else(|| "/".to_string());
                     let mut imap = checkout_session(&acc).await?;
                     let folder = imap
-                        .create_folder_path(&db, acc.id, "Drafts", &delimiter)
+                        .create_folder_path(db, acc.id, "Drafts", &delimiter)
                         .await
                         .map_err(|e| e.to_string())?;
                     imap.checkin();
@@ -295,7 +294,7 @@ impl qobject::Bridge {
                 }
             };
             if source_uid >= 0 {
-                let source = messages::get_by_uid(&db, drafts.id, source_uid as u32)
+                let source = messages::get_by_uid(db, drafts.id, source_uid as u32)
                     .map_err(|_| "source draft no longer exists".to_string())?;
                 if !source.is_draft {
                     return Err("source message is not a draft".to_string());
@@ -329,16 +328,16 @@ impl qobject::Bridge {
                 .await
                 .map_err(|e| e.to_string())?;
             let remove_error = if source_uid >= 0 {
-                let source = messages::get_by_uid(&db, drafts.id, source_uid as u32)
+                let source = messages::get_by_uid(db, drafts.id, source_uid as u32)
                     .map_err(|_| "source draft no longer exists".to_string())?;
-                imap.delete_message(&db, source.id)
+                imap.delete_message(db, source.id)
                     .await
                     .err()
                     .map(|e| e.to_string())
             } else {
                 None
             };
-            imap.sync_folder_window(&db, drafts.id, Some(FULL_SYNC_WINDOW))
+            imap.sync_folder_window(db, drafts.id, Some(FULL_SYNC_WINDOW))
                 .await
                 .map_err(|e| e.to_string())?;
             imap.checkin();
@@ -358,18 +357,18 @@ impl qobject::Bridge {
     pub fn draft_form(self: Pin<&mut Self>, uid: i32) -> QString {
         let folder_id = *self.current_folder_id();
         spawn_job(self, "Open draft", move |db, _progress| async move {
-            let folder = folders::get(&db, folder_id).map_err(|_| "unknown folder".to_string())?;
-            let message = messages::get_by_uid(&db, folder_id, uid as u32)
+            let folder = folders::get(db, folder_id).map_err(|_| "unknown folder".to_string())?;
+            let message = messages::get_by_uid(db, folder_id, uid as u32)
                 .map_err(|_| "draft is no longer available".to_string())?;
             if folder.role != mailcore::models::FolderRole::Drafts || !message.is_draft {
                 return Err("message is not a draft".to_string());
             }
-            ensure_attachment_data(&db, message.id, true).await?;
-            let attachments = messages::list_attachments(&db, message.id)
+            ensure_attachment_data(db, message.id, true).await?;
+            let attachments = messages::list_attachments(db, message.id)
                 .map_err(|e| e.to_string())?
                 .into_iter()
                 .map(|a| {
-                    let path = draft_attachment_path(&db, a.id)?;
+                    let path = draft_attachment_path(db, a.id)?;
                     Ok(serde_json::json!({
                         "path": path,
                         "name": safe_filename(a.filename.as_deref(), a.id),
@@ -403,13 +402,13 @@ impl qobject::Bridge {
         let wanted = *self.current_account_id();
         let current = *self.current_folder_id();
         spawn_job(self, "Delete", move |db, _progress| async move {
-            let acc = current_account(&db, wanted)?;
-            let drafts = folders::list_by_account(&db, acc.id)
+            let acc = current_account(db, wanted)?;
+            let drafts = folders::list_by_account(db, acc.id)
                 .map_err(|e| e.to_string())?
                 .into_iter()
                 .find(|f| f.role == mailcore::models::FolderRole::Drafts)
                 .ok_or_else(|| "draft is no longer available".to_string())?;
-            let msg = messages::get_by_uid(&db, drafts.id, uid as u32)
+            let msg = messages::get_by_uid(db, drafts.id, uid as u32)
                 .map_err(|_| "draft is no longer available".to_string())?;
             if !msg.is_draft {
                 return Err("message is not a draft".to_string());
@@ -417,7 +416,7 @@ impl qobject::Bridge {
             // Drafts are destroyed outright, never filed to Trash:
             // discarding an unsent draft means it is gone.
             let mut imap = checkout_session(&acc).await?;
-            imap.delete_message(&db, msg.id)
+            imap.delete_message(db, msg.id)
                 .await
                 .map_err(|e| e.to_string())?;
             imap.checkin();

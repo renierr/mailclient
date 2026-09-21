@@ -286,3 +286,101 @@ fn bulk_delete_removes_only_the_folder_uids() {
     assert!(!compact[0].is_read);
     assert!(!compact[0].is_starred);
 }
+
+fn updated_at_of(db: &Db, folder_id: i64, uid: u32) -> String {
+    db.conn()
+        .query_row(
+            "select updated_at from messages where folder_id = ?1 and uid = ?2",
+            params![folder_id, uid],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+/// Rows in the FTS shadow table: every re-index appends to it, so this is a
+/// direct read on whether the update trigger fired.
+fn fts_rows(db: &Db) -> i64 {
+    db.conn()
+        .query_row("select count(*) from messages_fts_data", [], |r| r.get(0))
+        .unwrap()
+}
+
+#[test]
+fn counts_by_account_agrees_with_the_per_folder_queries() {
+    let (db, acc, f) = setup();
+    let other = folders::upsert(&db, acc, "Archive", "/", FolderRole::Archive).unwrap();
+    let id = upsert(&db, &sample_new(acc, f, 1)).unwrap();
+    upsert(&db, &sample_new(acc, f, 2)).unwrap();
+    upsert(&db, &sample_new(acc, other, 3)).unwrap();
+    set_flags(&db, id, true, false).unwrap();
+
+    let counts = counts_by_account(&db, acc).unwrap();
+    assert_eq!(counts[&f].total, count_by_folder(&db, f).unwrap());
+    assert_eq!(counts[&f].unread, count_unread(&db, f).unwrap());
+    assert_eq!(counts[&other].total, 1);
+    assert_eq!(counts[&other].unread, 1);
+}
+
+#[test]
+fn an_empty_folder_is_simply_absent_from_the_counts() {
+    let (db, acc, _f) = setup();
+    let empty = folders::upsert(&db, acc, "Spam", "/", FolderRole::Custom).unwrap();
+    assert!(!counts_by_account(&db, acc).unwrap().contains_key(&empty));
+}
+
+#[test]
+fn unchanged_server_flags_touch_nothing() {
+    let (db, acc, f) = setup();
+    upsert(&db, &sample_new(acc, f, 1)).unwrap();
+    let before = updated_at_of(&db, f, 1);
+    let index_before = fts_rows(&db);
+
+    // What sync does for every message in the window on every pass.
+    set_flags_by_uid(&db, acc, f, 1, false, false, false).unwrap();
+
+    assert_eq!(updated_at_of(&db, f, 1), before);
+    assert_eq!(
+        fts_rows(&db),
+        index_before,
+        "flag no-op re-indexed the body"
+    );
+}
+
+#[test]
+fn a_real_flag_change_still_lands_without_re_indexing() {
+    let (db, acc, f) = setup();
+    upsert(&db, &sample_new(acc, f, 1)).unwrap();
+    let index_before = fts_rows(&db);
+
+    set_flags_by_uid(&db, acc, f, 1, true, false, false).unwrap();
+
+    assert!(get_by_uid(&db, f, 1).unwrap().is_read);
+    assert_eq!(
+        fts_rows(&db),
+        index_before,
+        "a flag change re-indexed the body"
+    );
+}
+
+#[test]
+fn changing_indexed_text_does_re_index() {
+    let (db, acc, f) = setup();
+    let id = upsert(&db, &sample_new(acc, f, 1)).unwrap();
+    let index_before = fts_rows(&db);
+
+    db.conn()
+        .execute(
+            "update messages set subject = 'Goodbye' where id = ?1",
+            [id],
+        )
+        .unwrap();
+
+    assert!(fts_rows(&db) > index_before);
+    // The index now carries the new subject, not the old one.
+    assert_eq!(
+        crate::search::search(&db, acc, "Goodbye", 10)
+            .unwrap()
+            .len(),
+        1
+    );
+}

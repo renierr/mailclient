@@ -12,12 +12,14 @@ use crate::store::{accounts, folders, messages, settings};
 
 /// `[{name, role, unread}]` ordered by path.
 pub fn folders_json(db: &Db, account_id: i64) -> Result<String> {
+    let counts = messages::counts_by_account(db, account_id)?;
     let mut arr = Vec::new();
     for f in folders::list_by_account(db, account_id)? {
+        let c = counts.get(&f.id).copied().unwrap_or_default();
         let unread = if f.role == FolderRole::Trash {
             0
         } else {
-            messages::count_unread(db, f.id)?
+            c.unread
         };
         arr.push(json!({
             "id": f.id,
@@ -28,7 +30,7 @@ pub fn folders_json(db: &Db, account_id: i64) -> Result<String> {
             // plus the hierarchy delimiter so the move picker can indent
             // subfolders (depth = segments - 1).
             "subscribed": f.subscribed,
-            "count": messages::count_by_folder(db, f.id)?,
+            "count": c.total,
             "delimiter": f.delimiter,
         }));
     }

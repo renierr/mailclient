@@ -16,6 +16,8 @@ pub use flags::{
     set_read_many_by_uids, set_star_many_by_uids,
 };
 
+use std::collections::HashMap;
+
 use rusqlite::{params, OptionalExtension};
 
 use crate::db::Db;
@@ -272,6 +274,46 @@ pub fn count_by_folder(db: &Db, folder_id: i64) -> Result<u64> {
         |r| r.get(0),
     )?;
     Ok(n as u64)
+}
+
+/// Cached and unread counts for one folder.
+#[derive(Clone, Copy, Default)]
+pub struct FolderCounts {
+    pub total: u64,
+    pub unread: u64,
+}
+
+/// Both counts for every folder of an account, in one pass.
+///
+/// The sidebar needs them for all folders at once, and asking per folder is
+/// two queries each. Folders with no cached messages are absent from the
+/// map -- callers treat a miss as zero.
+pub fn counts_by_account(db: &Db, account_id: i64) -> Result<HashMap<i64, FolderCounts>> {
+    let conn = db.conn();
+    let mut stmt = conn.prepare(
+        "select folder_id, count(*), sum(case when is_read = 0 then 1 else 0 end)
+         from messages
+         where folder_id in (select id from folders where account_id = ?1)
+         group by folder_id",
+    )?;
+    let rows = stmt.query_map([account_id], |r| {
+        let folder_id: i64 = r.get(0)?;
+        let total: i64 = r.get(1)?;
+        let unread: i64 = r.get(2)?;
+        Ok((
+            folder_id,
+            FolderCounts {
+                total: total as u64,
+                unread: unread as u64,
+            },
+        ))
+    })?;
+    let mut out = HashMap::new();
+    for r in rows {
+        let (id, counts) = r?;
+        out.insert(id, counts);
+    }
+    Ok(out)
 }
 
 /// Smallest cached UID in a folder, if any. Older-batch sync fetches server

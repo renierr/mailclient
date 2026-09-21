@@ -369,6 +369,7 @@ pub mod qobject {
 }
 
 use core::pin::Pin;
+use std::cell::OnceCell;
 
 use cxx_qt_lib::QString;
 use mailcore::feed;
@@ -378,8 +379,33 @@ pub(crate) fn qstring(s: &str) -> QString {
     QString::from(s)
 }
 
-pub(crate) fn open_db() -> Result<mailcore::Db, String> {
-    mailcore::Db::open(&mailcore::default_db_path()).map_err(|e| e.to_string())
+thread_local! {
+    /// The calling thread's connection, opened on first use.
+    static DB: OnceCell<&'static mailcore::Db> = const { OnceCell::new() };
+}
+
+/// The connection for this thread, opened once and reused.
+///
+/// Opening a connection costs about 2ms -- the file, the WAL setup and the
+/// migration check -- to then do work measured in microseconds, and the
+/// bridge is entered on every star toggle, every message selection and every
+/// keystroke in the search box. rusqlite's `Connection` is not `Sync`, so a
+/// single shared handle is out; the connection is cached per thread instead.
+///
+/// It is leaked deliberately. Only the GUI thread and the one long-lived net
+/// thread ever get here, both live as long as the process, and a thread-local
+/// holding a `Db` would otherwise have to be handed out through a closure at
+/// every call site. A failed open caches nothing, so the next call retries.
+pub(crate) fn shared_db() -> Result<&'static mailcore::Db, String> {
+    DB.with(|cell| {
+        if let Some(db) = cell.get() {
+            return Ok(*db);
+        }
+        let opened = mailcore::Db::open(&mailcore::default_db_path()).map_err(|e| e.to_string())?;
+        let db: &'static mailcore::Db = Box::leak(Box::new(opened));
+        let _ = cell.set(db);
+        Ok(db)
+    })
 }
 
 /// Backing Rust struct for the `Bridge` QObject.
@@ -496,12 +522,12 @@ pub(crate) fn sync_sort_props(bridge: &mut Pin<&mut qobject::Bridge>, db: &mailc
 
 impl qobject::Bridge {
     pub fn contacts_json(&self, prefix: &QString) -> QString {
-        let result = open_db().and_then(|db| {
+        let result = shared_db().and_then(|db| {
             let prefix = prefix.to_string();
             let contacts = if prefix.trim().is_empty() {
-                mailcore::store::contacts::list(&db, 200)
+                mailcore::store::contacts::list(db, 200)
             } else {
-                mailcore::store::contacts::suggest(&db, &prefix, 10)
+                mailcore::store::contacts::suggest(db, &prefix, 10)
             };
             contacts
                 .map(|contacts| {
@@ -523,8 +549,8 @@ impl qobject::Bridge {
         } else {
             Some(alias.as_str())
         };
-        let result = open_db().and_then(|db| {
-            mailcore::store::contacts::set_alias(&db, address.trim(), alias_opt)
+        let result = shared_db().and_then(|db| {
+            mailcore::store::contacts::set_alias(db, address.trim(), alias_opt)
                 .map_err(|e| e.to_string())
         });
         match result {
@@ -535,8 +561,8 @@ impl qobject::Bridge {
 
     pub fn delete_contact(&self, address: &QString) -> QString {
         let address = address.to_string();
-        let result = open_db().and_then(|db| {
-            mailcore::store::contacts::delete(&db, address.trim()).map_err(|e| e.to_string())
+        let result = shared_db().and_then(|db| {
+            mailcore::store::contacts::delete(db, address.trim()).map_err(|e| e.to_string())
         });
         match result {
             Ok(()) => qstring(""),

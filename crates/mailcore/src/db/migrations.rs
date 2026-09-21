@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 10;
+pub const SCHEMA_VERSION: u32 = 11;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -26,6 +26,22 @@ const SCHEMA_V3: &str = "alter table messages add column flags_dirty integer not
 /// v10 DDL: `folders.highest_modseq` — CONDSTORE / QRESYNC modseq tracking per folder.
 const SCHEMA_V10: &str =
     "alter table folders add column highest_modseq integer not null default 0;";
+
+/// v11 DDL: re-create the FTS update trigger with a WHEN guard, so that
+/// updating a flag no longer re-indexes the whole message body. Must drop
+/// first: the version in `schema.sql` is `create ... if not exists`, which
+/// leaves an existing (unguarded) trigger in place.
+const SCHEMA_V11: &str = "drop trigger if exists trg_messages_au;
+create trigger trg_messages_au after update on messages
+when old.subject is not new.subject
+  or old.from_addr is not new.from_addr
+  or old.body_text is not new.body_text
+begin
+    insert into messages_fts (messages_fts, rowid, subject, from_addr, body_text)
+    values ('delete', old.id, old.subject, old.from_addr, old.body_text);
+    insert into messages_fts (rowid, subject, from_addr, body_text)
+    values (new.id, new.subject, new.from_addr, new.body_text);
+end;";
 
 /// Run `ALTER TABLE ... ADD COLUMN` statements, tolerating columns that are
 /// already there.
@@ -129,6 +145,10 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         // v10: `folders.highest_modseq` for CONDSTORE / QRESYNC.
         add_columns(conn, &[SCHEMA_V10])?;
     }
+    if current < 11 {
+        // v11: stop the FTS trigger re-indexing bodies on every flag change.
+        conn.execute_batch(SCHEMA_V11)?;
+    }
     if current != SCHEMA_VERSION {
         conn.execute(
             "update schema_meta set value = ?1 where key = 'version'",
@@ -193,7 +213,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(version, "10");
+        assert_eq!(version, SCHEMA_VERSION.to_string());
         conn.execute(
             "select raw_mime, envelope_from, envelope_to from send_queue",
             [],
@@ -222,8 +242,45 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(version, "10");
+        assert_eq!(version, SCHEMA_VERSION.to_string());
         conn.execute("select highest_modseq from folders", [])
             .unwrap();
+    }
+
+    #[test]
+    fn v11_migration_reguards_the_fts_update_trigger() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_FULL).unwrap();
+        conn.execute(
+            "insert into schema_meta (key, value) values ('version', '10')",
+            [],
+        )
+        .unwrap();
+        // The shape an already-installed database has: no WHEN clause.
+        conn.execute_batch(
+            "drop trigger trg_messages_au;
+             create trigger trg_messages_au after update on messages begin
+                 insert into messages_fts (messages_fts, rowid, subject, from_addr, body_text)
+                 values ('delete', old.id, old.subject, old.from_addr, old.body_text);
+                 insert into messages_fts (rowid, subject, from_addr, body_text)
+                 values (new.id, new.subject, new.from_addr, new.body_text);
+             end;",
+        )
+        .unwrap();
+
+        ensure_schema(&conn).unwrap();
+
+        let sql: String = conn
+            .query_row(
+                "select sql from sqlite_master where type = 'trigger'
+                   and name = 'trg_messages_au'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            sql.to_ascii_lowercase().contains("when old.subject"),
+            "{sql}"
+        );
     }
 }

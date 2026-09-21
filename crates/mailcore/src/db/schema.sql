@@ -106,7 +106,15 @@ create trigger if not exists trg_messages_ad after delete on messages begin
     insert into messages_fts (messages_fts, rowid, subject, from_addr, body_text)
     values ('delete', old.id, old.subject, old.from_addr, old.body_text);
 end;
-create trigger if not exists trg_messages_au after update on messages begin
+-- Guarded on the indexed columns only. Flag updates (read, starred,
+-- flags_dirty) touch nearly every row on every sync; unguarded, each one
+-- deletes and reinserts the row's full text -- body included -- to store
+-- exactly what was already there. `is not` so NULL compares like a value.
+create trigger if not exists trg_messages_au after update on messages
+when old.subject is not new.subject
+  or old.from_addr is not new.from_addr
+  or old.body_text is not new.body_text
+begin
     insert into messages_fts (messages_fts, rowid, subject, from_addr, body_text)
     values ('delete', old.id, old.subject, old.from_addr, old.body_text);
     insert into messages_fts (rowid, subject, from_addr, body_text)

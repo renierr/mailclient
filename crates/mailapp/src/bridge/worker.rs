@@ -8,7 +8,7 @@ use cxx_qt_lib::QString;
 
 use crate::bridge::qobject;
 use crate::bridge::session::{checkout_session, current_account, guard_sync};
-use crate::bridge::{open_db, push_feeds, qstring};
+use crate::bridge::{push_feeds, qstring, shared_db};
 
 /// What to refresh on the GUI after a job.
 #[derive(Clone, Copy)]
@@ -96,20 +96,20 @@ type JobFn = Box<dyn FnOnce(&tokio::runtime::Runtime) + Send>;
 pub(crate) fn spawn_flag_push(account_id: i64) {
     let _ = net_tx().send(Box::new(move |rt| {
         rt.block_on(async {
-            let db = match open_db() {
+            let db = match shared_db() {
                 Ok(d) => d,
                 Err(e) => {
                     log::warn!("flag-push: cannot open db: {e}");
                     return;
                 }
             };
-            if mailcore::store::messages::list_flags_dirty(&db, account_id)
+            if mailcore::store::messages::list_flags_dirty(db, account_id)
                 .unwrap_or_default()
                 .is_empty()
             {
                 return;
             }
-            let acc = match current_account(&db, account_id) {
+            let acc = match current_account(db, account_id) {
                 Ok(a) => a,
                 Err(e) => {
                     log::debug!("flag-push: {e}");
@@ -123,7 +123,7 @@ pub(crate) fn spawn_flag_push(account_id: i64) {
                     return;
                 }
             };
-            let pushed = imap.push_dirty_flags(&db, acc.id).await;
+            let pushed = imap.push_dirty_flags(db, acc.id).await;
             if pushed > 0 {
                 log::info!("flag-push: pushed {pushed} flag change(s)");
             }
@@ -169,7 +169,7 @@ fn net_tx() -> &'static mpsc::Sender<JobFn> {
 /// reading a draft or saving an attachment does not rebuild the message list.
 pub(crate) fn spawn_job<F, Fut>(mut bridge: Pin<&mut qobject::Bridge>, kind: &str, op: F) -> QString
 where
-    F: FnOnce(mailcore::Db, JobProgress) -> Fut + Send + 'static,
+    F: FnOnce(&'static mailcore::Db, JobProgress) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = Result<(String, Option<JobRefresh>), String>> + 'static,
 {
     if *bridge.busy() {
@@ -189,7 +189,7 @@ where
     let _ = net_tx().send(Box::new(move |rt| {
         let outcome = guard_sync(&kind_owned, || {
             rt.block_on(async {
-                let db = open_db()?;
+                let db = shared_db()?;
                 op(db, progress).await
             })
         });
@@ -207,8 +207,8 @@ where
                     folder_id: *bridge.current_folder_id(),
                 };
                 let target = refresh.resolve(started, live);
-                if let Ok(db) = open_db() {
-                    push_feeds(&mut bridge, &db, target.account_id, target.folder_id);
+                if let Ok(db) = shared_db() {
+                    push_feeds(&mut bridge, db, target.account_id, target.folder_id);
                 }
             }
             bridge.as_mut().set_busy(false);
