@@ -8,7 +8,7 @@ use mailcore::sync::imap::{ArchiveOutcome, MoveOutcome, TrashOutcome};
 
 use crate::bridge::qobject;
 use crate::bridge::session::{checkout_session, current_account};
-use crate::bridge::worker::{JobRefresh, spawn_flag_push, spawn_job};
+use crate::bridge::worker::{spawn_flag_push, spawn_job, JobRefresh};
 use crate::bridge::{open_db, push_feeds, qstring, MAX_MESSAGE_LIMIT};
 
 /// Turn save-dialog output into a plain path. Dialogs hand back `file://`

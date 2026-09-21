@@ -24,7 +24,8 @@ pub(crate) const COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::fro
 /// Timeout for TCP connect + TLS handshake each.
 pub(crate) const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
-/// Newest-N window for a full folder sync (matches `feed::FEED_LIMIT`).
+/// Newest-N window for a full folder sync (matches the list's initial page,
+/// `mailapp`'s `DEFAULT_MESSAGE_LIMIT`; mailcore cannot name it from here).
 /// Bounding the fetch keeps massive mailboxes fast: the list only shows 200,
 /// so downloading 10k full RFC822 bodies on every ⟳ is pure waste.
 /// Older mail backfills on demand (per-folder sync / scroll pagination).

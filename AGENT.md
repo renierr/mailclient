@@ -50,6 +50,34 @@ This file is normative for all coding agents (human or AI) working in this repo.
 - QML must stay responsive: dialogs are resizable (`AppDialog` with geometry memory) and windows vary in width, so every pane has to adapt instead of clipping. Rules: wrapping text gets `wrapMode` + a width bound (`Layout.fillWidth`); content inside a `ScrollView` binds its width to the ScrollView's own `availableWidth` via an explicit `id` (never `parent.availableWidth` — ScrollView reparents its children, so `parent` is not the ScrollView and the column falls back to its implicit width, which disables wrapping and pushes trailing controls off-screen); items in a `RowLayout` that must yield get `Layout.minimumWidth: 0` (e.g. a ComboBox next to a button); `Flow` only wraps when its own width is constrained. Verify resizable dialogs at narrow widths, not just the default size.
 - No emojis in code unless the user asks. Concise comments only.
 
+### File size & where tests live
+
+A file that keeps growing is usually a module that has taken on a second
+responsibility. Treat these as prompts to look, not as hard gates:
+
+- **Past roughly 500 lines of non-test code**, split by responsibility rather
+  than by line count — the way `imap.rs` and `sender.rs` became directories of
+  focused modules. Name the parts after what they do, not `utils`/`helpers`.
+- **Before splitting or relocating anything, check for non-test callers.**
+  Code whose only callers are its own tests is dead: delete it and the tests
+  with it, and retarget any coverage worth keeping at the live function. That
+  is cheaper than carefully rehoming code nothing runs.
+- **Tests stay colocated** (`#[cfg(test)] mod tests` at the foot of the file)
+  by default — being next to what they cover is worth a lot, and a high test
+  ratio in a small file is a well-tested small file, not a problem. Extract
+  only when the file is genuinely hard to move around in: past roughly 400
+  lines *and* more than about 40% tests, or a test block over ~250 lines on
+  its own. Then move the block to a sibling submodule and leave
+  `#[cfg(test)] mod tests;` behind: `src/feed.rs` + `src/feed/tests.rs`, or a
+  directory of focused files when there are several themes, as in
+  `sync/imap/tests/`. Pure move, no behaviour change — `super::*` still
+  reaches the parent's private items.
+- **Never relocate unit tests into `crates/<crate>/tests/` to shrink a file.**
+  That directory is a separate crate that can only see `pub` items, so moving
+  them there forces visibility to be widened for testing alone. It is for
+  genuine end-to-end tests against the public API; everything else stays a
+  `#[cfg(test)]` submodule inside the crate, where private items are reachable.
+
 ## 4. Dependency Policy
 
 Allowed without asking (pinned in `Cargo.toml`):

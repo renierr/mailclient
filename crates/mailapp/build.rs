@@ -36,7 +36,10 @@ use cxx_qt_build::{CxxQtBuilder, QmlFile, QmlModule};
 /// reason a build fails.
 #[cfg(windows)]
 fn embed_icon() {
-    let icon = concat!(env!("CARGO_MANIFEST_DIR"), "/../../resources/mailclient.ico");
+    let icon = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../resources/mailclient.ico"
+    );
     println!("cargo:rerun-if-changed={icon}");
     let mut res = winresource::WindowsResource::new();
     res.set_icon_with_id(icon, "1")
