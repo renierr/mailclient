@@ -60,6 +60,7 @@ QtObject {
     readonly property int controlHeight: Math.round(32 * uiScale)
     readonly property int miniButton: Math.round(24 * uiScale)
     readonly property int checkSize: Math.round(18 * uiScale)
+    readonly property int pillHeight: Math.round(20 * uiScale)
 
     // --- type -------------------------------------------------------------
     readonly property int fontTiny: Math.round(11 * uiScale)

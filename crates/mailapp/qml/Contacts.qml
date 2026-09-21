@@ -222,9 +222,9 @@ AppDialog {
                     Rectangle {
                         Layout.alignment: Qt.AlignVCenter
                         color: Theme.bgRaised
-                        radius: Theme.radiusSm
+                        radius: Theme.radius
                         implicitWidth: seenLabel.implicitWidth + Theme.sm * 2
-                        implicitHeight: 20
+                        implicitHeight: Theme.pillHeight
                         border.width: 1
                         border.color: Theme.border
                         Accessible.name: qsTr("Seen %1 times").arg(modelData.times_seen)
