@@ -1,3 +1,4 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
 //! mailapp — Qt/QML shell over `mailcore`.
 //!
 //! Boots a `QGuiApplication` + `QQmlApplicationEngine`, opens (and migrates)
@@ -11,6 +12,13 @@
 //!
 //! Rust QObjects (`Mailclient` module) are registered in the binary, so
 //! `import Mailclient` resolves no matter where `Main.qml` loads from.
+//!
+//! Windows gives a console-subsystem binary a terminal window of its own, so
+//! launching the exe from Explorer or a shortcut flashed one up beside the
+//! GUI. Hence the `windows_subsystem` attribute above. It also cuts the
+//! headless CLI off from the shell that started it, which
+//! [`platform::attach_parent_console`] undoes when there is a console to
+//! reconnect to. Neither concept exists on the other platforms.
 
 pub mod bridge;
 pub mod platform;
@@ -44,6 +52,9 @@ fn find_main_qml() -> Option<PathBuf> {
 }
 
 fn main() {
+    // Before anything prints: on Windows this is what gives `--status`,
+    // `--sync-once` and the log a console to write to (see the module docs).
+    platform::attach_parent_console();
     env_logger::init();
 
     // Headless mode for the Omarchy bar widget / systemd timer. Same binary,
