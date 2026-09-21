@@ -56,27 +56,44 @@ pub fn accounts_json(db: &Db) -> Result<String> {
     Ok(serde_json::to_string(&arr)?)
 }
 
+/// A list/reader timestamp: the text to show, plus a key naming the cases
+/// that are a *word* rather than a number.
+///
+/// mailcore has no translation catalogue and must stay Qt-free, so it cannot
+/// produce "Yesterday" in the user's language. It names the case instead and
+/// QML supplies the word (`text` carries untranslated English as the
+/// fallback, so a caller that ignores `key` still shows something sensible).
+struct ShortDate {
+    text: String,
+    /// `"yesterday"`, or `""` when `text` is already a plain time or date.
+    key: &'static str,
+}
+
 /// Compact human date in the **viewer's** timezone: `09:12` (today),
-/// `Yesterday`, else `2026-09-07`.
+/// yesterday, else `2026-09-07`.
 ///
 /// Everything is converted to local time first. Formatting the parsed value
 /// directly keeps whatever offset the sender wrote (usually `Z`), so a mail
 /// that arrived at 11:12 local showed 09:12, and "today"/"yesterday" flipped
 /// at UTC midnight rather than the user's.
-fn short_date(rfc3339: Option<&str>) -> String {
+fn short_date(rfc3339: Option<&str>) -> ShortDate {
+    let plain = |text: String| ShortDate { text, key: "" };
     let raw = rfc3339.unwrap_or("");
     let Ok(dt) = chrono::DateTime::parse_from_rfc3339(raw) else {
-        return raw.to_string();
+        return plain(raw.to_string());
     };
     let local = dt.with_timezone(&chrono::Local);
     let today = chrono::Local::now().date_naive();
     let date = local.date_naive();
     if date == today {
-        local.format("%H:%M").to_string()
+        plain(local.format("%H:%M").to_string())
     } else if date == today.pred_opt().unwrap_or(today) {
-        "Yesterday".to_string()
+        ShortDate {
+            text: "Yesterday".to_string(),
+            key: "yesterday",
+        }
     } else {
-        local.format("%Y-%m-%d").to_string()
+        plain(local.format("%Y-%m-%d").to_string())
     }
 }
 
@@ -94,14 +111,13 @@ pub fn sanitized_bodies(
     // A stored `body_text` may itself hold HTML source (legacy
     // plain-only sends of composer rich text). Prefer a real html part,
     // else upgrade text that looks like HTML.
-    let candidate_html =
-        if html::looks_like_html(raw_html) || !raw_html.trim().is_empty() && body_html.is_some() {
-            raw_html
-        } else if html::looks_like_html(raw_text) {
-            raw_text
-        } else {
-            ""
-        };
+    let candidate_html = if !raw_html.trim().is_empty() {
+        raw_html
+    } else if html::looks_like_html(raw_text) {
+        raw_text
+    } else {
+        ""
+    };
     let Sanitized {
         html: safe_html,
         had_remote,
@@ -151,8 +167,8 @@ fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Rows for the mailbox list: `[{uid, subject, from, date, snippet, unread,
-/// starred, has_attachments}]`, in the user's sort order (see
+/// Rows for the mailbox list: `[{uid, subject, from, date, date_key, snippet,
+/// unread, starred, has_attachments}]`, in the user's sort order (see
 /// `message_sort_field` / `message_sort_desc` — Date means newest IMAP UID
 /// first).
 ///
@@ -164,6 +180,9 @@ fn one_line(s: &str) -> String {
 /// `limit`/`offset` page the local cache in sort order. The list grows via
 /// "load older": the bridge backfills the next server batch into SQLite
 /// first (`sync_older`), then raises `limit` so the new rows appear.
+///
+/// `date_key` is `"yesterday"` when `date` is that word and `""` otherwise —
+/// see [`ShortDate`] for why the word is QML's to supply.
 pub fn messages_list_json_paged(
     db: &Db,
     folder_id: i64,
@@ -180,11 +199,13 @@ pub fn messages_list_json_paged(
         &rows
             .into_iter()
             .map(|m| {
+                let date = short_date(m.date.as_deref());
                 json!({
                     "uid": m.uid,
                     "subject": m.subject.unwrap_or_else(|| "(no subject)".to_string()),
                     "from": m.from_addr.unwrap_or_else(|| "?".to_string()),
-                    "date": short_date(m.date.as_deref()),
+                    "date": date.text,
+                    "date_key": date.key,
                     "snippet": m.snippet.unwrap_or_default(),
                     "unread": if is_trash { false } else { !m.is_read },
                     "starred": m.is_starred,
@@ -218,12 +239,14 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
             })
         })
         .collect();
+    let date = short_date(m.date.as_deref());
     Ok(serde_json::to_string(&json!({
         "uid": m.uid,
         "subject": m.subject.as_deref().unwrap_or("(no subject)"),
         "from": m.from_addr.as_deref().unwrap_or("?"),
         "reply_to": m.reply_to.as_deref().unwrap_or(""),
-        "date": short_date(m.date.as_deref()),
+        "date": date.text,
+        "date_key": date.key,
         "snippet": m.snippet.as_deref().unwrap_or(""),
         "unread": if is_trash { false } else { !m.is_read }, "starred": m.is_starred,
         "has_attachments": m.has_attachments || !files.is_empty(),
@@ -341,13 +364,15 @@ pub fn search_json(
     let rows = stmt.query_map(
         rusqlite::params![match_query, account_id, limit as i64, folder],
         |row| {
+            let date = short_date(row.get::<_, Option<String>>(5)?.as_deref());
             Ok(json!({
                 "uid": row.get::<_, u32>(0)?,
                 "folder_id": row.get::<_, i64>(1)?,
                 "folder": row.get::<_, String>(2)?,
                 "subject": row.get::<_, Option<String>>(3)?.unwrap_or_else(|| "(no subject)".to_string()),
                 "from": row.get::<_, Option<String>>(4)?.unwrap_or_else(|| "?".to_string()),
-                "date": short_date(row.get::<_, Option<String>>(5)?.as_deref()),
+                "date": date.text,
+                "date_key": date.key,
                 "snippet": one_line(&row.get::<_, String>(6)?),
                 "unread": row.get::<_, i64>(7)? == 0,
                 "starred": row.get::<_, i64>(8)? != 0,

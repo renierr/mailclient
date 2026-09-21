@@ -63,6 +63,9 @@ fn main() {
             // In-place ListModel updates, shared by every pane that owns a
             // feed model (see qml/ModelSync.qml).
             .qml_file(QmlFile::from("qml/ModelSync.qml").singleton(true))
+            // One contract for parsing bridge payloads, so a malformed one
+            // cannot abandon a reload half-way (see qml/FeedJson.qml).
+            .qml_file(QmlFile::from("qml/FeedJson.qml").singleton(true))
             .qml_file("qml/Main.qml")
             .qml_file("qml/Sidebar.qml")
             .qml_file("qml/MessageList.qml")

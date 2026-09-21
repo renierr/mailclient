@@ -341,23 +341,16 @@ impl SmtpSender {
         Ok(())
     }
 
-    /// File the sent MIME bytes into the account's Sent folder (Thunderbird-style).
-    /// A disabled setting skips silently (`Ok` — that is intentional, not a
-    /// failure); every genuine failure is returned so the caller can tell
-    /// the user the Sent copy is missing instead of looking sent-but-unsaved.
-    /// Never fails the send itself — callers run this after SMTP accepted.
-    pub async fn save_sent_copy(
-        &self,
-        db: &Db,
-        account_id: i64,
-        imap_password: Option<&str>,
-        raw: &[u8],
-    ) -> Result<()> {
+    /// Where the Sent copy belongs, or `None` when the setting is off.
+    ///
+    /// Resolved before any connection is touched, so a disabled copy or a
+    /// missing Sent folder costs nothing.
+    fn sent_copy_target(db: &Db, account_id: i64) -> Result<Option<String>> {
         match settings::get_bool(db, settings::SENT_COPY_ENABLED) {
             Ok(true) => {}
             Ok(false) => {
                 log::info!("smtp: sent-copy disabled by setting");
-                return Ok(());
+                return Ok(None);
             }
             Err(e) => {
                 return Err(StoreError::InvalidInput(format!(
@@ -365,16 +358,60 @@ impl SmtpSender {
                 )));
             }
         }
-        let sent_path = folders::list_by_account(db, account_id)
+        folders::list_by_account(db, account_id)
             .map_err(|e| {
                 StoreError::InvalidInput(format!("cannot list folders, skipping sent copy: {e}"))
             })?
             .into_iter()
             .find(|f| f.role == FolderRole::Sent)
-            .map(|f| f.path)
+            .map(|f| Some(f.path))
             .ok_or_else(|| {
                 StoreError::InvalidInput("no Sent folder known, skipping sent copy".to_string())
-            })?;
+            })
+    }
+
+    /// File the sent MIME bytes into the account's Sent folder over a session
+    /// the caller already holds.
+    ///
+    /// Preferred wherever a session is available: [`Self::save_sent_copy`]
+    /// dials a second TCP + TLS + LOGIN of its own, which the user waits
+    /// through after the mail is already gone.
+    ///
+    /// A disabled setting skips silently (`Ok` — intentional, not a failure);
+    /// every genuine failure is returned so the caller can say the Sent copy
+    /// is missing rather than leave it looking sent-but-unsaved.
+    pub async fn save_sent_copy_via(
+        db: &Db,
+        account_id: i64,
+        imap: &mut ImapSync,
+        raw: &[u8],
+    ) -> Result<()> {
+        let Some(sent_path) = Self::sent_copy_target(db, account_id)? else {
+            return Ok(());
+        };
+        imap.append_to_folder(&sent_path, raw)
+            .await
+            .map_err(|e| StoreError::InvalidInput(format!("APPEND to {sent_path} failed: {e}")))?;
+        log::info!("smtp: saved copy to {sent_path}");
+        Ok(())
+    }
+
+    /// File the sent MIME bytes into the account's Sent folder, connecting a
+    /// session for it.
+    ///
+    /// For callers with no session to lend — the outbox flush and the
+    /// headless CLI, which run in processes that keep no pool. Inside the
+    /// app, prefer [`Self::save_sent_copy_via`].
+    pub async fn save_sent_copy(
+        &self,
+        db: &Db,
+        account_id: i64,
+        imap_password: Option<&str>,
+        raw: &[u8],
+    ) -> Result<()> {
+        if Self::sent_copy_target(db, account_id)?.is_none() {
+            return Ok(());
+        }
         let Some(imap_password) = imap_password else {
             return Err(StoreError::InvalidInput(
                 "no IMAP credential, skipping sent copy".to_string(),
@@ -387,12 +424,9 @@ impl SmtpSender {
         imap.connect(imap_password).await.map_err(|e| {
             StoreError::InvalidInput(format!("IMAP connect failed, skipping sent copy: {e}"))
         })?;
-        imap.append_to_folder(&sent_path, raw)
-            .await
-            .map_err(|e| StoreError::InvalidInput(format!("APPEND to {sent_path} failed: {e}")))?;
+        let result = Self::save_sent_copy_via(db, account_id, &mut imap, raw).await;
         imap.logout().await;
-        log::info!("smtp: saved copy to {sent_path}");
-        Ok(())
+        result
     }
 }
 

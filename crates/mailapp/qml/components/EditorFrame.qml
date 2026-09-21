@@ -105,7 +105,7 @@ Item {
             + "})", function (json) {
                 if (!json)
                     return
-                var s = JSON.parse(json)
+                var s = FeedJson.parse(json, ({}))
                 root.boldActive = s.b === true
                 root.italicActive = s.i === true
                 root.underlineActive = s.u === true

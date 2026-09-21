@@ -27,7 +27,7 @@ Item {
             return
         }
         var rows = []
-        try { rows = JSON.parse(root.backend.contacts_json(root.query())) } catch (e) {}
+        rows = FeedJson.parse(root.backend.contacts_json(root.query()), [])
         suggestionModel.clear()
         for (var i = 0; i < rows.length; i++)
             suggestionModel.append(rows[i])

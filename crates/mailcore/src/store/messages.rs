@@ -1,13 +1,29 @@
-//! CRUD for `messages` + `attachments` metadata.
+//! The `messages` table: rows in, rows out, rows gone.
+//!
+//! Flag state and the attachment rows hanging off a message each have their
+//! own rules, so they live next door: [`flags`] owns read/starred/draft and
+//! the local-change queue, [`attachments`] owns the files.
+
+mod attachments;
+mod flags;
+
+pub use attachments::{
+    add_attachment, attachment_has_data, delete_attachments_for_message, get_attachment,
+    list_attachments, replace_attachments, save_attachment_to_path, set_has_attachments,
+};
+pub use flags::{
+    clear_flags_dirty, delete_many_by_uids, list_flags_dirty, set_flags, set_flags_by_uid,
+    set_read_many_by_uids, set_star_many_by_uids,
+};
 
 use rusqlite::{params, OptionalExtension};
 
 use crate::db::Db;
 use crate::error::{Result, StoreError};
-use crate::models::{Attachment, Message, NewAttachment, NewMessage};
+use crate::models::{Message, NewMessage};
 use crate::store::{json_vec, now, opt_bool};
 
-fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
+pub(super) fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
     let to: String = row.get(8)?;
     let cc: String = row.get(9)?;
     let bcc: String = row.get(10)?;
@@ -41,7 +57,7 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
 }
 
 // Column order must match row_to_message indices.
-const COLS: &str = "id, account_id, folder_id, uid, message_id_header, thread_id,
+pub(super) const COLS: &str = "id, account_id, folder_id, uid, message_id_header, thread_id,
     subject, from_addr, to_addrs, cc_addrs, bcc_addrs, reply_to, date, snippet,
      body_text, body_html, raw_headers, is_read, keywords, is_starred, is_draft,
     has_attachments, size, downloaded_full";
@@ -269,62 +285,6 @@ pub fn min_uid(db: &Db, folder_id: i64) -> Result<Option<u32>> {
     Ok(v.map(|u| u as u32))
 }
 
-/// Flip read/starred flags, marking the row for the next server push.
-///
-/// The UI calls this on click and returns immediately; `flags_dirty` is what
-/// keeps the change from being reverted by the next sync (see
-/// [`list_flags_dirty`], [`clear_flags_dirty`]).
-pub fn set_flags(db: &Db, id: i64, is_read: bool, is_starred: bool) -> Result<()> {
-    let n = db.conn().execute(
-        "update messages set is_read = ?1, is_starred = ?2, flags_dirty = 1,
-            updated_at = ?3
-         where id = ?4",
-        params![i64::from(is_read), i64::from(is_starred), now(), id],
-    )?;
-    if n == 0 {
-        return Err(StoreError::NotFound(format!("message {id}")));
-    }
-    Ok(())
-}
-
-/// Messages of an account whose flags still need pushing to the server.
-pub fn list_flags_dirty(db: &Db, account_id: i64) -> Result<Vec<Message>> {
-    let conn = db.conn();
-    let mut stmt = conn.prepare(&format!(
-        "select {COLS} from messages
-         where account_id = ?1 and flags_dirty = 1
-         order by folder_id, uid"
-    ))?;
-    let rows = stmt.query_map([account_id], row_to_message)?;
-    let mut out = Vec::new();
-    for r in rows {
-        out.push(r?);
-    }
-    Ok(out)
-}
-
-/// Mark one message's flags as pushed — but only the state that was pushed.
-///
-/// A push is not instantaneous, and the user can click again while it is in
-/// flight. Clearing unconditionally would drop that newer toggle on the
-/// floor: it set `flags_dirty` back to 1, the clear wiped it, and the next
-/// sync pulled the server's now-stale flags back over it. Matching on the
-/// flags that actually went to the server leaves such a row dirty for the
-/// next round instead. Returns `true` when the row was cleared.
-pub fn clear_flags_dirty(
-    db: &Db,
-    id: i64,
-    pushed_read: bool,
-    pushed_starred: bool,
-) -> Result<bool> {
-    let n = db.conn().execute(
-        "update messages set flags_dirty = 0
-         where id = ?1 and is_read = ?2 and is_starred = ?3",
-        params![id, i64::from(pushed_read), i64::from(pushed_starred)],
-    )?;
-    Ok(n > 0)
-}
-
 /// Delete a message (attachments cascade, FTS row removed by trigger).
 pub fn delete(db: &Db, id: i64) -> Result<()> {
     let n = db
@@ -333,178 +293,6 @@ pub fn delete(db: &Db, id: i64) -> Result<()> {
     if n == 0 {
         return Err(StoreError::NotFound(format!("message {id}")));
     }
-    Ok(())
-}
-
-/// Record one attachment. `size` is stored as given so metadata-only rows
-/// (`data=None`) still report real sizes; full rows should pass
-/// `size == data.len()`.
-pub fn add_attachment(db: &Db, message_id: i64, a: &NewAttachment) -> Result<i64> {
-    db.conn().execute(
-        "insert into attachments (message_id, filename, mime_type, size,
-            content_id, storage_path, data, is_inline, created_at)
-         values (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8)",
-        params![
-            message_id,
-            a.filename,
-            a.mime_type,
-            a.size as i64,
-            a.content_id,
-            a.data.as_deref(),
-            i64::from(a.is_inline),
-            now()
-        ],
-    )?;
-    Ok(db.conn().last_insert_rowid())
-}
-
-/// Replace a message's attachments with a freshly parsed set while keeping
-/// stable row IDs: matches on filename/mime/content-id/size/inline, fills
-/// bytes in place, inserts truly new parts, deletes vanished ones — all in
-/// one transaction so an open/save click holding a pre-download ID still
-/// resolves afterwards (`unchecked_` because `Db::conn()` is shared `&`).
-pub fn replace_attachments(db: &Db, message_id: i64, files: &[NewAttachment]) -> Result<()> {
-    let tx = db.conn().unchecked_transaction()?;
-    let mut existing = list_attachments(db, message_id)?;
-    for file in files {
-        let matched = existing.iter().position(|a| {
-            a.filename == file.filename
-                && a.mime_type == file.mime_type
-                && a.content_id == file.content_id
-                && a.size == file.size
-                && a.is_inline == file.is_inline
-        });
-        if let Some(index) = matched {
-            let attachment = existing.remove(index);
-            tx.execute(
-                "update attachments set data = coalesce(?1, data),
-                    storage_path = case when ?1 is not null then null else storage_path end
-                 where id = ?2",
-                params![file.data.as_deref(), attachment.id],
-            )?;
-        } else {
-            tx.execute(
-                "insert into attachments (message_id, filename, mime_type, size,
-                    content_id, storage_path, data, is_inline, created_at)
-                 values (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8)",
-                params![
-                    message_id,
-                    file.filename,
-                    file.mime_type,
-                    file.size as i64,
-                    file.content_id,
-                    file.data.as_deref(),
-                    i64::from(file.is_inline),
-                    now()
-                ],
-            )?;
-        }
-    }
-    for attachment in existing {
-        tx.execute("delete from attachments where id = ?1", [attachment.id])?;
-    }
-    tx.commit()?;
-    Ok(())
-}
-
-/// List attachment metadata of a message (no BLOB bytes — keeps feeds cheap).
-/// Ordered with regular attachments first, inline parts last.
-pub fn list_attachments(db: &Db, message_id: i64) -> Result<Vec<Attachment>> {
-    let mut stmt = db.conn().prepare(
-        "select id, message_id, filename, mime_type, size, content_id,
-            storage_path, is_inline
-         from attachments where message_id = ?1 order by is_inline, id",
-    )?;
-    let rows = stmt
-        .query_map([message_id], |row| {
-            Ok(Attachment {
-                id: row.get(0)?,
-                message_id: row.get(1)?,
-                filename: row.get(2)?,
-                mime_type: row.get(3)?,
-                size: row.get::<_, i64>(4)? as u64,
-                content_id: row.get(5)?,
-                storage_path: row.get(6)?,
-                data: None,
-                is_inline: row.get::<_, i64>(7)? != 0,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
-}
-
-/// Fetch one attachment with its bytes (for save/open).
-pub fn get_attachment(db: &Db, id: i64) -> Result<Attachment> {
-    db.conn()
-        .query_row(
-            "select id, message_id, filename, mime_type, size, content_id,
-                storage_path, data, is_inline
-             from attachments where id = ?1",
-            [id],
-            |row| {
-                Ok(Attachment {
-                    id: row.get(0)?,
-                    message_id: row.get(1)?,
-                    filename: row.get(2)?,
-                    mime_type: row.get(3)?,
-                    size: row.get::<_, i64>(4)? as u64,
-                    content_id: row.get(5)?,
-                    storage_path: row.get(6)?,
-                    data: row.get::<_, Option<Vec<u8>>>(7)?,
-                    is_inline: row.get::<_, i64>(8)? != 0,
-                })
-            },
-        )
-        .optional()?
-        .ok_or_else(|| StoreError::NotFound(format!("attachment {id}")))
-}
-
-/// Whether one attachment already has bytes (inline BLOB or legacy file).
-/// Drives on-demand downloads: `false` means the next save must fetch first.
-pub fn attachment_has_data(db: &Db, id: i64) -> Result<bool> {
-    let n: i64 = db.conn().query_row(
-        "select case when (data is not null and length(data) > 0)
-            or storage_path is not null then 1 else 0 end
-         from attachments where id = ?1",
-        [id],
-        |row| row.get(0),
-    )?;
-    Ok(n != 0)
-}
-
-/// Refresh only the `has_attachments` flag (used after an on-demand
-/// attachment fetch; unlike `upsert` this never touches read/star state).
-pub fn set_has_attachments(db: &Db, id: i64, has: bool) -> Result<()> {
-    db.conn().execute(
-        "update messages set has_attachments = ?1, updated_at = ?2 where id = ?3",
-        params![i64::from(has), now(), id],
-    )?;
-    Ok(())
-}
-
-/// Write one attachment's bytes to `dest_path`. Falls back to the legacy
-/// `storage_path` file when the row has no inline blob.
-pub fn save_attachment_to_path(db: &Db, id: i64, dest_path: &std::path::Path) -> Result<u64> {
-    let a = get_attachment(db, id)?;
-    if let Some(bytes) = a.data.filter(|b| !b.is_empty()) {
-        std::fs::write(dest_path, &bytes)?;
-        Ok(bytes.len() as u64)
-    } else if let Some(src) = a.storage_path {
-        let n = std::fs::copy(&src, dest_path)?;
-        Ok(n)
-    } else {
-        Err(StoreError::NotFound(format!(
-            "attachment {id} has no stored data"
-        )))
-    }
-}
-
-/// Delete all attachments of a message (used before re-storing on resync).
-pub fn delete_attachments_for_message(db: &Db, message_id: i64) -> Result<()> {
-    db.conn().execute(
-        "delete from attachments where message_id = ?1",
-        [message_id],
-    )?;
     Ok(())
 }
 
@@ -544,108 +332,6 @@ pub fn delete_by_uid_range(db: &Db, folder_id: i64, lo: u32, hi: u32) -> Result<
         "delete from messages where folder_id = ?1 and uid >= ?2 and uid <= ?3",
         params![folder_id, lo, hi],
     )?;
-    Ok(n as u64)
-}
-
-/// Update flags of one UID in a folder (no-op if unknown).
-pub fn set_flags_by_uid(
-    db: &Db,
-    account_id: i64,
-    folder_id: i64,
-    uid: u32,
-    is_read: bool,
-    is_starred: bool,
-    is_draft: bool,
-) -> Result<()> {
-    db.conn().execute(
-        "update messages set is_read = ?1, is_starred = ?2, is_draft = ?3,
-            updated_at = ?4
-         where account_id = ?5 and folder_id = ?6 and uid = ?7 and flags_dirty = 0",
-        params![
-            i64::from(is_read),
-            i64::from(is_starred),
-            i64::from(is_draft),
-            now(),
-            account_id,
-            folder_id,
-            uid as i64,
-        ],
-    )?;
-    Ok(())
-}
-
-/// Deduplicated, sorted UIDs for a bulk statement (empty in = no-op).
-fn clean_uids(uids: &[u32]) -> Vec<i64> {
-    let mut v: Vec<i64> = uids.iter().map(|u| *u as i64).collect();
-    v.sort_unstable();
-    v.dedup();
-    v
-}
-
-/// Bulk mark read/unread for one folder (local-only, queued via
-/// `flags_dirty` like the single-click path). Only the read flag moves —
-/// starred state is preserved. Returns rows touched.
-pub fn set_read_many_by_uids(db: &Db, folder_id: i64, uids: &[u32], read: bool) -> Result<u64> {
-    let clean = clean_uids(uids);
-    if clean.is_empty() {
-        return Ok(0);
-    }
-    let placeholders = clean.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!(
-        "update messages set is_read = ?1, flags_dirty = 1, updated_at = ?2
-         where folder_id = ?3 and uid in ({placeholders})"
-    );
-    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(clean.len() + 3);
-    args.push(Box::new(i64::from(read)));
-    args.push(Box::new(now()));
-    args.push(Box::new(folder_id));
-    for u in clean {
-        args.push(Box::new(u));
-    }
-    let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
-    let n = db.conn().execute(&sql, refs.as_slice())?;
-    Ok(n as u64)
-}
-
-/// Bulk star/unstar for one folder (local-only, queued). Only the starred
-/// flag moves — read state is preserved. Returns rows touched.
-pub fn set_star_many_by_uids(db: &Db, folder_id: i64, uids: &[u32], starred: bool) -> Result<u64> {
-    let clean = clean_uids(uids);
-    if clean.is_empty() {
-        return Ok(0);
-    }
-    let placeholders = clean.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!(
-        "update messages set is_starred = ?1, flags_dirty = 1, updated_at = ?2
-         where folder_id = ?3 and uid in ({placeholders})"
-    );
-    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(clean.len() + 3);
-    args.push(Box::new(i64::from(starred)));
-    args.push(Box::new(now()));
-    args.push(Box::new(folder_id));
-    for u in clean {
-        args.push(Box::new(u));
-    }
-    let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
-    let n = db.conn().execute(&sql, refs.as_slice())?;
-    Ok(n as u64)
-}
-
-/// Bulk delete cached rows of one folder by UID. Returns rows removed.
-pub fn delete_many_by_uids(db: &Db, folder_id: i64, uids: &[u32]) -> Result<u64> {
-    let clean = clean_uids(uids);
-    if clean.is_empty() {
-        return Ok(0);
-    }
-    let placeholders = clean.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!("delete from messages where folder_id = ?1 and uid in ({placeholders})");
-    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(clean.len() + 1);
-    args.push(Box::new(folder_id));
-    for u in clean {
-        args.push(Box::new(u));
-    }
-    let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
-    let n = db.conn().execute(&sql, refs.as_slice())?;
     Ok(n as u64)
 }
 

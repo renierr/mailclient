@@ -116,7 +116,7 @@ ApplicationWindow {
     function reloadFolders() {
         // Synced in place, never cleared: clearing destroys every sidebar
         // delegate on every click (see qml/ModelSync.qml).
-        ModelSync.sync(folderModel, JSON.parse(backend.folders_json), "name")
+        ModelSync.sync(folderModel, FeedJson.parse(backend.folders_json, []), "name")
         // The sidebar shows a subscribed-only subset, and in-place row edits
         // don't re-fire `onFoldersChanged` — refresh the subset explicitly.
         sidebar.refreshShown()
@@ -139,18 +139,18 @@ ApplicationWindow {
     }
 
     function reloadMessages() {
-        root.messageRows = JSON.parse(backend.messages_json)
+        root.messageRows = FeedJson.parse(backend.messages_json, [])
         // Drop the selection only if that message really is gone.
         if (root.messageByUid(root.currentUid) === undefined)
             root.currentUid = -1
         if (root.currentUid >= 0)
-            root.currentMessage = JSON.parse(backend.message_json(root.currentUid))
+            root.currentMessage = FeedJson.parse(backend.message_json(root.currentUid), undefined)
         else
             root.currentMessage = undefined
     }
 
     function reloadAccounts() {
-        ModelSync.sync(accountModel, JSON.parse(backend.accounts_json), "id")
+        ModelSync.sync(accountModel, FeedJson.parse(backend.accounts_json, []), "id")
     }
 
     function reloadAll() {
@@ -195,11 +195,7 @@ ApplicationWindow {
         var q = searchField.text.trim()
         if (q.length >= 3) {
             root.searching = true
-            try {
-                root.searchRows = JSON.parse(backend.search_json(q, root.searchScope()))
-            } catch (e) {
-                root.searchRows = []
-            }
+            root.searchRows = FeedJson.parse(backend.search_json(q, root.searchScope()), [])
             // Thin local hits get topped up from the server once typing
             // settles (debounced below); the job refresh re-runs this.
             if (fromTyping)
@@ -264,7 +260,7 @@ ApplicationWindow {
             }
         }
         root.currentUid = uid
-        root.currentMessage = JSON.parse(backend.message_json(uid))
+        root.currentMessage = FeedJson.parse(backend.message_json(uid), undefined)
         markReadTimer.stop()
         if (!appSettings.auto_mark_read) {
             return  // stay unread until the user says otherwise

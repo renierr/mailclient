@@ -170,13 +170,21 @@ impl qobject::Bridge {
             // become "sent, but …" notes, which close the composer anyway.
             let mut notes: Vec<String> = Vec::new();
             // SMTP accepted it: release the composer now rather than holding
-            // it open through the Sent copy, the draft removal and the
-            // resync (the Sent copy pays a second TLS + LOGIN of its own).
+            // it open through the Sent copy, the draft removal and the resync.
             progress.report("");
-            if let Err(e) = sender
-                .save_sent_copy(&db, acc.id, Some(&secrets.imap_password), &raw)
-                .await
-            {
+            // Over a pooled session — the connect-its-own variant would pay a
+            // second TCP + TLS + LOGIN while the user waits on a mail that is
+            // already gone.
+            let copy_res = async {
+                let mut imap = checkout_session(&acc).await?;
+                SmtpSender::save_sent_copy_via(&db, acc.id, &mut imap, &raw)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                imap.checkin();
+                Ok::<_, String>(())
+            }
+            .await;
+            if let Err(e) = copy_res {
                 log::warn!("send: sent copy failed: {e}");
                 notes.push(format!("sent, but the Sent copy failed: {e}"));
             }

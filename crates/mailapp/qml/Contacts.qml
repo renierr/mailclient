@@ -32,11 +32,7 @@ AppDialog {
     }
 
     function reload() {
-        try {
-            root.rows = JSON.parse(root.backend.contacts_json(root.searchQuery))
-        } catch (e) {
-            root.rows = []
-        }
+        root.rows = FeedJson.parse(root.backend.contacts_json(root.searchQuery), [])
     }
 
     function saveAlias(addr, newAlias) {

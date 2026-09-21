@@ -167,12 +167,7 @@ AppDialog {
     }
 
     function loadCapsAccounts() {
-        var arr = []
-        try {
-            arr = JSON.parse(root.backend ? root.backend.accounts_json : "[]")
-        } catch (e) {
-            arr = []
-        }
+        var arr = FeedJson.parse(root.backend ? root.backend.accounts_json : "[]", [])
         root.capsAccounts = arr
         if (arr.length === 0) {
             root.capsAccountId = -1

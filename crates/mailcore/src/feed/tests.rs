@@ -333,9 +333,25 @@ fn search_rows_carry_folder_and_plain_snippet() {
 #[test]
 fn short_date_formats() {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    assert_eq!(short_date(Some(&now)).len(), 5); // HH:MM
-    assert_eq!(short_date(Some("2020-01-02T03:04:05+00:00")), "2020-01-02");
-    assert_eq!(short_date(None), "");
+    assert_eq!(short_date(Some(&now)).text.len(), 5); // HH:MM
+    assert_eq!(
+        short_date(Some("2020-01-02T03:04:05+00:00")).text,
+        "2020-01-02"
+    );
+    assert_eq!(short_date(None).text, "");
+    // Numbers need no translating, so they carry no key.
+    assert_eq!(short_date(Some(&now)).key, "");
+    assert_eq!(short_date(None).key, "");
+}
+
+#[test]
+fn yesterday_is_flagged_for_the_ui_to_translate() {
+    // The only case whose text is a word rather than a number. mailcore has
+    // no catalogue, so it names the case and QML supplies the word.
+    let yesterday = chrono::Local::now() - chrono::Duration::days(1);
+    let d = short_date(Some(&yesterday.to_rfc3339()));
+    assert_eq!(d.key, "yesterday");
+    assert_eq!(d.text, "Yesterday", "English fallback for key-less callers");
 }
 
 #[test]
@@ -355,7 +371,7 @@ fn short_date_renders_local_clock_not_the_senders_offset() {
             .to_rfc3339(),
     ];
     for raw in offsets {
-        let shown = short_date(Some(&raw));
+        let shown = short_date(Some(&raw)).text;
         // Only same-day mails render as a clock time; otherwise the date
         // is shown and this assertion does not apply.
         if shown.len() == 5 {

@@ -181,11 +181,7 @@ Rectangle {
         root.headersInfo = ({})
         if (!root.backend || !root.backend.message_headers_json || root.messageUid < 0)
             return
-        try {
-            root.headersInfo = JSON.parse(root.backend.message_headers_json(root.messageUid))
-        } catch (e) {
-            root.headersInfo = ({})
-        }
+        root.headersInfo = FeedJson.parse(root.backend.message_headers_json(root.messageUid), ({}))
     }
 
     // "Name <addr>" -> {name, addr}; a bare address yields both identical.
@@ -326,7 +322,12 @@ Rectangle {
                                 Layout.fillWidth: true
                             }
                             Label {
-                                text: root.message ? root.message.date : ""
+                                // `date_key` names the one case whose text is
+                                // a word; mailcore cannot translate it itself
+                                // (see feed::ShortDate).
+                                text: !root.message ? ""
+                                    : root.message.date_key === "yesterday" ? qsTr("Yesterday")
+                                    : root.message.date
                                 color: Theme.textMuted
                                 font.pixelSize: Theme.fontSmall
                             }

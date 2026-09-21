@@ -318,12 +318,19 @@ Rectangle {
             folder: m.folder || "",
             subject: m.subject,
             from: m.from,
-            date: m.date,
+            date: root.displayDate(m),
             snippet: m.snippet,
             unread: m.unread,
             starred: m.starred,
             has_attachments: m.has_attachments === true
         }
+    }
+
+    // A feed date is a clock time or a date except for one case, which is a
+    // word. mailcore is Qt-free and has no catalogue, so it flags that case
+    // in `date_key` and the word is translated here (see feed::ShortDate).
+    function displayDate(m) {
+        return m.date_key === "yesterday" ? qsTr("Yesterday") : m.date
     }
 
     function rebuildFiltered() {

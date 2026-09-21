@@ -31,12 +31,7 @@ AppDialog {
 
     // Empty for a new account, prefilled from `Bridge.account_form` for an edit.
     function loadForm(json, id) {
-        var f = {}
-        try {
-            f = JSON.parse(json || "{}")
-        } catch (e) {
-            f = {}
-        }
+        var f = FeedJson.parse(json, ({}))
         root.editId = id === undefined ? -1 : id
         nameField.text = f.name || ""
         emailField.text = f.email || ""

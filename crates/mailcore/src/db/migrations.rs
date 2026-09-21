@@ -27,6 +27,25 @@ const SCHEMA_V3: &str = "alter table messages add column flags_dirty integer not
 const SCHEMA_V10: &str =
     "alter table folders add column highest_modseq integer not null default 0;";
 
+/// Run `ALTER TABLE ... ADD COLUMN` statements, tolerating columns that are
+/// already there.
+///
+/// SQLite errors on a duplicate column, and that case is benign here: a fresh
+/// install gets every column from `schema.sql` but can still carry an older
+/// version stamp, so the catch-up migrations re-add what already exists. Any
+/// other error is a real failure and aborts.
+fn add_columns(conn: &Connection, statements: &[&str]) -> Result<()> {
+    for stmt in statements {
+        if let Err(e) = conn.execute_batch(stmt) {
+            let msg = e.to_string().to_ascii_lowercase();
+            if !(msg.contains("duplicate column") || msg.contains("already exists")) {
+                return Err(e.into());
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Create or upgrade the database to [`SCHEMA_VERSION`].
 pub fn ensure_schema(conn: &Connection) -> Result<()> {
     let current: u32 = conn
@@ -52,61 +71,40 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         conn.execute_batch(SCHEMA_V2)?;
     }
     if current < 3 {
-        conn.execute_batch(SCHEMA_V3)?;
+        // v3: `messages.flags_dirty`.
+        add_columns(conn, &[SCHEMA_V3])?;
     }
     if current < 4 {
-        // `ALTER TABLE ... ADD COLUMN` errors when the column already exists
-        // (e.g. a fresh v4 `schema.sql` install that still carries version 3
-        // in `schema_meta`); those are benign — anything else aborts.
-        // v4 DDL: `attachments.data` BLOB + `is_inline` marker.
-        for stmt in [
-            "alter table attachments add column data blob;",
-            "alter table attachments add column is_inline integer not null default 0;",
-        ] {
-            if let Err(e) = conn.execute_batch(stmt) {
-                let msg = e.to_string().to_ascii_lowercase();
-                if !(msg.contains("duplicate column") || msg.contains("already exists")) {
-                    return Err(e.into());
-                }
-            }
-        }
+        // v4: `attachments.data` BLOB + `is_inline` marker.
+        add_columns(
+            conn,
+            &[
+                "alter table attachments add column data blob;",
+                "alter table attachments add column is_inline integer not null default 0;",
+            ],
+        )?;
     }
     if current < 5 {
-        // `accounts.from_name`: sender display name (`""` = address only).
-        // Same benign-duplicate tolerance as v4 (fresh v5 `schema.sql`
-        // installs carrying an older version stamp).
-        if let Err(e) = conn
-            .execute_batch("alter table accounts add column from_name text not null default '';")
-        {
-            let msg = e.to_string().to_ascii_lowercase();
-            if !(msg.contains("duplicate column") || msg.contains("already exists")) {
-                return Err(e.into());
-            }
-        }
+        // v5: `accounts.from_name` — sender display name (`""` = address only).
+        add_columns(
+            conn,
+            &["alter table accounts add column from_name text not null default '';"],
+        )?;
     }
     if current < 6 {
-        if let Err(e) = conn.execute_batch("alter table messages add column raw_headers text;") {
-            let msg = e.to_string().to_ascii_lowercase();
-            if !(msg.contains("duplicate column") || msg.contains("already exists")) {
-                return Err(e.into());
-            }
-        }
+        // v6: `messages.raw_headers` for the technical-headers view.
+        add_columns(conn, &["alter table messages add column raw_headers text;"])?;
     }
     if current < 7 {
-        if let Err(e) = conn.execute_batch("alter table folders add column server_total integer;") {
-            let msg = e.to_string().to_ascii_lowercase();
-            if !(msg.contains("duplicate column") || msg.contains("already exists")) {
-                return Err(e.into());
-            }
-        }
+        // v7: `folders.server_total` — last SELECT's message count.
+        add_columns(
+            conn,
+            &["alter table folders add column server_total integer;"],
+        )?;
     }
     if current < 8 {
-        if let Err(e) = conn.execute_batch("alter table contacts add column alias text;") {
-            let msg = e.to_string().to_ascii_lowercase();
-            if !(msg.contains("duplicate column") || msg.contains("already exists")) {
-                return Err(e.into());
-            }
-        }
+        // v8: `contacts.alias`, backfilled from the transferred real name.
+        add_columns(conn, &["alter table contacts add column alias text;"])?;
         if let Err(e) = conn.execute_batch(
             "update contacts set alias = name where alias is null and name is not null;",
         ) {
@@ -117,26 +115,19 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         }
     }
     if current < 9 {
-        for stmt in [
-            "alter table send_queue add column raw_mime blob;",
-            "alter table send_queue add column envelope_from text;",
-            "alter table send_queue add column envelope_to text not null default '[]';",
-        ] {
-            if let Err(e) = conn.execute_batch(stmt) {
-                let msg = e.to_string().to_ascii_lowercase();
-                if !(msg.contains("duplicate column") || msg.contains("already exists")) {
-                    return Err(e.into());
-                }
-            }
-        }
+        // v9: outbox keeps the raw MIME and envelope, so a send survives a crash.
+        add_columns(
+            conn,
+            &[
+                "alter table send_queue add column raw_mime blob;",
+                "alter table send_queue add column envelope_from text;",
+                "alter table send_queue add column envelope_to text not null default '[]';",
+            ],
+        )?;
     }
     if current < 10 {
-        if let Err(e) = conn.execute_batch(SCHEMA_V10) {
-            let msg = e.to_string().to_ascii_lowercase();
-            if !(msg.contains("duplicate column") || msg.contains("already exists")) {
-                return Err(e.into());
-            }
-        }
+        // v10: `folders.highest_modseq` for CONDSTORE / QRESYNC.
+        add_columns(conn, &[SCHEMA_V10])?;
     }
     if current != SCHEMA_VERSION {
         conn.execute(
