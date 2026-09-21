@@ -166,6 +166,91 @@ async fn uid_fetch_messages_parses_server_literal() {
     assert_eq!(fetched[0].2, b"hello world");
 }
 
+/// Mock that answers SELECT and accepts everything else, recording each
+/// command so a test can assert which expunge verb actually went out.
+async fn expunge_server(caps: &'static str) -> MockImapServer {
+    MockImapServer::start(caps, |tag, rest| {
+        if rest.to_ascii_uppercase().starts_with("SELECT") {
+            vec![
+                "* 0 EXISTS\r\n".to_string(),
+                "* OK [UIDVALIDITY 1] Ok\r\n".to_string(),
+                format!("{tag} OK [READ-WRITE] SELECT completed\r\n"),
+            ]
+        } else {
+            vec![format!("{tag} OK completed\r\n")]
+        }
+    })
+    .await
+}
+
+/// `true` when the command's verb (after the tag) is a bare `EXPUNGE`, i.e.
+/// the mailbox-wide form rather than `UID EXPUNGE`.
+fn is_bare_expunge(cmd: &str) -> bool {
+    cmd.to_ascii_uppercase().split_whitespace().nth(1) == Some("EXPUNGE")
+}
+
+#[tokio::test]
+async fn uid_expunge_scopes_the_destroy_to_the_given_uids() {
+    // With UIDPLUS the destroy must name its UIDs: a bare EXPUNGE would also
+    // destroy whatever another client had flagged \Deleted but not expunged.
+    let server = expunge_server("IMAP4rev1 UIDPLUS").await;
+    let account = test_mock_account(server.port);
+    let mut sync = ImapSync::new(&account);
+    sync.connect("secret").await.unwrap();
+    let session = sync.session().unwrap();
+    session.select("INBOX", None).await.unwrap();
+    session.uid_expunge(&[5, 6]).await.unwrap();
+
+    let cmds = server.received.lock().await.clone();
+    assert!(
+        cmds.iter()
+            .any(|c| c.to_ascii_uppercase().contains("UID EXPUNGE 5:6")),
+        "expected a scoped UID EXPUNGE, got: {cmds:?}"
+    );
+    assert!(
+        !cmds.iter().any(|c| is_bare_expunge(c)),
+        "a mailbox-wide EXPUNGE slipped out: {cmds:?}"
+    );
+}
+
+#[tokio::test]
+async fn uid_expunge_falls_back_without_uidplus() {
+    // No scoped form exists there, and leaving the messages flagged-but-alive
+    // would be the wrong outcome too.
+    let server = expunge_server("IMAP4rev1").await;
+    let account = test_mock_account(server.port);
+    let mut sync = ImapSync::new(&account);
+    sync.connect("secret").await.unwrap();
+    let session = sync.session().unwrap();
+    session.select("INBOX", None).await.unwrap();
+    session.uid_expunge(&[5]).await.unwrap();
+
+    let cmds = server.received.lock().await.clone();
+    assert!(
+        cmds.iter().any(|c| is_bare_expunge(c)),
+        "expected the plain EXPUNGE fallback, got: {cmds:?}"
+    );
+}
+
+#[tokio::test]
+async fn uid_expunge_of_nothing_stays_off_the_wire() {
+    let server = expunge_server("IMAP4rev1 UIDPLUS").await;
+    let account = test_mock_account(server.port);
+    let mut sync = ImapSync::new(&account);
+    sync.connect("secret").await.unwrap();
+    let session = sync.session().unwrap();
+    session.select("INBOX", None).await.unwrap();
+    session.uid_expunge(&[]).await.unwrap();
+
+    let cmds = server.received.lock().await.clone();
+    assert!(
+        !cmds
+            .iter()
+            .any(|c| c.to_ascii_uppercase().contains("EXPUNGE")),
+        "an empty selection still sent an expunge: {cmds:?}"
+    );
+}
+
 #[tokio::test]
 async fn store_copy_expunge_and_create_hit_the_wire() {
     let server = MockImapServer::start("IMAP4rev1", |tag, rest| {

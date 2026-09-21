@@ -613,7 +613,7 @@ impl ImapSession {
                 self.execute(body).await?;
                 self.uid_store_flags(uids, StoreType::Add, vec![Flag::Deleted])
                     .await?;
-                self.expunge().await?;
+                self.uid_expunge(uids).await?;
             }
         } else {
             let body = CommandBody::copy(sequence_set, mailbox, true)
@@ -621,15 +621,48 @@ impl ImapSession {
             self.execute(body).await?;
             self.uid_store_flags(uids, StoreType::Add, vec![Flag::Deleted])
                 .await?;
-            self.expunge().await?;
+            self.uid_expunge(uids).await?;
         }
         Ok(())
     }
 
-    /// EXPUNGE.
+    /// EXPUNGE — removes **every** `\Deleted` message in the mailbox.
+    ///
+    /// Only correct when that is genuinely what is meant. To destroy
+    /// specific messages use [`Self::uid_expunge`], which does not reach
+    /// past them.
     pub async fn expunge(&mut self) -> Result<()> {
         self.execute(CommandBody::Expunge).await?;
         Ok(())
+    }
+
+    /// UID EXPUNGE (RFC 4315): destroy only `uids`, among those flagged
+    /// `\Deleted`.
+    ///
+    /// Plain `EXPUNGE` takes the whole mailbox with it, so a message another
+    /// client had flagged `\Deleted` but not yet expunged — its own pending
+    /// delete, still undoable on its side — was destroyed as a side effect of
+    /// us deleting something unrelated. Servers without UIDPLUS leave no
+    /// alternative, and there the wide behaviour is what "delete" has to
+    /// mean; everywhere else this stays inside the selection the user made.
+    pub async fn uid_expunge(&mut self, uids: &[u32]) -> Result<()> {
+        if uids.is_empty() {
+            return Ok(());
+        }
+        if !self.has_capability("uidplus") {
+            log::debug!("imap: no UIDPLUS, falling back to mailbox-wide EXPUNGE");
+            return self.expunge().await;
+        }
+        let sequence_set = uids_to_sequence_set(uids)?;
+        match self.execute(CommandBody::ExpungeUid { sequence_set }).await {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                // Advertised but refused: the messages are already flagged
+                // `\Deleted`, so leaving them is the wrong outcome too.
+                log::warn!("imap: UID EXPUNGE failed ({e}), falling back to EXPUNGE");
+                self.expunge().await
+            }
+        }
     }
 
     /// APPEND.

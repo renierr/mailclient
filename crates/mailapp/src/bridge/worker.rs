@@ -145,7 +145,17 @@ fn net_tx() -> &'static mpsc::Sender<JobFn> {
                     .expect("tokio runtime for mailclient-net");
                 let _guard = rt.enter();
                 while let Ok(job) = rx.recv() {
-                    job(&rt);
+                    // A panic escaping a job would unwind this thread out of
+                    // existence, and every later `send` would then be dropped
+                    // by the `let _ =` at the call sites -- sync, send and
+                    // downloads would silently stop working until restart,
+                    // with nothing logged. Jobs that can report a failure to
+                    // the user wrap themselves too (see `spawn_job`); this is
+                    // the net that catches the ones that cannot.
+                    let _ = guard_sync("background job", || {
+                        job(&rt);
+                        Ok::<(), String>(())
+                    });
                 }
             })
             .expect("mailclient-net thread");

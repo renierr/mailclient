@@ -506,7 +506,7 @@ impl ImapSync {
         session
             .uid_store_flags(&[msg.uid], StoreType::Add, vec![Flag::Deleted])
             .await?;
-        session.expunge().await?;
+        session.uid_expunge(&[msg.uid]).await?;
         messages::delete(db, message_id)?;
         Ok(())
     }
@@ -558,7 +558,7 @@ impl ImapSync {
         session
             .uid_store_flags(uids, StoreType::Add, vec![Flag::Deleted])
             .await?;
-        session.expunge().await?;
+        session.uid_expunge(uids).await?;
         let count = messages::delete_many_by_uids(db, folder_id, uids)?;
         Ok(count)
     }
@@ -586,11 +586,12 @@ impl ImapSync {
         );
 
         // UIDVALIDITY change => server-side rebuild, drop local copies.
-        if let Some(validity) = mb.uid_validity {
-            if folder.uid_validity.is_some_and(|v| v != validity) {
-                log::warn!("imap: UIDVALIDITY changed for {} — resyncing", folder.path);
-                messages::delete_by_folder(db, folder_id)?;
-            }
+        let validity_changed = mb
+            .uid_validity
+            .is_some_and(|v| folder.uid_validity.is_some_and(|old| old != v));
+        if validity_changed {
+            log::warn!("imap: UIDVALIDITY changed for {} — resyncing", folder.path);
+            messages::delete_by_folder(db, folder_id)?;
         }
 
         let mut expunged = 0u64;
@@ -748,7 +749,16 @@ impl ImapSync {
 
         let validity = mb.uid_validity.unwrap_or(folder.uid_validity.unwrap_or(0));
         let uid_next = mb.uid_next.unwrap_or(folder.uid_next.unwrap_or(0));
-        let new_modseq = mb.highest_modseq.unwrap_or(folder.highest_modseq);
+        // Modseqs belong to a mailbox incarnation. Carrying the old one into
+        // a rebuilt mailbox that reports none of its own would make the next
+        // sync ask `CHANGEDSINCE <stale>` and QRESYNC-select against it —
+        // both silently skipping everything older than a number from a
+        // mailbox that no longer exists. Starting over is the only safe read.
+        let new_modseq = if validity_changed {
+            mb.highest_modseq.unwrap_or(0)
+        } else {
+            mb.highest_modseq.unwrap_or(folder.highest_modseq)
+        };
         folders::set_sync_state(
             db,
             folder_id,
@@ -883,11 +893,22 @@ impl ImapSync {
     /// Rows that fail stay dirty for the next run, so this never loses a
     /// toggle (offline, quit mid-push, server error). Returns pushed count.
     /// Used both by full syncs and by the quiet post-toggle push job.
+    ///
+    /// A row the user toggled again mid-push also stays dirty — the clear
+    /// only matches the flags this run actually sent (see
+    /// [`messages::clear_flags_dirty`]).
     pub async fn push_dirty_flags(&mut self, db: &Db, account_id: i64) -> u64 {
         let mut pushed = 0u64;
         for m in messages::list_flags_dirty(db, account_id).unwrap_or_default() {
             if self.push_flags(db, &m).await.is_ok() {
-                let _ = messages::clear_flags_dirty(db, m.id);
+                match messages::clear_flags_dirty(db, m.id, m.is_read, m.is_starred) {
+                    Ok(false) => log::info!(
+                        "imap: message {} was toggled again mid-push, staying dirty",
+                        m.id
+                    ),
+                    Ok(true) => {}
+                    Err(e) => log::warn!("imap: cannot clear dirty flag on {}: {e}", m.id),
+                }
                 pushed += 1;
             }
         }

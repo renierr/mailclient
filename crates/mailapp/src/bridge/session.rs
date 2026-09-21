@@ -168,3 +168,27 @@ pub(crate) fn guard_sync<T>(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::guard_sync;
+
+    /// The net thread runs every job through this (see `worker::net_tx`), so
+    /// a panic has to come back as a value — unwinding past it would take the
+    /// thread down and silently strand all later background work.
+    #[test]
+    fn a_panicking_job_comes_back_as_an_error() {
+        let err = guard_sync("probe", || -> Result<(), String> {
+            panic!("boom");
+        })
+        .unwrap_err();
+        assert!(err.contains("probe"), "{err}");
+        assert!(err.contains("boom"), "{err}");
+
+        assert_eq!(guard_sync("probe", || Ok::<i32, String>(7)).unwrap(), 7);
+        assert_eq!(
+            guard_sync("probe", || Err::<i32, String>("plain".into())).unwrap_err(),
+            "plain"
+        );
+    }
+}

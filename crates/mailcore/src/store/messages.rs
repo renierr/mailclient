@@ -310,11 +310,21 @@ pub fn list_flags_dirty(db: &Db, account_id: i64) -> Result<Vec<Message>> {
     Ok(out)
 }
 
-/// Mark one message's flags as pushed.
-pub fn clear_flags_dirty(db: &Db, id: i64) -> Result<()> {
-    db.conn()
-        .execute("update messages set flags_dirty = 0 where id = ?1", [id])?;
-    Ok(())
+/// Mark one message's flags as pushed — but only the state that was pushed.
+///
+/// A push is not instantaneous, and the user can click again while it is in
+/// flight. Clearing unconditionally would drop that newer toggle on the
+/// floor: it set `flags_dirty` back to 1, the clear wiped it, and the next
+/// sync pulled the server's now-stale flags back over it. Matching on the
+/// flags that actually went to the server leaves such a row dirty for the
+/// next round instead. Returns `true` when the row was cleared.
+pub fn clear_flags_dirty(db: &Db, id: i64, pushed_read: bool, pushed_starred: bool) -> Result<bool> {
+    let n = db.conn().execute(
+        "update messages set flags_dirty = 0
+         where id = ?1 and is_read = ?2 and is_starred = ?3",
+        params![id, i64::from(pushed_read), i64::from(pushed_starred)],
+    )?;
+    Ok(n > 0)
 }
 
 /// Delete a message (attachments cascade, FTS row removed by trigger).
@@ -737,7 +747,7 @@ mod tests {
         assert!(dirty[0].is_read);
 
         // Once pushed, the row is settled and stays out of the queue.
-        clear_flags_dirty(&db, id).unwrap();
+        assert!(clear_flags_dirty(&db, id, true, false).unwrap());
         assert!(list_flags_dirty(&db, acc).unwrap().is_empty());
 
         // Starring queues too, and only the touched row.
@@ -746,6 +756,30 @@ mod tests {
         assert_eq!(dirty.len(), 1);
         assert_eq!(dirty[0].id, other);
         assert!(dirty[0].is_starred);
+    }
+
+    #[test]
+    fn a_toggle_during_the_push_is_not_swallowed_by_the_clear() {
+        let (db, acc, f) = setup();
+        let id = upsert(&db, &sample_new(acc, f, 1)).unwrap();
+
+        // The click that starts the push.
+        set_flags(&db, id, true, false).unwrap();
+        let in_flight = list_flags_dirty(&db, acc).unwrap().remove(0);
+
+        // The user clicks again while the push is still on the network.
+        set_flags(&db, id, false, false).unwrap();
+
+        // The push lands and reports the state it actually sent. The newer
+        // click must survive it.
+        assert!(!clear_flags_dirty(&db, id, in_flight.is_read, in_flight.is_starred).unwrap());
+        let still_dirty = list_flags_dirty(&db, acc).unwrap();
+        assert_eq!(still_dirty.len(), 1);
+        assert!(!still_dirty[0].is_read, "the newer unread state was lost");
+
+        // The next round pushes that state and does settle the row.
+        assert!(clear_flags_dirty(&db, id, false, false).unwrap());
+        assert!(list_flags_dirty(&db, acc).unwrap().is_empty());
     }
 
     #[test]

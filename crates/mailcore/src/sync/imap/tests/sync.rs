@@ -152,6 +152,82 @@ async fn uidvalidity_change_drops_local_cache() {
 }
 
 #[tokio::test]
+async fn uidvalidity_change_resets_the_modseq() {
+    // The rebuilt mailbox reports no HIGHESTMODSEQ of its own. Keeping the
+    // old incarnation's number would make the next sync ask CHANGEDSINCE
+    // against a mailbox that no longer exists and skip every flag change
+    // below it.
+    let server = MockImapServer::start("IMAP4rev1 CONDSTORE", |tag, rest| {
+        let upper = rest.to_ascii_uppercase();
+        if upper.starts_with("SELECT") {
+            select_ok(tag, 0, 2, 6)
+        } else if upper.starts_with("UID SEARCH") {
+            vec![
+                "* SEARCH\r\n".to_string(),
+                format!("{tag} OK UID SEARCH completed\r\n"),
+            ]
+        } else {
+            vec![format!("{tag} OK completed\r\n")]
+        }
+    })
+    .await;
+
+    let db = Db::open_in_memory().unwrap();
+    let account = test_mock_account(server.port);
+    let account_id = test_account_row(&db, &account);
+    let inbox_id = folders::upsert(&db, account_id, "INBOX", "/", FolderRole::Inbox).unwrap();
+    folders::set_sync_state(&db, inbox_id, 1, 10, 1, 4242).unwrap();
+    assert_eq!(folders::get(&db, inbox_id).unwrap().highest_modseq, 4242);
+
+    let mut sync = ImapSync::new(&account);
+    sync.connect("secret").await.unwrap();
+    sync.sync_folder_window(&db, inbox_id, Some(FULL_SYNC_WINDOW))
+        .await
+        .unwrap();
+
+    let folder = folders::get(&db, inbox_id).unwrap();
+    assert_eq!(folder.uid_validity, Some(2));
+    assert_eq!(
+        folder.highest_modseq, 0,
+        "the previous incarnation's modseq survived the rebuild"
+    );
+}
+
+#[tokio::test]
+async fn an_unchanged_uidvalidity_keeps_the_modseq() {
+    // The other side of the same coin: a SELECT that simply does not carry
+    // HIGHESTMODSEQ must not throw away what we already knew.
+    let server = MockImapServer::start("IMAP4rev1 CONDSTORE", |tag, rest| {
+        let upper = rest.to_ascii_uppercase();
+        if upper.starts_with("SELECT") {
+            select_ok(tag, 0, 1, 6)
+        } else if upper.starts_with("UID SEARCH") {
+            vec![
+                "* SEARCH\r\n".to_string(),
+                format!("{tag} OK UID SEARCH completed\r\n"),
+            ]
+        } else {
+            vec![format!("{tag} OK completed\r\n")]
+        }
+    })
+    .await;
+
+    let db = Db::open_in_memory().unwrap();
+    let account = test_mock_account(server.port);
+    let account_id = test_account_row(&db, &account);
+    let inbox_id = folders::upsert(&db, account_id, "INBOX", "/", FolderRole::Inbox).unwrap();
+    folders::set_sync_state(&db, inbox_id, 1, 10, 1, 4242).unwrap();
+
+    let mut sync = ImapSync::new(&account);
+    sync.connect("secret").await.unwrap();
+    sync.sync_folder_window(&db, inbox_id, Some(FULL_SYNC_WINDOW))
+        .await
+        .unwrap();
+
+    assert_eq!(folders::get(&db, inbox_id).unwrap().highest_modseq, 4242);
+}
+
+#[tokio::test]
 async fn sync_older_backfills_below_local_min() {
     let server = MockImapServer::start("IMAP4rev1", |tag, rest| {
         let upper = rest.to_ascii_uppercase();

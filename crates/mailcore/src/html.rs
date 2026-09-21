@@ -478,14 +478,28 @@ fn find_sub(h: &[u8], n: &[u8], from: usize) -> Option<usize> {
         .map(|p| p + from)
 }
 
+/// Truncate to at most `max` bytes without splitting a character.
+///
+/// `&s[..max]` panics when `max` lands inside a multi-byte sequence, which
+/// one oversized non-ASCII mail is enough to hit. UTF-8 continuation bytes
+/// are `10xxxxxx`, so walking back to the first non-continuation byte finds
+/// the boundary; at most three steps.
+fn truncate_on_char_boundary(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let bytes = s.as_bytes();
+    let mut end = max;
+    while end > 0 && (bytes[end] & 0b1100_0000) == 0b1000_0000 {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Sanitize untrusted HTML. `allow_remote=false` (reader default) strips
 /// remote `<img>` and records `had_remote`.
 pub fn sanitize(raw: &str, allow_remote: bool) -> Sanitized {
-    let raw = if raw.len() > MAX_HTML_BYTES {
-        &raw[..MAX_HTML_BYTES]
-    } else {
-        raw
-    };
+    let raw = truncate_on_char_boundary(raw, MAX_HTML_BYTES);
     let bytes = raw.as_bytes();
     let mut out = String::new();
     let mut had_remote = false;
@@ -940,5 +954,27 @@ mod tests {
         assert!(!s.html.contains("&amp;zwnj;"), "zwnj leaked: {s:?}");
         assert!(!s.html.contains("&zwnj;"), "zwnj leaked: {s:?}");
         assert_eq!(html_to_text("<p>a&zwnj;b</p>"), "a\u{200c}b");
+    }
+
+    #[test]
+    fn oversized_body_truncates_without_splitting_a_character() {
+        // One 2-byte char sitting exactly across MAX_HTML_BYTES: slicing by
+        // byte index there used to panic, taking the reader down with it.
+        for pad in 0..4 {
+            let mut s = "a".repeat(MAX_HTML_BYTES - 1 - pad);
+            s.push('\u{20ac}'); // 3 bytes
+            s.push('ä'); // 2 bytes
+            s.push_str("<p>tail</p>");
+            let out = sanitize(&s, false);
+            assert!(!out.html.is_empty());
+        }
+        // The cap still holds, and nothing is cut mid-character.
+        let big = "ä".repeat(MAX_HTML_BYTES);
+        assert!(truncate_on_char_boundary(&big, MAX_HTML_BYTES).len() <= MAX_HTML_BYTES);
+        // Short input is returned whole.
+        assert_eq!(truncate_on_char_boundary("äöü", MAX_HTML_BYTES), "äöü");
+        // A cut that lands inside the first character yields nothing rather
+        // than half a character.
+        assert_eq!(truncate_on_char_boundary("ä", 1), "");
     }
 }
