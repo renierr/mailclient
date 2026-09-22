@@ -129,7 +129,10 @@ it needs the same ask.
 
 ## 5. Workflows
 
-- Build: `./build.sh` (release bundle into `dist/`). Dev loop: `./dev.sh`. Install locally: `./scripts/install-local.sh` (`~/.local`). Never hand-roll `cargo build` output paths in docs; point to the scripts.
+- Build: `./build.sh` (Qt release bundle into `dist/`), `./build.sh --flutter`
+  (Flutter release bundle into `dist/mailclient-flutter/`). Dev loop: `./dev.sh`
+  (Qt) or `./dev.sh --flutter`. Both dev loops use `./data/dev.sqlite`
+  (`MAILCLIENT_DB` overrides). Install locally: `./scripts/install-local.sh` (`~/.local`). Never hand-roll `cargo build` output paths in docs; point to the scripts.
 - Flutter: `flutter run -d windows` / `-d linux` from `flutter/` (the Rust core builds as part of it). Regenerate FFI glue with `flutter_rust_bridge_codegen generate` from the repo root.
 - Tests: `cargo test --workspace`, plus `flutter test` in `flutter/`. QML smoke: `qml6 qml/Main.qml` or `qmllint qml/*.qml` if no display.
 - Debugging crashes on Omarchy: load the `diagnose-crash` skill path (systemd-coredump) — do not guess.

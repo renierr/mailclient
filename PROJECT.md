@@ -191,12 +191,20 @@ cache-only so they render immediately.
 ## 6. Build / Run / Install
 
 ```sh
-./dev.sh                # debug build + run (uses ./crates/mailapp/qml live)
-./build.sh              # release build → dist/mailclient/{bin/mailapp,qml/,resources/}
-./scripts/install-local.sh  # copy bundle to ~/.local/{bin,share/mailclient} + install .desktop
+./dev.sh                # Qt dev: debug build + run (uses ./crates/mailapp/qml live)
+./dev.sh --flutter      # Flutter dev: flutter run -d linux (debug Dart, release Rust core)
+./build.sh              # Qt release build → dist/mailclient/{bin/mailapp,qml/,resources/}
+./build.sh --flutter    # Flutter release build → dist/mailclient-flutter/{mailclient,lib/,data/}
+./build.sh --all        # both release bundles
+./scripts/install-local.sh  # copy Qt bundle to ~/.local/{bin,share/mailclient} + install .desktop
 cargo test -p mailcore      # backend unit tests (SQLite in-memory)
 qmllint crates/mailapp/qml/*.qml crates/mailapp/qml/components/*.qml  # QML lint (uses /usr/lib/qt6/bin when on PATH)
 ```
+
+Dev runs (both frontends) open the local `./data/dev.sqlite` (override
+`MAILCLIENT_DB` for a throwaway file), never the real mailbox. Release
+bundles use the platform database (`~/.local/share/...`) unless
+`MAILCLIENT_DB` is set when launching them.
 
 DB location: `~/.local/share/mailclient/mailclient.sqlite` (override `MAILCLIENT_DB=/tmp/x.sqlite` for tests/dev).
 

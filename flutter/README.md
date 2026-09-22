@@ -73,9 +73,17 @@ test/                           model decoding tests
 
 ## Building
 
+From the repository root:
+
+```sh
+./dev.sh --flutter   # debug loop: flutter run -d linux against ./data/dev.sqlite
+./build.sh --flutter # release bundle → dist/mailclient-flutter/
+```
+
 `flutter run -d windows` and `flutter run -d linux` build the Rust core as
 part of the CMake build and drop the shared library into the bundle — nothing
-extra to run first.
+extra to run first. Local runs use `./data/dev.sqlite` via `MAILCLIENT_DB`
+(the same file `./dev.sh` gives the Qt frontend), never the real mailbox.
 
 The core is built optimised even for a debug Flutter build: it is not the code
 being debugged, and an unoptimised bundled SQLite, rustls and MIME parser make
