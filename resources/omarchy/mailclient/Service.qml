@@ -59,6 +59,24 @@ Item {
     return root.account !== "" ? ["--account", root.account] : []
   }
 
+  // Transient credential-store blips (locked keyring at login, Secret
+  // Service D-Bus hiccup): normal noise, not a red error. Anything else
+  // (bad password, offline, usage error) shows immediately.
+  function isTransientError(msg) {
+    return /keyring|secret service|secure storage|dbus|remote peer disconnected/i.test(String(msg || ""))
+  }
+
+  // Show-or-suppress for a failed poll: transient errors stay quiet until
+  // we have a baseline reading and the failure repeats, so one bad poll
+  // (or the first poll before the keyring is unlocked) never paints the
+  // popup red. Returns the error text to display, or "" to stay quiet.
+  function displayError(msg) {
+    var text = String(msg || "")
+    if (text === "") return ""
+    if (isTransientError(text) && (root.knownUnread < 0 || root.failStreak < 2)) return ""
+    return text
+  }
+
   function pollIntervalMs() {
     var shift = Math.max(0, Math.min(root.failStreak, 3))
     return root.syncIntervalMin * 60000 * (1 << shift)
@@ -96,13 +114,15 @@ Item {
   function applyReport(raw) {
     var parsed = Model.parseReport(raw)
     if (!parsed.ok) {
-      lastError = "Could not read mail sync result"
       root.failStreak += 1
+      lastError = displayError("Could not read mail sync result")
       return
     }
     if (parsed.errors.length > 0) {
       root.failStreak += 1
-      lastError = parsed.errors.length > 1 ? String(parsed.errors[0]) + " (+" + (parsed.errors.length - 1) + " more)" : String(parsed.errors[0])
+      var first = String(parsed.errors[0])
+      var more = parsed.errors.length > 1 ? " (+" + (parsed.errors.length - 1) + " more)" : ""
+      lastError = displayError(first + more)
     } else {
       root.failStreak = 0
       lastError = ""
@@ -157,7 +177,8 @@ Item {
       if (exitCode === 0) root.applyReport(syncStdout.text)
       else {
         root.failStreak += 1
-        root.lastError = String(syncStderr.text || syncStdout.text || "mail sync failed").trim().substring(0, 140)
+        var msg = String(syncStderr.text || syncStdout.text || "mail sync failed").trim().substring(0, 140)
+        root.lastError = displayError(msg)
       }
     }
   }

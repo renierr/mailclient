@@ -143,7 +143,7 @@ impl qobject::Bridge {
         spawn_job(self, "Send", move |db, progress| async move {
             let acc = current_account(db, wanted)?;
             let secrets = auth::load_account_secrets(&acc.auth_vault_key)
-                .map_err(|e| format!("no password in keyring: {e}"))?;
+                .map_err(|e| e.to_string())?;
             let sender = SmtpSender::new(&acc);
             if let Err(e) = sender.submit_queued(db, queue_id, &secrets.smtp_password) {
                 // Same no-duplicate rule as an interactive failure: the user

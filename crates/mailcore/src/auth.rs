@@ -33,14 +33,14 @@ pub fn save_account_secrets(
     let payload = serde_json::json!({"imap": imap_password, "smtp": smtp_password});
     entry(vault_key)?
         .set_password(&payload.to_string())
-        .map_err(|e| StoreError::InvalidInput(format!("keyring store failed: {e}")))
+        .map_err(|e| StoreError::Keyring(format!("store failed: {e}")))
 }
 
 /// Load both passwords; empty/missing SMTP falls back to the IMAP password.
 pub fn load_account_secrets(vault_key: &str) -> Result<AccountSecrets> {
     let raw = entry(vault_key)?
         .get_password()
-        .map_err(|e| StoreError::InvalidInput(format!("keyring load failed: {e}")))?;
+        .map_err(|e| StoreError::Keyring(format!("load failed: {e}")))?;
     // Legacy plain-password entries (M1 harness era): treat whole value as IMAP.
     let (imap, smtp) = match serde_json::from_str::<serde_json::Value>(&raw) {
         Ok(v) => (
@@ -56,14 +56,35 @@ pub fn load_account_secrets(vault_key: &str) -> Result<AccountSecrets> {
         Err(_) => (raw, String::new()),
     };
     if imap.is_empty() {
-        return Err(StoreError::InvalidInput(
-            "empty password in keyring".to_string(),
-        ));
+        return Err(StoreError::Keyring("account has no stored password".to_string()));
     }
     Ok(AccountSecrets {
         smtp_password: resolve_smtp(&imap, &smtp),
         imap_password: imap,
     })
+}
+
+/// Load with a few quick retries.
+///
+/// The headless CLI (`--sync-once`) spawns fresh for every poll and opens a
+/// new Secret Service D-Bus connection each time, so a momentary "remote
+/// peer disconnected" should ride out instead of surfacing as an error.
+/// Interactive callers keep the single-attempt `load_account_secrets`
+/// (the user is present to unlock/retry).
+pub async fn load_account_secrets_retry(vault_key: &str) -> Result<AccountSecrets> {
+    const ATTEMPTS: usize = 3;
+    let mut err = match load_account_secrets(vault_key) {
+        Ok(s) => return Ok(s),
+        Err(e) => e,
+    };
+    for _ in 1..ATTEMPTS {
+        tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+        match load_account_secrets(vault_key) {
+            Ok(s) => return Ok(s),
+            Err(e) => err = e,
+        }
+    }
+    Err(err)
 }
 
 /// Empty SMTP password means "same as IMAP".
@@ -79,12 +100,12 @@ fn resolve_smtp(imap_password: &str, smtp_password: &str) -> String {
 pub fn delete_account_secrets(vault_key: &str) -> Result<()> {
     entry(vault_key)?
         .delete_credential()
-        .map_err(|e| StoreError::InvalidInput(format!("keyring delete failed: {e}")))
+        .map_err(|e| StoreError::Keyring(format!("delete failed: {e}")))
 }
 
 fn entry(vault_key: &str) -> Result<keyring::Entry> {
     keyring::Entry::new(SERVICE, vault_key)
-        .map_err(|e| StoreError::InvalidInput(format!("keyring unavailable: {e}")))
+        .map_err(|e| StoreError::Keyring(format!("unavailable: {e}")))
 }
 
 #[cfg(test)]

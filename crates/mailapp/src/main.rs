@@ -197,7 +197,10 @@ fn run_headless(args: &[String]) -> i32 {
                     .build()
                     .map_err(|e| e.to_string());
                 match rt_res.and_then(|rt| {
-                    let s = mailcore::auth::load_account_secrets(&a.auth_vault_key)
+                    let s = rt
+                        .block_on(mailcore::auth::load_account_secrets_retry(
+                            &a.auth_vault_key,
+                        ))
                         .map_err(|e| e.to_string())?;
                     rt.block_on(async {
                         imap.connect(&s.imap_password)

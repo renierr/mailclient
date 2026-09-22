@@ -122,7 +122,7 @@ impl qobject::Bridge {
                         &password,
                         &str_field("smtp_password"),
                     ) {
-                        return qstring(&format!("keyring unavailable: {e}"));
+                        return qstring(&format!("{e}"));
                     }
                 }
                 existing.id
@@ -135,7 +135,7 @@ impl qobject::Bridge {
                 if let Err(e) =
                     auth::save_account_secrets(&vault, &password, &str_field("smtp_password"))
                 {
-                    return qstring(&format!("keyring unavailable: {e}"));
+                    return qstring(&format!("{e}"));
                 }
                 let mut with_vault = form_account;
                 with_vault.auth_vault_key = vault;

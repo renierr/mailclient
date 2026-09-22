@@ -86,10 +86,11 @@ pub async fn sync_account(db: &Db, account: &Account, imap: &mut ImapSync) -> Ac
         ..Default::default()
     };
 
-    let secrets = match auth::load_account_secrets(&account.auth_vault_key) {
+    let secrets = match auth::load_account_secrets_retry(&account.auth_vault_key).await {
         Ok(s) => s,
         Err(e) => {
-            out.errors.push(format!("keyring: {e}"));
+            // `StoreError::Keyring` already displays with a "keyring: " prefix.
+            out.errors.push(format!("{e}"));
             out.unread = unread_for_account(db, account.id);
             return out;
         }
@@ -175,7 +176,7 @@ pub async fn sync_all_accounts(db: &Db) -> SyncAllReport {
     };
     for acc in &list {
         let mut imap = ImapSync::new(acc);
-        let secrets = auth::load_account_secrets(&acc.auth_vault_key);
+        let secrets = auth::load_account_secrets_retry(&acc.auth_vault_key).await;
         let result = match secrets {
             Ok(s) => match imap.connect(&s.imap_password).await {
                 Ok(()) => {
@@ -200,7 +201,7 @@ pub async fn sync_all_accounts(db: &Db) -> SyncAllReport {
                     email: acc.email_address.clone(),
                     ..Default::default()
                 };
-                r.errors.push(format!("keyring: {e}"));
+                r.errors.push(format!("{e}"));
                 r.unread = unread_for_account(db, acc.id);
                 r
             }

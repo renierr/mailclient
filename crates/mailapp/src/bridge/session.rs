@@ -101,7 +101,7 @@ pub(crate) async fn checkout_session(account: &Account) -> Result<SessionLease, 
             } else {
                 log::info!("imap: pooled session for account {id} went stale, reconnecting");
                 let secrets = auth::load_account_secrets(&account.auth_vault_key)
-                    .map_err(|e| format!("no password in keyring: {e}"))?;
+                    .map_err(|e| e.to_string())?;
                 let mut fresh = ImapSync::new(account);
                 fresh
                     .connect(&secrets.imap_password)
@@ -112,7 +112,7 @@ pub(crate) async fn checkout_session(account: &Account) -> Result<SessionLease, 
         }
         None => {
             let secrets = auth::load_account_secrets(&account.auth_vault_key)
-                .map_err(|e| format!("no password in keyring: {e}"))?;
+                .map_err(|e| e.to_string())?;
             let mut fresh = ImapSync::new(account);
             fresh
                 .connect(&secrets.imap_password)
