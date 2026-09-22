@@ -31,6 +31,26 @@ void main() {
     });
   });
 
+  group('Account', () {
+    test('reads the sender display name the composer prefills', () {
+      final a = Account.fromJson(jsonDecode('''
+        {"id": 1, "name": "Work", "email": "me@example.com",
+         "from_name": "Me Myself", "imap_host": "imap.x", "smtp_host": "smtp.x"}
+      ''') as Map<String, dynamic>);
+
+      expect(a.fromName, 'Me Myself');
+    });
+
+    test('a missing sender name degrades to empty, not to a throw', () {
+      final a = Account.fromJson(
+          jsonDecode('{"id": 1, "name": "", "email": "me@example.com"}')
+              as Map<String, dynamic>);
+
+      expect(a.fromName, '');
+      expect(a.displayName, 'me@example.com');
+    });
+  });
+
   group('MessageSummary', () {
     test('fills in the placeholders the list would otherwise show blank', () {
       final m = MessageSummary.fromJson(

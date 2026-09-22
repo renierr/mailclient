@@ -1,3 +1,4 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -13,6 +14,7 @@ enum ComposeMode { blank, reply, replyAll, forward, draft }
 class ComposerInitial {
   const ComposerInitial({
     required this.mode,
+    this.fromAddr = '',
     this.to = '',
     this.cc = '',
     this.bcc = '',
@@ -27,6 +29,10 @@ class ComposerInitial {
   });
 
   final ComposeMode mode;
+
+  /// The stored From for a reopened draft. Blank/reply/forward leave it empty
+  /// and the account address is used instead.
+  final String fromAddr;
   final String to;
   final String cc;
   final String bcc;
@@ -139,6 +145,7 @@ class ComposerDialog extends StatefulWidget {
         builder: (_) => ComposerDialog(
           initial: ComposerInitial(
             mode: ComposeMode.draft,
+            fromAddr: '${form['from'] ?? ''}',
             to: '${form['to'] ?? ''}',
             cc: '${form['cc'] ?? ''}',
             bcc: '${form['bcc'] ?? ''}',
@@ -206,6 +213,7 @@ class ComposerDialog extends StatefulWidget {
 }
 
 class _ComposerDialogState extends State<ComposerDialog> {
+  late final TextEditingController _fromLocal;
   late final TextEditingController _to;
   late final TextEditingController _cc;
   late final TextEditingController _bcc;
@@ -213,6 +221,15 @@ class _ComposerDialogState extends State<ComposerDialog> {
   late final TextEditingController _replyToCtrl;
   late final TextEditingController _subject;
   late final TextEditingController _body;
+
+  /// The account's domain, locked like in the Qt composer: sending as another
+  /// domain breaks SPF and domain-aligned DKIM/DMARC. Only the local part
+  /// edits.
+  String _domain = '';
+
+  /// Files picked this session: paths the core reads at send time, so no
+  /// bytes cross into Dart state.
+  final List<_PickedFile> _picked = [];
   bool _showCc = false;
   bool _showBcc = false;
   bool _showReplyTo = false;
@@ -220,10 +237,23 @@ class _ComposerDialogState extends State<ComposerDialog> {
   bool _working = false;
   String? _error;
 
+  static String _localPartOf(String address) {
+    final at = address.indexOf('@');
+    return at < 0 ? address : address.substring(0, at);
+  }
+
+  static String _domainOf(String address) {
+    final at = address.indexOf('@');
+    return at < 0 ? '' : address.substring(at);
+  }
+
   @override
   void initState() {
     super.initState();
     final i = widget.initial;
+    // Controllers need the account address, which lives behind a context
+    // lookup — defer to didChangeDependencies once.
+    _fromLocal = TextEditingController()..addListener(_edited);
     _to = TextEditingController(text: i.to)..addListener(_edited);
     _cc = TextEditingController(text: i.cc)..addListener(_edited);
     _bcc = TextEditingController(text: i.bcc)..addListener(_edited);
@@ -237,6 +267,24 @@ class _ComposerDialogState extends State<ComposerDialog> {
     _showReplyTo = i.replyTo.isNotEmpty;
   }
 
+  bool _prefilled = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_prefilled) return;
+    _prefilled = true;
+    final state = context.read<MailState>();
+    final accountEmail = state.account?.email ?? '';
+    _domain = _domainOf(accountEmail);
+    // A reopened draft keeps its own local part; anything new starts from
+    // the account address.
+    _fromLocal.text = widget.initial.fromAddr.isNotEmpty
+        ? _localPartOf(widget.initial.fromAddr)
+        : _localPartOf(accountEmail);
+    _senderName.text = state.account?.fromName ?? '';
+  }
+
   void _edited() {
     if (!_dirty) setState(() => _dirty = true);
   }
@@ -244,6 +292,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
   @override
   void dispose() {
     for (final c in [
+      _fromLocal,
       _to,
       _cc,
       _bcc,
@@ -299,8 +348,37 @@ class _ComposerDialogState extends State<ComposerDialog> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Text('From: ${account?.email ?? ''}',
-                          style: Theme.of(context).textTheme.bodyMedium),
+                      // Sender identity, like the Qt header grid: name beside a
+                      // local-part field with the account domain locked on.
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Expanded(
+                            flex: 2,
+                            child: TextField(
+                              controller: _senderName,
+                              decoration: InputDecoration(
+                                labelText: 'Sender name',
+                                hintText: account?.displayName ?? '',
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            flex: 3,
+                            child: TextField(
+                              controller: _fromLocal,
+                              decoration: InputDecoration(
+                                labelText: 'From',
+                                suffixText: _domain,
+                                helperText: _domain.isEmpty
+                                    ? null
+                                    : 'Domain is fixed to this account',
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                       _RecipientField(
                           label: 'To',
                           controller: _to,
@@ -323,13 +401,6 @@ class _ComposerDialogState extends State<ComposerDialog> {
                                 'Replies to this message go here instead of From',
                           ),
                         ),
-                      TextField(
-                        controller: _senderName,
-                        decoration: InputDecoration(
-                          labelText: 'Sender name',
-                          hintText: account?.displayName ?? '',
-                        ),
-                      ),
                       TextField(
                         controller: _subject,
                         decoration: const InputDecoration(labelText: 'Subject'),
@@ -364,17 +435,9 @@ class _ComposerDialogState extends State<ComposerDialog> {
                         ),
                       ],
                       const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          const Icon(Icons.attach_file, size: 16),
-                          const SizedBox(width: 4),
-                          const Text('No files attached. '),
-                          TextButton(
-                            onPressed: () => state.showStatus(
-                                'Attaching files is not wired yet — the file picker is still an open decision.'),
-                            child: const Text('Add (mock)'),
-                          ),
-                        ],
+                      _AttachmentPicker(
+                        picked: _picked,
+                        onChanged: () => setState(() => _dirty = true),
                       ),
                       if (_error != null) ...[
                         const SizedBox(height: 4),
@@ -433,19 +496,31 @@ class _ComposerDialogState extends State<ComposerDialog> {
         ComposeMode.draft => 'Edit draft',
       };
 
-  Map<String, dynamic> _form() => {
-        'to': _to.text,
-        'cc': _cc.text,
-        'bcc': _bcc.text,
-        'from': '',
-        'from_name': _senderName.text,
-        'reply_to': _showReplyTo ? _replyToCtrl.text : '',
-        'subject': _subject.text,
-        'body': _body.text,
-        'body_html': '',
-        'attachments': const [],
-        'draft_uid': widget.initial.draftUid,
-      };
+  /// The address as the core will see it: edited local part, locked domain —
+  /// or the whole account address when the field is blank.
+  String _effectiveFrom(String accountEmail) {
+    final local = _fromLocal.text.trim();
+    if (local.isEmpty) return accountEmail;
+    if (local.contains('@')) return local;
+    return '$local$_domain';
+  }
+
+  Map<String, dynamic> _form() {
+    final state = context.read<MailState>();
+    return {
+      'to': _to.text,
+      'cc': _cc.text,
+      'bcc': _bcc.text,
+      'from': _effectiveFrom(state.account?.email ?? ''),
+      'from_name': _senderName.text,
+      'reply_to': _showReplyTo ? _replyToCtrl.text : '',
+      'subject': _subject.text,
+      'body': _body.text,
+      'body_html': '',
+      'attachments': [for (final p in _picked) p.path],
+      'draft_uid': widget.initial.draftUid,
+    };
+  }
 
   Future<void> _send() async {
     final state = context.read<MailState>();
@@ -572,6 +647,97 @@ class _ComposerDialogState extends State<ComposerDialog> {
 }
 
 enum _DiscardChoice { cancel, discard, save }
+
+/// A file picked for sending. Only the path travels to the core, which reads
+/// the bytes at send time — nothing binary lives in Dart state.
+class _PickedFile {
+  const _PickedFile({required this.path, required this.name});
+
+  final String path;
+  final String name;
+}
+
+/// The outgoing tray: picked files as removable chips plus an Add button.
+///
+/// The picker is the platform file dialog (`file_picker`); on a minimal Linux
+/// without zenity/kdialog it cannot open one, and says so instead of failing
+/// silently.
+class _AttachmentPicker extends StatelessWidget {
+  const _AttachmentPicker({required this.picked, required this.onChanged});
+
+  final List<_PickedFile> picked;
+  final VoidCallback onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.read<MailState>();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (picked.isNotEmpty)
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (var i = 0; i < picked.length; i++)
+                Chip(
+                  avatar: const Icon(Icons.attach_file, size: 16),
+                  label: Text(picked[i].name,
+                      overflow: TextOverflow.ellipsis),
+                  deleteIcon: const Icon(Icons.close, size: 16),
+                  onDeleted: () {
+                    picked.removeAt(i);
+                    onChanged();
+                  },
+                ),
+            ],
+          ),
+        Row(
+          children: [
+            const Icon(Icons.attach_file, size: 16),
+            const SizedBox(width: 4),
+            Text(picked.isEmpty
+                ? 'No files attached.'
+                : '${picked.length} file(s) will be sent.'),
+            TextButton.icon(
+              icon: const Icon(Icons.add, size: 16),
+              label: const Text('Add files…'),
+              onPressed: () => _pick(context, state),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> _pick(BuildContext context, MailState state) async {
+    List<PlatformFile> files;
+    try {
+      files = await FilePicker.pickFiles();
+    } catch (e) {
+      state.showStatus(
+          'No file picker available ($e). On Linux this needs zenity, kdialog or qarma installed.',
+          isError: true);
+      return;
+    }
+    if (!context.mounted) return;
+    var added = 0;
+    for (final f in files) {
+      final path = f.path;
+      if (path == null || path.isEmpty) continue;
+      if (picked.any((p) => p.path == path)) continue;
+      picked.add(_PickedFile(path: path, name: f.name));
+      added++;
+    }
+    if (added == 0 &&
+        files.isNotEmpty &&
+        files.every((f) => f.path == null)) {
+      state.showStatus('The picked files have no usable path on this system.',
+          isError: true);
+    }
+    onChanged();
+  }
+}
 
 class _Notice extends StatelessWidget {
   const _Notice({required this.text});

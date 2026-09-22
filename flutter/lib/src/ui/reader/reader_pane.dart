@@ -1,4 +1,10 @@
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
 import '../../ffi/mail_core.dart';
@@ -6,6 +12,7 @@ import '../../models/models.dart';
 import '../../models/settings.dart';
 import '../../state/mail_state.dart';
 import '../composer/composer_dialog.dart';
+import '../menu_row.dart';
 import '../message_list/message_list_pane.dart' show confirmDelete;
 import '../move_to/move_to_dialog.dart';
 import 'mail_html_view.dart';
@@ -32,6 +39,12 @@ class _ReaderPaneState extends State<ReaderPane> {
   int _shownForUid = -1;
   bool _details = false;
 
+  /// Full `From:` header for the display name. The list feed only carries the
+  /// bare address, so the name comes from here — the same source the Qt
+  /// reader uses. Null while loading or when the headers are gone.
+  Future<MessageHeaders?>? _headersFuture;
+  int _headersForUid = -1;
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<MailState>();
@@ -48,6 +61,14 @@ class _ReaderPaneState extends State<ReaderPane> {
       _shownForUid = message.uid;
       _details = false;
     }
+    if (_headersForUid != message.uid) {
+      _headersForUid = message.uid;
+      final folderId = state.folderId;
+      _headersFuture = MailCore.instance
+          .messageHeaders(folderId, message.uid)
+          .then<MessageHeaders?>((h) => h)
+          .catchError((_) => null);
+    }
 
     final scale = state.settings.readerScale;
     return Column(
@@ -55,6 +76,7 @@ class _ReaderPaneState extends State<ReaderPane> {
       children: [
         _Header(
           message: message,
+          headersFuture: _headersFuture,
           details: _details,
           onToggleDetails: () =>
               setState(() => _details = !_details),
@@ -70,7 +92,9 @@ class _ReaderPaneState extends State<ReaderPane> {
             padding: const EdgeInsets.all(16),
             child: message.isHtml
                 ? MailHtmlView(
-                    html: _htmlWithRemoteImages ?? message.bodyHtml)
+                    html: _htmlWithRemoteImages ?? message.bodyHtml,
+                    textScale: scale,
+                  )
                 : MediaQuery(
                     data: MediaQuery.of(context).copyWith(
                       textScaler: TextScaler.linear(scale),
@@ -99,12 +123,14 @@ class _ReaderPaneState extends State<ReaderPane> {
 class _Header extends StatelessWidget {
   const _Header({
     required this.message,
+    required this.headersFuture,
     required this.details,
     required this.onToggleDetails,
     this.onClose,
   });
 
   final MessageBody message;
+  final Future<MessageHeaders?>? headersFuture;
   final bool details;
   final VoidCallback onToggleDetails;
   final VoidCallback? onClose;
@@ -113,6 +139,8 @@ class _Header extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final state = context.read<MailState>();
+    final fullscreen =
+        context.select<MailState, bool>((s) => s.readerFullscreen);
     final starred = context.select<MailState, bool>((s) => s.messages
         .where((m) => m.uid == message.uid)
         .firstOrNull
@@ -157,25 +185,57 @@ class _Header extends StatelessWidget {
                     uids: [message.uid],
                     permanent: state.deleteIsPermanent),
               ),
+              // Wide layouts only: narrower ones already give the reader
+              // every pixel they have.
+              if (onClose == null)
+                IconButton(
+                  tooltip:
+                      fullscreen ? 'Exit fullscreen' : 'Fullscreen',
+                  icon: Icon(fullscreen
+                      ? Icons.close_fullscreen
+                      : Icons.open_in_full),
+                  onPressed: state.toggleReaderFullscreen,
+                ),
               PopupMenuButton<String>(
                 icon: const Icon(Icons.more_vert),
                 onSelected: (v) => _more(context, state, v),
                 itemBuilder: (context) => const [
                   PopupMenuItem(
-                      value: 'forward', child: Text('Forward')),
+                    value: 'forward',
+                    child: MenuRow(
+                        icon: Icons.forward_outlined,
+                        text: 'Forward'),
+                  ),
                   PopupMenuItem(
-                      value: 'reply-all',
-                      child: Text('Reply all')),
+                    value: 'reply-all',
+                    child: MenuRow(
+                        icon: Icons.reply_all_outlined,
+                        text: 'Reply all'),
+                  ),
                   PopupMenuItem(
-                      value: 'archive', child: Text('Archive')),
+                    value: 'archive',
+                    child: MenuRow(
+                        icon: Icons.archive_outlined,
+                        text: 'Archive'),
+                  ),
                   PopupMenuItem(
-                      value: 'move', child: Text('Move to…')),
+                    value: 'move',
+                    child: MenuRow(
+                        icon: Icons.drive_file_move_outlined,
+                        text: 'Move to…'),
+                  ),
                   PopupMenuItem(
-                      value: 'purge',
-                      child: Text('Delete permanently…')),
+                    value: 'purge',
+                    child: MenuRow(
+                        icon: Icons.delete_forever_outlined,
+                        text: 'Delete permanently…'),
+                  ),
                   PopupMenuItem(
-                      value: 'headers',
-                      child: Text('Show headers…')),
+                    value: 'headers',
+                    child: MenuRow(
+                        icon: Icons.info_outline,
+                        text: 'Show headers…'),
+                  ),
                 ],
               ),
             ],
@@ -186,12 +246,47 @@ class _Header extends StatelessWidget {
             child: Row(
               children: [
                 Expanded(
-                  child: Text('${message.from}  ·  ${message.date}',
-                      style: theme.textTheme.bodySmall),
+                  child: FutureBuilder<MessageHeaders?>(
+                    future: headersFuture,
+                    builder: (context, snap) {
+                      // The list feed only carries the bare address; the full
+                      // From header has the display name, like the Qt reader.
+                      final from = (snap.data?.from.isNotEmpty ?? false)
+                          ? snap.data!.from
+                          : message.from;
+                      final shown = _splitAddr(from);
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            shown.name.isNotEmpty
+                                ? shown.name
+                                : shown.addr,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.w600),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          if (shown.name.isNotEmpty &&
+                              shown.addr != shown.name)
+                            Text(shown.addr,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.outline),
+                                overflow: TextOverflow.ellipsis),
+                        ],
+                      );
+                    },
+                  ),
                 ),
-                Icon(details
-                    ? Icons.expand_less
-                    : Icons.expand_more),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(message.date,
+                        style: theme.textTheme.bodySmall),
+                    Icon(details
+                        ? Icons.expand_less
+                        : Icons.expand_more),
+                  ],
+                ),
               ],
             ),
           ),
@@ -339,11 +434,28 @@ class _RemoteImagesBanner extends StatelessWidget {
   }
 }
 
-/// Attachment files with mock Open/Save actions.
+/// `"Name <addr>"` split apart; a bare address yields both identical.
+({String name, String addr}) _splitAddr(String full) {
+  final s = full.trim();
+  final lt = s.indexOf('<');
+  final gt = s.lastIndexOf('>');
+  if (lt >= 0 && gt > lt) {
+    var name = s.substring(0, lt).trim().replaceAll(
+          RegExp('^["\']|["\']\$'),
+          '',
+        );
+    final addr = s.substring(lt + 1, gt).trim();
+    if (name.isEmpty) name = addr;
+    return (name: name, addr: addr);
+  }
+  return (name: s, addr: s);
+}
+
+/// Attachment files with working Open / Save / Save-all.
 ///
-/// Downloading and opening files needs the file-picker/opener decision that is
-/// explicitly parked: the buttons are visible and honest about it rather than
-/// absent, so the layout they will live in is already real.
+/// Bytes stay in SQLite until the user acts: Open stages through the temp
+/// directory into the system viewer (`open_filex`), Save asks where
+/// (`file_picker`). A missing download is fetched first, on demand.
 class _AttachmentBar extends StatelessWidget {
   const _AttachmentBar({required this.message});
 
@@ -364,15 +476,14 @@ class _AttachmentBar extends StatelessWidget {
         children: [
           Row(
             children: [
-              Text(
-                  '📎 ${files.length} attachment(s)',
+              Text('${files.length} attachment(s)',
                   style: Theme.of(context).textTheme.bodySmall),
               const Spacer(),
               if (files.length > 1)
-                TextButton(
-                  onPressed: () => state.showStatus(
-                      'Saving files is not wired yet — the file picker is still an open decision.'),
-                  child: const Text('Save all (mock)'),
+                TextButton.icon(
+                  icon: const Icon(Icons.save_alt, size: 16),
+                  label: const Text('Save all…'),
+                  onPressed: () => _saveAll(context, state),
                 ),
             ],
           ),
@@ -381,18 +492,93 @@ class _AttachmentBar extends StatelessWidget {
             runSpacing: 8,
             children: [
               for (final a in files)
-                Chip(
+                InputChip(
                   avatar: const Icon(Icons.attach_file, size: 16),
                   label: Text('${a.filename}  (${_size(a.size)})'),
-                  deleteIcon: const Icon(Icons.open_in_new, size: 16),
-                  onDeleted: () => state.showStatus(
-                      'Opening files is not wired yet — the file opener is still an open decision.'),
+                  onPressed: () => _open(context, state, a),
+                  onDeleted: () => _saveOne(context, state, a),
+                  deleteButtonTooltipMessage: 'Save as…',
+                  deleteIcon: const Icon(Icons.save_alt, size: 16),
                 ),
             ],
           ),
         ],
       ),
     );
+  }
+
+  /// Cached bytes, downloading first when the message arrived without them.
+  Future<List<int>?> _bytes(MailState state, int attachmentId) async {
+    var bytes = await MailCore.instance.attachmentBytes(attachmentId);
+    if (bytes != null) return bytes;
+    await MailCore.instance.downloadAttachments(
+        state.accountId, state.folderId, message.uid);
+    return MailCore.instance.attachmentBytes(attachmentId);
+  }
+
+  Future<void> _open(
+      BuildContext context, MailState state, AttachmentInfo a) async {
+    try {
+      state.showStatus('Opening ${a.filename}…');
+      final bytes = await _bytes(state, a.id);
+      if (bytes == null) {
+        state.showStatus('${a.filename} is not downloaded yet',
+            isError: true);
+        return;
+      }
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/mailclient-${a.id}-${a.filename}');
+      await file.writeAsBytes(bytes, flush: true);
+      final result = await OpenFilex.open(file.path);
+      if (result.type != ResultType.done) {
+        state.showStatus('Could not open ${a.filename}: ${result.message}',
+            isError: true);
+      } else {
+        state.showStatus('Opened ${a.filename}');
+      }
+    } catch (e) {
+      state.showStatus('Could not open ${a.filename}: $e', isError: true);
+    }
+  }
+
+  Future<void> _saveOne(
+      BuildContext context, MailState state, AttachmentInfo a) async {
+    try {
+      // The picker writes the bytes itself and hands back where they went.
+      final bytes = await _bytes(state, a.id);
+      if (bytes == null) {
+        state.showStatus('${a.filename} is not downloaded yet',
+            isError: true);
+        return;
+      }
+      final uri = await FilePicker.saveFile(
+        dialogTitle: 'Save attachment',
+        fileName: a.filename,
+        bytes: Uint8List.fromList(bytes),
+        mimeType: a.mimeType,
+      );
+      if (uri == null) return;
+      state.showStatus('Saved ${a.filename}');
+    } catch (e) {
+      state.showStatus('Could not save ${a.filename}: $e', isError: true);
+    }
+  }
+
+  Future<void> _saveAll(BuildContext context, MailState state) async {
+    try {
+      final dir = await FilePicker.getDirectoryPath(
+        dialogTitle: 'Save all attachments',
+      );
+      if (dir == null) return;
+      for (final a in message.attachments.where((a) => !a.isInline)) {
+        await _bytes(state, a.id);
+      }
+      final n = await MailCore.instance
+          .saveAllAttachmentsTo(state.folderId, message.uid, dir);
+      state.showStatus('Saved $n file(s)');
+    } catch (e) {
+      state.showStatus('Could not save attachments: $e', isError: true);
+    }
   }
 
   static String _size(int bytes) {

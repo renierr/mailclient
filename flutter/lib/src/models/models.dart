@@ -17,6 +17,7 @@ class Account {
     required this.id,
     required this.name,
     required this.email,
+    required this.fromName,
     required this.imapHost,
     required this.smtpHost,
   });
@@ -24,6 +25,10 @@ class Account {
   final int id;
   final String name;
   final String email;
+
+  /// Sender display name for `From:` (`""` = address only). New in the feed;
+  /// older cores omit it and it degrades to the account name.
+  final String fromName;
   final String imapHost;
   final String smtpHost;
 
@@ -31,6 +36,7 @@ class Account {
         id: _int(j['id']),
         name: _str(j['name']),
         email: _str(j['email']),
+        fromName: _str(j['from_name']),
         imapHost: _str(j['imap_host']),
         smtpHost: _str(j['smtp_host']),
       );

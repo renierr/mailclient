@@ -82,6 +82,11 @@ android/app/mailffi.gradle.kts  Android: cargo-ndk into jniLibs
 test/                           model decoding tests
 ```
 
+File dialogs go through `file_picker` (pick, save, save-all) and `open_filex`
+(open in the system viewer). On Linux those need zenity, kdialog or qarma —
+without one the action reports it on the status line instead of failing
+silently.
+
 ## Building
 
 From the repository root:

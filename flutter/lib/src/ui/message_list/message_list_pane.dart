@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../models/models.dart';
 import '../../state/mail_state.dart';
 import '../composer/composer_dialog.dart';
+import '../menu_row.dart';
 import '../move_to/move_to_dialog.dart';
 
 /// The message list for the selected folder — or account-wide search hits.
@@ -218,14 +219,31 @@ class _ListHeader extends StatelessWidget {
               },
               itemBuilder: (context) => const [
                 PopupMenuItem(
-                    value: 'all', child: Text('Select all visible')),
+                  value: 'all',
+                  child: MenuRow(
+                      icon: Icons.select_all, text: 'Select all visible'),
+                ),
                 PopupMenuItem(
-                    value: 'unread', child: Text('Select unread')),
+                  value: 'unread',
+                  child: MenuRow(
+                      icon: Icons.mark_email_unread_outlined,
+                      text: 'Select unread'),
+                ),
                 PopupMenuItem(
-                    value: 'starred', child: Text('Select starred')),
+                  value: 'starred',
+                  child: MenuRow(
+                      icon: Icons.star_border, text: 'Select starred'),
+                ),
                 PopupMenuItem(
-                    value: 'invert', child: Text('Invert selection')),
-                PopupMenuItem(value: 'none', child: Text('Clear')),
+                  value: 'invert',
+                  child: MenuRow(
+                      icon: Icons.swap_horiz, text: 'Invert selection'),
+                ),
+                PopupMenuItem(
+                  value: 'none',
+                  child: MenuRow(
+                      icon: Icons.clear, text: 'Clear'),
+                ),
               ],
             ),
           PopupMenuButton<String>(
@@ -237,29 +255,25 @@ class _ListHeader extends StatelessWidget {
             },
             itemBuilder: (context) {
               final s = state.settings;
-              String tick(String f, bool d) =>
-                  (s.sortField == f && s.sortDescending == d)
-                      ? '✓ '
-                      : '　';
+              PopupMenuItem<String> item(
+                      String value, IconData icon, String text) =>
+                  PopupMenuItem(
+                    value: value,
+                    child: MenuRow(
+                      icon: icon,
+                      text: (s.sortField == value.split(':')[0] &&
+                              s.sortDescending == (value.endsWith(':desc')))
+                          ? '✓ $text'
+                          : text,
+                    ),
+                  );
               return [
-                PopupMenuItem(
-                    value: 'date:desc',
-                    child: Text('${tick('date', true)}Date, newest first')),
-                PopupMenuItem(
-                    value: 'date:asc',
-                    child: Text('${tick('date', false)}Date, oldest first')),
-                PopupMenuItem(
-                    value: 'from:asc',
-                    child: Text('${tick('from', false)}From A–Z')),
-                PopupMenuItem(
-                    value: 'from:desc',
-                    child: Text('${tick('from', true)}From Z–A')),
-                PopupMenuItem(
-                    value: 'subject:asc',
-                    child: Text('${tick('subject', false)}Subject A–Z')),
-                PopupMenuItem(
-                    value: 'subject:desc',
-                    child: Text('${tick('subject', true)}Subject Z–A')),
+                item('date:desc', Icons.schedule, 'Date, newest first'),
+                item('date:asc', Icons.schedule, 'Date, oldest first'),
+                item('from:asc', Icons.person_outline, 'From A–Z'),
+                item('from:desc', Icons.person_outline, 'From Z–A'),
+                item('subject:asc', Icons.subject, 'Subject A–Z'),
+                item('subject:desc', Icons.subject, 'Subject Z–A'),
               ];
             },
           ),
@@ -349,12 +363,22 @@ class _BulkBar extends StatelessWidget {
               },
               itemBuilder: (context) => const [
                 PopupMenuItem(
-                    value: 'purge',
-                    child: Text('Delete permanently…')),
+                  value: 'purge',
+                  child: MenuRow(
+                      icon: Icons.delete_forever_outlined,
+                      text: 'Delete permanently…'),
+                ),
                 PopupMenuItem(
-                    value: 'unread', child: Text('Select unread')),
+                  value: 'unread',
+                  child: MenuRow(
+                      icon: Icons.mark_email_unread_outlined,
+                      text: 'Select unread'),
+                ),
                 PopupMenuItem(
-                    value: 'starred', child: Text('Select starred')),
+                  value: 'starred',
+                  child: MenuRow(
+                      icon: Icons.star_border, text: 'Select starred'),
+                ),
               ],
             ),
           ],
@@ -428,6 +452,12 @@ String _subjectOf(MailState state, int uid) => state.messages
         ?.subject ??
     '';
 
+/// First letter of the sender for the row avatar, like the Qt Avatar seed.
+String _initial(String from) {
+  final m = RegExp(r'[a-zA-Z0-9]').firstMatch(from);
+  return m == null ? '?' : m.group(0)!.toUpperCase();
+}
+
 class _MessageTile extends StatelessWidget {
   const _MessageTile({
     required this.message,
@@ -457,17 +487,39 @@ class _MessageTile extends StatelessWidget {
       selectedTileColor: theme.colorScheme.secondaryContainer,
       leading: selectionMode
           ? Checkbox(value: checked, onChanged: (_) => onToggle())
-          : message.unread
-              ? Container(
-                  width: 8,
-                  height: 8,
-                  margin: const EdgeInsets.only(top: 14),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: theme.colorScheme.primary,
+          : SizedBox(
+              width: 60,
+              child: Row(
+                children: [
+                  // Unread marker beside the avatar, like the Qt row's dot
+                  // column — bold text alone is too easy to miss.
+                  if (message.unread)
+                    Container(
+                      width: 8,
+                      height: 8,
+                      margin: const EdgeInsets.only(right: 6),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: theme.colorScheme.primary,
+                      ),
+                    )
+                  else
+                    const SizedBox(width: 14),
+                  CircleAvatar(
+                    radius: 16,
+                    backgroundColor:
+                        theme.colorScheme.secondaryContainer,
+                    child: Text(
+                      _initial(message.from),
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: theme.colorScheme.onSecondaryContainer,
+                      ),
+                    ),
                   ),
-                )
-              : const SizedBox(width: 8),
+                ],
+              ),
+            ),
       onTap: onTap,
       title: Row(
         children: [
@@ -533,19 +585,46 @@ class _MessageTile extends StatelessWidget {
             onSelected: (v) => _rowAction(context, state, v),
             itemBuilder: (context) => [
               PopupMenuItem(
-                  value: 'read',
-                  child: Text(
-                      message.unread ? 'Mark as read' : 'Mark as unread')),
+                value: 'read',
+                child: MenuRow(
+                    icon: message.unread
+                        ? Icons.mark_email_read_outlined
+                        : Icons.mark_email_unread_outlined,
+                    text: message.unread
+                        ? 'Mark as read'
+                        : 'Mark as unread'),
+              ),
               PopupMenuItem(
-                  value: 'star',
-                  child: Text(
-                      message.starred ? 'Remove star' : 'Star')),
-              const PopupMenuItem(value: 'archive', child: Text('Archive')),
-              const PopupMenuItem(value: 'move', child: Text('Move to…')),
+                value: 'star',
+                child: MenuRow(
+                    icon: message.starred
+                        ? Icons.star
+                        : Icons.star_border,
+                    text: message.starred ? 'Remove star' : 'Star'),
+              ),
               const PopupMenuItem(
-                  value: 'delete', child: Text('Move to Trash')),
+                value: 'archive',
+                child: MenuRow(
+                    icon: Icons.archive_outlined, text: 'Archive'),
+              ),
               const PopupMenuItem(
-                  value: 'purge', child: Text('Delete permanently…')),
+                value: 'move',
+                child: MenuRow(
+                    icon: Icons.drive_file_move_outlined,
+                    text: 'Move to…'),
+              ),
+              const PopupMenuItem(
+                value: 'delete',
+                child: MenuRow(
+                    icon: Icons.delete_outline,
+                    text: 'Move to Trash'),
+              ),
+              const PopupMenuItem(
+                value: 'purge',
+                child: MenuRow(
+                    icon: Icons.delete_forever_outlined,
+                    text: 'Delete permanently…'),
+              ),
             ],
           ),
         ],
@@ -554,8 +633,7 @@ class _MessageTile extends StatelessWidget {
   }
 
   Future<void> _rowAction(
-      BuildContext context, MailState state, String v) async {
-    final uid = message.uid;
+      BuildContext context, MailState state, String v) async {    final uid = message.uid;
     switch (v) {
       case 'read':
         await state.setRead(uid, message.unread);

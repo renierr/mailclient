@@ -37,7 +37,7 @@ pub fn folders_json(db: &Db, account_id: i64) -> Result<String> {
     Ok(serde_json::to_string(&arr)?)
 }
 
-/// `[{id, name, email, imap_host, smtp_host}]` for the account manager.
+/// `[{id, name, email, from_name, imap_host, smtp_host}]` for the account manager.
 pub fn accounts_json(db: &Db) -> Result<String> {
     let mut arr = Vec::new();
     for a in accounts::list(db)? {
@@ -45,6 +45,7 @@ pub fn accounts_json(db: &Db) -> Result<String> {
             "id": a.id,
             "name": a.name,
             "email": a.email_address,
+            "from_name": a.from_name,
             "imap_host": a.imap_host,
             "imap_port": a.imap_port,
             "imap_sec": a.imap_security,

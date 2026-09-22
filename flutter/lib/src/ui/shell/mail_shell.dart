@@ -9,6 +9,7 @@ import '../accounts/accounts_dialog.dart';
 import '../composer/composer_dialog.dart';
 import '../contacts/contacts_dialog.dart';
 import '../folders/folder_manager_dialog.dart';
+import '../menu_row.dart';
 import '../message_list/message_list_pane.dart';
 import '../reader/reader_pane.dart';
 import '../settings/settings_dialog.dart';
@@ -32,6 +33,11 @@ class _MailShellState extends State<MailShell> {
   _Pane _pane = _Pane.list;
   final _searchFocus = FocusNode();
   final _searchController = TextEditingController();
+
+  /// Pane widths on the wide layout, dragged at the dividers. Plain fields,
+  /// not settings: the Qt SplitView does not remember them either.
+  double _sidebarWidth = 260;
+  double _listWidth = 380;
 
   @override
   void dispose() {
@@ -92,29 +98,45 @@ class _MailShellState extends State<MailShell> {
     );
   }
 
-  Widget _threePane() => Row(
-        children: [
-          const SizedBox(width: 260, child: FolderSidebar()),
-          const VerticalDivider(width: 1),
-          const SizedBox(width: 380, child: MessageListPane()),
-          const VerticalDivider(width: 1),
-          const Expanded(child: ReaderPane()),
-        ],
-      );
+  Widget _threePane() {
+    final fullscreen =
+        context.select<MailState, bool>((s) => s.readerFullscreen);
+    if (fullscreen) {
+      // The exit lives in the reader header, next to where fullscreen was
+      // entered — no extra chrome needed here.
+      return const ReaderPane();
+    }
+    return Row(
+      children: [
+        SizedBox(width: _sidebarWidth, child: const FolderSidebar()),
+        _PaneDivider(
+          onDelta: (dx) => setState(() => _sidebarWidth =
+              (_sidebarWidth + dx).clamp(160.0, 480.0)),
+        ),
+        SizedBox(width: _listWidth, child: const MessageListPane()),
+        _PaneDivider(
+          onDelta: (dx) => setState(() =>
+              _listWidth = (_listWidth + dx).clamp(240.0, 700.0)),
+        ),
+        const Expanded(child: ReaderPane()),
+      ],
+    );
+  }
 
   Widget _twoPane() {
     final state = context.watch<MailState>();
+    final fullscreen = state.readerFullscreen;
     // The reader takes the list's place rather than squeezing a third column
     // into a width where none of them would be usable.
+    final main = state.openUid >= 0
+        ? ReaderPane(onClose: state.closeMessage)
+        : const MessageListPane();
+    if (fullscreen) return main;
     return Row(
       children: [
         const SizedBox(width: 240, child: FolderSidebar()),
         const VerticalDivider(width: 1),
-        Expanded(
-          child: state.openUid >= 0
-              ? ReaderPane(onClose: state.closeMessage)
-              : const MessageListPane(),
-        ),
+        Expanded(child: main),
       ],
     );
   }
@@ -140,6 +162,33 @@ enum _Pane {
         _Pane.list => _Pane.folders,
         _Pane.reader => _Pane.list,
       };
+}
+
+/// The draggable split between panes: a visible divider that resizes on
+/// horizontal drag, like the Qt SplitView handle.
+class _PaneDivider extends StatelessWidget {
+  const _PaneDivider({required this.onDelta});
+
+  final ValueChanged<double> onDelta;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeColumn,
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onHorizontalDragUpdate: (d) => onDelta(d.delta.dx),
+        child: Container(
+          width: 9,
+          alignment: Alignment.center,
+          child: Container(
+            width: 1,
+            color: Theme.of(context).dividerColor,
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _TopBar extends StatelessWidget implements PreferredSizeWidget {
@@ -182,11 +231,14 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
             icon: const Icon(Icons.search),
             onPressed: () => _searchDialog(context, state),
           ),
-        IconButton(
-          tooltip: 'Compose (Ctrl+N)',
-          icon: const Icon(Icons.edit_outlined),
-          onPressed: () => ComposerDialog.showBlank(context),
-        ),
+        // Wide layouts compose from the sidebar button, like the Qt
+        // toolbar; the narrow panes have no sidebar, so they keep an icon.
+        if (narrow)
+          IconButton(
+            tooltip: 'Compose (Ctrl+N)',
+            icon: const Icon(Icons.edit_outlined),
+            onPressed: () => ComposerDialog.showBlank(context),
+          ),
         IconButton(
           tooltip: 'Sync (Ctrl+R)',
           // A spinner in place of the icon, rather than a disabled icon: the
@@ -204,16 +256,38 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
           onSelected: (value) => _menu(context, state, value),
           itemBuilder: (context) => const [
             PopupMenuItem(
-                value: 'add-account', child: Text('Add account…')),
+              value: 'add-account',
+              child: MenuRow(
+                  icon: Icons.person_add_outlined, text: 'Add account…'),
+            ),
             PopupMenuItem(
-                value: 'accounts', child: Text('Manage accounts…')),
+              value: 'accounts',
+              child: MenuRow(
+                  icon: Icons.manage_accounts_outlined,
+                  text: 'Manage accounts…'),
+            ),
             PopupMenuItem(
-                value: 'folders', child: Text('Manage IMAP folders…')),
+              value: 'folders',
+              child: MenuRow(
+                  icon: Icons.create_new_folder_outlined,
+                  text: 'Manage IMAP folders…'),
+            ),
             PopupMenuItem(
-                value: 'refresh-folders',
-                child: Text('Refresh folder list')),
-            PopupMenuItem(value: 'contacts', child: Text('Contacts')),
-            PopupMenuItem(value: 'settings', child: Text('Settings…')),
+              value: 'refresh-folders',
+              child: MenuRow(
+                  icon: Icons.refresh_outlined,
+                  text: 'Refresh folder list'),
+            ),
+            PopupMenuItem(
+              value: 'contacts',
+              child:
+                  MenuRow(icon: Icons.contacts_outlined, text: 'Contacts'),
+            ),
+            PopupMenuItem(
+              value: 'settings',
+              child:
+                  MenuRow(icon: Icons.settings_outlined, text: 'Settings…'),
+            ),
           ],
         ),
       ],

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/models.dart';
 import '../../state/mail_state.dart';
+import '../composer/composer_dialog.dart';
 import '../folders/folder_manager_dialog.dart';
 
 /// Accounts on top, this account's folders below.
@@ -20,6 +21,14 @@ class FolderSidebar extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+          child: FilledButton.icon(
+            icon: const Icon(Icons.edit_outlined, size: 18),
+            label: const Text('Compose'),
+            onPressed: () => ComposerDialog.showBlank(context),
+          ),
+        ),
         const _AccountPicker(),
         const Divider(height: 1),
         Expanded(

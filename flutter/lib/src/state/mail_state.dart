@@ -53,6 +53,17 @@ class MailState extends ChangeNotifier {
   bool _selectionMode = false;
   final Set<int> _selectedUids = {};
 
+  /// The reader takes the whole window, like the Qt fullscreen view. Only
+  /// the wide layout uses it — narrower ones already give the reader every
+  /// pixel they have.
+  bool _readerFullscreen = false;
+  bool get readerFullscreen => _readerFullscreen;
+
+  void toggleReaderFullscreen() {
+    _readerFullscreen = !_readerFullscreen;
+    notifyListeners();
+  }
+
   // --- list paging and counts --------------------------------------------
   int _messageLimit = _pageSize;
   static const _pageSize = 200;
@@ -508,6 +519,20 @@ class MailState extends ChangeNotifier {
       // query is still what the job ran for.
       if (searching) unawaited(_rerunSearch());
       return;
+    }
+    if (e.kind == 'Send' && e.ok) {
+      // SMTP accepted it and the Sent copy is filed server-side, but the
+      // local cache only learns about it from a sync. The generic reload
+      // below is not enough — pull the Sent folder so it appears.
+      final sent = _folders
+          .where((f) => f.role == FolderRole.sent)
+          .firstOrNull;
+      // A refusal just means a sync is already running; its own event will
+      // refresh the list when it lands.
+      if (sent != null) {
+        unawaited(
+            _core.syncFolder(_accountId, sent.id).catchError(_ignoreBusy));
+      }
     }
     // `-1` for the account means the job changed nothing worth re-reading.
     if (e.accountId < 0 || e.accountId != _accountId) return;

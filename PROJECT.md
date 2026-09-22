@@ -87,7 +87,9 @@ Milestone 7 detail — what works and what does not:
   API for send, drafts and attachment download is implemented and tested for
   what it can be offline.
 - **Built in the UI**: composer (plain-text; reply/reply-all/forward with `> `
-  quotes, drafts edit/save/delete, contact autocomplete, discard confirm),
+  quotes, drafts edit/save/delete, contact autocomplete, discard confirm,
+  editable From local part with the account domain locked, sender name
+  prefilled from the account, real file picker for outgoing attachments),
   settings screen (all keys incl. sort, signature, intervals) with About
   (version/licence/database + per-account IMAP capabilities), search UI (FTS
   with folder/account scope + debounced server backfill + jump-to-message),
@@ -95,10 +97,12 @@ Milestone 7 detail — what works and what does not:
   (read/unread/star/archive/move/trash/purge + select menus + shift-range),
   folder manager (create, show/hide, refresh, open), move picker, accounts
   manager, reader actions (reply/forward/star/archive/move/delete, headers
-  dialog), sort menu, delete/purge confirms, auto-sync timer, mark-read delay,
-  interface scale. Attachment Open/Save are visible mocks: the file
-  picker/opener is still an open decision, and the composer has no file source
-  to attach from yet.
+  dialog, fullscreen on wide layouts, sender display name from the stored
+  headers) with working attachment Open/Save/Save-all, sort menu,
+  delete/purge confirms, auto-sync timer, mark-read delay, interface scale,
+  resizable sidebar/list panes, avatar + unread-dot rows, icon menus.
+  On Linux the file dialogs need zenity, kdialog or qarma installed —
+  without one the picker says so instead of failing silently.
 - **Deliberately simpler than QML**: plain-text composer instead of WYSIWYG
   (auto send format stays plain), no reader fullscreen, no per-row context
   menu beyond the `⋯` (same actions), no global Up/Down/Delete/R/F keyboard
