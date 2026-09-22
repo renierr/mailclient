@@ -71,10 +71,15 @@ class _MailShellState extends State<MailShell> {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final width = constraints.maxWidth;
+            // Read here, in build, and pass down: provider's watch/select
+            // may only run in a build method, not in these helpers called
+            // from the layout callback.
+            final fullscreen = state.readerFullscreen;
+            final openUid = state.openUid;
             final body = width >= Breakpoints.medium
-                ? _threePane()
+                ? _threePane(fullscreen)
                 : width >= Breakpoints.compact
-                    ? _twoPane()
+                    ? _twoPane(fullscreen, openUid)
                     : _onePane();
             return Scaffold(
               appBar: _TopBar(
@@ -98,9 +103,7 @@ class _MailShellState extends State<MailShell> {
     );
   }
 
-  Widget _threePane() {
-    final fullscreen =
-        context.select<MailState, bool>((s) => s.readerFullscreen);
+  Widget _threePane(bool fullscreen) {
     if (fullscreen) {
       // The exit lives in the reader header, next to where fullscreen was
       // entered — no extra chrome needed here.
@@ -123,13 +126,11 @@ class _MailShellState extends State<MailShell> {
     );
   }
 
-  Widget _twoPane() {
-    final state = context.watch<MailState>();
-    final fullscreen = state.readerFullscreen;
+  Widget _twoPane(bool fullscreen, int openUid) {
     // The reader takes the list's place rather than squeezing a third column
     // into a width where none of them would be usable.
-    final main = state.openUid >= 0
-        ? ReaderPane(onClose: state.closeMessage)
+    final main = openUid >= 0
+        ? ReaderPane(onClose: context.read<MailState>().closeMessage)
         : const MessageListPane();
     if (fullscreen) return main;
     return Row(
