@@ -724,7 +724,7 @@ Rectangle {
                                 font.pixelSize: Theme.fontBase
                                 font.bold: row.model.unread
                                 elide: Text.ElideRight
-                                width: parent.width - Math.round(66 * Theme.uiScale) - (row.model.has_attachments ? Math.round(18 * Theme.uiScale) : 0)
+                                width: parent.width - Math.round(66 * Theme.uiScale) - (row.model.has_attachments ? Math.round(18 * Theme.uiScale) : 0) - (row.model.starred ? Math.round(18 * Theme.uiScale) : 0)
                             }
                             Label {
                                 text: row.model.has_attachments ? Icons.attachFile : ""
@@ -733,6 +733,16 @@ Rectangle {
                                 font.pixelSize: Theme.fontTiny
                                 width: row.model.has_attachments ? 14 : 0
                                 visible: row.model.has_attachments
+                            }
+                            // Passive starred cue (the toggle lives in the row
+                            // menu now, so a starred row still reads starred).
+                            Label {
+                                text: row.model.starred ? Icons.star : ""
+                                font.family: Icons.fontFamily
+                                color: Theme.star
+                                font.pixelSize: Theme.fontTiny
+                                width: row.model.starred ? 14 : 0
+                                visible: row.model.starred
                             }
                             Label {
                                 text: row.model.date
@@ -770,22 +780,28 @@ Rectangle {
                     }
                     }
 
-                    // Star, always visible when set, on hover otherwise.
+                    // Row actions menu (⋮), opening the same menu as
+                    // right-click: mark read/unread, star, archive, move,
+                    // trash, purge (or Open in search mode). Shown on hover
+                    // and on the current/checked row so keyboard selection
+                    // keeps it reachable.
                     IconButton {
+                        id: moreButton
                         anchors.verticalCenter: parent.verticalCenter
                         width: Theme.miniButton
                         height: Theme.miniButton
                         fontSize: Theme.fontBase
-                        visible: row.model.starred || hoverArea.containsMouse
-                        text: row.model.starred ? Icons.star : Icons.starBorder
+                        visible: hoverArea.containsMouse || row.current || row.checked
+                        text: Icons.moreVert
                         iconFont: true
-                        contentColor: row.model.starred ? Theme.star : Theme.textMuted
-                        tooltip: row.model.starred ? qsTr("Remove star") : qsTr("Star")
+                        contentColor: Theme.textMuted
+                        tooltip: qsTr("Message actions")
                         onClicked: {
-                            if (root.searching)
-                                root.emitLater2(root.searchJump, row.model.folder, row.model.uid)
-                            else
-                                root.emitLater(root.starToggled, row.model.uid)
+                            root.menuUid = row.model.uid
+                            root.menuFolderPath = row.model.folder
+                            root.menuStarred = row.model.starred
+                            root.menuUnread = row.model.unread
+                            rowMenu.popup()
                         }
                     }
                 }
