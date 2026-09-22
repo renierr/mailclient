@@ -1,0 +1,20 @@
+# flutter_rust_bridge codegen config.
+#
+# Run from the repository root:  flutter_rust_bridge_codegen generate
+#
+# It lives here rather than in `flutter/` (the usual spot) because the tool
+# joins this file's directory onto the paths below without normalising, so a
+# leading `..` never matches the Rust root it computes. Windows-style
+# separators for the same reason: the comparison is textual.
+#
+# Both outputs are committed, so a plain `cargo build` and a plain
+# `flutter run` work without the codegen tool installed. Regenerate whenever
+# anything in `crates/mailffi/src/api/` changes shape.
+rust_input: crate::api
+rust_root: crates\mailffi
+rust_output: crates\mailffi\src\frb_generated.rs
+dart_root: flutter
+dart_output: flutter\lib\src\ffi\generated
+# One handle for the whole native library, so nothing else in the app has to
+# know that a shared library is involved at all.
+dart_entrypoint_class_name: MailCoreApi

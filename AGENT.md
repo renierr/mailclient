@@ -9,7 +9,16 @@ This file is normative for all coding agents (human or AI) working in this repo.
 - Backend: **Rust (stable, edition 2021)**, workspace in `crates/`.
   - `mailcore`: pure-Rust library — SQLite storage, models, IMAP/SMTP sync engine. **No Qt dependency.**
   - `mailapp`: thin Qt/QML bridge binary using **cxx-qt 0.9** + `mailcore`. Only crate allowed to depend on Qt.
-- Frontend: **QML (QtQuick + QtQuick.Controls)**, single source in
+  - `mailffi`: `cdylib` exposing `mailcore` to the Flutter frontend via
+    **flutter_rust_bridge 2** (`dart:ffi`, in process). No Qt, no mail logic —
+    a translation layer only, same rule as `mailapp`.
+- Frontends: two, both over `mailcore`, neither authoritative over the other.
+  A behaviour change belongs in `mailcore` so both get it; a change made in
+  one frontend's adapter alone must be a deliberate, stated choice.
+  - **Qt/QML** (`crates/mailapp/qml/`) — the mature one.
+  - **Flutter** (`flutter/`) — Dart app over `mailffi`, targeting Linux and
+    Windows desktop with Android planned. See `flutter/README.md`.
+- Qt frontend: **QML (QtQuick + QtQuick.Controls)**, single source in
   `crates/mailapp/qml/`, embedded via the `Mailclient` QML module
   (`CxxQtBuilder::new_qml_module`). HTML mail rendered via `QtWebEngine`.
 - Storage: **SQLite** via `rusqlite` (bundled). One DB file per user: `~/.local/share/mailclient/mailclient.sqlite`.
@@ -21,7 +30,9 @@ This file is normative for all coding agents (human or AI) working in this repo.
 - Keep `mailcore` UI-free and unit-testable. All DB access goes through `mailcore::db` / `store::*`.
 - Evolve the SQLite schema **only via versioned migrations** in `crates/mailcore/src/db/migrations.rs` + `schema.sql`. Never edit a released migration in place; add a new one. Bump `SCHEMA_VERSION`.
 - Keep passwords/secrets **out of SQLite and git**. DB stores only `auth_vault_key`; actual secrets live in the OS keyring (`keyring` crate) or memory.
-- Run `cargo fmt`, `cargo clippy -- -D warnings`, and `cargo test -p mailcore` before finishing a backend change. Run `qmllint`/`qmlformat` (from `/usr/lib/qt6/bin`) on changed QML when available (`qmllint` needs `-I` for the built `Mailclient` import; unresolved-`Mailclient` warnings are expected pre-build).
+- Run `cargo fmt`, `cargo clippy -- -D warnings`, and `cargo test -p mailcore` before finishing a backend change. After changing anything in `crates/mailffi/src/api/`, re-run `flutter_rust_bridge_codegen generate` from the repo root and commit both generated files.
+- Run `qmllint`/`qmlformat` (from `/usr/lib/qt6/bin`) on changed QML when available (`qmllint` needs `-I` for the built `Mailclient` import; unresolved-`Mailclient` warnings are expected pre-build).
+- Run `flutter analyze` (must be clean) and `flutter test` in `flutter/` before finishing a Flutter change.
 - Update `PROJECT.md` ("Where we stand") when a milestone step completes.
 - Put build artefacts only in `dist/` (gitignored). Never commit binaries, `.sqlite` files, or secrets.
 
@@ -40,7 +51,12 @@ This file is normative for all coding agents (human or AI) working in this repo.
   SQLite only) — never add a test that dials out.
 - Do **not** add broad new external dependencies without justification. Prefer: std → small well-scoped crate → large framework. Large additions (new Qt modules, new async runtime, new DB) require user approval.
 - Do **not** put business logic in QML. QML is view-only; logic lives in Rust and is exposed via explicit bridge types.
-- Do **not** invent new top-level directories without updating this file and `PROJECT.md`.
+- Do **not** invent new top-level directories without updating this file and `PROJECT.md`. Current ones: `crates/`, `flutter/`, `qml` (inside `mailapp`), `resources/`, `scripts/`, `dist/` (gitignored).
+- Do **not** let the two frontends drift. Before copying anything out of
+  `mailapp` into `mailffi` (or back), check whether it belongs in `mailcore`
+  instead. Where a copy already exists it is listed in `flutter/README.md`
+  ("Shared code still to promote") — add to that list rather than quietly
+  making a third.
 
 ## 3. Code Style
 
@@ -94,7 +110,17 @@ cover storage (`rusqlite`, bundled), errors (`thiserror`), serialisation
 `tokio-rustls` and its `rustls-*` / `webpki-roots` trust roots), `lettre`,
 `mail-parser`, `keyring`, `directories`, `tempfile`, the Qt bridge (`cxx`,
 `cxx-qt`, `cxx-qt-lib`, `cxx-qt-build`) and `winresource` for the Windows
-executable resources.
+executable resources. The Flutter bridge adds
+`flutter_rust_bridge` (pinned with `=`), `anyhow` and `android_logger`.
+
+The `=` pin on `flutter_rust_bridge` is deliberate: the codegen tool, the Rust
+crate and the Dart package must be the same version, so a range would let
+`cargo update` silently desync them. Changing it means changing all three and
+regenerating.
+
+Dart packages are the same kind of decision as a crate, and `flutter/pubspec.yaml`
+is their source of truth. Currently: `flutter_rust_bridge`, `provider`,
+`path_provider`, `intl`, `flutter_widget_from_html_core`. Anything else → ask.
 
 Anything else (new crypto, a second async runtime, new Qt modules beyond
 Core/Gui/Qml/Quick/QuickControls2/Network/WebEngine) → ask first. Removing or
@@ -104,7 +130,8 @@ it needs the same ask.
 ## 5. Workflows
 
 - Build: `./build.sh` (release bundle into `dist/`). Dev loop: `./dev.sh`. Install locally: `./scripts/install-local.sh` (`~/.local`). Never hand-roll `cargo build` output paths in docs; point to the scripts.
-- Tests: `cargo test --workspace`. QML smoke: `qml6 qml/Main.qml` or `qmllint qml/*.qml` if no display.
+- Flutter: `flutter run -d windows` / `-d linux` from `flutter/` (the Rust core builds as part of it). Regenerate FFI glue with `flutter_rust_bridge_codegen generate` from the repo root.
+- Tests: `cargo test --workspace`, plus `flutter test` in `flutter/`. QML smoke: `qml6 qml/Main.qml` or `qmllint qml/*.qml` if no display.
 - Debugging crashes on Omarchy: load the `diagnose-crash` skill path (systemd-coredump) — do not guess.
 - Desktop integration files live in `resources/` (`.desktop`, icons). Install script links them; do not hardcode `$HOME` in code — use `directories`.
 

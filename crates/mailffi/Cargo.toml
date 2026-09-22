@@ -1,0 +1,36 @@
+[package]
+name = "mailffi"
+version = "0.5.0"
+edition = "2021"
+description = "C-ABI shared library exposing mailcore to the Flutter frontend via flutter_rust_bridge."
+license = "MIT OR Apache-2.0"
+
+[lib]
+# `cdylib` is what Flutter loads at runtime (mailffi.dll / libmailffi.so).
+# `staticlib` keeps an iOS/static-link option open; `lib` lets `cargo test`
+# and rust-analyzer see the crate normally.
+crate-type = ["cdylib", "staticlib", "lib"]
+
+# `flutter_rust_bridge`'s attribute macros expand to code guarded by their own
+# `frb_expand` cfg, which this crate never sets. Declaring it keeps the lint
+# honest instead of drowning `clippy -D warnings` in warnings about a cfg that
+# belongs to the macro.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
+
+[dependencies]
+mailcore = { path = "../mailcore" }
+flutter_rust_bridge = "=2.13.0"
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+log = "0.4"
+tokio = { version = "1", features = ["rt", "time"] }
+
+# Desktop logging goes to stderr like mailapp's; Android has no stderr worth
+# reading, so the log line is forwarded to logcat instead.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+env_logger = "0.11"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.14"

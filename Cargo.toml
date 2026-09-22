@@ -3,4 +3,5 @@ resolver = "2"
 members = [
     "crates/mailcore",
     "crates/mailapp",
+    "crates/mailffi",
 ]

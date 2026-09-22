@@ -13,15 +13,31 @@ A **full-featured, modern, responsive desktop mail client** for **Omarchy Linux*
 ## 2. Architecture
 
 ```text
-crates/mailapp/qml/ ──QtQuick UI──▶  crates/mailapp (cxx-qt bridge, Qt models) ─▶ crates/mailcore (db/store/sync/queue)
-Bay                                               ▲
+crates/mailapp/qml/ ──QtQuick UI──▶  crates/mailapp (cxx-qt bridge, Qt models) ─┐
+                                                                               ├─▶ crates/mailcore (db/store/sync/queue)
+flutter/lib/ ────────Flutter UI───▶  crates/mailffi (flutter_rust_bridge, FFI) ─┘
+                                                  ▲
                                   SQLite (~/.local/share/mailclient/mailclient.sqlite)
 ```
+
+Two frontends, one core. Neither is authoritative: behaviour lives in
+`mailcore` so both inherit it, and each adapter crate only translates. On a
+desktop with both installed they open the same database file, on purpose.
 
 - `crates/mailcore`: pure Rust. Modules: `error`, `models`, `db/{mod,schema,migrations}`, `store/{accounts,folders,messages,queue,contacts}`, `sync/{traits,imap,sender}`, `search`.
 - `crates/mailapp`: `cxx-qt` QObject bridge (`Bridge`, `SettingsBridge`, `AccountListModel`, `FolderTreeModel`, `MessageListModel`, composer controller) + `main.rs` loading `Main.qml` (embedded `Mailclient` module, filesystem override via `MAILCLIENT_QML_DIR`).
 - `crates/mailapp/qml/`: `Main.qml`, `Sidebar.qml`, `MessageList.qml`, `MessageView.qml`, `Composer.qml`, `AccountSetup.qml`, `Settings.qml`, `components/*`.
+- `crates/mailffi`: `cdylib` over `mailcore` for the Flutter frontend —
+  `api/{init,events,accounts,folders,messages,mutate,sync,search,composer,attachments,contacts,settings}`
+  plus `net` (the shared `mailclient-net` thread), `session` (IMAP pool) and
+  `db` (per-thread handle). No mail logic, no Qt.
+- `flutter/`: the Dart app — `src/ffi` (library loading + generated bindings),
+  `src/models`, `src/state`, `src/ui/{shell,sidebar,message_list,reader,accounts}`.
+  See `flutter/README.md` for the layering and its open questions.
 - `scripts/`: `install-local.sh`, `qt-env.sh`, `smoke.sh`. Output bundle: `dist/mailclient/`.
+- `flutter_rust_bridge.yaml` (repo root): FFI codegen config. At the root
+  rather than in `flutter/` because the tool does not normalise a leading `..`
+  on Windows.
 
 See `AGENT.md` for agent rules, dependency policy, and Definition of Done.
 
@@ -59,6 +75,33 @@ Secrets live in the OS keyring keyed by `accounts.auth_vault_key`, never in SQLi
 | 4 | Contacts + settings UI extras (threading, notifications explicitly dropped — not needed) | ✅ done (contacts manager, About with version/licence + server capabilities) |
 | 5 | Polish: background polling sync, offline/error states, onboarding, `.desktop`/icons, Windows feasibility | ✅ done (polling + pooled sessions + manual ⟳ done; offline-first cache + status-bar errors done; empty-state setup onboarding done; `.desktop`+icon installed; IDLE dropped; Windows portable via MSYS2/Git Bash scripts, built as a GUI-subsystem exe with its own icon linked in, so launching it opens no console window; headless `--sync-once`/`--status` JSON + Omarchy bar widget `mailclient.unread` done, see below) |
 | 6 | Bar integration: shared `mailcore::sync::headless` (GUI + CLI same orchestration), `mailapp --sync-once/--status [--json]`, cross-process `.sync.lock`, `resources/omarchy/mailclient/` bar-widget plugin (status poll + sync timers, notify-on-rise, click-to-open) | ✅ done |
+| 7 | Flutter frontend: `mailffi` cdylib (flutter_rust_bridge 2, in-process `dart:ffi`), Dart app in `flutter/` with responsive 3/2/1-pane shell, sidebar, list, reader, account setup; CMake wiring for Windows + Linux, Gradle wiring for Android | 🚧 scaffold complete, see below |
+
+Milestone 7 detail — what works and what does not:
+- **Works**: the whole read path and the local write path. Accounts
+  (list/add/edit/delete, keyring), folders (tree, unread pills, subscription),
+  messages (paged list, reader with sanitized HTML and the blocked-remote-images
+  "show once", attachment bar), local flag writes with background push, queued
+  sync / folder sync / load-older / folder refresh, queued delete / archive /
+  move / purge, FTS search plus server backfill, contacts, settings. The Rust
+  API for send, drafts and attachment download is implemented and tested for
+  what it can be offline.
+- **Not built yet in the UI**: composer, settings screen, search UI, contacts
+  manager, multi-select and bulk actions, folder manager, About. Each of these
+  has its `mailffi` call already; what is missing is the Dart screen.
+- **Not verified against a live server**: nothing in the Flutter path has been
+  run against a real mailbox yet. `cargo test`, `cargo clippy -D warnings`,
+  `flutter analyze` and `flutter test` are clean, and `flutter build windows`
+  produces a bundle with `mailffi.dll` in it, but a live run needs explicit
+  per-run consent (`AGENT.md` §2).
+- **Android does not compile**: `mailcore::auth` uses `keyring`
+  unconditionally while `mailcore`'s manifest only depends on it for Linux,
+  Windows and macOS. Android needs a Keystore-backed path in `mailcore` — a
+  design decision, not a build fix. The Gradle/cargo-ndk wiring is in place so
+  that work stays confined to `mailcore`.
+- **Known duplication**: the IMAP session pool, the account-form handling and
+  the composer form now exist in both `mailapp` and `mailffi`. They belong in
+  `mailcore`; the list is in `flutter/README.md`.
 
 Current state detail:
 - `mailcore`: the SQLite schema of §3 (FTS5 index, `settings` key/value store, local-change queueing via `messages.flags_dirty`, attachment bytes cached as BLOBs), typed stores (accounts/folders/messages/queue/contacts/settings incl. `compose_send_format`), `html` sanitizer (std-only tokenize→clean→serialise, remote/private-host gating, entity-aware incl. `&nbsp;`), IMAP sync (SPECIAL-USE role mapping, windowed UID FETCH + MIME parsing incl. Reply-To capture — INBOX newest 200, others newest 50 auto / 200 on open — UIDVALIDITY resync, expunge, flag refresh/push, server-side delete, Sent-copy APPEND, attachment names/sizes extracted with 25 MiB/file + 50-file caps — bytes never auto-download, only `fetch_attachments` on explicit Open/Save spends bandwidth). The default Date list order is IMAP UID/delivery order, not the sender-controlled RFC 5322 `Date:` header. SMTP send with `SendPolicy` + `SendFormat` (auto/plain/multipart/html, resilient fallback to auto; Auto sends text/plain unless the body carries real formatting, with an optional plain twin via `compose_include_plain`; Cc + Bcc; blank/placeholder To sends `To: undisclosed-recipients:;` (or `To: <text>:;`) with the envelope from Cc/Bcc; sender display name from the composer or account default; EHLO uses the sender domain; sanitized outgoing, `multipart/mixed` file attachments with extension-guessed MIME), keyring auth, safe JSON feeds (`body_text`/`body_html` sanitized/`is_html`/`has_remote_images` + legacy `body`, plus on-demand `message_html` for Show-once; message rows carry `has_attachments` + attachment metadata, never bytes).
