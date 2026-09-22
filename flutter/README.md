@@ -57,15 +57,26 @@ lib/
     ffi/
       mail_core.dart            the seam: library loading, JSON → models
       generated/                flutter_rust_bridge output (committed)
-    models/models.dart          Dart views of mailcore's JSON
-    state/mail_state.dart       selection, and routing job events back into it
+    models/
+      models.dart               accounts, folders, messages, contacts
+      settings.dart             preferences, search hits, header details
+    state/mail_state.dart       selection, search, multi-select, and routing
+                                job events back into what is on screen
     theme/app_theme.dart        themes and layout breakpoints
     ui/
-      shell/                    three / two / one pane by window width
+      shell/                    three / two / one pane by window width,
+                                search field, menus, shortcuts
       sidebar/                  accounts and folder tree
-      message_list/             the compact list feed
-      reader/                   message view, HTML rendering, attachments
-      accounts/                 account setup dialog
+      message_list/             the compact list feed, selection + bulk bar,
+                                sort menu, search results
+      reader/                   message view, HTML rendering, attachments,
+                                reply/forward/headers
+      accounts/                 account setup + accounts manager
+      composer/                 plain-text composer (reply/forward/drafts)
+      settings/                 all preferences + About/capabilities
+      contacts/                 contacts manager
+      folders/                  folder manager
+      move_to/                  move picker
 cmake/mailffi.cmake             desktop: builds and bundles the core
 android/app/mailffi.gradle.kts  Android: cargo-ndk into jniLibs
 test/                           model decoding tests

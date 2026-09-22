@@ -51,6 +51,19 @@ class _MailAppState extends State<MailApp> with WidgetsBindingObserver {
         theme: AppTheme.light(),
         darkTheme: AppTheme.dark(),
         debugShowCheckedModeBanner: false,
+        // The interface-scale setting, applied as text scaling: layout
+        // already adapts by width, so type is what grows.
+        builder: (context, child) {
+          final scale = context.select<MailState, double>(
+              (s) => s.settings.uiScale);
+          final mq = MediaQuery.of(context);
+          return MediaQuery(
+            data: mq.copyWith(
+              textScaler: TextScaler.linear(scale),
+            ),
+            child: child ?? const SizedBox.shrink(),
+          );
+        },
         home: const MailShell(),
       ),
     );

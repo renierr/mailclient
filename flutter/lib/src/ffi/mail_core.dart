@@ -11,6 +11,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
 import '../models/models.dart';
+import '../models/settings.dart';
 import 'generated/api/accounts.dart' as rust_accounts;
 import 'generated/api/attachments.dart' as rust_attachments;
 import 'generated/api/composer.dart' as rust_composer;
@@ -123,6 +124,12 @@ class MailCore {
   Future<FolderCounts> folderCounts(int folderId) =>
       rust_folders.folderCounts(folderId: folderId);
 
+  /// Resolve a folder path to its local id, for a UI that navigated by path
+  /// (search results carry paths, reads take ids).
+  Future<int> folderIdForPath(int accountId, String path) async =>
+      (await rust_folders.folderIdForPath(accountId: accountId, path: path))
+          .toInt();
+
   Future<void> setFolderSubscribed(int folderId, bool subscribed) =>
       rust_folders.setFolderSubscribed(
           folderId: folderId, subscribed: subscribed);
@@ -149,9 +156,9 @@ class MailCore {
       rust_messages.messageHtml(
           folderId: folderId, uid: uid, allowRemote: true);
 
-  Future<Map<String, dynamic>> messageHeaders(int folderId, int uid) async =>
-      _decodeMap(
-          await rust_messages.headersJson(folderId: folderId, uid: uid));
+  Future<MessageHeaders> messageHeaders(int folderId, int uid) async =>
+      MessageHeaders.fromJson(await _decodeMap(
+          await rust_messages.headersJson(folderId: folderId, uid: uid)));
 
   Future<void> markRead(int accountId, int folderId, int uid, bool read) =>
       rust_messages.markRead(
@@ -226,19 +233,18 @@ class MailCore {
 
   // --- search --------------------------------------------------------------
 
-  /// Local FTS only. Cheap enough to run on every keystroke.
-  Future<List<Map<String, dynamic>>> search(
+  /// Local FTS only, in rank order. Cheap enough to run on every keystroke.
+  Future<List<SearchHit>> search(
     int accountId,
     String query, {
     String folder = '',
     int limit = 100,
-  }) async {
-    final raw = await rust_search.searchJson(
-        accountId: accountId, query: query, folder: folder, limit: limit);
-    return (jsonDecode(raw) as List<dynamic>)
-        .whereType<Map<String, dynamic>>()
-        .toList(growable: false);
-  }
+  }) async =>
+      _decodeList(
+        await rust_search.searchJson(
+            accountId: accountId, query: query, folder: folder, limit: limit),
+        SearchHit.fromJson,
+      );
 
   /// Top up thin local results from the server. Queued; re-run [search] when
   /// the `"Search"` job finishes.
@@ -278,6 +284,13 @@ class MailCore {
   Future<String> saveAttachmentTo(int attachmentId, String path) =>
       rust_attachments.saveAttachmentTo(attachmentId: attachmentId, path: path);
 
+  /// Write every non-inline attachment of a message into `dir`.
+  /// Returns how many files were written.
+  Future<int> saveAllAttachmentsTo(int folderId, int uid, String dir) async =>
+      (await rust_attachments.saveAllAttachmentsTo(
+              folderId: folderId, uid: uid, dir: dir))
+          .toInt();
+
   // --- contacts ------------------------------------------------------------
 
   Future<List<Contact>> contacts({String prefix = ''}) async => _decodeList(
@@ -291,8 +304,8 @@ class MailCore {
 
   // --- settings ------------------------------------------------------------
 
-  Future<Map<String, dynamic>> settings() async =>
-      _decodeMap(await rust_settings.settingsJson());
+  Future<AppSettings> settings() async =>
+      AppSettings.fromJson(await _decodeMap(await rust_settings.settingsJson()));
 
   Future<void> setSetting(String key, String value) =>
       rust_settings.setSetting(key: key, value: value);

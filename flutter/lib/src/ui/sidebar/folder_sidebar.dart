@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/models.dart';
 import '../../state/mail_state.dart';
+import '../folders/folder_manager_dialog.dart';
 
 /// Accounts on top, this account's folders below.
 class FolderSidebar extends StatelessWidget {
@@ -37,6 +38,12 @@ class FolderSidebar extends StatelessWidget {
               );
             },
           ),
+        ),
+        const Divider(height: 1),
+        TextButton.icon(
+          icon: const Icon(Icons.folder_open_outlined, size: 16),
+          label: const Text('Manage folders…'),
+          onPressed: () => FolderManagerDialog.show(context),
         ),
       ],
     );

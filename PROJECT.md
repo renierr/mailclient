@@ -86,9 +86,23 @@ Milestone 7 detail — what works and what does not:
   move / purge, FTS search plus server backfill, contacts, settings. The Rust
   API for send, drafts and attachment download is implemented and tested for
   what it can be offline.
-- **Not built yet in the UI**: composer, settings screen, search UI, contacts
-  manager, multi-select and bulk actions, folder manager, About. Each of these
-  has its `mailffi` call already; what is missing is the Dart screen.
+- **Built in the UI**: composer (plain-text; reply/reply-all/forward with `> `
+  quotes, drafts edit/save/delete, contact autocomplete, discard confirm),
+  settings screen (all keys incl. sort, signature, intervals) with About
+  (version/licence/database + per-account IMAP capabilities), search UI (FTS
+  with folder/account scope + debounced server backfill + jump-to-message),
+  contacts manager (search, alias, remove), multi-select with bulk bar
+  (read/unread/star/archive/move/trash/purge + select menus + shift-range),
+  folder manager (create, show/hide, refresh, open), move picker, accounts
+  manager, reader actions (reply/forward/star/archive/move/delete, headers
+  dialog), sort menu, delete/purge confirms, auto-sync timer, mark-read delay,
+  interface scale. Attachment Open/Save are visible mocks: the file
+  picker/opener is still an open decision, and the composer has no file source
+  to attach from yet.
+- **Deliberately simpler than QML**: plain-text composer instead of WYSIWYG
+  (auto send format stays plain), no reader fullscreen, no per-row context
+  menu beyond the `⋯` (same actions), no global Up/Down/Delete/R/F keyboard
+  map beyond compose/sync/search-focus shortcuts.
 - **Not verified against a live server**: nothing in the Flutter path has been
   run against a real mailbox yet. `cargo test`, `cargo clippy -D warnings`,
   `flutter analyze` and `flutter test` are clean, and `flutter build windows`
