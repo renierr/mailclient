@@ -45,13 +45,13 @@ AppDialog {
 
     function roleIcon(role) {
         switch (role) {
-        case "inbox": return "📥"
-        case "drafts": return "📝"
-        case "sent": return "📤"
-        case "archive": return "🗄"
-        case "junk": return "🚫"
-        case "trash": return "🗑"
-        default: return "📁"
+        case "inbox": return Icons.inbox
+        case "drafts": return Icons.drafts
+        case "sent": return Icons.send
+        case "archive": return Icons.archive
+        case "junk": return Icons.block
+        case "trash": return Icons.trash
+        default: return Icons.folder
         }
     }
 
@@ -135,6 +135,7 @@ AppDialog {
 
                     Label {
                         text: root.roleIcon(folderRow.model.role)
+                        font.family: Icons.fontFamily
                         font.pixelSize: Theme.fontBase
                     }
 
@@ -161,7 +162,8 @@ AppDialog {
                     }
 
                     IconButton {
-                        text: "→"
+                        text: Icons.chevronRight
+                        iconFont: true
                         tooltip: qsTr("Open folder")
                         onClicked: root.emitLater(root.folderSelected, folderRow.model.name)
                     }

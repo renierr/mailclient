@@ -170,7 +170,8 @@ Dialog {
                 id: headerCloseBtn
                 Layout.alignment: Qt.AlignVCenter
                 visible: root.showHeaderCloseButton
-                text: "✕"
+                text: Icons.close
+                iconFont: true
                 tooltip: qsTr("Close")
                 Accessible.name: qsTr("Close")
                 onClicked: root.close()

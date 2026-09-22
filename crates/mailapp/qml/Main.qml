@@ -19,10 +19,19 @@ ApplicationWindow {
     // 1080p laptop and pushes the reader pane off the edge.
     width: Math.min(1320, Screen.desktopAvailableWidth - 80)
     height: Math.min(860, Screen.desktopAvailableHeight - 80)
-    minimumWidth: 720
+    minimumWidth: 380
     minimumHeight: 460
     title: qsTr("Mailclient")
     color: Theme.bg
+
+    // The bundled vector icon font. Loaded once, application-global from
+    // then on. The file sits next to this one, so the relative source
+    // resolves in embedded, dist and dev runs alike (the dist copy mirrors
+    // qml/ one to one, and the same path is embedded via qrc_resources).
+    FontLoader {
+        id: iconFontLoader
+        source: "fonts/MaterialIcons-Regular.ttf"
+    }
 
     // Pooled IMAP sessions stay logged in between actions — drop them on
     // quit (no LOGOUT round-trip, so this never blocks on a dead line).
@@ -53,6 +62,17 @@ ApplicationWindow {
     property string statusText: qsTr("Starting…")
     property bool busy: backend.busy
     property bool readerFullscreen: false
+
+    // --- responsive panes -------------------------------------------------
+    // Wide shows all three panes; medium pairs the sidebar with the list or
+    // the reader (whichever the selection calls for); narrow shows one pane
+    // at a time and navigates between them. The manual sidebar toggle only
+    // exists where there is a choice — the wide layout.
+    readonly property bool wideLayout: root.width >= 1100
+    readonly property bool mediumLayout: root.width >= 720 && root.width < 1100
+    property bool sidebarOpen: true
+    // Narrow navigation: folders | list | reader.
+    property string narrowPane: "list"
 
     function toggleReaderFullscreen() {
         if (!root.readerFullscreen && (root.currentUid < 0 || root.currentMessage === undefined))
@@ -249,6 +269,8 @@ ApplicationWindow {
     function openMessage(uid) {
         if (uid < 0 || uid === root.currentUid)
             return  // already open: re-clicking a row must not reload anything
+        // Narrow layouts navigate to the reader; wide ones show it already.
+        root.narrowPane = "reader"
         for (var i = 0; i < folderModel.count; i++) {
             if (folderModel.get(i).name === root.currentFolder
                     && folderModel.get(i).role === "drafts") {
@@ -514,6 +536,8 @@ ApplicationWindow {
             messageList.setSelectionMode(false)
             root.currentFolder = path
             root.currentUid = -1
+            // Narrow layouts return to the list; wide ones show it already.
+            root.narrowPane = "list"
             reloadMessages()
             // A folder-scoped search follows the selection: fresh scope,
             // fresh server top-up for the newly shown folder.
@@ -773,9 +797,20 @@ ApplicationWindow {
             spacing: Theme.sm
 
             IconButton {
-                text: "☰"
+                visible: root.wideLayout
+                text: Icons.menu
+                iconFont: true
                 tooltip: qsTr("Toggle sidebar")
-                onClicked: sidebar.visible = !sidebar.visible
+                onClicked: root.sidebarOpen = !root.sidebarOpen
+            }
+            // Narrow layouts have no sidebar to toggle: this steps back to
+            // the folder pane instead.
+            IconButton {
+                visible: !root.wideLayout && !root.mediumLayout && root.narrowPane === "list"
+                text: Icons.arrowBack
+                iconFont: true
+                tooltip: qsTr("Folders")
+                onClicked: root.narrowPane = "folders"
             }
 
             AppButton {
@@ -818,7 +853,8 @@ ApplicationWindow {
                     width: Theme.miniButton
                     height: Theme.miniButton
                     visible: searchField.text !== ""
-                    text: "✕"
+                    text: Icons.close
+                    iconFont: true
                     fontSize: Theme.fontSmall
                     tooltip: qsTr("Clear search")
                     onClicked: searchField.text = ""
@@ -843,29 +879,28 @@ ApplicationWindow {
             Item { Layout.fillWidth: true }
 
             IconButton {
-                text: "⟳"
+                text: Icons.sync
+                iconFont: true
                 tooltip: qsTr("Sync now (Ctrl+R)")
                 enabled: backend.account_count > 0 && !root.busy
                 onClicked: root.syncNow()
             }
             IconButton {
-                text: "🗂"
+                text: Icons.folder
+                iconFont: true
                 tooltip: qsTr("Manage IMAP folders")
                 enabled: backend.account_count > 0
                 onClicked: foldersDialog.open()
             }
             IconButton {
-                text: "✉"
+                text: Icons.person
+                iconFont: true
                 tooltip: qsTr("Accounts")
                 onClicked: accountsDialog.open()
             }
             IconButton {
-                text: "@"
-                tooltip: qsTr("Contacts")
-                onClicked: contactsDialog.open()
-            }
-            IconButton {
-                text: "⚙"
+                text: Icons.settings
+                iconFont: true
                 tooltip: qsTr("Settings")
                 onClicked: settingsDialog.open()
             }
@@ -875,15 +910,28 @@ ApplicationWindow {
     SplitView {
         anchors.fill: parent
 
-        handle: Rectangle {
-            implicitWidth: 1
-            color: SplitHandle.pressed || SplitHandle.hovered ? Theme.accent : Theme.border
+        // A grabbable split: the hit area is wide, only the line is thin.
+        handle: Item {
+            implicitWidth: 9
+            Rectangle {
+                width: 1
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.horizontalCenter: parent.horizontalCenter
+                color: SplitHandle.pressed || SplitHandle.hovered ? Theme.accent : Theme.border
+            }
+            HoverHandler {
+                cursorShape: Qt.SplitHCursor
+            }
         }
 
         Sidebar {
             id: sidebar
             visible: !root.readerFullscreen
-            enabled: !root.readerFullscreen
+                     && (root.wideLayout ? root.sidebarOpen
+                         : root.mediumLayout ? true
+                         : root.narrowPane === "folders")
+            enabled: visible
             SplitView.preferredWidth: 250
             SplitView.minimumWidth: 160
             folders: folderModel
@@ -901,7 +949,10 @@ ApplicationWindow {
         MessageList {
             id: messageList
             visible: !root.readerFullscreen
-            enabled: !root.readerFullscreen
+                     && (root.wideLayout ? true
+                         : root.mediumLayout ? root.currentUid < 0
+                         : root.narrowPane === "list")
+            enabled: visible
             SplitView.preferredWidth: 360
             SplitView.minimumWidth: 240
             messages: root.messageRows
@@ -944,8 +995,21 @@ ApplicationWindow {
             id: messageView
             SplitView.fillWidth: true
             SplitView.minimumWidth: 260
-            visible: true
+            visible: root.wideLayout ? true
+                     : root.mediumLayout ? root.currentUid >= 0
+                     : root.narrowPane === "reader"
+            enabled: visible
             isFullscreen: root.readerFullscreen
+            showBack: root.mediumLayout ? root.currentUid >= 0
+                      : !root.wideLayout && root.narrowPane === "reader"
+            onBackRequested: {
+                if (root.mediumLayout) {
+                    root.currentUid = -1
+                    root.currentMessage = undefined
+                } else {
+                    root.narrowPane = "list"
+                }
+            }
             loadRemoteImages: appSettings.load_remote_images
             readerFont: appSettings.reader_font_size
             backend: backend
@@ -980,7 +1044,8 @@ ApplicationWindow {
             spacing: Theme.sm
 
             Label {
-                text: root.busy ? "⟳" : ""
+                text: root.busy ? Icons.sync : ""
+                font.family: Icons.fontFamily
                 color: Theme.accent
                 font.pixelSize: Theme.fontSmall
             }

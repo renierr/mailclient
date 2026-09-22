@@ -13,6 +13,8 @@ AbstractButton {
     property color contentColor: Theme.text
     property int fontSize: Theme.fontMedium
     property bool active: false
+    // True when `text` is an `Icons.*` glyph rather than a text symbol.
+    property bool iconFont: false
 
     implicitWidth: Theme.controlHeight
     implicitHeight: Theme.controlHeight
@@ -30,6 +32,7 @@ AbstractButton {
     contentItem: Text {
         text: root.text
         color: root.active ? Theme.accent : root.contentColor
+        font.family: root.iconFont ? Icons.fontFamily : ""
         font.pixelSize: root.fontSize
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter

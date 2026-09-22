@@ -27,7 +27,8 @@ CheckBox {
         Text {
             anchors.centerIn: parent
             visible: control.checked
-            text: "✓"
+            text: Icons.done
+            font.family: Icons.fontFamily
             color: Theme.accentText
             font.pixelSize: Theme.fontSmall
             font.bold: true

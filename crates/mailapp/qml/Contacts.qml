@@ -99,7 +99,8 @@ AppDialog {
 
             IconButton {
                 visible: root.searchQuery !== ""
-                text: "✕"
+                text: Icons.close
+                iconFont: true
                 tooltip: qsTr("Clear search")
                 Accessible.name: qsTr("Clear search")
                 onClicked: {
@@ -236,7 +237,8 @@ AppDialog {
 
                     IconButton {
                         Layout.alignment: Qt.AlignVCenter
-                        text: "✎"
+                        text: Icons.edit
+                        iconFont: true
                         tooltip: qsTr("Edit alias")
                         Accessible.name: qsTr("Edit alias for %1").arg(modelData.alias || modelData.address)
                         onClicked: {
@@ -246,7 +248,8 @@ AppDialog {
 
                     IconButton {
                         Layout.alignment: Qt.AlignVCenter
-                        text: "✕"
+                        text: Icons.close
+                        iconFont: true
                         tooltip: qsTr("Remove contact")
                         Accessible.name: qsTr("Remove contact %1").arg(modelData.alias || modelData.address)
                         onClicked: {
@@ -304,7 +307,8 @@ AppDialog {
 
                     IconButton {
                         Layout.alignment: Qt.AlignVCenter
-                        text: "✓"
+                        text: Icons.done
+                        iconFont: true
                         tooltip: qsTr("Save alias")
                         Accessible.name: qsTr("Save alias")
                         onClicked: root.saveAlias(modelData.address, aliasEditField.text.trim())
@@ -312,7 +316,8 @@ AppDialog {
 
                     IconButton {
                         Layout.alignment: Qt.AlignVCenter
-                        text: "✕"
+                        text: Icons.close
+                        iconFont: true
                         tooltip: qsTr("Cancel")
                         Accessible.name: qsTr("Cancel alias edit")
                         onClicked: root.editingAddress = ""

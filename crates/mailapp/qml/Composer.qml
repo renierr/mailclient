@@ -525,7 +525,8 @@ Dialog {
             // Collapsed Reply-To toggle: our mail asks replies to go to
             // another address instead of From. Optional, off by default.
             IconButton {
-                text: "↩"
+                text: Icons.reply
+                iconFont: true
                 fontSize: Theme.fontSmall
                 implicitWidth: Math.round(36 * Theme.uiScale)
                 implicitHeight: Theme.controlHeight
@@ -653,7 +654,8 @@ Dialog {
                 anchors.margins: Theme.sm
                 spacing: Theme.sm
                 Label {
-                    text: "↩"
+                    text: Icons.reply
+                    font.family: Icons.fontFamily
                     color: Theme.danger
                     font.pixelSize: Theme.fontBase
                 }
@@ -740,7 +742,8 @@ Dialog {
             // ever abandons local edits, it never destroys the server copy.
             IconButton {
                 visible: root.draftUid >= 0
-                text: "🗑"
+                text: Icons.trash
+                iconFont: true
                 contentColor: Theme.danger
                 tooltip: qsTr("Delete this draft from the server…")
                 onClicked: deleteDraftConfirm.open()

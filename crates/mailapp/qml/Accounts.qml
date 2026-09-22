@@ -136,18 +136,21 @@ AppDialog {
                 }
 
                 IconButton {
-                    text: "✓"
+                    text: Icons.done
+                    iconFont: true
                     tooltip: qsTr("Use this account")
                     enabled: !accountRow.current
                     onClicked: root.emitLater(root.accountSelected, accountRow.model.id)
                 }
                 IconButton {
-                    text: "✎"
+                    text: Icons.edit
+                    iconFont: true
                     tooltip: qsTr("Edit")
                     onClicked: root.emitLater(root.editRequested, accountRow.model.id)
                 }
                 IconButton {
-                    text: "🗑"
+                    text: Icons.trash
+                    iconFont: true
                     tooltip: qsTr("Remove")
                     contentColor: Theme.danger
                     onClicked: {

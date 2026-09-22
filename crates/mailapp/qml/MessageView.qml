@@ -51,6 +51,10 @@ Rectangle {
     property bool allowRemoteOnce: false
     property bool isFullscreen: false
     signal fullscreenRequested()
+    // Narrower layouts give the reader the whole content area; the chevron
+    // back is how the user returns to the list. Set by Main.
+    property bool showBack: false
+    signal backRequested()
 
     // Keyed on the UID, not on `message` itself: the feed is re-parsed after
     // every open, star, delete and sync, so `message` is a fresh object each
@@ -282,15 +286,26 @@ Rectangle {
                 anchors.margins: Theme.lg
                 spacing: Theme.md
 
-                Label {
+                RowLayout {
                     Layout.fillWidth: true
-                    text: root.message ? root.message.subject : ""
-                    color: Theme.text
-                    font.pixelSize: Theme.fontTitle
-                    font.bold: true
-                    wrapMode: Text.Wrap
-                    maximumLineCount: 3
-                    elide: Text.ElideRight
+                    spacing: Theme.sm
+                    IconButton {
+                        visible: root.showBack
+                        text: Icons.arrowBack
+                        iconFont: true
+                        tooltip: qsTr("Back to the list")
+                        onClicked: root.backRequested()
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.message ? root.message.subject : ""
+                        color: Theme.text
+                        font.pixelSize: Theme.fontTitle
+                        font.bold: true
+                        wrapMode: Text.Wrap
+                        maximumLineCount: 3
+                        elide: Text.ElideRight
+                    }
                 }
 
                 // Sender block: avatar + display name / address + recipient.
@@ -352,7 +367,7 @@ Rectangle {
                         // the Headers dialog): replies go there, not to From.
                         Label {
                             visible: root.replyToDiffers
-                            text: qsTr("↩ Replies go to %1, not to the sender").arg(root.replyToAddr)
+                            text: qsTr("Replies go to %1, not to the sender").arg(root.replyToAddr)
                             color: Theme.danger
                             font.pixelSize: Theme.fontSmall
                             elide: Text.ElideRight
@@ -361,7 +376,8 @@ Rectangle {
                     }
 
                     IconButton {
-                        text: root.headerExpanded ? "⌄" : "›"
+                        text: root.headerExpanded ? Icons.expandMore : Icons.chevronRight
+                        iconFont: true
                         fontSize: Theme.fontMedium
                         tooltip: root.headerExpanded ? qsTr("Hide details") : qsTr("Show details")
                         onClicked: root.headerExpanded = !root.headerExpanded
@@ -441,34 +457,40 @@ Rectangle {
                     spacing: Theme.xs
                     Item { Layout.fillWidth: true }
                     IconButton {
-                        text: "↩"
+                        text: Icons.reply
+                        iconFont: true
                         tooltip: qsTr("Reply (R)")
                         onClicked: root.replyRequested()
                     }
                     IconButton {
-                        text: "→"
+                        text: Icons.forward
+                        iconFont: true
                         tooltip: qsTr("Forward (F)")
                         onClicked: root.forwardRequested()
                     }
                     IconButton {
-                        text: root.message && root.message.starred ? "★" : "☆"
+                        text: root.message && root.message.starred ? Icons.star : Icons.starBorder
+                        iconFont: true
                         contentColor: root.message && root.message.starred ? Theme.star : Theme.text
                         tooltip: qsTr("Star (S)")
                         onClicked: root.starRequested()
                     }
                     IconButton {
-                        text: "🗑"
+                        text: Icons.trash
+                        iconFont: true
                         tooltip: qsTr("Delete (Del)")
                         contentColor: Theme.danger
                         onClicked: root.deleteRequested()
                     }
                     IconButton {
-                        text: root.isFullscreen ? "⤢" : "⤡"
+                        text: root.isFullscreen ? Icons.closeFullscreen : Icons.openFullscreen
+                        iconFont: true
                         tooltip: root.isFullscreen ? qsTr("Exit full screen") : qsTr("Enter full screen")
                         onClicked: root.fullscreenRequested()
                     }
                     IconButton {
-                        text: "⋯"
+                        text: Icons.moreVert
+                        iconFont: true
                         tooltip: qsTr("More actions")
                         onClicked: moreMenu.popup()
                     }
@@ -493,7 +515,8 @@ Rectangle {
                 anchors.rightMargin: Theme.sm
                 spacing: Theme.sm
                 Label {
-                    text: "🛡"
+                    text: Icons.imageBlocked
+                    font.family: Icons.fontFamily
                 }
                 Label {
                     Layout.fillWidth: true
@@ -538,7 +561,8 @@ Rectangle {
                     Layout.fillWidth: true
                     spacing: Theme.sm
                     Label {
-                        text: "📎"
+                        text: Icons.attachFile
+                        font.family: Icons.fontFamily
                     }
                     Label {
                         Layout.fillWidth: true
@@ -654,21 +678,25 @@ Rectangle {
     AppMenu {
         id: moreMenu
 
-        MenuItem {
-            text: qsTr("Reply all")
+        AppMenuItem {
+            glyph: Icons.replyAll
+            label: qsTr("Reply all")
             onTriggered: root.replyAllRequested()
         }
-        MenuItem {
-            text: qsTr("Archive (A)")
+        AppMenuItem {
+            glyph: Icons.archive
+            label: qsTr("Archive (A)")
             onTriggered: root.archiveRequested()
         }
-        MenuItem {
-            text: qsTr("Move to… (M)")
+        AppMenuItem {
+            glyph: Icons.driveFileMove
+            label: qsTr("Move to… (M)")
             onTriggered: root.moveRequested()
         }
         MenuSeparator {}
-        MenuItem {
-            text: qsTr("Show headers…")
+        AppMenuItem {
+            glyph: Icons.info
+            label: qsTr("Show headers…")
             onTriggered: root.openHeaders()
         }
     }
@@ -680,7 +708,8 @@ Rectangle {
         visible: root.message === undefined
         Label {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: "✉"
+            text: Icons.mail
+            font.family: Icons.fontFamily
             font.pixelSize: 40
             color: Theme.textMuted
             opacity: 0.6
@@ -863,7 +892,8 @@ Rectangle {
                         anchors.leftMargin: Theme.xs
                         spacing: Theme.xs
                         Label {
-                            text: rawHeaders.visible ? "⌄" : "›"
+                            text: rawHeaders.visible ? Icons.expandMore : Icons.chevronRight
+                            font.family: Icons.fontFamily
                             color: Theme.textMuted
                             font.pixelSize: Theme.fontMedium
                         }

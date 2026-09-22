@@ -58,33 +58,38 @@ Rectangle {
         }
 
         IconButton {
-            text: "•≡"
+            text: Icons.formatListBulleted
+            iconFont: true
             tooltip: qsTr("Bullet list")
             enabled: !root.sourceMode
             active: root.bodyEditor ? root.bodyEditor.listActive : false
             onClicked: if (root.bodyEditor) root.bodyEditor.exec("insertUnorderedList")
         }
         IconButton {
-            text: "❝"
+            text: Icons.formatQuote
+            iconFont: true
             tooltip: qsTr("Quote")
             enabled: !root.sourceMode
             active: root.bodyEditor ? root.bodyEditor.quoteActive : false
             onClicked: if (root.bodyEditor) root.bodyEditor.exec("formatBlock", root.bodyEditor.quoteActive ? "p" : "blockquote")
         }
         IconButton {
-            text: "🔗"
+            text: Icons.link
+            iconFont: true
             tooltip: qsTr("Insert link")
             enabled: !root.sourceMode
             onClicked: root.linkRequested()
         }
         IconButton {
-            text: "✕"
+            text: Icons.close
+            iconFont: true
             tooltip: qsTr("Clear formatting")
             enabled: !root.sourceMode
             onClicked: if (root.bodyEditor) root.bodyEditor.exec("removeFormat")
         }
         IconButton {
-            text: "📎"
+            text: Icons.attachFile
+            iconFont: true
             tooltip: qsTr("Attach files")
             onClicked: root.attachRequested()
         }

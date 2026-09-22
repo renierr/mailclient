@@ -63,6 +63,9 @@ fn main() {
             // In-place ListModel updates, shared by every pane that owns a
             // feed model (see qml/ModelSync.qml).
             .qml_file(QmlFile::from("qml/ModelSync.qml").singleton(true))
+            // Vector icon codepoints for the bundled Material Icons font
+            // (see qml/Icons.qml, qml/fonts/ATTRIBUTION.md).
+            .qml_file(QmlFile::from("qml/Icons.qml").singleton(true))
             // One contract for parsing bridge payloads, so a malformed one
             // cannot abandon a reload half-way (see qml/FeedJson.qml).
             .qml_file(QmlFile::from("qml/FeedJson.qml").singleton(true))
@@ -85,6 +88,7 @@ fn main() {
             .qml_file("qml/components/AppComboBox.qml")
             .qml_file("qml/components/AppCheckBox.qml")
             .qml_file("qml/components/AppMenu.qml")
+            .qml_file("qml/components/AppMenuItem.qml")
             .qml_file("qml/components/RecipientField.qml")
             .qml_file("qml/components/EditorFrame.qml")
             .qml_file("qml/components/ComposerToolbar.qml")
@@ -97,5 +101,10 @@ fn main() {
     .qt_module("QuickControls2")
     .qt_module("Network")
     .qt_module("WebEngineQuick")
+    // The bundled icon font, embedded next to the QML that loads it:
+    // `qrc:/qt/qml/Mailclient/qml/fonts/…`, so the FontLoader's relative
+    // source resolves identically in embedded, dist and dev runs (the dist
+    // copy mirrors qml/ one to one).
+    .qrc_resources(["qml/fonts/MaterialIcons-Regular.ttf"])
     .build();
 }

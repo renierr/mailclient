@@ -31,7 +31,8 @@ ComboBox {
     indicator: Text {
         x: control.width - width - Theme.sm
         y: control.topPadding + (control.availableHeight - height) / 2
-        text: "⌄"
+        text: Icons.expandMore
+        font.family: Icons.fontFamily
         color: Theme.textMuted
         font.pixelSize: Theme.fontBase
     }

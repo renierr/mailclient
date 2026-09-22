@@ -117,7 +117,8 @@ Rectangle {
                     }
                 }
                 Label {
-                    text: "⌄"
+                    text: Icons.expandMore
+                    font.family: Icons.fontFamily
                     color: Theme.textMuted
                 }
             }
@@ -126,19 +127,22 @@ Rectangle {
                 id: accountMenu
                 Repeater {
                     model: root.accounts
-                    MenuItem {
+                    AppMenuItem {
                         required property var model
-                        text: (model.id === root.currentAccountId ? "● " : "   ") + model.email
+                        glyph: model.id === root.currentAccountId ? Icons.currentDot : ""
+                        label: model.email
                         onTriggered: root.emitLater(root.accountSelected, model.id)
                     }
                 }
                 MenuSeparator {}
-                MenuItem {
-                    text: qsTr("Add account…")
+                AppMenuItem {
+                    glyph: Icons.add
+                    label: qsTr("Add account…")
                     onTriggered: root.emitLater(root.addAccountRequested)
                 }
-                MenuItem {
-                    text: qsTr("Manage accounts…")
+                AppMenuItem {
+                    glyph: Icons.settings
+                    label: qsTr("Manage accounts…")
                     onTriggered: root.emitLater(root.manageAccountsRequested)
                 }
             }
@@ -162,7 +166,8 @@ Rectangle {
             }
 
             IconButton {
-                text: "⛭"
+                text: Icons.settings
+                iconFont: true
                 tooltip: qsTr("Manage IMAP folders…")
                 onClicked: root.manageFoldersRequested()
             }
@@ -211,15 +216,16 @@ Rectangle {
                     Label {
                         text: {
                             switch (folderRow.model.role) {
-                            case "inbox": return "📥"
-                            case "drafts": return "📝"
-                            case "sent": return "📤"
-                            case "archive": return "🗄"
-                            case "junk": return "🚫"
-                            case "trash": return "🗑"
-                            default: return "📁"
+                            case "inbox": return Icons.inbox
+                            case "drafts": return Icons.drafts
+                            case "sent": return Icons.send
+                            case "archive": return Icons.archive
+                            case "junk": return Icons.block
+                            case "trash": return Icons.trash
+                            default: return Icons.folder
                             }
                         }
+                        font.family: Icons.fontFamily
                         font.pixelSize: Theme.fontBase
                     }
                     Label {

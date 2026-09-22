@@ -27,7 +27,8 @@ Rectangle {
         spacing: Theme.xs
 
         Label {
-            text: "📎"
+            text: Icons.attachFile
+            font.family: Icons.fontFamily
         }
         Label {
             text: qsTr("%n file(s)", "", root.attachments ? root.attachments.length : 0)
@@ -67,7 +68,8 @@ Rectangle {
                             width: Math.round(20 * Theme.uiScale)
                             height: Math.round(20 * Theme.uiScale)
                             fontSize: Theme.fontSmall
-                            text: "✕"
+                            text: Icons.close
+                            iconFont: true
                             tooltip: qsTr("Remove")
                             onClicked: root.removeRequested(chipBox.index)
                         }

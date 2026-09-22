@@ -441,7 +441,8 @@ Rectangle {
                     IconButton {
                         visible: !root.searching
                         Layout.leftMargin: Theme.sm
-                        text: "☑"
+                        text: root.selectionMode ? Icons.checkBox : Icons.checkBoxBlank
+                        iconFont: true
                         fontSize: Theme.fontSmall
                         active: root.selectionMode
                         tooltip: root.selectionMode ? qsTr("Hide selection checkboxes") : qsTr("Select messages")
@@ -467,7 +468,8 @@ Rectangle {
                             Text {
                                 anchors.centerIn: parent
                                 visible: root.isAllSelected()
-                                text: "✓"
+                                text: Icons.done
+                                font.family: Icons.fontFamily
                                 color: Theme.accentText
                                 font.pixelSize: Theme.fontSmall
                                 font.bold: true
@@ -507,7 +509,8 @@ Rectangle {
                     }
                     IconButton {
                         visible: !root.searching
-                        text: "⇅"
+                        text: Icons.sort
+                        iconFont: true
                         fontSize: Theme.fontSmall
                         tooltip: qsTr("Sort: %1").arg(root.sortLabel())
                         onClicked: sortMenu.popup()
@@ -525,7 +528,8 @@ Rectangle {
                     IconButton {
                         Layout.rightMargin: Theme.sm
                         visible: root.selectionMode && !root.searching
-                        text: "▾"
+                        text: Icons.expandMore
+                        iconFont: true
                         fontSize: Theme.fontSmall
                         tooltip: qsTr("Select messages")
                         onClicked: selectMenu.popup()
@@ -673,7 +677,8 @@ Rectangle {
                             Text {
                                 anchors.centerIn: parent
                                 visible: row.checked
-                                text: "✓"
+                                text: Icons.done
+                                font.family: Icons.fontFamily
                                 color: Theme.accentText
                                 font.pixelSize: Theme.fontSmall
                                 font.bold: true
@@ -722,7 +727,8 @@ Rectangle {
                                 width: parent.width - Math.round(66 * Theme.uiScale) - (row.model.has_attachments ? Math.round(18 * Theme.uiScale) : 0)
                             }
                             Label {
-                                text: row.model.has_attachments ? "📎" : ""
+                                text: row.model.has_attachments ? Icons.attachFile : ""
+                                font.family: Icons.fontFamily
                                 color: Theme.textMuted
                                 font.pixelSize: Theme.fontTiny
                                 width: row.model.has_attachments ? 14 : 0
@@ -771,7 +777,8 @@ Rectangle {
                         height: Theme.miniButton
                         fontSize: Theme.fontBase
                         visible: row.model.starred || hoverArea.containsMouse
-                        text: row.model.starred ? "★" : "☆"
+                        text: row.model.starred ? Icons.star : Icons.starBorder
+                        iconFont: true
                         contentColor: row.model.starred ? Theme.star : Theme.textMuted
                         tooltip: row.model.starred ? qsTr("Remove star") : qsTr("Star")
                         onClicked: {
@@ -845,40 +852,47 @@ Rectangle {
 
         // Search hits belong to foreign folders: the folder-scoped actions
         // below would hit the wrong message, so search mode only opens.
-        MenuItem {
+        AppMenuItem {
             visible: root.searching
-            text: qsTr("Open message")
+            glyph: Icons.mail
+            label: qsTr("Open message")
             onTriggered: Qt.callLater(root.searchJump, root.menuFolderPath, root.menuUid)
         }
-        MenuItem {
+        AppMenuItem {
             visible: !root.searching
-            text: root.menuUnread ? qsTr("Mark as read") : qsTr("Mark as unread")
+            glyph: root.menuUnread ? Icons.markRead : Icons.markUnread
+            label: root.menuUnread ? qsTr("Mark as read") : qsTr("Mark as unread")
             onTriggered: Qt.callLater(root.markReadRequested, root.menuUid, root.menuUnread)
         }
-        MenuItem {
+        AppMenuItem {
             visible: !root.searching
-            text: root.menuStarred ? qsTr("Remove star") : qsTr("Star")
+            glyph: root.menuStarred ? Icons.starBorder : Icons.star
+            label: root.menuStarred ? qsTr("Remove star") : qsTr("Star")
             onTriggered: root.emitLater(root.starToggled, root.menuUid)
         }
-        MenuItem {
+        AppMenuItem {
             visible: !root.searching
-            text: qsTr("Archive")
+            glyph: Icons.archive
+            label: qsTr("Archive")
             onTriggered: root.emitLater(root.archiveRequested, root.menuUid)
         }
-        MenuItem {
+        AppMenuItem {
             visible: !root.searching
-            text: qsTr("Move to…")
+            glyph: Icons.driveFileMove
+            label: qsTr("Move to…")
             onTriggered: root.emitLater(root.moveRequested, root.menuUid)
         }
-        MenuItem {
+        AppMenuItem {
             visible: !root.searching
-            text: qsTr("Move to Trash")
+            glyph: Icons.trash
+            label: qsTr("Move to Trash")
             onTriggered: root.emitLater(root.deleteRequested, root.menuUid)
         }
         MenuSeparator { visible: !root.searching }
-        MenuItem {
+        AppMenuItem {
             visible: !root.searching
-            text: qsTr("Delete permanently…")
+            glyph: Icons.deleteForever
+            label: qsTr("Delete permanently…")
             onTriggered: root.emitLater(root.purgeRequested, root.menuUid)
         }
     }
@@ -886,24 +900,29 @@ Rectangle {
     AppMenu {
         id: selectMenu
 
-        MenuItem {
-            text: qsTr("Select all visible")
+        AppMenuItem {
+            glyph: Icons.selectAll
+            label: qsTr("Select all visible")
             onTriggered: root.selectAll()
         }
-        MenuItem {
-            text: qsTr("Select none")
+        AppMenuItem {
+            glyph: Icons.deselect
+            label: qsTr("Select none")
             onTriggered: root.selectNone()
         }
-        MenuItem {
-            text: qsTr("Select unread")
+        AppMenuItem {
+            glyph: Icons.markUnread
+            label: qsTr("Select unread")
             onTriggered: root.selectUnread()
         }
-        MenuItem {
-            text: qsTr("Select starred")
+        AppMenuItem {
+            glyph: Icons.star
+            label: qsTr("Select starred")
             onTriggered: root.selectStarred()
         }
-        MenuItem {
-            text: qsTr("Invert selection")
+        AppMenuItem {
+            glyph: Icons.swapHoriz
+            label: qsTr("Invert selection")
             onTriggered: root.invertSelection()
         }
     }
@@ -911,30 +930,32 @@ Rectangle {
     AppMenu {
         id: sortMenu
 
-        MenuItem {
-            text: root.sortTick("date", true) + qsTr("Date: newest first")
+        // No glyphs here on purpose: the tick column already marks the
+        // active sort, and an icon per row would fight it.
+        AppMenuItem {
+            label: root.sortTick("date", true) + qsTr("Date: newest first")
             onTriggered: root.sortRequested("date", true)
         }
-        MenuItem {
-            text: root.sortTick("date", false) + qsTr("Date: oldest first")
+        AppMenuItem {
+            label: root.sortTick("date", false) + qsTr("Date: oldest first")
             onTriggered: root.sortRequested("date", false)
         }
         MenuSeparator {}
-        MenuItem {
-            text: root.sortTick("from", false) + qsTr("From: A to Z")
+        AppMenuItem {
+            label: root.sortTick("from", false) + qsTr("From: A to Z")
             onTriggered: root.sortRequested("from", false)
         }
-        MenuItem {
-            text: root.sortTick("from", true) + qsTr("From: Z to A")
+        AppMenuItem {
+            label: root.sortTick("from", true) + qsTr("From: Z to A")
             onTriggered: root.sortRequested("from", true)
         }
         MenuSeparator {}
-        MenuItem {
-            text: root.sortTick("subject", false) + qsTr("Subject: A to Z")
+        AppMenuItem {
+            label: root.sortTick("subject", false) + qsTr("Subject: A to Z")
             onTriggered: root.sortRequested("subject", false)
         }
-        MenuItem {
-            text: root.sortTick("subject", true) + qsTr("Subject: Z to A")
+        AppMenuItem {
+            label: root.sortTick("subject", true) + qsTr("Subject: Z to A")
             onTriggered: root.sortRequested("subject", true)
         }
     }
@@ -944,55 +965,65 @@ Rectangle {
 
         // Complete action set: the bulk bar collapses buttons into here on
         // narrow panes, so every bar action must have a menu twin.
-        MenuItem {
-            text: qsTr("Mark selected as read")
+        AppMenuItem {
+            glyph: Icons.markRead
+            label: qsTr("Mark selected as read")
             onTriggered: root.emitLater2(root.bulkMarkReadRequested, root.selectedUids.slice(), true)
         }
-        MenuItem {
-            text: qsTr("Mark selected as unread")
+        AppMenuItem {
+            glyph: Icons.markUnread
+            label: qsTr("Mark selected as unread")
             onTriggered: root.emitLater2(root.bulkMarkReadRequested, root.selectedUids.slice(), false)
         }
-        MenuItem {
-            text: root.selectionAllStarred() ? qsTr("Remove star from selected") : qsTr("Star selected")
+        AppMenuItem {
+            glyph: root.selectionAllStarred() ? Icons.starBorder : Icons.star
+            label: root.selectionAllStarred() ? qsTr("Remove star from selected") : qsTr("Star selected")
             onTriggered: root.emitLater2(root.bulkStarRequested, root.selectedUids.slice(), !root.selectionAllStarred())
         }
-        MenuItem {
-            text: qsTr("Archive selected")
+        AppMenuItem {
+            glyph: Icons.archive
+            label: qsTr("Archive selected")
             onTriggered: {
                 var uids = root.selectedUids.slice()
                 Qt.callLater(root.bulkArchiveRequested, uids)
             }
         }
-        MenuItem {
-            text: qsTr("Move selected to…")
+        AppMenuItem {
+            glyph: Icons.driveFileMove
+            label: qsTr("Move selected to…")
             onTriggered: {
                 var uids = root.selectedUids.slice()
                 Qt.callLater(root.bulkMoveRequested, uids)
             }
         }
-        MenuItem {
-            text: qsTr("Move selected to Trash")
+        AppMenuItem {
+            glyph: Icons.trash
+            label: qsTr("Move selected to Trash")
             onTriggered: {
                 var uids = root.selectedUids.slice()
                 Qt.callLater(root.bulkDeleteRequested, uids)
             }
         }
         MenuSeparator {}
-        MenuItem {
-            text: qsTr("Select unread")
+        AppMenuItem {
+            glyph: Icons.markUnread
+            label: qsTr("Select unread")
             onTriggered: root.selectUnread()
         }
-        MenuItem {
-            text: qsTr("Select starred")
+        AppMenuItem {
+            glyph: Icons.star
+            label: qsTr("Select starred")
             onTriggered: root.selectStarred()
         }
-        MenuItem {
-            text: qsTr("Clear selection")
+        AppMenuItem {
+            glyph: Icons.clear
+            label: qsTr("Clear selection")
             onTriggered: root.clearSelection()
         }
         MenuSeparator {}
-        MenuItem {
-            text: qsTr("Delete permanently…")
+        AppMenuItem {
+            glyph: Icons.deleteForever
+            label: qsTr("Delete permanently…")
             onTriggered: {
                 var uids = root.selectedUids.slice()
                 Qt.callLater(root.bulkPurgeRequested, uids)
@@ -1007,7 +1038,8 @@ Rectangle {
         visible: filtered.count === 0
         Label {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: root.filterText !== "" ? "🔍" : "📭"
+            text: root.filterText !== "" ? Icons.search : Icons.inbox
+            font.family: Icons.fontFamily
             font.pixelSize: 32
             opacity: 0.5
         }
