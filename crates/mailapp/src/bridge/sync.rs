@@ -7,7 +7,9 @@ use mailcore::sync::imap::{FULL_SYNC_WINDOW, OLDER_BATCH};
 use mailcore::sync::traits::SyncProvider;
 
 use crate::bridge::qobject;
-use crate::bridge::session::{checkout_session, current_account, drop_all_imap_sessions};
+use crate::bridge::session::{
+    checkout_session, current_account, drop_all_imap_sessions, job_account,
+};
 use crate::bridge::worker::{spawn_job, JobRefresh};
 use crate::bridge::{push_feeds, qstring, shared_db, DEFAULT_MESSAGE_LIMIT};
 
@@ -16,7 +18,7 @@ impl qobject::Bridge {
         let wanted = *self.current_account_id();
         let current = *self.current_folder_id();
         spawn_job(self, "Sync", move |db, _progress| async move {
-            let acc = current_account(db, wanted)?;
+            let acc = job_account(db, wanted)?;
             // Shared orchestration (outbox flush, flag push, folder sweep);
             // the GUI lends its pooled session, the CLI brings a fresh one.
             let mut imap = checkout_session(&acc).await?;
@@ -68,7 +70,7 @@ impl qobject::Bridge {
         let wanted = *self.current_account_id();
         let path = path.to_string();
         spawn_job(self, "Sync", move |db, _progress| async move {
-            let acc = current_account(db, wanted)?;
+            let acc = job_account(db, wanted)?;
             let folder = folders::get_by_path(db, acc.id, &path).map_err(|e| e.to_string())?;
             let mut imap = checkout_session(&acc).await?;
             imap.push_dirty_flags(db, acc.id).await;
@@ -94,7 +96,7 @@ impl qobject::Bridge {
             return qstring("no folder selected");
         }
         spawn_job(self, "Sync", move |db, _progress| async move {
-            let acc = current_account(db, wanted)?;
+            let acc = job_account(db, wanted)?;
             let folder = folders::get(db, folder_id).map_err(|e| e.to_string())?;
             if folder.account_id != acc.id {
                 return Err("folder does not belong to this account".to_string());
@@ -129,7 +131,7 @@ impl qobject::Bridge {
         let wanted = *self.current_account_id();
         let current = *self.current_folder_id();
         spawn_job(self, "Sync", move |db, _progress| async move {
-            let acc = current_account(db, wanted)?;
+            let acc = job_account(db, wanted)?;
             let mut imap = checkout_session(&acc).await?;
             let list = imap
                 .sync_folders(db, acc.id)
@@ -160,7 +162,7 @@ impl qobject::Bridge {
         let query = query.to_string();
         let folder = folder.to_string();
         spawn_job(self, "Search", move |db, _progress| async move {
-            let acc = current_account(db, wanted)?;
+            let acc = job_account(db, wanted)?;
             let tokens = mailcore::search::search_tokens(&query);
             if tokens.is_empty() {
                 return Ok(("Search: nothing searchable in that query".to_string(), None));
@@ -240,7 +242,7 @@ impl qobject::Bridge {
         let current = *self.current_folder_id();
         let path = path.to_string();
         spawn_job(self, "Sync", move |db, _progress| async move {
-            let acc = current_account(db, wanted)?;
+            let acc = job_account(db, wanted)?;
             let delimiter = folders::list_by_account(db, acc.id)
                 .unwrap_or_default()
                 .first()

@@ -9,8 +9,8 @@ use mailcore::sync::sender::{format_draft, SendFormat, SendPolicy, SendRequest, 
 use crate::bridge::messages::{draft_attachment_path, ensure_attachment_data, safe_filename};
 use crate::bridge::qobject;
 use crate::bridge::qstring;
-use crate::bridge::session::{checkout_session, current_account, evict_imap_session};
-use crate::bridge::worker::{spawn_job, JobRefresh};
+use crate::bridge::session::{checkout_session, current_account, evict_imap_session, job_account};
+use crate::bridge::worker::{spawn_job, JobRefresh, BUSY_MESSAGE};
 
 impl qobject::Bridge {
     pub fn send_mail(self: Pin<&mut Self>, form: &QString) -> QString {
@@ -86,6 +86,12 @@ impl qobject::Bridge {
             _ => Vec::new(),
         };
         let draft_uid = v.get("draft_uid").and_then(|x| x.as_i64()).unwrap_or(-1) as i32;
+        // Refuse while busy *before* the outbox row exists: `spawn_job` would
+        // refuse too, but by then the message would sit queued and go out
+        // with the next sync behind a "busy" the user reads as "not sent".
+        if *self.busy() {
+            return qstring(BUSY_MESSAGE);
+        }
         let wanted = *self.current_account_id();
         let folder_id = *self.current_folder_id();
         // Validate + build + enqueue synchronously: pure local work (SQLite +
@@ -140,12 +146,25 @@ impl qobject::Bridge {
             Ok(v) => v,
             Err(e) => return qstring(&e.to_string()),
         };
-        spawn_job(self, "Send", move |db, progress| async move {
-            let acc = current_account(db, wanted)?;
-            let secrets = auth::load_account_secrets(&acc.auth_vault_key)
-                .map_err(|e| e.to_string())?;
+        let account_id = acc.id;
+        let queued = spawn_job(self, "Send", move |db, progress| async move {
+            // The row is born claimed: any failure before the submit must drop
+            // its MIME, or crash recovery would later retry what the user saw
+            // fail (the same no-duplicate rule as a failed submit below).
+            let prepared = job_account(db, account_id).and_then(|acc| {
+                auth::load_account_secrets(&acc.auth_vault_key)
+                    .map(|s| (acc, s))
+                    .map_err(|e| e.to_string())
+            });
+            let (acc, secrets) = match prepared {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = queue::discard_mime(db, queue_id);
+                    return Err(format!("send failed: {e}"));
+                }
+            };
             let sender = SmtpSender::new(&acc);
-            if let Err(e) = sender.submit_queued(db, queue_id, &secrets.smtp_password) {
+            if let Err(e) = sender.submit_claimed(db, queue_id, &secrets.smtp_password) {
                 // Same no-duplicate rule as an interactive failure: the user
                 // sees this error and owns the retry.
                 let _ = queue::discard_mime(db, queue_id);
@@ -224,7 +243,14 @@ impl qobject::Bridge {
                 }
             }
             sent_resync(db, &acc, folder_id, notes).await
-        })
+        });
+        if !queued.is_empty() {
+            // Not started after all (unreachable while the busy check above
+            // holds, since both run on the GUI thread) — never leave an
+            // orphan row behind for crash recovery to deliver later.
+            let _ = queue::discard_mime(db, queue_id);
+        }
+        queued
     }
 
     pub fn save_draft(self: Pin<&mut Self>, form: &QString) -> QString {
@@ -268,7 +294,7 @@ impl qobject::Bridge {
         let wanted = *self.current_account_id();
         let current_folder_id = *self.current_folder_id();
         spawn_job(self, "Save draft", move |db, _progress| async move {
-            let acc = current_account(db, wanted)?;
+            let acc = job_account(db, wanted)?;
             let drafts = match folders::list_by_account(db, acc.id)
                 .map_err(|e| e.to_string())?
                 .into_iter()
@@ -402,7 +428,7 @@ impl qobject::Bridge {
         let wanted = *self.current_account_id();
         let current = *self.current_folder_id();
         spawn_job(self, "Delete", move |db, _progress| async move {
-            let acc = current_account(db, wanted)?;
+            let acc = job_account(db, wanted)?;
             let drafts = folders::list_by_account(db, acc.id)
                 .map_err(|e| e.to_string())?
                 .into_iter()

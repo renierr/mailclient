@@ -15,6 +15,12 @@ pub const MAX_SEND_RETRIES: u64 = 5;
 /// How long a completed row is kept for diagnostics before it is pruned.
 const SENT_RETENTION_DAYS: i64 = 30;
 
+/// How long a `sending` row must sit untouched before a flush treats it as
+/// orphaned by a crash. A live submit from another process (the GUI and the
+/// `--sync-once` CLI share the DB) holds its row for seconds; requeueing it
+/// early would hand the same MIME to a second submitter and deliver twice.
+const STALE_SENDING_MINUTES: i64 = 30;
+
 /// Timestamp `days` in the past, in the same format [`now`] writes — the
 /// column is text, so a different encoding would compare wrong.
 fn days_ago(days: i64) -> String {
@@ -22,7 +28,10 @@ fn days_ago(days: i64) -> String {
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
-/// Persist a fully-built MIME message for later (or immediate) SMTP submit.
+/// Persist a fully-built MIME message for immediate SMTP submit. The row is
+/// born `sending`, i.e. already claimed by the caller: a flush in another
+/// process must not grab it between this insert and the caller's own submit.
+/// A crash before that submit leaves it for [`requeue_interrupted`].
 pub fn enqueue_mime(
     db: &Db,
     account_id: i64,
@@ -35,7 +44,7 @@ pub fn enqueue_mime(
     db.conn().execute(
         "insert into send_queue (account_id, message_id, status, retries,
             raw_mime, envelope_from, envelope_to, created_at, updated_at)
-         values (?1, ?2, 'queued', 0, ?3, ?4, ?5, ?6, ?6)",
+         values (?1, ?2, 'sending', 0, ?3, ?4, ?5, ?6, ?6)",
         params![
             account_id,
             message_id,
@@ -82,14 +91,16 @@ pub fn list_pending(db: &Db) -> Result<Vec<QueuedSend>> {
     Ok(rows)
 }
 
-/// Pending rows that still hold MIME bytes and have retries left, oldest
+/// Unclaimed rows that still hold MIME bytes and have retries left, oldest
 /// first. A row whose bytes were dropped (the failure was already reported to
-/// the user, who owns the retry) or that hit [`MAX_SEND_RETRIES`] is skipped.
+/// the user, who owns the retry) or that hit [`MAX_SEND_RETRIES`] is skipped,
+/// and so is a `sending` row: someone owns it. Candidates only -- a submitter
+/// must still win [`claim`] before touching SMTP.
 pub fn list_submittable(db: &Db, account_id: i64) -> Result<Vec<QueuedSend>> {
     let mut stmt = db.conn().prepare(&format!(
         "select {COLS} from send_queue
          where account_id = ?1
-           and status in ('queued', 'sending', 'failed')
+           and status in ('queued', 'failed')
            and raw_mime is not null
            and length(raw_mime) > 0
            and retries < ?2
@@ -112,19 +123,31 @@ pub fn get(db: &Db, id: i64) -> Result<QueuedSend> {
         .map_err(|_| StoreError::NotFound(format!("queue entry {id}")))
 }
 
-/// Mark an entry as in-flight so a crash retries the same MIME.
-pub fn mark_sending(db: &Db, id: i64) -> Result<()> {
-    set_status(db, id, QueueStatus::Sending, None)
+/// Atomically take ownership of an unclaimed row (`queued`/`failed` to
+/// `sending`). `false` means another submitter got there first -- or the row
+/// is gone or already sent -- and the caller must leave it alone. This single
+/// conditional update is what keeps two processes flushing the same outbox
+/// from delivering one message twice.
+pub fn claim(db: &Db, id: i64) -> Result<bool> {
+    let rows = db.conn().execute(
+        "update send_queue set status = 'sending', updated_at = ?1
+         where id = ?2 and status in ('queued', 'failed')",
+        params![now(), id],
+    )?;
+    Ok(rows == 1)
 }
 
-/// Crash recovery: `sending` rows never got a final status, so put this
-/// account's back in `queued` for the next submit of the same MIME bytes.
-/// Scoped per account so a flush never disturbs another account's in-flight row.
+/// Crash recovery: a `sending` row untouched for longer than any live submit
+/// takes never got a final status, so put it back in `queued` for the next
+/// submit of the same MIME bytes. Scoped per account so a flush never
+/// disturbs another account's rows; recent rows are left to their owner.
 pub fn requeue_interrupted(db: &Db, account_id: i64) -> Result<u64> {
+    let cutoff = (chrono::Utc::now() - chrono::Duration::minutes(STALE_SENDING_MINUTES))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let n = db.conn().execute(
         "update send_queue set status = 'queued', updated_at = ?1
-         where status = 'sending' and account_id = ?2",
-        params![now(), account_id],
+         where status = 'sending' and account_id = ?2 and updated_at < ?3",
+        params![now(), account_id, cutoff],
     )?;
     Ok(n as u64)
 }
@@ -178,17 +201,6 @@ pub fn prune_sent(db: &Db) -> Result<u64> {
     Ok(n as u64)
 }
 
-fn set_status(db: &Db, id: i64, status: QueueStatus, error: Option<&str>) -> Result<()> {
-    let rows = db.conn().execute(
-        "update send_queue set status = ?1, last_error = ?2, updated_at = ?3 where id = ?4",
-        params![status.as_str(), error, now(), id],
-    )?;
-    if rows == 0 {
-        return Err(StoreError::NotFound(format!("queue entry {id}")));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,6 +241,18 @@ mod tests {
         enqueue_mime(db, acc, None, RAW, "a@x.y", &["b@x.y".to_string()]).unwrap()
     }
 
+    /// Backdate a row so it looks orphaned by a crash long ago.
+    fn age(db: &Db, id: i64, minutes: i64) {
+        let ts = (chrono::Utc::now() - chrono::Duration::minutes(minutes))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        db.conn()
+            .execute(
+                "update send_queue set updated_at = ?1 where id = ?2",
+                params![ts, id],
+            )
+            .unwrap();
+    }
+
     #[test]
     fn enqueue_and_fail_then_sent() {
         let (db, acc) = setup();
@@ -243,16 +267,39 @@ mod tests {
     }
 
     #[test]
-    fn mime_bytes_roundtrip_and_submittable() {
+    fn mime_bytes_roundtrip_and_born_claimed() {
         let (db, acc) = setup();
         let id = enqueue(&db, acc);
-        mark_sending(&db, id).unwrap();
         let row = get(&db, id).unwrap();
         assert_eq!(row.status, QueueStatus::Sending);
         assert_eq!(row.raw_mime.as_deref(), Some(RAW));
         assert_eq!(row.envelope_from.as_deref(), Some("a@x.y"));
         assert_eq!(row.envelope_to, vec!["b@x.y".to_string()]);
+        // Owned by the enqueuer: a concurrent flush must not see it.
+        assert!(list_submittable(&db, acc).unwrap().is_empty());
+        assert!(!claim(&db, id).unwrap());
+    }
+
+    #[test]
+    fn only_one_submitter_wins_the_claim() {
+        let (db, acc) = setup();
+        let id = enqueue(&db, acc);
+        mark_failed(&db, id, "timeout").unwrap();
         assert_eq!(list_submittable(&db, acc).unwrap().len(), 1);
+        assert!(claim(&db, id).unwrap());
+        assert!(!claim(&db, id).unwrap());
+        assert!(list_submittable(&db, acc).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_live_send_is_not_requeued_but_an_orphan_is() {
+        let (db, acc) = setup();
+        let live = enqueue(&db, acc);
+        let orphan = enqueue(&db, acc);
+        age(&db, orphan, STALE_SENDING_MINUTES + 1);
+        assert_eq!(requeue_interrupted(&db, acc).unwrap(), 1);
+        assert_eq!(get(&db, live).unwrap().status, QueueStatus::Sending);
+        assert_eq!(get(&db, orphan).unwrap().status, QueueStatus::Queued);
     }
 
     #[test]
@@ -281,8 +328,11 @@ mod tests {
         let (db, acc) = setup();
         let id = enqueue(&db, acc);
         for _ in 0..MAX_SEND_RETRIES {
-            assert_eq!(list_submittable(&db, acc).unwrap().len(), 1);
             mark_failed(&db, id, "timeout").unwrap();
+            if get(&db, id).unwrap().retries < MAX_SEND_RETRIES {
+                assert_eq!(list_submittable(&db, acc).unwrap().len(), 1);
+                assert!(claim(&db, id).unwrap());
+            }
         }
         assert!(list_submittable(&db, acc).unwrap().is_empty());
     }
@@ -293,8 +343,8 @@ mod tests {
         let other = account(&db, "b", "k2");
         let mine = enqueue(&db, acc);
         let theirs = enqueue(&db, other);
-        mark_sending(&db, mine).unwrap();
-        mark_sending(&db, theirs).unwrap();
+        age(&db, mine, STALE_SENDING_MINUTES + 1);
+        age(&db, theirs, STALE_SENDING_MINUTES + 1);
         assert_eq!(requeue_interrupted(&db, acc).unwrap(), 1);
         assert_eq!(get(&db, mine).unwrap().status, QueueStatus::Queued);
         assert_eq!(get(&db, theirs).unwrap().status, QueueStatus::Sending);

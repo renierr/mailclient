@@ -20,6 +20,19 @@ pub(crate) fn current_account(db: &mailcore::Db, wanted: i64) -> Result<Account,
         .ok_or_else(|| "no account — add one first".to_string())
 }
 
+/// Resolve the account a background job captured when it was queued. Unlike
+/// [`current_account`] this never substitutes another account for a captured
+/// id: a send or draft meant for a removed account must fail, not land in
+/// whichever account happens to be first. `-1` (nothing selected when the job
+/// was queued) still means "the first account".
+pub(crate) fn job_account(db: &mailcore::Db, captured: i64) -> Result<Account, String> {
+    if captured < 0 {
+        return current_account(db, captured);
+    }
+    accounts::get(db, captured)
+        .map_err(|_| "the account was removed before this action could run".to_string())
+}
+
 /// Connect an IMAP session using the keyring secret.
 pub(crate) fn imap_pool() -> std::sync::MutexGuard<'static, HashMap<i64, ImapSync>> {
     use std::sync::OnceLock;
@@ -111,8 +124,8 @@ pub(crate) async fn checkout_session(account: &Account) -> Result<SessionLease, 
             }
         }
         None => {
-            let secrets = auth::load_account_secrets(&account.auth_vault_key)
-                .map_err(|e| e.to_string())?;
+            let secrets =
+                auth::load_account_secrets(&account.auth_vault_key).map_err(|e| e.to_string())?;
             let mut fresh = ImapSync::new(account);
             fresh
                 .connect(&secrets.imap_password)

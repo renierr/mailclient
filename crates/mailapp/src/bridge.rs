@@ -360,9 +360,9 @@ pub mod qobject {
         #[qinvokable]
         fn load(self: Pin<&mut Self>);
 
-        /// Persist current properties to the settings store.
+        /// Persist current properties to the settings store; `""` or the error.
         #[qinvokable]
-        fn save(self: Pin<&mut Self>);
+        fn save(self: Pin<&mut Self>) -> QString;
     }
 
     impl cxx_qt::Threading for Bridge {}

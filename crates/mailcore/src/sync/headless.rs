@@ -7,9 +7,12 @@
 //! [`sync_all_accounts`]. Either way the folder sweep, windows, and counts
 //! cannot drift apart.
 //!
-//! [`SyncLock`] serializes writers across processes (GUI + CLI + timer):
-//! SQLite WAL already prevents corruption, the lock turns collisions into a
-//! clean "skip this run" instead of a `database is locked` error.
+//! [`SyncLock`] serializes the `--sync-once` runs (CLI + bar timer) with each
+//! other: SQLite WAL already prevents corruption, the lock turns collisions
+//! into a clean "skip this run" instead of a `database is locked` error. The
+//! GUI does not take it — a user-driven sync or send must never be skipped —
+//! so a GUI and a CLI run can overlap. The outbox is safe under that overlap
+//! because every submit first wins an atomic [`crate::store::queue::claim`].
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};

@@ -6,7 +6,8 @@ import Mailclient
 import "components"
 
 // Add / edit account. Submit goes to the Rust bridge, which persists to SQLite
-// + the OS keyring. Re-saving a known email address updates it in place.
+// + the OS keyring. An edit sends its account id, so changing the address
+// renames that account; a new form with a known address updates it in place.
 AppDialog {
     id: root
     preferredWidth: 560
@@ -16,7 +17,7 @@ AppDialog {
     padding: Theme.lg
     closePolicy: Popup.NoAutoClose
 
-    // Set when editing an existing account; "" for a new one.
+    // Set when editing an existing account; -1 for a new one.
     property int editId: -1
     property bool editing: editId >= 0
 
@@ -99,6 +100,7 @@ AppDialog {
         if (!root.validate())
             return
         root.accountSubmit(JSON.stringify({
+            id: root.editId,
             name: nameField.text,
             email: emailField.text.trim(),
             from_name: fromNameField.text.trim(),

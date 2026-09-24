@@ -19,7 +19,18 @@ AbstractButton {
     implicitWidth: Theme.controlHeight
     implicitHeight: Theme.controlHeight
     hoverEnabled: true
+    // Tab-reachable, but a click must not steal focus (the composer toolbar
+    // formats a selection that lives in the editor).
+    focusPolicy: Qt.TabFocus
     opacity: enabled ? 1 : 0.35
+
+    // `text` is usually an icon-font glyph, which a screen reader would read
+    // out as a private-use character: the tooltip is the real name.
+    Accessible.name: root.tooltip !== "" ? root.tooltip : root.text
+    Accessible.role: Accessible.Button
+    // Space activates any AbstractButton; Enter should too.
+    Keys.onReturnPressed: root.click()
+    Keys.onEnterPressed: root.click()
 
     background: Rectangle {
         radius: Theme.radius
@@ -27,6 +38,9 @@ AbstractButton {
              : root.pressed ? Theme.border
              : root.hovered ? Theme.hover
              : "transparent"
+        // Keyboard focus must be visible, or Tab lands somewhere unseen.
+        border.width: root.visualFocus ? 2 : 0
+        border.color: Theme.accent
     }
 
     contentItem: Text {

@@ -7,6 +7,7 @@ use mailcore::store::{accounts, folders, settings};
 
 use crate::bridge::qobject;
 use crate::bridge::session::evict_imap_session;
+use crate::bridge::worker::BUSY_MESSAGE;
 use crate::bridge::{push_feeds, qstring, shared_db, DEFAULT_MESSAGE_LIMIT};
 
 impl qobject::Bridge {
@@ -100,13 +101,29 @@ impl qobject::Bridge {
             auth_vault_key: String::new(), // replaced below
             check_interval_secs: 300,
         };
-        // Re-saving an existing email updates it (also migrates its secrets
+        // An edit names its account by id, so changing the address renames
+        // that account instead of creating a second one. Without an id,
+        // re-saving an existing email updates it (also migrates its secrets
         // into the current keyring backend); otherwise a fresh row is created.
-        let id = match accounts::list(db)
-            .unwrap_or_default()
-            .into_iter()
-            .find(|a| a.email_address == email)
+        let edit_id = v.get("id").and_then(|x| x.as_i64()).filter(|id| *id >= 0);
+        let all = accounts::list(db).unwrap_or_default();
+        if let Some(other) = all
+            .iter()
+            .find(|a| a.email_address == email && edit_id.is_some_and(|id| a.id != id))
         {
+            return qstring(&format!(
+                "another account already uses {}",
+                other.email_address
+            ));
+        }
+        let target = match edit_id {
+            Some(id) => match all.into_iter().find(|a| a.id == id) {
+                Some(a) => Some(a),
+                None => return qstring("this account no longer exists"),
+            },
+            None => all.into_iter().find(|a| a.email_address == email),
+        };
+        let id = match target {
             Some(existing) => {
                 if let Err(e) = accounts::update_connection(db, existing.id, &form_account) {
                     return qstring(&e.to_string());
@@ -178,6 +195,11 @@ impl qobject::Bridge {
     }
 
     pub fn delete_account(mut self: Pin<&mut Self>, id: i64) -> QString {
+        // A queued or running job holds its account's id; deleting under it
+        // would cascade away its outbox row or strand a draft mid-save.
+        if *self.busy() {
+            return qstring(BUSY_MESSAGE);
+        }
         let db = match shared_db() {
             Ok(d) => d,
             Err(e) => return qstring(&e),

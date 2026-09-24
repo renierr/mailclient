@@ -148,8 +148,10 @@ fn run_headless(args: &[String]) -> i32 {
         }
     };
 
-    // Sync mode takes the cross-process lock; a live holder (open GUI
-    // mid-sync) means the cache is fresh anyway, so report it as locked.
+    // Sync mode takes the cross-process lock; a live holder (another
+    // `--sync-once` still running) means the cache is fresh anyway, so report
+    // it as locked. The GUI never holds it — outbox rows are claimed
+    // atomically, so overlapping with an open GUI cannot double-send.
     let mut locked = false;
     let _guard = if sync {
         match headless::acquire_sync_lock(&db_path) {

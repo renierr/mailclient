@@ -56,7 +56,9 @@ pub fn load_account_secrets(vault_key: &str) -> Result<AccountSecrets> {
         Err(_) => (raw, String::new()),
     };
     if imap.is_empty() {
-        return Err(StoreError::Keyring("account has no stored password".to_string()));
+        return Err(StoreError::Keyring(
+            "account has no stored password".to_string(),
+        ));
     }
     Ok(AccountSecrets {
         smtp_password: resolve_smtp(&imap, &smtp),

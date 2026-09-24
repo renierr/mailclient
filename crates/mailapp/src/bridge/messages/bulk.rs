@@ -12,7 +12,7 @@ use mailcore::models::FolderRole;
 use mailcore::store::{accounts, folders, messages};
 
 use crate::bridge::qobject;
-use crate::bridge::session::{checkout_session, current_account};
+use crate::bridge::session::{checkout_session, job_account};
 use crate::bridge::worker::{spawn_flag_push, spawn_job, JobRefresh};
 use crate::bridge::{push_feeds, qstring, shared_db};
 
@@ -187,7 +187,7 @@ impl qobject::Bridge {
         let current = *self.current_folder_id();
         let path = path.to_string();
         spawn_job(self, "Move", move |db, _progress| async move {
-            let acc = current_account(db, wanted)?;
+            let acc = job_account(db, wanted)?;
             let dest = folders::get_by_path(db, acc.id, &path).map_err(|e| e.to_string())?;
             if dest.id == current {
                 return Ok((

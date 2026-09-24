@@ -42,6 +42,11 @@ lives in `scripts/qt-env.sh`:
 `C:/Qt`, `D:/Qt`, `$USERPROFILE/Qt`. It also prepends Qt's `bin/` to PATH,
 which Windows needs to load the Qt DLLs at runtime.
 
+Bare `cargo` outside the wrappers (`cargo clippy --workspace`, `cargo test
+--workspace`) gets none of that: set `QMAKE` to the kit's `qmake6.exe`, and
+put the kit's `bin/` on PATH before running the `mailapp` tests — otherwise the
+test binary exits with `STATUS_DLL_NOT_FOUND` before a single test runs.
+
 Needed once:
 
 - **MSVC build tools** + Windows SDK (the C++ workload) -- cxx-qt compiles C++.

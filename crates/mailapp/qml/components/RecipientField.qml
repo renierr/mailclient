@@ -62,7 +62,15 @@ Item {
         id: popup
         x: 0
         y: root.height + 2
-        width: Math.max(root.width, 360)
+        // At least 360 wide for readable suggestions, but never past the
+        // window's right edge: the field is indented, so a narrow window
+        // would otherwise push the list off-screen.
+        property real roomRight: root.width
+        width: Math.max(root.width, Math.min(360, roomRight))
+        onAboutToShow: {
+            var win = root.Window.window
+            roomRight = win ? win.width - root.mapToItem(null, 0, 0).x - 8 : root.width
+        }
         padding: 4
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle { color: Theme.bgRaised; radius: Theme.radius; border.width: 1; border.color: Theme.border }

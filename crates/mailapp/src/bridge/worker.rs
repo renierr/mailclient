@@ -7,7 +7,7 @@ use cxx_qt::Threading;
 use cxx_qt_lib::QString;
 
 use crate::bridge::qobject;
-use crate::bridge::session::{checkout_session, current_account, guard_sync};
+use crate::bridge::session::{checkout_session, guard_sync, job_account};
 use crate::bridge::{push_feeds, qstring, shared_db};
 
 /// What to refresh on the GUI after a job.
@@ -82,6 +82,9 @@ impl JobProgress {
     }
 }
 
+/// What a refused [`spawn_job`] returns while another job holds the latch.
+pub(crate) const BUSY_MESSAGE: &str = "busy — wait for the current action";
+
 type JobFn = Box<dyn FnOnce(&tokio::runtime::Runtime) + Send>;
 
 /// Fire-and-forget push of locally-dirtied read/star flags, run after every
@@ -109,7 +112,7 @@ pub(crate) fn spawn_flag_push(account_id: i64) {
             {
                 return;
             }
-            let acc = match current_account(db, account_id) {
+            let acc = match job_account(db, account_id) {
                 Ok(a) => a,
                 Err(e) => {
                     log::debug!("flag-push: {e}");
@@ -173,7 +176,7 @@ where
     Fut: std::future::Future<Output = Result<(String, Option<JobRefresh>), String>> + 'static,
 {
     if *bridge.busy() {
-        return qstring("busy — wait for the current action");
+        return qstring(BUSY_MESSAGE);
     }
     bridge.as_mut().set_busy(true);
     let started = Selection {

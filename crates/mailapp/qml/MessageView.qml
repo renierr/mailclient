@@ -218,7 +218,7 @@ Rectangle {
     // body keeps its space; the chevron re-opens it on demand.
     property bool headerExpanded: false
     onWidthChanged: {
-        if (root.width < 480)
+        if (root.width < Math.round(480 * Theme.uiScale))
             root.headerExpanded = false
     }
 
@@ -256,7 +256,12 @@ Rectangle {
             + "img{max-width:100%;height:auto}pre{white-space:pre-wrap}"
             + "blockquote{margin:8px 0;padding-left:12px;border-left:3px solid "
             + Theme.border + ";color:" + Theme.textMuted + "}"
-            + "table{border-collapse:collapse}td,th{padding:4px 8px}</style>"
+            // Newsletter tables carry fixed cell widths (the sanitizer keeps
+            // the attribute): author CSS beats presentational attributes, so
+            // this lets them shrink to the pane instead of scrolling sideways.
+            + "table{border-collapse:collapse;max-width:100%!important}"
+            + "td,th{padding:4px 8px;overflow-wrap:anywhere}"
+            + "table[width],td[width],th[width]{width:auto!important}</style>"
             + "</head><body>" + inner + "</body></html>"
     }
 

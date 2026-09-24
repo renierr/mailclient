@@ -716,22 +716,29 @@ Rectangle {
                         spacing: 2
 
                         Row {
+                            id: fromRow
                             width: parent.width
                             spacing: Theme.sm
+                            // Cue glyphs render at the scaled tiny font, so
+                            // their cells scale too; the sender takes exactly
+                            // what the visible cells and gaps leave over.
+                            readonly property int cueWidth: Math.round(14 * Theme.uiScale)
                             Label {
                                 text: row.model.from || qsTr("(unknown sender)")
                                 color: Theme.text
                                 font.pixelSize: Theme.fontBase
                                 font.bold: row.model.unread
                                 elide: Text.ElideRight
-                                width: parent.width - Math.round(66 * Theme.uiScale) - (row.model.has_attachments ? Math.round(18 * Theme.uiScale) : 0) - (row.model.starred ? Math.round(18 * Theme.uiScale) : 0)
+                                width: Math.max(0, parent.width - dateLabel.width - Theme.sm
+                                       - (row.model.has_attachments ? fromRow.cueWidth + Theme.sm : 0)
+                                       - (row.model.starred ? fromRow.cueWidth + Theme.sm : 0))
                             }
                             Label {
                                 text: row.model.has_attachments ? Icons.attachFile : ""
                                 font.family: Icons.fontFamily
                                 color: Theme.textMuted
                                 font.pixelSize: Theme.fontTiny
-                                width: row.model.has_attachments ? 14 : 0
+                                width: fromRow.cueWidth
                                 visible: row.model.has_attachments
                             }
                             // Passive starred cue (the toggle lives in the row
@@ -741,10 +748,11 @@ Rectangle {
                                 font.family: Icons.fontFamily
                                 color: Theme.star
                                 font.pixelSize: Theme.fontTiny
-                                width: row.model.starred ? 14 : 0
+                                width: fromRow.cueWidth
                                 visible: row.model.starred
                             }
                             Label {
+                                id: dateLabel
                                 text: row.model.date
                                 color: Theme.textMuted
                                 font.pixelSize: Theme.fontTiny

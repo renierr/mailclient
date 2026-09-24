@@ -125,6 +125,15 @@ Dialog {
     // user types sets this, and closing then asks first.
     property bool dirty: false
 
+    // A send of this composition is queued but SMTP has not accepted it yet.
+    // The dialog is already closed, but its fields still hold the text a
+    // failure reopens — so no new composition may reuse them until then, and
+    // a result only acts on the composer while this is still set.
+    property bool sendPending: false
+    // A draft save of this composition is running. Editing is locked until it
+    // reports back, so closing on success can never drop newer typing.
+    property bool saving: false
+
     // The domain is fixed to the account: only the local part is editable,
     // since sending as another domain breaks SPF and domain-aligned
     // DKIM/DMARC authentication.
@@ -202,6 +211,20 @@ Dialog {
 
     function markClean() { root.dirty = false }
 
+    // Every open* resets the one shared set of fields; refuse while an
+    // earlier composition still needs them (see sendPending / saving).
+    function readyForNew() {
+        if (root.sendPending) {
+            root.statusMessage(qsTr("Still sending the previous message — try again in a moment"))
+            return false
+        }
+        if (root.saving) {
+            root.statusMessage(qsTr("Still saving the draft — try again in a moment"))
+            return false
+        }
+        return true
+    }
+
     function requestClose() {
         if (root.dirty)
             discardConfirm.open()
@@ -276,6 +299,8 @@ Dialog {
     }
 
     function openBlank() {
+        if (!root.readyForNew())
+            return
         root.sourceMode = false
         root.resetHeaders()
         root.setBody(root.signatureHtml())
@@ -284,6 +309,8 @@ Dialog {
     }
 
     function openForReply(message) {
+        if (!root.readyForNew())
+            return
         root.sourceMode = false
         root.resetHeaders()
         if (message !== undefined) {
@@ -310,6 +337,8 @@ Dialog {
     }
 
     function openForForward(message) {
+        if (!root.readyForNew())
+            return
         root.sourceMode = false
         root.resetHeaders()
         if (message !== undefined) {
@@ -334,6 +363,8 @@ Dialog {
     }
 
     function openForDraft(draft) {
+        if (!root.readyForNew())
+            return
         root.sourceMode = false
         root.resetHeaders()
         root.draftUid = draft.draft_uid === undefined ? -1 : draft.draft_uid
@@ -453,6 +484,7 @@ Dialog {
     ColumnLayout {
         anchors.fill: parent
         spacing: Theme.sm
+        enabled: !root.saving
 
         // --- headers ------------------------------------------------------
         // One row each for From / To / Subject; Cc and Bcc hide behind
@@ -833,7 +865,8 @@ Dialog {
         title: qsTr("Insert link")
         modal: true
         anchors.centerIn: parent
-        width: 420
+        // Never wider than the composer, which itself shrinks with the window.
+        width: Math.min(420, root.width - 2 * Theme.lg)
         padding: Theme.lg
 
         background: Rectangle {
@@ -881,7 +914,8 @@ Dialog {
         title: qsTr("Unsent changes")
         modal: true
         anchors.centerIn: parent
-        width: 440
+        // Never wider than the composer, which itself shrinks with the window.
+        width: Math.min(440, root.width - 2 * Theme.lg)
         padding: Theme.lg
 
         background: Rectangle {
@@ -940,7 +974,8 @@ Dialog {
         title: qsTr("Delete draft?")
         modal: true
         anchors.centerIn: parent
-        width: 400
+        // Never wider than the composer, which itself shrinks with the window.
+        width: Math.min(400, root.width - 2 * Theme.lg)
         padding: Theme.lg
 
         background: Rectangle {

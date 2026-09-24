@@ -178,7 +178,8 @@ AppDialog {
         title: qsTr("Remove account?")
         modal: true
         anchors.centerIn: parent
-        width: 420
+        // Never wider than the (host-clamped) Accounts dialog around it.
+        width: Math.min(420, root.width - 2 * Theme.lg)
         padding: Theme.lg
 
         background: Rectangle {

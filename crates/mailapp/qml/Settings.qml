@@ -270,17 +270,27 @@ AppDialog {
         }
     }
 
+    // A small (host-clamped) dialog cannot afford a labelled side navigation
+    // next to the detail pane: it collapses to an icon rail instead.
+    readonly property bool compactNav: root.width < Math.round(620 * Theme.uiScale)
+
     RowLayout {
         anchors.fill: parent
         spacing: Theme.md
 
         // --- section navigation --------------------------------------
+        // Keyboard: Tab focuses the list, Up/Down switch sections.
         ListView {
             id: nav
-            Layout.preferredWidth: Math.round(168 * Theme.uiScale)
+            Layout.preferredWidth: root.compactNav ? Math.round(44 * Theme.uiScale)
+                                                   : Math.round(168 * Theme.uiScale)
             Layout.fillHeight: true
             clip: true
             spacing: 2
+            activeFocusOnTab: true
+            keyNavigationEnabled: true
+            Accessible.role: Accessible.PageTabList
+            Accessible.name: qsTr("Settings sections")
             model: ListModel {
                 ListElement { icon: "Aa"; label: qsTr("Interface") }
                 ListElement { icon: "📥"; label: qsTr("Mailbox") }
@@ -296,10 +306,15 @@ AppDialog {
                 required property int index
                 width: nav.width
                 height: Math.round(38 * Theme.uiScale)
+                Accessible.role: Accessible.PageTab
+                Accessible.name: navItem.label
+                Accessible.selected: nav.currentIndex === navItem.index
                 Rectangle {
                     anchors.fill: parent
                     radius: Theme.radius
                     color: nav.currentIndex === navItem.index ? Theme.selected : "transparent"
+                    border.width: nav.activeFocus && nav.currentIndex === navItem.index ? 2 : 0
+                    border.color: Theme.accent
                 }
                 Rectangle {
                     width: 3
@@ -313,11 +328,16 @@ AppDialog {
                 }
                 RowLayout {
                     anchors.fill: parent
-                    anchors.leftMargin: Theme.md
-                    anchors.rightMargin: Theme.sm
+                    anchors.leftMargin: root.compactNav ? Theme.xs : Theme.md
+                    anchors.rightMargin: root.compactNav ? Theme.xs : Theme.sm
                     spacing: Theme.sm
-                    Label { text: navItem.icon }
                     Label {
+                        Layout.fillWidth: root.compactNav
+                        horizontalAlignment: Text.AlignHCenter
+                        text: navItem.icon
+                    }
+                    Label {
+                        visible: !root.compactNav
                         Layout.fillWidth: true
                         text: navItem.label
                         color: nav.currentIndex === navItem.index ? Theme.text : Theme.textMuted
@@ -327,9 +347,15 @@ AppDialog {
                     }
                 }
                 MouseArea {
+                    id: navMouse
                     anchors.fill: parent
+                    hoverEnabled: true
                     onClicked: nav.currentIndex = navItem.index
                 }
+                // The icon rail has no labels: name the section on hover.
+                ToolTip.visible: root.compactNav && navMouse.containsMouse
+                ToolTip.text: navItem.label
+                ToolTip.delay: 400
             }
         }
 
@@ -737,12 +763,12 @@ AppDialog {
         settingsBridge.signature_text = root.localSigText
         settingsBridge.reply_below_quote = root.localReplyBelow
         settingsBridge.request_mdn = root.localRequestMdn
-        settingsBridge.save()
+        var saveError = settingsBridge.save()
         // Sort lives on Bridge (shared with the list header menu).
         if (root.backend && root.backend.set_sort
                 && (root.localSortField !== root.backend.sort_field
                     || root.localSortDesc !== root.backend.sort_descending))
             root.backend.set_sort(root.localSortField, root.localSortDesc)
-        root.statusMessage(qsTr("Settings saved"))
+        root.statusMessage(saveError !== "" ? saveError : qsTr("Settings saved"))
     }
 }

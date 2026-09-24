@@ -73,6 +73,9 @@ ApplicationWindow {
     property bool sidebarOpen: true
     // Narrow navigation: folders | list | reader.
     property string narrowPane: "list"
+    // Toolbar controls grow with the interface scale but the window minimum
+    // does not, so below this width the secondary actions fold into a menu.
+    readonly property bool compactToolbar: root.width < Math.round(700 * Theme.uiScale)
 
     function toggleReaderFullscreen() {
         if (!root.readerFullscreen && (root.currentUid < 0 || root.currentMessage === undefined))
@@ -88,6 +91,20 @@ ApplicationWindow {
     onCurrentMessageChanged: {
         if (root.currentMessage === undefined && root.readerFullscreen)
             root.readerFullscreen = false
+        // Same trap in the narrow layout: the reader's Back button lives in
+        // the message header, so an emptied reader pane has no way out.
+        if (root.currentMessage === undefined && root.narrowPane === "reader")
+            root.narrowPane = "list"
+    }
+
+    // Leave the reader (medium/narrow Back): drop the selection, so the same
+    // row opens again on the next click, and cancel a pending delayed
+    // mark-as-read, since the user stopped viewing before it elapsed.
+    function closeReader() {
+        markReadTimer.stop()
+        root.currentUid = -1
+        root.currentMessage = undefined
+        root.narrowPane = "list"
     }
 
     Bridge {
@@ -269,8 +286,6 @@ ApplicationWindow {
     function openMessage(uid) {
         if (uid < 0 || uid === root.currentUid)
             return  // already open: re-clicking a row must not reload anything
-        // Narrow layouts navigate to the reader; wide ones show it already.
-        root.narrowPane = "reader"
         for (var i = 0; i < folderModel.count; i++) {
             if (folderModel.get(i).name === root.currentFolder
                     && folderModel.get(i).role === "drafts") {
@@ -283,6 +298,11 @@ ApplicationWindow {
         }
         root.currentUid = uid
         root.currentMessage = FeedJson.parse(backend.message_json(uid), undefined)
+        // Narrow layouts navigate to the reader; wide ones show it already.
+        // Drafts open in the composer instead (above), and a message that
+        // failed to load stays on the list rather than in an empty reader.
+        if (root.currentMessage !== undefined)
+            root.narrowPane = "reader"
         markReadTimer.stop()
         if (!appSettings.auto_mark_read) {
             return  // stay unread until the user says otherwise
@@ -331,6 +351,13 @@ ApplicationWindow {
         var r = backend.load_older_messages()
         if (r !== "")
             root.statusText = r
+    }
+
+    // The search scope changed (toolbar checkbox or its menu twin): re-run an
+    // active search under the new scope, server top-up included.
+    function folderScopeToggled() {
+        root.lastServerQuery = ""
+        root.updateSearch(true)
     }
 
     function toggleStar(uid) {
@@ -612,10 +639,14 @@ ApplicationWindow {
 
         // SMTP has accepted the message; the Sent copy and the folder
         // resync still have to run, but the user is done waiting.
+        // Only while this send is still pending: once released, the composer
+        // may already hold a newer message the user started.
         function onJob_progress(kind, status) {
             if (kind === "Send") {
-                composer.markClean()
-                composer.close()
+                if (composer.sendPending) {
+                    composer.sendPending = false
+                    composer.markClean()
+                }
                 root.statusText = qsTr("Sent")
             }
         }
@@ -639,29 +670,34 @@ ApplicationWindow {
                 return
             }
             if (kind === "Send") {
-                // Normally already closed when queued; closing an
-                // already-closed dialog is a no-op, and this is the backstop
-                // for the case where it never arrived. "sent, but …"
-                // means the bookkeeping failed, never the delivery.
-                if (status === "" || status.indexOf("sent, but") === 0) {
-                    composer.markClean()
-                    composer.close()
-                } else {
-                    // Genuine send failure after the optimistic close: the
-                    // fields still hold the text (nothing cleared them), so
-                    // reopen and flag dirty — cancelling then asks before
-                    // discarding. Edge: text composed since is shown instead;
-                    // the error status still says what failed.
-                    composer.dirty = true
-                    composer.open()
+                // Closed when queued. `sendPending` still set means progress
+                // never arrived, so the composer still holds this message
+                // (new compositions are refused meanwhile). Cleared means it
+                // was released at SMTP acceptance and may hold a newer mail
+                // by now: never touch it then. "sent, but …" means the
+                // bookkeeping failed, never the delivery.
+                if (composer.sendPending) {
+                    composer.sendPending = false
+                    if (status === "" || status.indexOf("sent, but") === 0) {
+                        composer.markClean()
+                        composer.close()
+                    } else {
+                        // Genuine send failure after the optimistic close:
+                        // the fields still hold the text, so reopen and flag
+                        // dirty — cancelling then asks before discarding.
+                        composer.dirty = true
+                        composer.open()
+                    }
                 }
                 if (status !== "")
                     root.statusText = status
                 return
             }
             if (kind === "Save draft") {
-                // Same reasoning: a partial save already appended the
+                // Editing was locked for the save, so the fields still hold
+                // exactly what was saved. A partial save already appended the
                 // replacement, so reopening and retrying would duplicate it.
+                composer.saving = false
                 if (status === "" || status.indexOf("draft saved, but") === 0) {
                     composer.markClean()
                     composer.close()
@@ -814,8 +850,18 @@ ApplicationWindow {
             }
 
             AppButton {
+                visible: !root.compactToolbar
                 text: qsTr("✎  Compose")
                 intent: "primary"
+                enabled: backend.account_count > 0
+                onClicked: composer.openBlank()
+            }
+            IconButton {
+                visible: root.compactToolbar
+                text: Icons.edit
+                iconFont: true
+                tooltip: qsTr("Compose (Ctrl+N)")
+                contentColor: Theme.accent
                 enabled: backend.account_count > 0
                 onClicked: composer.openBlank()
             }
@@ -826,9 +872,12 @@ ApplicationWindow {
             TextField {
                 id: searchField
                 Layout.fillWidth: true
+                Layout.minimumWidth: 60
                 Layout.maximumWidth: 460
                 implicitHeight: Theme.controlHeight
-                placeholderText: folderScopeCheck.checked
+                placeholderText: root.compactToolbar
+                    ? (folderScopeCheck.checked ? qsTr("Search folder…") : qsTr("Search…"))
+                    : folderScopeCheck.checked
                     ? qsTr("Search this folder… (3+ letters: folder + server)")
                     : qsTr("Search mail… (3+ letters: account + server)")
                 color: Theme.text
@@ -865,15 +914,16 @@ ApplicationWindow {
             // Folder scope: limits the FTS index and the server backfill
             // to the selected folder (off = whole account). Toggling
             // re-runs an active search under the new scope.
+            // Compact toolbars hide it; the overflow menu toggles the same
+            // state (the checkbox keeps holding it either way).
             CheckBox {
                 id: folderScopeCheck
+                visible: !root.compactToolbar
                 text: root.width > 640 ? qsTr("Folder") : ""
+                Accessible.name: qsTr("Search only the current folder")
                 ToolTip.text: qsTr("Search only the current folder")
                 ToolTip.visible: hovered
-                onToggled: {
-                    root.lastServerQuery = ""
-                    root.updateSearch(true)
-                }
+                onToggled: root.folderScopeToggled()
             }
 
             Item { Layout.fillWidth: true }
@@ -886,6 +936,7 @@ ApplicationWindow {
                 onClicked: root.syncNow()
             }
             IconButton {
+                visible: !root.compactToolbar
                 text: Icons.folder
                 iconFont: true
                 tooltip: qsTr("Manage IMAP folders")
@@ -893,16 +944,66 @@ ApplicationWindow {
                 onClicked: foldersDialog.open()
             }
             IconButton {
+                visible: !root.compactToolbar
+                text: Icons.contacts
+                iconFont: true
+                tooltip: qsTr("Contacts")
+                onClicked: contactsDialog.open()
+            }
+            IconButton {
+                visible: !root.compactToolbar
                 text: Icons.person
                 iconFont: true
                 tooltip: qsTr("Accounts")
                 onClicked: accountsDialog.open()
             }
             IconButton {
+                visible: !root.compactToolbar
                 text: Icons.settings
                 iconFont: true
                 tooltip: qsTr("Settings")
                 onClicked: settingsDialog.open()
+            }
+            IconButton {
+                id: overflowButton
+                visible: root.compactToolbar
+                text: Icons.moreVert
+                iconFont: true
+                tooltip: qsTr("More")
+                onClicked: overflowMenu.popup(overflowButton, 0, overflowButton.height)
+            }
+        }
+
+        AppMenu {
+            id: overflowMenu
+            AppMenuItem {
+                glyph: folderScopeCheck.checked ? Icons.checkBox : Icons.checkBoxBlank
+                label: qsTr("Search only this folder")
+                onTriggered: {
+                    folderScopeCheck.checked = !folderScopeCheck.checked
+                    root.folderScopeToggled()
+                }
+            }
+            AppMenuItem {
+                glyph: Icons.folder
+                label: qsTr("Manage IMAP folders")
+                enabled: backend.account_count > 0
+                onTriggered: foldersDialog.open()
+            }
+            AppMenuItem {
+                glyph: Icons.contacts
+                label: qsTr("Contacts")
+                onTriggered: contactsDialog.open()
+            }
+            AppMenuItem {
+                glyph: Icons.person
+                label: qsTr("Accounts")
+                onTriggered: accountsDialog.open()
+            }
+            AppMenuItem {
+                glyph: Icons.settings
+                label: qsTr("Settings")
+                onTriggered: settingsDialog.open()
             }
         }
     }
@@ -1002,14 +1103,7 @@ ApplicationWindow {
             isFullscreen: root.readerFullscreen
             showBack: root.mediumLayout ? root.currentUid >= 0
                       : !root.wideLayout && root.narrowPane === "reader"
-            onBackRequested: {
-                if (root.mediumLayout) {
-                    root.currentUid = -1
-                    root.currentMessage = undefined
-                } else {
-                    root.narrowPane = "list"
-                }
-            }
+            onBackRequested: root.closeReader()
             loadRemoteImages: appSettings.load_remote_images
             readerFont: appSettings.reader_font_size
             backend: backend
@@ -1087,6 +1181,7 @@ ApplicationWindow {
                 // Validated + queued locally (no network yet): close at once
                 // instead of waiting out the SMTP transaction. A later
                 // failure reopens the composer with the text still in place.
+                composer.sendPending = true
                 composer.markClean()
                 composer.close()
             }
@@ -1098,6 +1193,8 @@ ApplicationWindow {
             var r = backend.save_draft(payload)
             if (r !== "")
                 root.statusText = r
+            else
+                composer.saving = true
         }
     }
 
@@ -1207,7 +1304,8 @@ ApplicationWindow {
         title: deleteConfirm.permanent ? qsTr("Delete permanently?") : qsTr("Move to Trash?")
         modal: true
         anchors.centerIn: parent
-        width: 420
+        // Clamped to the window, which may be narrower than the default.
+        width: Math.min(420, root.width - 16)
         padding: Theme.lg
 
         property int uid: -1
@@ -1274,7 +1372,8 @@ ApplicationWindow {
         title: qsTr("Delete permanently?")
         modal: true
         anchors.centerIn: parent
-        width: 420
+        // Clamped to the window, which may be narrower than the default.
+        width: Math.min(420, root.width - 16)
         padding: Theme.lg
 
         property int uid: -1
