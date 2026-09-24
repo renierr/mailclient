@@ -23,8 +23,8 @@ ColumnLayout {
     property bool required: false
     property bool invalid: false
 
-    signal accepted()
-    signal editingFinished()
+    signal accepted
+    signal editingFinished
 
     spacing: Theme.xs
 
@@ -41,7 +41,9 @@ ColumnLayout {
             color: Theme.danger
             font.pixelSize: Theme.fontSmall
         }
-        Item { Layout.fillWidth: true }
+        Item {
+            Layout.fillWidth: true
+        }
     }
 
     AppTextField {

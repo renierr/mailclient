@@ -26,36 +26,45 @@ AppDialog {
     signal folderChosen(string path)
 
     function emitLater(sig, arg) {
-        Qt.callLater(sig, arg)
+        Qt.callLater(sig, arg);
     }
 
     function roleIcon(role) {
         switch (role) {
-        case "inbox": return Icons.inbox
-        case "drafts": return Icons.drafts
-        case "sent": return Icons.send
-        case "archive": return Icons.archive
-        case "junk": return Icons.block
-        case "trash": return Icons.trash
-        default: return Icons.folder
+        case "inbox":
+            return Icons.inbox;
+        case "drafts":
+            return Icons.drafts;
+        case "sent":
+            return Icons.send;
+        case "archive":
+            return Icons.archive;
+        case "junk":
+            return Icons.block;
+        case "trash":
+            return Icons.trash;
+        default:
+            return Icons.folder;
         }
     }
 
     // Hierarchy depth from the stored path + delimiter (subfolders indent).
     function depthOf(model) {
-        var delim = model.delimiter !== undefined && model.delimiter !== "" ? model.delimiter : "/"
-        return model.name.split(delim).length - 1
+        var delim = model.delimiter !== undefined && model.delimiter !== "" ? model.delimiter : "/";
+        return model.name.split(delim).length - 1;
     }
 
     function shortName(model) {
-        var delim = model.delimiter !== undefined && model.delimiter !== "" ? model.delimiter : "/"
-        var parts = model.name.split(delim)
-        return parts[parts.length - 1]
+        var delim = model.delimiter !== undefined && model.delimiter !== "" ? model.delimiter : "/";
+        var parts = model.name.split(delim);
+        return parts[parts.length - 1];
     }
 
     footer: RowLayout {
         spacing: Theme.sm
-        Item { Layout.fillWidth: true }
+        Item {
+            Layout.fillWidth: true
+        }
         AppButton {
             Layout.rightMargin: Theme.lg + 8
             Layout.bottomMargin: Theme.md
@@ -75,9 +84,9 @@ AppDialog {
             maximumLineCount: 2
             color: Theme.textMuted
             font.pixelSize: Theme.fontSmall
-            text: root.uids && root.uids.length > 0
-                  ? qsTr("Move %n messages to:", "", root.uids.length)
-                  : root.subject !== "" ? qsTr("Move “%1” to:").arg(root.subject) : qsTr("Move to:")
+            text: root.uids && root.uids.length > 0 ? qsTr("Move %n messages to:", "", root.uids.length) : root.subject
+                                                      !== "" ? qsTr("Move “%1” to:").arg(root.subject) : qsTr(
+                                                                   "Move to:")
         }
 
         ListView {
@@ -87,9 +96,13 @@ AppDialog {
             clip: true
             spacing: 2
             // Set inline (not via a binding loop): subscribed-only subset.
-            model: ListModel { id: shown }
+            model: ListModel {
+                id: shown
+            }
             boundsBehavior: Flickable.StopAtBounds
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            ScrollBar.vertical: ScrollBar {
+                policy: ScrollBar.AsNeeded
+            }
 
             Component.onCompleted: root.refreshShown()
 
@@ -135,20 +148,20 @@ AppDialog {
     }
 
     function refreshShown() {
-        var rows = []
+        var rows = [];
         if (root.folders) {
             for (var i = 0; i < root.folders.count; i++) {
-                var f = root.folders.get(i)
+                var f = root.folders.get(i);
                 if (f.subscribed === false)
-                    continue
+                    continue;
                 rows.push({
-                    name: f.name,
-                    role: f.role,
-                    delimiter: f.delimiter !== undefined ? f.delimiter : "/"
-                })
+                              name: f.name,
+                              role: f.role,
+                              delimiter: f.delimiter !== undefined ? f.delimiter : "/"
+                          });
             }
         }
-        ModelSync.sync(shown, rows, "name")
+        ModelSync.sync(shown, rows, "name");
     }
 
     onFoldersChanged: root.refreshShown()

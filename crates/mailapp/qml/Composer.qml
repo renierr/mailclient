@@ -46,41 +46,39 @@ Dialog {
 
     width: Math.min(Math.max(wantW, Math.min(minWidth, maxW)), maxW)
     height: Math.min(Math.max(wantH, Math.min(minHeight, maxH)), maxH)
-    x: positioned ? Math.round(Math.max(0, Math.min(wantX, hostW - width)))
-                  : Math.round((hostW - width) / 2)
-    y: positioned ? Math.round(Math.max(0, Math.min(wantY, hostH - height)))
-                  : Math.round((hostH - height) / 2)
+    x: positioned ? Math.round(Math.max(0, Math.min(wantX, hostW - width))) : Math.round((hostW - width) / 2)
+    y: positioned ? Math.round(Math.max(0, Math.min(wantY, hostH - height))) : Math.round((hostH - height) / 2)
 
     function applyDefaultGeometry() {
-        wantW = preferredW
-        wantH = preferredH
-        positioned = false
+        wantW = preferredW;
+        wantH = preferredH;
+        positioned = false;
     }
 
     function applyResize(edges, sX, sY, sW, sH, dx, dy) {
-        var nx = sX
-        var ny = sY
-        var nw = sW
-        var nh = sH
-        var minW = Math.min(minWidth, maxW)
-        var minH = Math.min(minHeight, maxH)
+        var nx = sX;
+        var ny = sY;
+        var nw = sW;
+        var nh = sH;
+        var minW = Math.min(minWidth, maxW);
+        var minH = Math.min(minHeight, maxH);
         if (edges & Qt.RightEdge)
-            nw = Math.min(Math.max(minW, sW + dx), hostW - nx)
+            nw = Math.min(Math.max(minW, sW + dx), hostW - nx);
         if (edges & Qt.LeftEdge) {
-            nw = Math.min(Math.max(minW, sW - dx), sX + sW)
-            nx = sX + sW - nw
+            nw = Math.min(Math.max(minW, sW - dx), sX + sW);
+            nx = sX + sW - nw;
         }
         if (edges & Qt.BottomEdge)
-            nh = Math.min(Math.max(minH, sH + dy), hostH - ny)
+            nh = Math.min(Math.max(minH, sH + dy), hostH - ny);
         if (edges & Qt.TopEdge) {
-            nh = Math.min(Math.max(minH, sH - dy), sY + sH)
-            ny = sY + sH - nh
+            nh = Math.min(Math.max(minH, sH - dy), sY + sH);
+            ny = sY + sH - nh;
         }
-        positioned = true
-        wantX = nx
-        wantY = ny
-        wantW = nw
-        wantH = nh
+        positioned = true;
+        wantX = nx;
+        wantY = ny;
+        wantW = nw;
+        wantH = nh;
     }
 
     onOpened: applyDefaultGeometry()
@@ -138,16 +136,15 @@ Dialog {
     // since sending as another domain breaks SPF and domain-aligned
     // DKIM/DMARC authentication.
     readonly property string accountDomain: {
-        var at = root.accountEmail.indexOf("@")
-        return at < 0 ? "" : root.accountEmail.substring(at)
+        var at = root.accountEmail.indexOf("@");
+        return at < 0 ? "" : root.accountEmail.substring(at);
     }
     readonly property string accountLocalPart: {
-        var at = root.accountEmail.indexOf("@")
-        return at < 0 ? root.accountEmail : root.accountEmail.substring(0, at)
+        var at = root.accountEmail.indexOf("@");
+        return at < 0 ? root.accountEmail : root.accountEmail.substring(0, at);
     }
-    readonly property string effectiveFrom:
-        fromLocal.text.trim() === "" ? root.accountEmail
-                                     : fromLocal.text.trim() + root.accountDomain
+    readonly property string effectiveFrom: fromLocal.text.trim() === "" ? root.accountEmail : fromLocal.text.trim()
+                                                                           + root.accountDomain
 
     background: Rectangle {
         color: Theme.bg
@@ -192,57 +189,59 @@ Dialog {
             property real sX
             property real sY
             onPressed: function (mouse) {
-                var p = mapToItem(root.parent, mouse.x, mouse.y)
-                sMX = p.x
-                sMY = p.y
-                sX = root.x
-                sY = root.y
-                root.positioned = true
+                var p = mapToItem(root.parent, mouse.x, mouse.y);
+                sMX = p.x;
+                sMY = p.y;
+                sX = root.x;
+                sY = root.y;
+                root.positioned = true;
             }
             onPositionChanged: function (mouse) {
                 if (!pressed)
-                    return
-                var p = mapToItem(root.parent, mouse.x, mouse.y)
-                root.wantX = sX + p.x - sMX
-                root.wantY = sY + p.y - sMY
+                    return;
+                var p = mapToItem(root.parent, mouse.x, mouse.y);
+                root.wantX = sX + p.x - sMX;
+                root.wantY = sY + p.y - sMY;
             }
         }
     }
 
-    function markClean() { root.dirty = false }
+    function markClean() {
+        root.dirty = false;
+    }
 
     // Every open* resets the one shared set of fields; refuse while an
     // earlier composition still needs them (see sendPending / saving).
     function readyForNew() {
         if (root.sendPending) {
-            root.statusMessage(qsTr("Still sending the previous message — try again in a moment"))
-            return false
+            root.statusMessage(qsTr("Still sending the previous message — try again in a moment"));
+            return false;
         }
         if (root.saving) {
-            root.statusMessage(qsTr("Still saving the draft — try again in a moment"))
-            return false
+            root.statusMessage(qsTr("Still saving the draft — try again in a moment"));
+            return false;
         }
-        return true
+        return true;
     }
 
     function requestClose() {
         if (root.dirty)
-            discardConfirm.open()
+            discardConfirm.open();
         else
-            root.close()
+            root.close();
     }
 
     function escapeHtml(t) {
-        return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
 
     // Plain-text quote as `>` citations: renders in every client and keeps
     // Auto sends as text/plain unless the user adds real formatting.
     function plainToHtmlQuote(t) {
-        var lines = root.escapeHtml(t).split("\n")
+        var lines = root.escapeHtml(t).split("\n");
         for (var i = 0; i < lines.length; i++)
-            lines[i] = "&gt; " + lines[i]
-        return "<p>" + lines.join("<br>") + "</p>"
+            lines[i] = "&gt; " + lines[i];
+        return "<p>" + lines.join("<br>") + "</p>";
     }
 
     // Quote in the format the original arrived in: HTML mail gets a styled
@@ -252,12 +251,12 @@ Dialog {
     // sanitized again on send. Gapless: callers add the spacing that fits
     // the reply placement (above vs below the quote).
     function quoteCore(message, headerText) {
-        var wasHtml = message.is_html === true
-        var html = message.body_html !== undefined ? message.body_html : ""
+        var wasHtml = message.is_html === true;
+        var html = message.body_html !== undefined ? message.body_html : "";
         if (wasHtml && html !== "")
-            return "<p>" + root.escapeHtml(headerText) + "</p><blockquote>" + html + "</blockquote>"
-        var q = message.body_text !== undefined ? message.body_text : (message.snippet || "")
-        return root.plainToHtmlQuote(headerText + "\n" + q)
+            return "<p>" + root.escapeHtml(headerText) + "</p><blockquote>" + html + "</blockquote>";
+        var q = message.body_text !== undefined ? message.body_text : (message.snippet || "");
+        return root.plainToHtmlQuote(headerText + "\n" + q);
     }
 
     // Signature block with the standard `-- ` separator, or "" when the
@@ -265,219 +264,222 @@ Dialog {
     // rich editor and plain-text sends.
     function signatureHtml() {
         if (!root.signatureEnabled)
-            return ""
-        var lines = root.signatureText.split("\n")
+            return "";
+        var lines = root.signatureText.split("\n");
         while (lines.length > 0 && lines[lines.length - 1].trim() === "")
-            lines.pop()
+            lines.pop();
         while (lines.length > 0 && lines[0].trim() === "")
-            lines.shift()
+            lines.shift();
         if (lines.length === 0)
-            return ""
-        return "<p>-- <br>" + root.escapeHtml(lines.join("\n")).split("\n").join("<br>") + "</p>"
+            return "";
+        return "<p>-- <br>" + root.escapeHtml(lines.join("\n")).split("\n").join("<br>") + "</p>";
     }
 
     function resetHeaders() {
-        fromLocal.text = root.accountLocalPart
-        fromName.text = root.accountFromName
-        toField.text = ""
-        ccField.text = ""
-        bccField.text = ""
-        replyToField.text = ""
-        subjectField.text = ""
-        root.showCc = false
-        root.showBcc = false
-        root.showReplyTo = false
-        root.replyNoticeAddr = ""
-        root.replyNoticeSender = ""
-        root.attachments = []
-        root.draftUid = -1
+        fromLocal.text = root.accountLocalPart;
+        fromName.text = root.accountFromName;
+        toField.text = "";
+        ccField.text = "";
+        bccField.text = "";
+        replyToField.text = "";
+        subjectField.text = "";
+        root.showCc = false;
+        root.showBcc = false;
+        root.showReplyTo = false;
+        root.replyNoticeAddr = "";
+        root.replyNoticeSender = "";
+        root.attachments = [];
+        root.draftUid = -1;
     }
 
     function setBody(html) {
-        bodyEditor.setHtml(html)
-        sourceArea.text = html
+        bodyEditor.setHtml(html);
+        sourceArea.text = html;
     }
 
     function openBlank() {
         if (!root.readyForNew())
-            return
-        root.sourceMode = false
-        root.resetHeaders()
-        root.setBody(root.signatureHtml())
-        root.markClean()
-        open()
+            return;
+        root.sourceMode = false;
+        root.resetHeaders();
+        root.setBody(root.signatureHtml());
+        root.markClean();
+        open();
     }
 
     function openForReply(message) {
         if (!root.readyForNew())
-            return
-        root.sourceMode = false
-        root.resetHeaders()
+            return;
+        root.sourceMode = false;
+        root.resetHeaders();
         if (message !== undefined) {
             // Replies go to Reply-To when the sender set one, else From —
             // and when the two differ the banner below says so out loud.
-            var from = message.from || ""
-            var rt = (message.reply_to || "").trim()
-            var differs = rt !== "" && rt.toLowerCase() !== from.trim().toLowerCase()
-            toField.text = differs ? rt : from
+            var from = message.from || "";
+            var rt = (message.reply_to || "").trim();
+            var differs = rt !== "" && rt.toLowerCase() !== from.trim().toLowerCase();
+            toField.text = differs ? rt : from;
             if (differs) {
-                root.replyNoticeAddr = rt
-                root.replyNoticeSender = from
+                root.replyNoticeAddr = rt;
+                root.replyNoticeSender = from;
             }
-            subjectField.text = "Re: " + (message.subject || "")
-            var core = root.quoteCore(message,
-                "On " + (message.date || "") + ", " + (message.from || "") + " wrote:")
+            subjectField.text = "Re: " + (message.subject || "");
+            var core = root.quoteCore(message, "On " + (message.date || "") + ", " + (message.from || "") + " wrote:");
             if (root.replyBelowQuote)
-                root.setBody(core + "<p></p>" + root.signatureHtml())
+                root.setBody(core + "<p></p>" + root.signatureHtml());
             else
-                root.setBody("<p></p>" + root.signatureHtml() + core)
+                root.setBody("<p></p>" + root.signatureHtml() + core);
         }
-        root.markClean()
-        open()
+        root.markClean();
+        open();
     }
 
     function openForForward(message) {
         if (!root.readyForNew())
-            return
-        root.sourceMode = false
-        root.resetHeaders()
+            return;
+        root.sourceMode = false;
+        root.resetHeaders();
         if (message !== undefined) {
-            subjectField.text = "Fwd: " + (message.subject || "")
-            var lead = root.signatureHtml() + "<p></p>"
-            var wasHtml = message.is_html === true
-            var html = message.body_html !== undefined ? message.body_html : ""
+            subjectField.text = "Fwd: " + (message.subject || "");
+            var lead = root.signatureHtml() + "<p></p>";
+            var wasHtml = message.is_html === true;
+            var html = message.body_html !== undefined ? message.body_html : "";
             if (wasHtml && html !== "") {
-                root.setBody(lead + "<p>— Forwarded message —<br>From: "
-                    + root.escapeHtml(message.from || "") + "<br>Date: "
-                    + root.escapeHtml(message.date || "") + "<br>Subject: "
-                    + root.escapeHtml(message.subject || "") + "</p><blockquote>" + html + "</blockquote>")
+                root.setBody(lead + "<p>— Forwarded message —<br>From: " + root.escapeHtml(message.from || "")
+                             + "<br>Date: " + root.escapeHtml(message.date || "") + "<br>Subject: " + root.escapeHtml(
+                                 message.subject || "") + "</p><blockquote>" + html + "</blockquote>");
             } else {
-                var q = message.body_text !== undefined ? message.body_text : (message.snippet || "")
-                root.setBody(lead + root.plainToHtmlQuote("— Forwarded message —\nFrom: "
-                    + (message.from || "") + "\nDate: " + (message.date || "") + "\nSubject: "
-                    + (message.subject || "") + "\n\n" + q))
+                var q = message.body_text !== undefined ? message.body_text : (message.snippet || "");
+                root.setBody(lead + root.plainToHtmlQuote("— Forwarded message —\nFrom: " + (message.from || "")
+                                                          + "\nDate: " + (message.date || "") + "\nSubject: " + (
+                                                              message.subject || "") + "\n\n" + q));
             }
         }
-        root.markClean()
-        open()
+        root.markClean();
+        open();
     }
 
     function openForDraft(draft) {
         if (!root.readyForNew())
-            return
-        root.sourceMode = false
-        root.resetHeaders()
-        root.draftUid = draft.draft_uid === undefined ? -1 : draft.draft_uid
-        var from = draft.from || root.accountEmail
-        var at = from.indexOf("@")
-        fromLocal.text = at < 0 ? from : from.substring(0, at)
-        toField.text = draft.to || ""
-        ccField.text = draft.cc || ""
-        bccField.text = draft.bcc || ""
-        replyToField.text = draft.reply_to || ""
-        root.showCc = ccField.text !== ""
-        root.showBcc = bccField.text !== ""
-        root.showReplyTo = replyToField.text !== ""
-        subjectField.text = draft.subject || ""
-        root.attachments = draft.attachments || []
-        root.setBody(draft.body || "")
-        root.markClean()
-        open()
+            return;
+        root.sourceMode = false;
+        root.resetHeaders();
+        root.draftUid = draft.draft_uid === undefined ? -1 : draft.draft_uid;
+        var from = draft.from || root.accountEmail;
+        var at = from.indexOf("@");
+        fromLocal.text = at < 0 ? from : from.substring(0, at);
+        toField.text = draft.to || "";
+        ccField.text = draft.cc || "";
+        bccField.text = draft.bcc || "";
+        replyToField.text = draft.reply_to || "";
+        root.showCc = ccField.text !== "";
+        root.showBcc = bccField.text !== "";
+        root.showReplyTo = replyToField.text !== "";
+        subjectField.text = draft.subject || "";
+        root.attachments = draft.attachments || [];
+        root.setBody(draft.body || "");
+        root.markClean();
+        open();
     }
 
     // Source mode shows exactly what will be sent, and edits round-trip.
     function toggleSource() {
         if (!root.sourceMode) {
             bodyEditor.fetchHtml(function (html) {
-                sourceArea.text = html
-                root.sourceMode = true
-            })
+                sourceArea.text = html;
+                root.sourceMode = true;
+            });
         } else {
-            bodyEditor.setHtml(sourceArea.text)
-            root.sourceMode = false
+            bodyEditor.setHtml(sourceArea.text);
+            root.sourceMode = false;
         }
     }
 
     function baseName(url) {
-        var s = url.toString()
-        var i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"))
-        var name = i < 0 ? s : s.substring(i + 1)
-        try { name = decodeURIComponent(name) } catch (e) {}
-        return name === "" ? s : name
+        var s = url.toString();
+        var i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
+        var name = i < 0 ? s : s.substring(i + 1);
+        try {
+            name = decodeURIComponent(name);
+        } catch (e) {}
+        return name === "" ? s : name;
     }
 
     function addAttachments(urls) {
-        var next = root.attachments.slice()
+        var next = root.attachments.slice();
         for (var i = 0; i < urls.length; i++) {
-            var u = urls[i].toString()
-            var known = false
+            var u = urls[i].toString();
+            var known = false;
             for (var j = 0; j < next.length; j++) {
                 if (next[j].path === u) {
-                    known = true
-                    break
+                    known = true;
+                    break;
                 }
             }
             if (!known)
-                next.push({ path: u, name: root.baseName(u) })
+                next.push({
+                              path: u,
+                              name: root.baseName(u)
+                          });
         }
-        root.attachments = next
-        root.dirty = true
+        root.attachments = next;
+        root.dirty = true;
     }
 
     function removeAttachment(index) {
-        var next = root.attachments.slice()
-        next.splice(index, 1)
-        root.attachments = next
-        root.dirty = true
+        var next = root.attachments.slice();
+        next.splice(index, 1);
+        root.attachments = next;
+        root.dirty = true;
     }
 
     function payloadFor(html) {
-        var paths = []
+        var paths = [];
         for (var i = 0; i < root.attachments.length; i++)
-            paths.push(root.attachments[i].path)
+            paths.push(root.attachments[i].path);
         return JSON.stringify({
-            from: root.effectiveFrom,
-            from_name: fromName.text.trim(),
-            reply_to: replyToField.text,
-            to: toField.text,
-            cc: ccField.text,
-            bcc: bccField.text,
-            subject: subjectField.text,
-            body: html,
-            body_html: html,
-            attachments: paths,
-            draft_uid: root.draftUid
-        })
+                                  from: root.effectiveFrom,
+                                  from_name: fromName.text.trim(),
+                                  reply_to: replyToField.text,
+                                  to: toField.text,
+                                  cc: ccField.text,
+                                  bcc: bccField.text,
+                                  subject: subjectField.text,
+                                  body: html,
+                                  body_html: html,
+                                  attachments: paths,
+                                  draft_uid: root.draftUid
+                              });
     }
 
     // To accepts placeholder text or stays blank: the real recipients may
     // live in Cc/Bcc alone. Only all-three-empty blocks the send.
-    readonly property bool hasRecipients:
-        toField.text.trim() !== "" || ccField.text.trim() !== "" || bccField.text.trim() !== ""
+    readonly property bool hasRecipients: toField.text.trim() !== "" || ccField.text.trim() !== "" || bccField.text.trim()
+                                          !== ""
 
     // Reading the document back is asynchronous, so Send finishes inside the
     // callback rather than returning a payload.
     function requestSend() {
         if (!root.hasRecipients) {
-            root.statusMessage(qsTr("Add at least one recipient (To, Cc or Bcc)"))
-            return
+            root.statusMessage(qsTr("Add at least one recipient (To, Cc or Bcc)"));
+            return;
         }
         if (root.sourceMode) {
-            root.sendRequested(root.payloadFor(sourceArea.text))
+            root.sendRequested(root.payloadFor(sourceArea.text));
         } else {
             bodyEditor.fetchHtml(function (html) {
-                root.sendRequested(root.payloadFor(html))
-            })
+                root.sendRequested(root.payloadFor(html));
+            });
         }
     }
 
     function requestSaveDraft() {
         if (root.sourceMode) {
-            root.saveDraftRequested(root.payloadFor(sourceArea.text))
+            root.saveDraftRequested(root.payloadFor(sourceArea.text));
         } else {
             bodyEditor.fetchHtml(function (html) {
-                root.saveDraftRequested(root.payloadFor(html))
-            })
+                root.saveDraftRequested(root.payloadFor(html));
+            });
         }
     }
 
@@ -516,56 +518,58 @@ Dialog {
                     placeholderText: qsTr("Name")
                     onTextChanged: root.dirty = true
                 }
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredWidth: 200
-                implicitHeight: Theme.controlHeight
-                radius: Theme.radius
-                color: Theme.bg
-                border.width: 1
-                border.color: fromLocal.activeFocus ? Theme.accent : Theme.border
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: 200
+                    implicitHeight: Theme.controlHeight
+                    radius: Theme.radius
+                    color: Theme.bg
+                    border.width: 1
+                    border.color: fromLocal.activeFocus ? Theme.accent : Theme.border
 
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: Theme.sm
-                    anchors.rightMargin: Theme.sm
-                    spacing: 0
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: Theme.sm
+                        anchors.rightMargin: Theme.sm
+                        spacing: 0
 
-                    AppTextField {
-                        id: fromLocal
-                        Layout.fillWidth: true
-                        text: root.accountLocalPart
-                        color: Theme.text
-                        font.pixelSize: Theme.fontBase
-                        placeholderTextColor: Theme.textMuted
-                        selectByMouse: true
-                        leftPadding: 0
-                        rightPadding: 0
-                        background: null
-                        onTextChanged: root.dirty = true
-                    }
-                    Label {
-                        text: root.accountDomain
-                        color: Theme.textMuted
-                        font.pixelSize: Theme.fontBase
-                        ToolTip.visible: domainHover.hovered
-                        ToolTip.text: qsTr("Fixed to this account's domain")
-                        HoverHandler { id: domainHover }
+                        AppTextField {
+                            id: fromLocal
+                            Layout.fillWidth: true
+                            text: root.accountLocalPart
+                            color: Theme.text
+                            font.pixelSize: Theme.fontBase
+                            placeholderTextColor: Theme.textMuted
+                            selectByMouse: true
+                            leftPadding: 0
+                            rightPadding: 0
+                            background: null
+                            onTextChanged: root.dirty = true
+                        }
+                        Label {
+                            text: root.accountDomain
+                            color: Theme.textMuted
+                            font.pixelSize: Theme.fontBase
+                            ToolTip.visible: domainHover.hovered
+                            ToolTip.text: qsTr("Fixed to this account's domain")
+                            HoverHandler {
+                                id: domainHover
+                            }
+                        }
                     }
                 }
-            }
-            // Collapsed Reply-To toggle: our mail asks replies to go to
-            // another address instead of From. Optional, off by default.
-            IconButton {
-                text: Icons.reply
-                iconFont: true
-                fontSize: Theme.fontSmall
-                implicitWidth: Math.round(36 * Theme.uiScale)
-                implicitHeight: Theme.controlHeight
-                active: root.showReplyTo || replyToField.text !== ""
-                tooltip: qsTr("Set Reply-To address")
-                onClicked: root.showReplyTo = !root.showReplyTo
-            }
+                // Collapsed Reply-To toggle: our mail asks replies to go to
+                // another address instead of From. Optional, off by default.
+                IconButton {
+                    text: Icons.reply
+                    iconFont: true
+                    fontSize: Theme.fontSmall
+                    implicitWidth: Math.round(36 * Theme.uiScale)
+                    implicitHeight: Theme.controlHeight
+                    active: root.showReplyTo || replyToField.text !== ""
+                    tooltip: qsTr("Set Reply-To address")
+                    onClicked: root.showReplyTo = !root.showReplyTo
+                }
             }
 
             Label {
@@ -672,8 +676,8 @@ Dialog {
         // it (the user took control of the recipient).
         Rectangle {
             Layout.fillWidth: true
-            visible: root.replyNoticeAddr !== ""
-                     && toField.text.trim().toLowerCase() === root.replyNoticeAddr.toLowerCase()
+            visible: root.replyNoticeAddr !== "" && toField.text.trim().toLowerCase()
+                     === root.replyNoticeAddr.toLowerCase()
             radius: Theme.radius
             color: Theme.bgAlt
             border.width: 1
@@ -696,7 +700,8 @@ Dialog {
                     wrapMode: Text.Wrap
                     color: Theme.text
                     font.pixelSize: Theme.fontSmall
-                    text: qsTr("Replies to this mail go to %1 — not to the sender (%2).").arg(root.replyNoticeAddr).arg(root.replyNoticeSender)
+                    text: qsTr("Replies to this mail go to %1 — not to the sender (%2).").arg(root.replyNoticeAddr).arg(
+                              root.replyNoticeSender)
                 }
             }
         }
@@ -769,7 +774,9 @@ Dialog {
                 color: Theme.textMuted
                 font.pixelSize: Theme.fontTiny
             }
-            Item { Layout.fillWidth: true }
+            Item {
+                Layout.fillWidth: true
+            }
             // Server drafts get an explicit delete: closing (Discard) only
             // ever abandons local edits, it never destroys the server copy.
             IconButton {
@@ -803,15 +810,15 @@ Dialog {
                     width: 12
                     height: 12
                     onPaint: {
-                        var ctx = getContext("2d")
-                        ctx.clearRect(0, 0, width, height)
-                        ctx.strokeStyle = Theme.border
-                        ctx.lineWidth = 1.5
+                        var ctx = getContext("2d");
+                        ctx.clearRect(0, 0, width, height);
+                        ctx.strokeStyle = Theme.border;
+                        ctx.lineWidth = 1.5;
                         for (var i = 0; i < 3; i++) {
-                            ctx.beginPath()
-                            ctx.moveTo(2 + i * 3, height - 1)
-                            ctx.lineTo(width - 1, 2 + i * 3)
-                            ctx.stroke()
+                            ctx.beginPath();
+                            ctx.moveTo(2 + i * 3, height - 1);
+                            ctx.lineTo(width - 1, 2 + i * 3);
+                            ctx.stroke();
                         }
                     }
                 }
@@ -827,24 +834,23 @@ Dialog {
                     property real sW
                     property real sH
                     onPressed: function (mouse) {
-                        var p = mapToItem(root.parent, mouse.x, mouse.y)
-                        sMX = p.x
-                        sMY = p.y
-                        sX = root.x
-                        sY = root.y
-                        sW = root.width
-                        sH = root.height
+                        var p = mapToItem(root.parent, mouse.x, mouse.y);
+                        sMX = p.x;
+                        sMY = p.y;
+                        sX = root.x;
+                        sY = root.y;
+                        sW = root.width;
+                        sH = root.height;
                         // Resize from this corner without restoring the
                         // centered fallback position.
-                        root.wantX = sX
-                        root.wantY = sY
+                        root.wantX = sX;
+                        root.wantY = sY;
                     }
                     onPositionChanged: function (mouse) {
                         if (!pressed)
-                            return
-                        var p = mapToItem(root.parent, mouse.x, mouse.y)
-                        root.applyResize(Qt.RightEdge | Qt.BottomEdge,
-                            sX, sY, sW, sH, p.x - sMX, p.y - sMY)
+                            return;
+                        var p = mapToItem(root.parent, mouse.x, mouse.y);
+                        root.applyResize(Qt.RightEdge | Qt.BottomEdge, sX, sY, sW, sH, p.x - sMX, p.y - sMY);
                     }
                 }
             }
@@ -880,7 +886,9 @@ Dialog {
 
         footer: RowLayout {
             spacing: Theme.sm
-            Item { Layout.fillWidth: true }
+            Item {
+                Layout.fillWidth: true
+            }
             AppButton {
                 text: qsTr("Cancel")
                 onClicked: linkDialog.close()
@@ -892,8 +900,8 @@ Dialog {
                 text: qsTr("Insert")
                 intent: "primary"
                 onClicked: {
-                    bodyEditor.exec("createLink", urlField.text.trim())
-                    linkDialog.close()
+                    bodyEditor.exec("createLink", urlField.text.trim());
+                    linkDialog.close();
                 }
             }
         }
@@ -927,7 +935,9 @@ Dialog {
 
         footer: RowLayout {
             spacing: Theme.sm
-            Item { Layout.fillWidth: true }
+            Item {
+                Layout.fillWidth: true
+            }
             AppButton {
                 text: qsTr("Cancel")
                 onClicked: discardConfirm.close()
@@ -936,9 +946,9 @@ Dialog {
                 text: root.draftUid >= 0 ? qsTr("Discard changes") : qsTr("Discard")
                 intent: "danger"
                 onClicked: {
-                    root.markClean()
-                    discardConfirm.close()
-                    root.close()
+                    root.markClean();
+                    discardConfirm.close();
+                    root.close();
                 }
             }
             AppButton {
@@ -950,8 +960,8 @@ Dialog {
                 onClicked: {
                     // Stays open until the save job reports back (see
                     // onSaveDraftRequested): a failure keeps the text.
-                    discardConfirm.close()
-                    root.requestSaveDraft()
+                    discardConfirm.close();
+                    root.requestSaveDraft();
                 }
             }
         }
@@ -961,9 +971,8 @@ Dialog {
             wrapMode: Text.Wrap
             color: Theme.text
             font.pixelSize: Theme.fontBase
-            text: root.draftUid >= 0
-                  ? qsTr("Discard your edits? The saved draft on the server is kept.")
-                  : qsTr("This message has not been sent. Save it as a draft on the server?")
+            text: root.draftUid >= 0 ? qsTr("Discard your edits? The saved draft on the server is kept.") : qsTr(
+                                           "This message has not been sent. Save it as a draft on the server?")
         }
     }
 
@@ -987,7 +996,9 @@ Dialog {
 
         footer: RowLayout {
             spacing: Theme.sm
-            Item { Layout.fillWidth: true }
+            Item {
+                Layout.fillWidth: true
+            }
             AppButton {
                 text: qsTr("Cancel")
                 onClicked: deleteDraftConfirm.close()
@@ -1000,17 +1011,17 @@ Dialog {
                 intent: "danger"
                 onClicked: {
                     if (root.backend && root.backend.delete_draft) {
-                        var uid = root.draftUid
-                        root.markClean()
-                        deleteDraftConfirm.close()
-                        root.close()
-                        var r = root.backend.delete_draft(uid)
+                        var uid = root.draftUid;
+                        root.markClean();
+                        deleteDraftConfirm.close();
+                        root.close();
+                        var r = root.backend.delete_draft(uid);
                         if (r !== "")
-                            root.statusMessage(r)
+                            root.statusMessage(r);
                     } else {
-                        root.markClean()
-                        deleteDraftConfirm.close()
-                        root.close()
+                        root.markClean();
+                        deleteDraftConfirm.close();
+                        root.close();
                     }
                 }
             }

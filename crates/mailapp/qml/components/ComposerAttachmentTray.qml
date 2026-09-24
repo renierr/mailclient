@@ -9,7 +9,7 @@ Rectangle {
     id: root
 
     property var attachments: []
-    signal addRequested()
+    signal addRequested
     signal removeRequested(int index)
 
     implicitHeight: attachRow.implicitHeight + Theme.sm * 2

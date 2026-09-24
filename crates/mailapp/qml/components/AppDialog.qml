@@ -42,48 +42,46 @@ Dialog {
 
     width: Math.min(Math.max(wantW, Math.min(minWidth, maxW)), maxW)
     height: Math.min(Math.max(wantH, Math.min(minHeight, maxH)), maxH)
-    x: positioned ? Math.round(Math.max(0, Math.min(wantX, hostW - width)))
-                  : Math.round((hostW - width) / 2)
-    y: positioned ? Math.round(Math.max(0, Math.min(wantY, hostH - height)))
-                  : Math.round((hostH - height) / 2)
+    x: positioned ? Math.round(Math.max(0, Math.min(wantX, hostW - width))) : Math.round((hostW - width) / 2)
+    y: positioned ? Math.round(Math.max(0, Math.min(wantY, hostH - height))) : Math.round((hostH - height) / 2)
 
     function applyDefaultGeometry() {
-        wantW = preferredWidth
-        wantH = preferredHeight
-        positioned = false
+        wantW = preferredWidth;
+        wantH = preferredHeight;
+        positioned = false;
     }
 
     function applyResize(edges, sX, sY, sW, sH, dx, dy) {
         if (!resizable)
-            return
-        var nx = sX
-        var ny = sY
-        var nw = sW
-        var nh = sH
-        var minW = Math.min(minWidth, maxW)
-        var minH = Math.min(minHeight, maxH)
+            return;
+        var nx = sX;
+        var ny = sY;
+        var nw = sW;
+        var nh = sH;
+        var minW = Math.min(minWidth, maxW);
+        var minH = Math.min(minHeight, maxH);
         if (edges & Qt.RightEdge)
-            nw = Math.min(Math.max(minW, sW + dx), hostW - nx)
+            nw = Math.min(Math.max(minW, sW + dx), hostW - nx);
         if (edges & Qt.LeftEdge) {
-            nw = Math.min(Math.max(minW, sW - dx), sX + sW)
-            nx = sX + sW - nw
+            nw = Math.min(Math.max(minW, sW - dx), sX + sW);
+            nx = sX + sW - nw;
         }
         if (edges & Qt.BottomEdge)
-            nh = Math.min(Math.max(minH, sH + dy), hostH - ny)
+            nh = Math.min(Math.max(minH, sH + dy), hostH - ny);
         if (edges & Qt.TopEdge) {
-            nh = Math.min(Math.max(minH, sH - dy), sY + sH)
-            ny = sY + sH - nh
+            nh = Math.min(Math.max(minH, sH - dy), sY + sH);
+            ny = sY + sH - nh;
         }
-        positioned = true
-        wantX = nx
-        wantY = ny
-        wantW = nw
-        wantH = nh
+        positioned = true;
+        wantX = nx;
+        wantY = ny;
+        wantW = nw;
+        wantH = nh;
     }
 
     onOpened: {
         if (!rememberGeometry || !positioned) {
-            applyDefaultGeometry()
+            applyDefaultGeometry();
         }
     }
 
@@ -109,19 +107,19 @@ Dialog {
             property real sX
             property real sY
             onPressed: function (mouse) {
-                var p = mapToItem(root.parent, mouse.x, mouse.y)
-                sMX = p.x
-                sMY = p.y
-                sX = root.x
-                sY = root.y
-                root.positioned = true
+                var p = mapToItem(root.parent, mouse.x, mouse.y);
+                sMX = p.x;
+                sMY = p.y;
+                sX = root.x;
+                sY = root.y;
+                root.positioned = true;
             }
             onPositionChanged: function (mouse) {
                 if (!pressed)
-                    return
-                var p = mapToItem(root.parent, mouse.x, mouse.y)
-                root.wantX = sX + p.x - sMX
-                root.wantY = sY + p.y - sMY
+                    return;
+                var p = mapToItem(root.parent, mouse.x, mouse.y);
+                root.wantX = sX + p.x - sMX;
+                root.wantY = sY + p.y - sMY;
             }
         }
 
@@ -189,33 +187,33 @@ Dialog {
     // Overlay resize handles on top of content & footer
     Item {
         id: resizeContainer
-        parent: (root.contentItem && root.contentItem.parent)
-                ? root.contentItem.parent
-                : (root.background ? root.background.parent : null)
+        parent: (root.contentItem && root.contentItem.parent) ? root.contentItem.parent : (root.background
+                                                                                           ? root.background.parent :
+                                                                                             null)
         z: 9999
         anchors.fill: parent
         visible: root.resizable
 
         function startResize(mouseArea, edges, mouse) {
-            var p = mouseArea.mapToItem(root.parent, mouse.x, mouse.y)
-            mouseArea.sMX = p.x
-            mouseArea.sMY = p.y
-            mouseArea.sX = root.x
-            mouseArea.sY = root.y
-            mouseArea.sW = root.width
-            mouseArea.sH = root.height
+            var p = mouseArea.mapToItem(root.parent, mouse.x, mouse.y);
+            mouseArea.sMX = p.x;
+            mouseArea.sMY = p.y;
+            mouseArea.sX = root.x;
+            mouseArea.sY = root.y;
+            mouseArea.sW = root.width;
+            mouseArea.sH = root.height;
             if (edges & (Qt.RightEdge | Qt.BottomEdge)) {
-                root.wantX = mouseArea.sX
-                root.wantY = mouseArea.sY
+                root.wantX = mouseArea.sX;
+                root.wantY = mouseArea.sY;
             }
         }
 
         function updateResize(mouseArea, edges, mouse) {
             if (!mouseArea.pressed)
-                return
-            var p = mouseArea.mapToItem(root.parent, mouse.x, mouse.y)
-            root.applyResize(edges, mouseArea.sX, mouseArea.sY, mouseArea.sW, mouseArea.sH,
-                             p.x - mouseArea.sMX, p.y - mouseArea.sMY)
+                return;
+            var p = mouseArea.mapToItem(root.parent, mouse.x, mouse.y);
+            root.applyResize(edges, mouseArea.sX, mouseArea.sY, mouseArea.sW, mouseArea.sH, p.x - mouseArea.sMX, p.y
+                             - mouseArea.sMY);
         }
 
         // Bottom-right corner resize grip
@@ -230,15 +228,15 @@ Dialog {
                 width: 12
                 height: 12
                 onPaint: {
-                    var ctx = getContext("2d")
-                    ctx.clearRect(0, 0, width, height)
-                    ctx.strokeStyle = Theme.border
-                    ctx.lineWidth = 1.5
+                    var ctx = getContext("2d");
+                    ctx.clearRect(0, 0, width, height);
+                    ctx.strokeStyle = Theme.border;
+                    ctx.lineWidth = 1.5;
                     for (var i = 0; i < 3; i++) {
-                        ctx.beginPath()
-                        ctx.moveTo(2 + i * 3, height - 1)
-                        ctx.lineTo(width - 1, 2 + i * 3)
-                        ctx.stroke()
+                        ctx.beginPath();
+                        ctx.moveTo(2 + i * 3, height - 1);
+                        ctx.lineTo(width - 1, 2 + i * 3);
+                        ctx.stroke();
                     }
                 }
             }
@@ -249,9 +247,16 @@ Dialog {
                 hoverEnabled: true
                 preventStealing: true
                 cursorShape: Qt.SizeFDiagCursor
-                property real sMX; property real sMY; property real sX; property real sY; property real sW; property real sH
+                property real sMX
+                property real sMY
+                property real sX
+                property real sY
+                property real sW
+                property real sH
                 onPressed: mouse => resizeContainer.startResize(brGripArea, Qt.RightEdge | Qt.BottomEdge, mouse)
-                onPositionChanged: mouse => resizeContainer.updateResize(brGripArea, Qt.RightEdge | Qt.BottomEdge, mouse)
+                onPositionChanged: mouse => resizeContainer.updateResize(brGripArea, Qt.RightEdge | Qt.BottomEdge,
+                                                                         mouse)
+
             }
         }
 
@@ -265,7 +270,12 @@ Dialog {
             anchors.bottomMargin: 20
             width: 6
             cursorShape: Qt.SizeHorCursor
-            property real sMX; property real sMY; property real sX; property real sY; property real sW; property real sH
+            property real sMX
+            property real sMY
+            property real sX
+            property real sY
+            property real sW
+            property real sH
             onPressed: mouse => resizeContainer.startResize(rEdgeArea, Qt.RightEdge, mouse)
             onPositionChanged: mouse => resizeContainer.updateResize(rEdgeArea, Qt.RightEdge, mouse)
         }
@@ -280,7 +290,12 @@ Dialog {
             anchors.rightMargin: 20
             height: 6
             cursorShape: Qt.SizeVerCursor
-            property real sMX; property real sMY; property real sX; property real sY; property real sW; property real sH
+            property real sMX
+            property real sMY
+            property real sX
+            property real sY
+            property real sW
+            property real sH
             onPressed: mouse => resizeContainer.startResize(bEdgeArea, Qt.BottomEdge, mouse)
             onPositionChanged: mouse => resizeContainer.updateResize(bEdgeArea, Qt.BottomEdge, mouse)
         }
@@ -295,7 +310,12 @@ Dialog {
             anchors.bottomMargin: 20
             width: 6
             cursorShape: Qt.SizeHorCursor
-            property real sMX; property real sMY; property real sX; property real sY; property real sW; property real sH
+            property real sMX
+            property real sMY
+            property real sX
+            property real sY
+            property real sW
+            property real sH
             onPressed: mouse => resizeContainer.startResize(lEdgeArea, Qt.LeftEdge, mouse)
             onPositionChanged: mouse => resizeContainer.updateResize(lEdgeArea, Qt.LeftEdge, mouse)
         }
@@ -308,7 +328,12 @@ Dialog {
             width: 14
             height: 14
             cursorShape: Qt.SizeBDiagCursor
-            property real sMX; property real sMY; property real sX; property real sY; property real sW; property real sH
+            property real sMX
+            property real sMY
+            property real sX
+            property real sY
+            property real sW
+            property real sH
             onPressed: mouse => resizeContainer.startResize(blCornerArea, Qt.LeftEdge | Qt.BottomEdge, mouse)
             onPositionChanged: mouse => resizeContainer.updateResize(blCornerArea, Qt.LeftEdge | Qt.BottomEdge, mouse)
         }

@@ -22,7 +22,7 @@ AppDialog {
     property int currentAccountId: -1
 
     signal statusMessage(string text)
-    signal addRequested()
+    signal addRequested
     signal editRequested(int id)
     signal accountSelected(int id)
     signal deleteConfirmed(int id)
@@ -30,9 +30,9 @@ AppDialog {
     // These rebuild the account model, destroying the row that was clicked.
     function emitLater(sig, arg) {
         if (arg === undefined)
-            Qt.callLater(sig)
+            Qt.callLater(sig);
         else
-            Qt.callLater(sig, arg)
+            Qt.callLater(sig, arg);
     }
 
     // Pending delete, so the confirm dialog knows what it is confirming.
@@ -47,7 +47,9 @@ AppDialog {
             text: qsTr("Add account…")
             onClicked: root.addRequested()
         }
-        Item { Layout.fillWidth: true }
+        Item {
+            Layout.fillWidth: true
+        }
         AppButton {
             Layout.rightMargin: Theme.lg + 8
             Layout.bottomMargin: Theme.md
@@ -63,7 +65,9 @@ AppDialog {
         spacing: Theme.sm
         model: root.accounts
         boundsBehavior: Flickable.StopAtBounds
-        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+        ScrollBar.vertical: ScrollBar {
+            policy: ScrollBar.AsNeeded
+        }
 
         delegate: Rectangle {
             id: accountRow
@@ -123,10 +127,8 @@ AppDialog {
                         }
                     }
                     Label {
-                        text: qsTr("%1 · IMAP %2:%3")
-                              .arg(accountRow.model.name)
-                              .arg(accountRow.model.imap_host)
-                              .arg(accountRow.model.imap_port)
+                        text: qsTr("%1 · IMAP %2:%3").arg(accountRow.model.name).arg(accountRow.model.imap_host).arg(
+                                  accountRow.model.imap_port)
                         color: Theme.textMuted
                         font.pixelSize: Theme.fontTiny
                         elide: Text.ElideRight
@@ -154,9 +156,9 @@ AppDialog {
                     tooltip: qsTr("Remove")
                     contentColor: Theme.danger
                     onClicked: {
-                        root.pendingDeleteId = accountRow.model.id
-                        root.pendingDeleteEmail = accountRow.model.email
-                        confirmDelete.open()
+                        root.pendingDeleteId = accountRow.model.id;
+                        root.pendingDeleteEmail = accountRow.model.email;
+                        confirmDelete.open();
                     }
                 }
             }
@@ -193,7 +195,9 @@ AppDialog {
         // Controls style, so they would not match any other button here.
         footer: RowLayout {
             spacing: Theme.sm
-            Item { Layout.fillWidth: true }
+            Item {
+                Layout.fillWidth: true
+            }
             AppButton {
                 text: qsTr("Cancel")
                 onClicked: confirmDelete.close()
@@ -205,9 +209,9 @@ AppDialog {
                 text: qsTr("Remove")
                 intent: "danger"
                 onClicked: {
-                    root.deleteConfirmed(root.pendingDeleteId)
-                    root.pendingDeleteId = -1
-                    confirmDelete.close()
+                    root.deleteConfirmed(root.pendingDeleteId);
+                    root.pendingDeleteId = -1;
+                    confirmDelete.close();
                 }
             }
         }
@@ -217,8 +221,9 @@ AppDialog {
             wrapMode: Text.Wrap
             color: Theme.text
             font.pixelSize: Theme.fontBase
-            text: qsTr("Remove %1?\n\nIts cached folders and messages are deleted locally and its password is removed from the OS keyring. Mail on the server is untouched.")
-                  .arg(root.pendingDeleteEmail)
+            text: qsTr(
+                      "Remove %1?\n\nIts cached folders and messages are deleted locally and its password is removed from the OS keyring. Mail on the server is untouched.").arg(
+                      root.pendingDeleteEmail)
         }
     }
 }

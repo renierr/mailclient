@@ -32,29 +32,30 @@ Rectangle {
     // Rust Bridge, for the on-demand "Show once" re-sanitize. Set by Main.
     property var backend
     property string remoteHtml: ""
-    signal replyRequested()
-    signal replyAllRequested()
-    signal forwardRequested()
-    signal starRequested()
-    signal archiveRequested()
-    signal moveRequested()
-    signal deleteRequested()
+    signal replyRequested
+    signal replyAllRequested
+    signal forwardRequested
+    signal starRequested
+    signal archiveRequested
+    signal moveRequested
+    signal deleteRequested
     signal statusMessage(string text)
 
     color: Theme.bg
 
     // Derived, decided in Rust — no QML `<`/`>` guessing.
     readonly property bool isHtml: message !== undefined && message.is_html === true
-    readonly property string plainBody: message ? (message.body_text !== undefined ? message.body_text : (message.body || "")) : ""
+    readonly property string plainBody: message ? (message.body_text !== undefined ? message.body_text : (message.body
+                                                                                                          || "")) : ""
     readonly property string htmlBody: message ? (message.body_html !== undefined ? message.body_html : "") : ""
     readonly property bool hasRemote: message !== undefined && message.has_remote_images === true
     property bool allowRemoteOnce: false
     property bool isFullscreen: false
-    signal fullscreenRequested()
+    signal fullscreenRequested
     // Narrower layouts give the reader the whole content area; the chevron
     // back is how the user returns to the list. Set by Main.
     property bool showBack: false
-    signal backRequested()
+    signal backRequested
 
     // Keyed on the UID, not on `message` itself: the feed is re-parsed after
     // every open, star, delete and sync, so `message` is a fresh object each
@@ -64,17 +65,17 @@ Rectangle {
 
     onMessageUidChanged: {
         // One-shot remote consent is per-message.
-        root.allowRemoteOnce = false
-        root.remoteHtml = ""
-        root.headerExpanded = false
-        root.loadHeaders()
-        root.reloadHtml()
+        root.allowRemoteOnce = false;
+        root.remoteHtml = "";
+        root.headerExpanded = false;
+        root.loadHeaders();
+        root.reloadHtml();
     }
     onHtmlBodyChanged: {
         // A fresh feed (sync, settings toggle) invalidates the one-shot copy.
         if (!root.allowRemoteOnce)
-            root.remoteHtml = ""
-        root.reloadHtml()
+            root.remoteHtml = "";
+        root.reloadHtml();
     }
     onRemoteHtmlChanged: root.reloadHtml()
     onLoadRemoteImagesChanged: root.reloadHtml()
@@ -82,54 +83,53 @@ Rectangle {
 
     function reloadHtml() {
         if (root.isHtml && bodyLoader.item) {
-            var body = root.remoteHtml !== "" ? root.remoteHtml : root.htmlBody
-            bodyLoader.item.loadHtml(root.wrapDoc(body), "")
+            var body = root.remoteHtml !== "" ? root.remoteHtml : root.htmlBody;
+            bodyLoader.item.loadHtml(root.wrapDoc(body), "");
         }
     }
 
     function showRemoteOnce() {
         if (!root.message || root.message.uid === undefined)
-            return
+            return;
         // The feed stripped remote URLs (setting off), so re-sanitize the
         // stored raw body with remotes kept for this view only.
-        var html = ""
+        var html = "";
         if (root.backend && root.backend.message_html)
-            html = root.backend.message_html(root.message.uid, true)
+            html = root.backend.message_html(root.message.uid, true);
         if (html !== "")
-            root.remoteHtml = html
-        root.allowRemoteOnce = true
-        root.statusMessage(qsTr("Remote images allowed for this message only"))
+            root.remoteHtml = html;
+        root.allowRemoteOnce = true;
+        root.statusMessage(qsTr("Remote images allowed for this message only"));
     }
 
     function effectiveAutoLoad() {
-        return root.loadRemoteImages || root.allowRemoteOnce
+        return root.loadRemoteImages || root.allowRemoteOnce;
     }
 
     // Non-inline files from the Rust feed (bytes stay in SQLite until saved).
     readonly property var fileAttachments: {
-        if (root.message === undefined || root.message === null
-                || root.message.attachments === undefined)
-            return []
-        var out = []
+        if (root.message === undefined || root.message === null || root.message.attachments === undefined)
+            return [];
+        var out = [];
         for (var i = 0; i < root.message.attachments.length; i++) {
             if (root.message.attachments[i].is_inline !== true)
-                out.push(root.message.attachments[i])
+                out.push(root.message.attachments[i]);
         }
-        return out
+        return out;
     }
 
     function formatSize(n) {
         if (n === undefined || n === null)
-            return ""
+            return "";
         if (n < 1024)
-            return qsTr("%1 B").arg(n)
+            return qsTr("%1 B").arg(n);
         if (n < 1024 * 1024)
-            return qsTr("%1 KB").arg((n / 1024).toFixed(1))
-        return qsTr("%1 MB").arg((n / (1024 * 1024)).toFixed(1))
+            return qsTr("%1 KB").arg((n / 1024).toFixed(1));
+        return qsTr("%1 MB").arg((n / (1024 * 1024)).toFixed(1));
     }
 
     function displayName(a) {
-        return a.filename || qsTr("attachment-%1.bin").arg(a.id)
+        return a.filename || qsTr("attachment-%1.bin").arg(a.id);
     }
 
     // Join a downloads-folder value with a filename into a `file://` URL
@@ -138,88 +138,93 @@ Rectangle {
     // The filename is encoded so spaces/`#` survive the string→QUrl trip
     // (Rust decodes it back).
     function joinFileUrl(dir, name) {
-        var s = dir.toString().replace(/\\/g, "/")
+        var s = dir.toString().replace(/\\/g, "/");
         if (s.indexOf("file:") !== 0) {
             if (s.length >= 2 && s[1] === ":")
-                s = "/" + s
-            s = "file://" + s
+                s = "/" + s;
+            s = "file://" + s;
         }
-        s = s.replace(/\/+$/, "")
+        s = s.replace(/\/+$/, "");
         if (name !== undefined)
-            s += "/" + encodeURIComponent(name)
-        return s
+            s += "/" + encodeURIComponent(name);
+        return s;
     }
 
     function saveOne(a) {
         if (!root.backend || !root.backend.save_attachment)
-            return
-        saveOneDialog.attachmentId = a.id
-        var base = StandardPaths.writableLocation(StandardPaths.DownloadLocation)
-        saveOneDialog.selectedFile = root.joinFileUrl(base, root.displayName(a))
-        saveOneDialog.open()
+            return;
+        saveOneDialog.attachmentId = a.id;
+        var base = StandardPaths.writableLocation(StandardPaths.DownloadLocation);
+        saveOneDialog.selectedFile = root.joinFileUrl(base, root.displayName(a));
+        saveOneDialog.open();
     }
 
     function saveAll() {
         if (!root.backend || !root.backend.save_all_attachments)
-            return
-        var base = StandardPaths.writableLocation(StandardPaths.DownloadLocation)
+            return;
+        var base = StandardPaths.writableLocation(StandardPaths.DownloadLocation);
         if (base.toString() !== "")
-            saveAllDialog.selectedFolder = root.joinFileUrl(base)
-        saveAllDialog.open()
+            saveAllDialog.selectedFolder = root.joinFileUrl(base);
+        saveAllDialog.open();
     }
 
     // Open in the system viewer — downloads first when not cached yet.
     function openOne(a) {
         if (!root.backend || !root.backend.open_attachment)
-            return
-        root.statusMessage(qsTr("Opening…"))
-        var url = root.backend.open_attachment(a.id)
+            return;
+        root.statusMessage(qsTr("Opening…"));
+        var url = root.backend.open_attachment(a.id);
         if (url !== "")
-            root.statusMessage(url)
+            root.statusMessage(url);
     }
 
     // Full headers for the opened mail (sender display name, To/Cc, full
     // date) — same on-demand source as the Headers dialog, loaded once per
     // message so the header shows more than the bare From address.
     function loadHeaders() {
-        root.headersInfo = ({})
+        root.headersInfo = ({});
         if (!root.backend || !root.backend.message_headers_json || root.messageUid < 0)
-            return
-        root.headersInfo = FeedJson.parse(root.backend.message_headers_json(root.messageUid), ({}))
+            return;
+        root.headersInfo = FeedJson.parse(root.backend.message_headers_json(root.messageUid), ({}));
     }
 
     // "Name <addr>" -> {name, addr}; a bare address yields both identical.
     function splitAddr(full) {
-        var s = (full || "").trim()
-        var lt = s.indexOf("<")
-        var gt = s.lastIndexOf(">")
+        var s = (full || "").trim();
+        var lt = s.indexOf("<");
+        var gt = s.lastIndexOf(">");
         if (lt >= 0 && gt > lt) {
-            var name = s.substring(0, lt).trim().replace(/^["']|["']$/g, "")
-            var addr = s.substring(lt + 1, gt).trim()
-            return {"name": name !== "" ? name : addr, "addr": addr}
+            var name = s.substring(0, lt).trim().replace(/^["']|["']$/g, "");
+            var addr = s.substring(lt + 1, gt).trim();
+            return {
+                "name": name !== "" ? name : addr,
+                "addr": addr
+            };
         }
-        return {"name": s, "addr": s}
+        return {
+            "name": s,
+            "addr": s
+        };
     }
 
-    readonly property var sender: root.splitAddr(
-        root.headersInfo.from || (root.message ? root.message.from : ""))
+    readonly property var sender: root.splitAddr(root.headersInfo.from || (root.message ? root.message.from : ""))
     // Reply-To pointing elsewhere than the sender: answering goes there,
     // not to From. Compared on the bare address, case-insensitively.
     readonly property string replyToAddr: (root.headersInfo.reply_to || "").trim()
-    readonly property bool replyToDiffers: root.replyToAddr !== ""
-        && root.replyToAddr.toLowerCase() !== root.sender.addr.trim().toLowerCase()
+    readonly property bool replyToDiffers: root.replyToAddr !== "" && root.replyToAddr.toLowerCase()
+                                           !== root.sender.addr.trim().toLowerCase()
     readonly property string toLine: root.joinAddrs(root.headersInfo.to)
     readonly property string ccLine: root.joinAddrs(root.headersInfo.cc)
-    readonly property string fullDate:
-        (root.headersInfo.date || "") !== "" ? root.headersInfo.date
-        : (root.message ? root.message.date : "")
+    readonly property string fullDate: (root.headersInfo.date || "") !== "" ? root.headersInfo.date : (root.message
+                                                                                                       ? root.message.date :
+                                                                                                         "")
 
     // Collapsible extra header info. Auto-collapses on narrow panes so the
     // body keeps its space; the chevron re-opens it on demand.
     property bool headerExpanded: false
     onWidthChanged: {
         if (root.width < Math.round(480 * Theme.uiScale))
-            root.headerExpanded = false
+            root.headerExpanded = false;
     }
 
     // Header details for the Headers dialog (Roundcube-style "Kopfzeilen"):
@@ -229,40 +234,39 @@ Rectangle {
 
     function joinAddrs(v) {
         if (v === undefined || v === null)
-            return ""
+            return "";
         if (typeof v === "string")
-            return v
+            return v;
         if (v.length === undefined)
-            return ""
-        var out = []
+            return "";
+        var out = [];
         for (var i = 0; i < v.length; i++)
-            out.push(v[i])
-        return out.join(", ")
+            out.push(v[i]);
+        return out.join(", ");
     }
 
     function openHeaders() {
-        root.loadHeaders()
-        headersDialog.open()
+        root.loadHeaders();
+        headersDialog.open();
     }
 
     // Trusted wrapper added AFTER Rust sanitizing (so layout CSS is ours).
     // Colours come from the theme so HTML mail matches the app in dark mode.
     function wrapDoc(inner) {
-        return "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
-            + "<style>body{font-family:sans-serif;font-size:" + Math.round(14 * Theme.uiScale) + "px;line-height:1.55;"
-            + "max-width:78ch;margin:16px;word-wrap:break-word;"
-            + "color:" + Theme.text + ";background:" + Theme.bg + "}"
-            + "a{color:" + Theme.accent + "}"
-            + "img{max-width:100%;height:auto}pre{white-space:pre-wrap}"
-            + "blockquote{margin:8px 0;padding-left:12px;border-left:3px solid "
-            + Theme.border + ";color:" + Theme.textMuted + "}"
-            // Newsletter tables carry fixed cell widths (the sanitizer keeps
-            // the attribute): author CSS beats presentational attributes, so
-            // this lets them shrink to the pane instead of scrolling sideways.
-            + "table{border-collapse:collapse;max-width:100%!important}"
-            + "td,th{padding:4px 8px;overflow-wrap:anywhere}"
-            + "table[width],td[width],th[width]{width:auto!important}</style>"
-            + "</head><body>" + inner + "</body></html>"
+        return "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" + "<style>body{font-family:sans-serif;font-size:"
+                + Math.round(14 * Theme.uiScale) + "px;line-height:1.55;"
+                + "max-width:78ch;margin:16px;word-wrap:break-word;" + "color:" + Theme.text + ";background:"
+                + Theme.bg + "}" + "a{color:" + Theme.accent + "}"
+                + "img{max-width:100%;height:auto}pre{white-space:pre-wrap}"
+                + "blockquote{margin:8px 0;padding-left:12px;border-left:3px solid " + Theme.border + ";color:"
+                + Theme.textMuted + "}" +
+                // Newsletter tables carry fixed cell widths (the sanitizer keeps
+                // the attribute): author CSS beats presentational attributes, so
+                // this lets them shrink to the pane instead of scrolling sideways.
+                "table{border-collapse:collapse;max-width:100%!important}"
+                + "td,th{padding:4px 8px;overflow-wrap:anywhere}"
+                + "table[width],td[width],th[width]{width:auto!important}</style>" + "</head><body>" + inner
+                + "</body></html>";
     }
 
     ColumnLayout {
@@ -345,9 +349,8 @@ Rectangle {
                                 // `date_key` names the one case whose text is
                                 // a word; mailcore cannot translate it itself
                                 // (see feed::ShortDate).
-                                text: !root.message ? ""
-                                    : root.message.date_key === "yesterday" ? qsTr("Yesterday")
-                                    : root.message.date
+                                text: !root.message ? "" : root.message.date_key === "yesterday" ? qsTr("Yesterday") :
+                                                                                                   root.message.date
                                 color: Theme.textMuted
                                 font.pixelSize: Theme.fontSmall
                             }
@@ -398,7 +401,11 @@ Rectangle {
                     columnSpacing: Theme.md
                     rowSpacing: Theme.xs
 
-                    Label { text: qsTr("From"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+                    Label {
+                        text: qsTr("From")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                    }
                     Label {
                         Layout.fillWidth: true
                         text: root.headersInfo.from || root.sender.addr
@@ -407,7 +414,11 @@ Rectangle {
                         wrapMode: Text.WrapAnywhere
                         textFormat: Text.PlainText
                     }
-                    Label { text: qsTr("To"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+                    Label {
+                        text: qsTr("To")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                    }
                     Label {
                         Layout.fillWidth: true
                         text: root.toLine
@@ -431,7 +442,11 @@ Rectangle {
                         textFormat: Text.PlainText
                         visible: text !== ""
                     }
-                    Label { text: qsTr("Date"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+                    Label {
+                        text: qsTr("Date")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                    }
                     Label {
                         Layout.fillWidth: true
                         text: root.fullDate
@@ -460,7 +475,9 @@ Rectangle {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: Theme.xs
-                    Item { Layout.fillWidth: true }
+                    Item {
+                        Layout.fillWidth: true
+                    }
                     IconButton {
                         text: Icons.reply
                         iconFont: true
@@ -587,9 +604,9 @@ Rectangle {
                 Repeater {
                     model: root.fileAttachments
                     RowLayout {
+                        id: fileRow
                         Layout.fillWidth: true
                         spacing: Theme.sm
-                        id: fileRow
                         required property var modelData
                         Label {
                             Layout.fillWidth: true
@@ -630,7 +647,9 @@ Rectangle {
             contentWidth: width
             contentHeight: plainText.implicitHeight + Theme.lg * 2
             boundsBehavior: Flickable.StopAtBounds
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            ScrollBar.vertical: ScrollBar {
+                policy: ScrollBar.AsNeeded
+            }
 
             TextEdit {
                 id: plainText
@@ -643,9 +662,9 @@ Rectangle {
                 readOnly: true
                 selectByMouse: true
                 color: Theme.text
-                font.pixelSize: root.readerFont === "small" ? Theme.fontSmall
-                              : root.readerFont === "large" ? Theme.fontMedium + 3
-                              : Theme.fontBase + 1
+                font.pixelSize: root.readerFont === "small" ? Theme.fontSmall : root.readerFont === "large" ? Theme.fontMedium
+                                                                                                              + 3 : Theme.fontBase
+                                                                                                              + 1
             }
         }
 
@@ -735,10 +754,10 @@ Rectangle {
         property int attachmentId: -1
         onAccepted: {
             if (root.backend && root.backend.save_attachment) {
-                root.statusMessage(qsTr("Saving…"))
-                var r = root.backend.save_attachment(attachmentId, selectedFile.toString())
+                root.statusMessage(qsTr("Saving…"));
+                var r = root.backend.save_attachment(attachmentId, selectedFile.toString());
                 if (r !== "")
-                    root.statusMessage(r)
+                    root.statusMessage(r);
             }
         }
     }
@@ -748,10 +767,10 @@ Rectangle {
         title: qsTr("Save all attachments")
         onAccepted: {
             if (root.backend && root.backend.save_all_attachments) {
-                root.statusMessage(qsTr("Saving…"))
-                var r = root.backend.save_all_attachments(root.messageUid, selectedFolder.toString())
+                root.statusMessage(qsTr("Saving…"));
+                var r = root.backend.save_all_attachments(root.messageUid, selectedFolder.toString());
                 if (r !== "")
-                    root.statusMessage(r)
+                    root.statusMessage(r);
             }
         }
     }
@@ -775,7 +794,9 @@ Rectangle {
 
         footer: RowLayout {
             spacing: Theme.sm
-            Item { Layout.fillWidth: true }
+            Item {
+                Layout.fillWidth: true
+            }
             AppButton {
                 Layout.rightMargin: Theme.lg
                 Layout.bottomMargin: Theme.md
@@ -802,7 +823,11 @@ Rectangle {
                     columnSpacing: Theme.md
                     rowSpacing: Theme.xs
 
-                    Label { text: qsTr("From"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+                    Label {
+                        text: qsTr("From")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                    }
                     Label {
                         Layout.fillWidth: true
                         text: root.headersInfo.from || ""
@@ -811,7 +836,11 @@ Rectangle {
                         wrapMode: Text.WrapAnywhere
                         textFormat: Text.PlainText
                     }
-                    Label { text: qsTr("To"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+                    Label {
+                        text: qsTr("To")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                    }
                     Label {
                         Layout.fillWidth: true
                         text: root.joinAddrs(root.headersInfo.to)
@@ -821,66 +850,74 @@ Rectangle {
                         textFormat: Text.PlainText
                     }
                     Label {
-                text: qsTr("Cc")
-                color: Theme.textMuted
-                font.pixelSize: Theme.fontSmall
-                visible: root.joinAddrs(root.headersInfo.cc) !== ""
+                        text: qsTr("Cc")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                        visible: root.joinAddrs(root.headersInfo.cc) !== ""
                     }
                     Label {
-                Layout.fillWidth: true
-                text: root.joinAddrs(root.headersInfo.cc)
-                color: Theme.text
-                font.pixelSize: Theme.fontSmall
-                wrapMode: Text.WrapAnywhere
-                textFormat: Text.PlainText
-                visible: text !== ""
-                    }
-                    Label { text: qsTr("Date"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
-                    Label {
-                Layout.fillWidth: true
-                text: root.headersInfo.date || ""
-                color: Theme.text
-                font.pixelSize: Theme.fontSmall
-                textFormat: Text.PlainText
-                    }
-                    Label { text: qsTr("Subject"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
-                    Label {
-                Layout.fillWidth: true
-                text: root.headersInfo.subject || ""
-                color: Theme.text
-                font.pixelSize: Theme.fontSmall
-                wrapMode: Text.Wrap
-                textFormat: Text.PlainText
+                        Layout.fillWidth: true
+                        text: root.joinAddrs(root.headersInfo.cc)
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSmall
+                        wrapMode: Text.WrapAnywhere
+                        textFormat: Text.PlainText
+                        visible: text !== ""
                     }
                     Label {
-                text: qsTr("Message-ID")
-                color: Theme.textMuted
-                font.pixelSize: Theme.fontSmall
-                visible: (root.headersInfo.message_id || "") !== ""
+                        text: qsTr("Date")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
                     }
                     Label {
-                Layout.fillWidth: true
-                text: root.headersInfo.message_id || ""
-                color: Theme.text
-                font.pixelSize: Theme.fontSmall
-                wrapMode: Text.WrapAnywhere
-                textFormat: Text.PlainText
-                visible: text !== ""
+                        Layout.fillWidth: true
+                        text: root.headersInfo.date || ""
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSmall
+                        textFormat: Text.PlainText
                     }
                     Label {
-                text: qsTr("Reply-To")
-                color: Theme.textMuted
-                font.pixelSize: Theme.fontSmall
-                visible: (root.headersInfo.reply_to || "") !== ""
+                        text: qsTr("Subject")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
                     }
                     Label {
-                Layout.fillWidth: true
-                text: root.headersInfo.reply_to || ""
-                color: Theme.text
-                font.pixelSize: Theme.fontSmall
-                wrapMode: Text.WrapAnywhere
-                textFormat: Text.PlainText
-                visible: text !== ""
+                        Layout.fillWidth: true
+                        text: root.headersInfo.subject || ""
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSmall
+                        wrapMode: Text.Wrap
+                        textFormat: Text.PlainText
+                    }
+                    Label {
+                        text: qsTr("Message-ID")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                        visible: (root.headersInfo.message_id || "") !== ""
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.headersInfo.message_id || ""
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSmall
+                        wrapMode: Text.WrapAnywhere
+                        textFormat: Text.PlainText
+                        visible: text !== ""
+                    }
+                    Label {
+                        text: qsTr("Reply-To")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                        visible: (root.headersInfo.reply_to || "") !== ""
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.headersInfo.reply_to || ""
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSmall
+                        wrapMode: Text.WrapAnywhere
+                        textFormat: Text.PlainText
+                        visible: text !== ""
                     }
                 }
 
@@ -908,15 +945,20 @@ Rectangle {
                             font.pixelSize: Theme.fontSmall
                         }
                     }
-                    HoverHandler { id: disclosureHover }
-                    TapHandler { onTapped: rawHeaders.visible = !rawHeaders.visible }
+                    HoverHandler {
+                        id: disclosureHover
+                    }
+                    TapHandler {
+                        onTapped: rawHeaders.visible = !rawHeaders.visible
+                    }
                 }
                 TextArea {
                     id: rawHeaders
                     Layout.fillWidth: true
                     Layout.preferredHeight: visible ? implicitHeight + Theme.md * 2 : 0
                     visible: false
-                    text: root.headersInfo.raw || qsTr("Complete headers are unavailable until this message is downloaded again.")
+                    text: root.headersInfo.raw || qsTr(
+                              "Complete headers are unavailable until this message is downloaded again.")
                     readOnly: true
                     selectByMouse: true
                     wrapMode: TextArea.WrapAnywhere
@@ -924,7 +966,10 @@ Rectangle {
                     color: Theme.text
                     font.family: "monospace"
                     font.pixelSize: Theme.fontTiny
-                    background: Rectangle { color: Theme.bgAlt; radius: Theme.radius }
+                    background: Rectangle {
+                        color: Theme.bgAlt
+                        radius: Theme.radius
+                    }
                 }
             }
         }

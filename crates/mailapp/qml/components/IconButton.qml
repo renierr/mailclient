@@ -34,10 +34,7 @@ AbstractButton {
 
     background: Rectangle {
         radius: Theme.radius
-        color: root.active ? Theme.selected
-             : root.pressed ? Theme.border
-             : root.hovered ? Theme.hover
-             : "transparent"
+        color: root.active ? Theme.selected : root.pressed ? Theme.border : root.hovered ? Theme.hover : "transparent"
         // Keyboard focus must be visible, or Tab lands somewhere unseen.
         border.width: root.visualFocus ? 2 : 0
         border.color: Theme.accent

@@ -9,14 +9,14 @@ RowLayout {
     property int selectedCount: 0
     property bool allStarred: false
 
-    signal clearRequested()
-    signal markReadRequested()
-    signal markUnreadRequested()
-    signal toggleStarRequested()
-    signal archiveRequested()
-    signal moveRequested()
-    signal deleteRequested()
-    signal moreRequested()
+    signal clearRequested
+    signal markReadRequested
+    signal markUnreadRequested
+    signal toggleStarRequested
+    signal archiveRequested
+    signal moveRequested
+    signal deleteRequested
+    signal moreRequested
 
     height: Math.round(40 * Theme.uiScale)
     spacing: 2
@@ -31,7 +31,8 @@ RowLayout {
     Label {
         Layout.leftMargin: Theme.md
         Layout.minimumWidth: 0
-        Layout.preferredWidth: Math.min(implicitWidth, Math.max(Math.round(28 * Theme.uiScale), root.width - Math.round(220 * Theme.uiScale)))
+        Layout.preferredWidth: Math.min(implicitWidth, Math.max(Math.round(28 * Theme.uiScale), root.width - Math.round(
+                                                                    220 * Theme.uiScale)))
         text: root.veryCompact ? qsTr("%1").arg(root.selectedCount) : qsTr("%n selected", "", root.selectedCount)
         color: Theme.text
         font.pixelSize: Theme.fontSmall
@@ -47,7 +48,9 @@ RowLayout {
         onClicked: root.clearRequested()
     }
 
-    Item { Layout.fillWidth: true }
+    Item {
+        Layout.fillWidth: true
+    }
 
     IconButton {
         text: Icons.done

@@ -24,75 +24,75 @@ QtObject {
     function indexOfKey(model, key, value) {
         for (var i = 0; i < model.count; i++) {
             if (model.get(i)[key] === value)
-                return i
+                return i;
         }
-        return -1
+        return -1;
     }
 
     // Write back only the roles that differ, so an unchanged row emits no
     // dataChanged and the delegate does no work.
     function updateRow(model, index, row) {
-        var cur = model.get(index)
-        var changed = null
+        var cur = model.get(index);
+        var changed = null;
         for (var k in row) {
             if (cur[k] !== row[k]) {
                 if (changed === null)
-                    changed = {}
-                changed[k] = row[k]
+                    changed = {};
+                changed[k] = row[k];
             }
         }
         if (changed !== null)
-            model.set(index, changed)
+            model.set(index, changed);
     }
 
     // Align `model` with `rows`, identifying rows by the `key` role.
     function sync(model, rows, key) {
-        var i
+        var i;
         if (!rows)
-            rows = []
+            rows = [];
 
         // Drop rows that are gone. Back to front, so indices stay valid.
-        var wanted = Object.create(null)
+        var wanted = Object.create(null);
         for (i = 0; i < rows.length; i++)
-            wanted[rows[i][key]] = true
+            wanted[rows[i][key]] = true;
         for (i = model.count - 1; i >= 0; i--) {
             if (wanted[model.get(i)[key]] !== true)
-                model.remove(i)
+                model.remove(i);
         }
 
         // Fast path: if the model is empty (e.g. folder switch or first paint),
         // append directly without scanning.
         if (model.count === 0) {
             for (i = 0; i < rows.length; i++)
-                model.append(rows[i])
-            return
+                model.append(rows[i]);
+            return;
         }
 
         // Build index lookup map for remaining rows: O(1) instead of O(N) linear scan
-        var indexMap = Object.create(null)
+        var indexMap = Object.create(null);
         for (i = 0; i < model.count; i++)
-            indexMap[model.get(i)[key]] = i
+            indexMap[model.get(i)[key]] = i;
 
         // Walk the wanted order: insert what is missing, move what moved,
         // update what stayed.
         for (i = 0; i < rows.length; i++) {
-            var kVal = rows[i][key]
-            var at = indexMap[kVal]
+            var kVal = rows[i][key];
+            var at = indexMap[kVal];
             if (at === undefined) {
-                model.insert(i, rows[i])
+                model.insert(i, rows[i]);
                 // Rebuild map when positions shift from insert
-                indexMap = Object.create(null)
+                indexMap = Object.create(null);
                 for (var j = 0; j < model.count; j++)
-                    indexMap[model.get(j)[key]] = j
+                    indexMap[model.get(j)[key]] = j;
             } else {
                 if (at !== i) {
-                    model.move(at, i, 1)
+                    model.move(at, i, 1);
                     // Rebuild map when positions shift from move
-                    indexMap = Object.create(null)
+                    indexMap = Object.create(null);
                     for (var m = 0; m < model.count; m++)
-                        indexMap[model.get(m)[key]] = m
+                        indexMap[model.get(m)[key]] = m;
                 }
-                util.updateRow(model, i, rows[i])
+                util.updateRow(model, i, rows[i]);
             }
         }
     }

@@ -23,8 +23,6 @@ TextField {
         radius: Theme.radius
         color: Theme.bg
         border.width: 1
-        border.color: control.invalid ? Theme.danger
-                    : control.activeFocus ? Theme.accent
-                    : Theme.border
+        border.color: control.invalid ? Theme.danger : control.activeFocus ? Theme.accent : Theme.border
     }
 }

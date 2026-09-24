@@ -30,88 +30,81 @@ Item {
     // Body set before the document was ready; applied on load.
     property string pendingHtml: ""
 
-    signal contentChanged()
+    signal contentChanged
 
-    readonly property string documentHtml:
-        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>"
-        + "html,body{margin:0;padding:0;height:100%}"
-        + "#e{box-sizing:border-box;min-height:100%;padding:12px 14px;outline:none;"
-        + "font-family:sans-serif;font-size:" + Math.round(14 * Theme.uiScale) + "px;line-height:1.55;"
-        + "color:" + Theme.text + ";background:" + Theme.bg + ";caret-color:" + Theme.accent + "}"
-        + "#e:empty:before{content:attr(data-placeholder);color:" + Theme.textMuted + "}"
-        + "blockquote{margin:8px 0;padding-left:12px;border-left:3px solid " + Theme.border
-        + ";color:" + Theme.textMuted + "}"
-        + "a{color:" + Theme.accent + "}"
-        + "</style></head><body><div id=\"e\" contenteditable=\"true\" "
-        + "data-placeholder=\"" + qsTr("Write your message…") + "\"></div>"
-        + "<script>"
-        + "document.execCommand('defaultParagraphSeparator', false, 'p');"
-        + "document.execCommand('styleWithCSS', false, false);"
-        + "var e = document.getElementById('e');"
-        + "e.focus();"
-        + "</script></body></html>"
+    readonly property string documentHtml: "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>"
+                                           + "html,body{margin:0;padding:0;height:100%}"
+                                           + "#e{box-sizing:border-box;min-height:100%;padding:12px 14px;outline:none;"
+                                           + "font-family:sans-serif;font-size:" + Math.round(14 * Theme.uiScale)
+                                           + "px;line-height:1.55;" + "color:" + Theme.text + ";background:" + Theme.bg
+                                           + ";caret-color:" + Theme.accent + "}"
+                                           + "#e:empty:before{content:attr(data-placeholder);color:" + Theme.textMuted
+                                           + "}" + "blockquote{margin:8px 0;padding-left:12px;border-left:3px solid "
+                                           + Theme.border + ";color:" + Theme.textMuted + "}" + "a{color:" + Theme.accent
+                                           + "}" + "</style></head><body><div id=\"e\" contenteditable=\"true\" "
+                                           + "data-placeholder=\"" + qsTr("Write your message…") + "\"></div>"
+                                           + "<script>"
+                                           + "document.execCommand('defaultParagraphSeparator', false, 'p');"
+                                           + "document.execCommand('styleWithCSS', false, false);"
+                                           + "var e = document.getElementById('e');" + "e.focus();"
+                                           + "</script></body></html>"
 
     function exec(command, value) {
         if (!root.ready)
-            return
+            return;
         // JSON.stringify, not string concatenation: an apostrophe in the
         // value would otherwise close the JS string literal.
-        var arg = value === undefined ? "null" : JSON.stringify(value)
-        view.runJavaScript(
-            "document.getElementById('e').focus();"
-            + "document.execCommand(" + JSON.stringify(command) + ", false, " + arg + ");",
-            function () {
-                root.pollState()
-                root.contentChanged()
-            })
+        var arg = value === undefined ? "null" : JSON.stringify(value);
+        view.runJavaScript("document.getElementById('e').focus();" + "document.execCommand(" + JSON.stringify(command)
+                           + ", false, " + arg + ");", function () {
+                               root.pollState();
+                               root.contentChanged();
+                           });
     }
 
     // Read the body back. Async by nature, so the caller passes a callback
     // (Send collects the payload from it).
     function fetchHtml(callback) {
         if (!root.ready) {
-            callback("")
-            return
+            callback("");
+            return;
         }
-        view.runJavaScript("document.getElementById('e').innerHTML", callback)
+        view.runJavaScript("document.getElementById('e').innerHTML", callback);
     }
 
     function setHtml(html) {
         if (!root.ready) {
             // Arrives before the document finished loading (openForReply on a
             // freshly created dialog); replay it once we are ready.
-            root.pendingHtml = html === undefined ? "" : html
-            return
+            root.pendingHtml = html === undefined ? "" : html;
+            return;
         }
-        view.runJavaScript("document.getElementById('e').innerHTML = "
-                           + JSON.stringify(html === undefined ? "" : html) + ";")
+        view.runJavaScript("document.getElementById('e').innerHTML = " + JSON.stringify(html === undefined ? "" : html)
+                           + ";");
     }
 
     function focusEditor() {
         if (root.ready)
-            view.runJavaScript("document.getElementById('e').focus();")
+            view.runJavaScript("document.getElementById('e').focus();");
     }
 
     function pollState() {
         if (!root.ready)
-            return
-        view.runJavaScript(
-            "JSON.stringify({"
-            + "b: document.queryCommandState('bold'),"
-            + "i: document.queryCommandState('italic'),"
-            + "u: document.queryCommandState('underline'),"
-            + "l: document.queryCommandState('insertUnorderedList'),"
-            + "q: !!document.queryCommandValue('formatBlock').match(/blockquote/i)"
-            + "})", function (json) {
-                if (!json)
-                    return
-                var s = FeedJson.parse(json, ({}))
-                root.boldActive = s.b === true
-                root.italicActive = s.i === true
-                root.underlineActive = s.u === true
-                root.listActive = s.l === true
-                root.quoteActive = s.q === true
-            })
+            return;
+        view.runJavaScript("JSON.stringify({" + "b: document.queryCommandState('bold'),"
+                           + "i: document.queryCommandState('italic')," + "u: document.queryCommandState('underline'),"
+                           + "l: document.queryCommandState('insertUnorderedList'),"
+                           + "q: !!document.queryCommandValue('formatBlock').match(/blockquote/i)" + "})", function (
+                               json) {
+                               if (!json)
+                                   return;
+                               var s = FeedJson.parse(json, ({}));
+                               root.boldActive = s.b === true;
+                               root.italicActive = s.i === true;
+                               root.underlineActive = s.u === true;
+                               root.listActive = s.l === true;
+                               root.quoteActive = s.q === true;
+                           });
     }
 
     WebEngineView {
@@ -128,24 +121,24 @@ Item {
         settings.javascriptCanAccessClipboard: true
 
         onLoadingChanged: loadRequest => {
-            if (loadRequest.status === WebEngineView.LoadSucceededStatus) {
-                root.ready = true
-                if (root.pendingHtml !== "") {
-                    root.setHtml(root.pendingHtml)
-                    root.pendingHtml = ""
-                }
-                root.pollState()
-            }
-        }
+                              if (loadRequest.status === WebEngineView.LoadSucceededStatus) {
+                                  root.ready = true;
+                                  if (root.pendingHtml !== "") {
+                                      root.setHtml(root.pendingHtml);
+                                      root.pendingHtml = "";
+                                  }
+                                  root.pollState();
+                              }
+                          }
 
         // Clicking a link in the draft must not navigate the editor away;
         // everything else (including this view's own initial loadHtml) is
         // allowed, or the document would never appear.
         onNavigationRequested: request => {
-            if (request.navigationType === WebEngineView.NavigationTypeLinkClicked
-                    || request.navigationType === WebEngineView.NavigationTypeFormSubmitted)
-                request.action = WebEngineView.IgnoreRequest
-        }
+                                   if (request.navigationType === WebEngineView.NavigationTypeLinkClicked
+                                       || request.navigationType === WebEngineView.NavigationTypeFormSubmitted)
+                                   request.action = WebEngineView.IgnoreRequest;
+                               }
 
         Component.onCompleted: view.loadHtml(root.documentHtml, "")
     }

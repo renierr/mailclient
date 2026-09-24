@@ -22,115 +22,114 @@ AppDialog {
     property bool editing: editId >= 0
 
     title: editing ? qsTr("Edit account") : qsTr("Add account")
-    subtitle: editing ? qsTr("Leave the password blank to keep the stored one")
-                      : qsTr("Passwords are stored in the OS keyring, never in the database")
+    subtitle: editing ? qsTr("Leave the password blank to keep the stored one") : qsTr(
+                            "Passwords are stored in the OS keyring, never in the database")
 
     signal statusMessage(string text)
     signal accountSubmit(string payload)
 
-
-
     // Empty for a new account, prefilled from `Bridge.account_form` for an edit.
     function loadForm(json, id) {
-        var f = FeedJson.parse(json, ({}))
-        root.editId = id === undefined ? -1 : id
-        nameField.text = f.name || ""
-        emailField.text = f.email || ""
-        fromNameField.text = f.from_name || ""
-        imapField.text = f.imap_host || ""
-        imapPortField.text = f.imap_port || "993"
-        imapSecBox.currentIndex = (f.imap_sec || "tls").toLowerCase() === "starttls" ? 1 : 0
-        imapUserField.text = f.imap_user || ""
-        passField.text = ""
-        smtpField.text = f.smtp_host || ""
-        smtpPortField.text = f.smtp_port || "465"
-        smtpSecBox.currentIndex = (f.smtp_sec || "tls").toLowerCase() === "starttls" ? 1 : 0
-        smtpUserField.text = f.smtp_user || ""
-        smtpPassField.text = ""
-        root.clearErrors()
+        var f = FeedJson.parse(json, ({}));
+        root.editId = id === undefined ? -1 : id;
+        nameField.text = f.name || "";
+        emailField.text = f.email || "";
+        fromNameField.text = f.from_name || "";
+        imapField.text = f.imap_host || "";
+        imapPortField.text = f.imap_port || "993";
+        imapSecBox.currentIndex = (f.imap_sec || "tls").toLowerCase() === "starttls" ? 1 : 0;
+        imapUserField.text = f.imap_user || "";
+        passField.text = "";
+        smtpField.text = f.smtp_host || "";
+        smtpPortField.text = f.smtp_port || "465";
+        smtpSecBox.currentIndex = (f.smtp_sec || "tls").toLowerCase() === "starttls" ? 1 : 0;
+        smtpUserField.text = f.smtp_user || "";
+        smtpPassField.text = "";
+        root.clearErrors();
     }
 
     function openNew() {
-        root.loadForm("{}", -1)
-        root.open()
+        root.loadForm("{}", -1);
+        root.open();
     }
 
     function openEdit(json, id) {
-        root.loadForm(json, id)
-        root.open()
+        root.loadForm(json, id);
+        root.open();
     }
 
     function clearErrors() {
-        emailField.invalid = false
-        imapField.invalid = false
-        smtpField.invalid = false
-        passField.invalid = false
-        errorLabel.text = ""
+        emailField.invalid = false;
+        imapField.invalid = false;
+        smtpField.invalid = false;
+        passField.invalid = false;
+        errorLabel.text = "";
     }
 
     // Validate here so the dialog can point at the offending field; the
     // bridge re-checks anyway.
     function validate() {
-        root.clearErrors()
-        var problems = []
+        root.clearErrors();
+        var problems = [];
         if (emailField.text.trim() === "" || emailField.text.indexOf("@") < 0) {
-            emailField.invalid = true
-            problems.push(qsTr("a valid email address"))
+            emailField.invalid = true;
+            problems.push(qsTr("a valid email address"));
         }
         if (imapField.text.trim() === "") {
-            imapField.invalid = true
-            problems.push(qsTr("the IMAP host"))
+            imapField.invalid = true;
+            problems.push(qsTr("the IMAP host"));
         }
         if (smtpField.text.trim() === "") {
-            smtpField.invalid = true
-            problems.push(qsTr("the SMTP host"))
+            smtpField.invalid = true;
+            problems.push(qsTr("the SMTP host"));
         }
         if (!root.editing && passField.text === "") {
-            passField.invalid = true
-            problems.push(qsTr("a password"))
+            passField.invalid = true;
+            problems.push(qsTr("a password"));
         }
         if (problems.length > 0) {
-            errorLabel.text = qsTr("Please fill in %1.").arg(problems.join(", "))
-            return false
+            errorLabel.text = qsTr("Please fill in %1.").arg(problems.join(", "));
+            return false;
         }
-        return true
+        return true;
     }
 
     function submit() {
         if (!root.validate())
-            return
+            return;
         root.accountSubmit(JSON.stringify({
-            id: root.editId,
-            name: nameField.text,
-            email: emailField.text.trim(),
-            from_name: fromNameField.text.trim(),
-            imap_host: imapField.text.trim(),
-            imap_port: imapPortField.text,
-            imap_sec: imapSecBox.currentText.toLowerCase(),
-            imap_user: imapUserField.text.trim() === "" ? emailField.text.trim() : imapUserField.text.trim(),
-            password: passField.text,
-            smtp_host: smtpField.text.trim(),
-            smtp_port: smtpPortField.text,
-            smtp_sec: smtpSecBox.currentText.toLowerCase(),
-            smtp_user: smtpUserField.text.trim(),
-            smtp_password: smtpPassField.text
-        }))
+                                              id: root.editId,
+                                              name: nameField.text,
+                                              email: emailField.text.trim(),
+                                              from_name: fromNameField.text.trim(),
+                                              imap_host: imapField.text.trim(),
+                                              imap_port: imapPortField.text,
+                                              imap_sec: imapSecBox.currentText.toLowerCase(),
+                                              imap_user: imapUserField.text.trim() === "" ? emailField.text.trim() :
+                                                                                            imapUserField.text.trim(),
+                                              password: passField.text,
+                                              smtp_host: smtpField.text.trim(),
+                                              smtp_port: smtpPortField.text,
+                                              smtp_sec: smtpSecBox.currentText.toLowerCase(),
+                                              smtp_user: smtpUserField.text.trim(),
+                                              smtp_password: smtpPassField.text
+                                          }));
     }
 
     // Fill the obvious hosts/user from the address once it is typed.
     function guessFromEmail() {
-        var at = emailField.text.indexOf("@")
+        var at = emailField.text.indexOf("@");
         if (at < 0)
-            return
-        var domain = emailField.text.substring(at + 1).trim()
+            return;
+        var domain = emailField.text.substring(at + 1).trim();
         if (domain === "")
-            return
+            return;
         if (imapField.text === "")
-            imapField.text = "imap." + domain
+            imapField.text = "imap." + domain;
         if (smtpField.text === "")
-            smtpField.text = "smtp." + domain
+            smtpField.text = "smtp." + domain;
         if (imapUserField.text === "")
-            imapUserField.text = emailField.text.trim()
+            imapUserField.text = emailField.text.trim();
     }
 
     footer: ColumnLayout {
@@ -151,7 +150,9 @@ AppDialog {
             Layout.rightMargin: Theme.lg + 8
             Layout.bottomMargin: Theme.md
             spacing: Theme.sm
-            Item { Layout.fillWidth: true }
+            Item {
+                Layout.fillWidth: true
+            }
             AppButton {
                 text: qsTr("Cancel")
                 onClicked: root.reject()
@@ -230,7 +231,10 @@ AppDialog {
                     label: qsTr("Port")
                     text: "993"
                     inputMethodHints: Qt.ImhDigitsOnly
-                    validator: IntValidator { bottom: 1; top: 65535 }
+                    validator: IntValidator {
+                        bottom: 1
+                        top: 65535
+                    }
                 }
                 ColumnLayout {
                     spacing: Theme.xs
@@ -243,11 +247,11 @@ AppDialog {
                         id: imapSecBox
                         Layout.preferredWidth: 120
                         model: ["TLS", "STARTTLS"]
-                        onActivated: function(index) {
+                        onActivated: function (index) {
                             if (index === 1 && imapPortField.text === "993")
-                                imapPortField.text = "143"
+                                imapPortField.text = "143";
                             else if (index === 0 && imapPortField.text === "143")
-                                imapPortField.text = "993"
+                                imapPortField.text = "993";
                         }
                     }
                 }
@@ -293,7 +297,10 @@ AppDialog {
                     label: qsTr("Port")
                     text: "465"
                     inputMethodHints: Qt.ImhDigitsOnly
-                    validator: IntValidator { bottom: 1; top: 65535 }
+                    validator: IntValidator {
+                        bottom: 1
+                        top: 65535
+                    }
                 }
                 ColumnLayout {
                     spacing: Theme.xs
@@ -306,11 +313,11 @@ AppDialog {
                         id: smtpSecBox
                         Layout.preferredWidth: 120
                         model: ["TLS", "STARTTLS"]
-                        onActivated: function(index) {
+                        onActivated: function (index) {
                             if (index === 1 && smtpPortField.text === "465")
-                                smtpPortField.text = "587"
+                                smtpPortField.text = "587";
                             else if (index === 0 && smtpPortField.text === "587")
-                                smtpPortField.text = "465"
+                                smtpPortField.text = "465";
                         }
                     }
                 }
@@ -328,7 +335,9 @@ AppDialog {
                 echoMode: TextInput.Password
                 placeholderText: qsTr("same as IMAP password")
             }
-            Item { Layout.preferredHeight: Theme.sm }
+            Item {
+                Layout.preferredHeight: Theme.sm
+            }
         }
     }
 }

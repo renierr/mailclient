@@ -25,33 +25,40 @@ AppDialog {
     property bool busy: false
 
     signal statusMessage(string text)
-    signal refreshRequested()
+    signal refreshRequested
     signal visibilityToggled(string path, bool subscribed)
     signal folderSelected(string path)
     signal createRequested(string path)
 
     function clearNewFolder() {
-        newFolderField.text = ""
+        newFolderField.text = "";
     }
 
     function emitLater(sig, arg1, arg2) {
         if (arg1 === undefined)
-            Qt.callLater(sig)
+            Qt.callLater(sig);
         else if (arg2 === undefined)
-            Qt.callLater(sig, arg1)
+            Qt.callLater(sig, arg1);
         else
-            Qt.callLater(sig, arg1, arg2)
+            Qt.callLater(sig, arg1, arg2);
     }
 
     function roleIcon(role) {
         switch (role) {
-        case "inbox": return Icons.inbox
-        case "drafts": return Icons.drafts
-        case "sent": return Icons.send
-        case "archive": return Icons.archive
-        case "junk": return Icons.block
-        case "trash": return Icons.trash
-        default: return Icons.folder
+        case "inbox":
+            return Icons.inbox;
+        case "drafts":
+            return Icons.drafts;
+        case "sent":
+            return Icons.send;
+        case "archive":
+            return Icons.archive;
+        case "junk":
+            return Icons.block;
+        case "trash":
+            return Icons.trash;
+        default:
+            return Icons.folder;
         }
     }
 
@@ -64,7 +71,9 @@ AppDialog {
             enabled: !root.busy
             onClicked: root.refreshRequested()
         }
-        Item { Layout.fillWidth: true }
+        Item {
+            Layout.fillWidth: true
+        }
         AppButton {
             Layout.rightMargin: Theme.lg + 8
             Layout.bottomMargin: Theme.md
@@ -100,7 +109,8 @@ AppDialog {
             wrapMode: Text.Wrap
             color: Theme.textMuted
             font.pixelSize: Theme.fontSmall
-            text: qsTr("Uncheck to hide a folder from the sidebar. Hidden folders keep their cached mail and skip auto-sync; opening one still syncs it.")
+            text: qsTr(
+                      "Uncheck to hide a folder from the sidebar. Hidden folders keep their cached mail and skip auto-sync; opening one still syncs it.")
         }
 
         ListView {
@@ -111,7 +121,9 @@ AppDialog {
             spacing: 2
             model: root.folders
             boundsBehavior: Flickable.StopAtBounds
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            ScrollBar.vertical: ScrollBar {
+                policy: ScrollBar.AsNeeded
+            }
 
             delegate: Rectangle {
                 id: folderRow
@@ -151,9 +163,9 @@ AppDialog {
                             Layout.fillWidth: true
                         }
                         Label {
-                            text: qsTr("%1 total · %2 unread")
-                                  .arg(folderRow.model.count !== undefined ? folderRow.model.count : 0)
-                                  .arg(folderRow.model.unread)
+                            text: qsTr("%1 total · %2 unread").arg(folderRow.model.count !== undefined
+                                                                   ? folderRow.model.count : 0).arg(
+                                      folderRow.model.unread)
                             color: Theme.textMuted
                             font.pixelSize: Theme.fontTiny
                             elide: Text.ElideRight

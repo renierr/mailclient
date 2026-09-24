@@ -105,7 +105,9 @@ AppDialog {
 
     footer: RowLayout {
         spacing: Theme.sm
-        Item { Layout.fillWidth: true }
+        Item {
+            Layout.fillWidth: true
+        }
         AppButton {
             text: qsTr("Cancel")
             onClicked: root.reject()
@@ -122,128 +124,129 @@ AppDialog {
 
     function formatIndex(v) {
         if (v === "plain")
-            return 1
+            return 1;
         if (v === "multipart")
-            return 2
+            return 2;
         if (v === "html")
-            return 3
-        return 0
+            return 3;
+        return 0;
     }
 
     function delayIndex(secs) {
-        var steps = [0, 3, 5, 10, 30]
-        var idx = steps.indexOf(secs)
-        return idx >= 0 ? idx : 0
+        var steps = [0, 3, 5, 10, 30];
+        var idx = steps.indexOf(secs);
+        return idx >= 0 ? idx : 0;
     }
 
     function delaySecs(idx) {
-        return [0, 3, 5, 10, 30][idx] || 0
+        return [0, 3, 5, 10, 30][idx] || 0;
     }
 
     function syncIndex(mins) {
-        var steps = [0, 5, 10, 15, 30, 60]
-        var idx = steps.indexOf(mins)
-        return idx >= 0 ? idx : 0
+        var steps = [0, 5, 10, 15, 30, 60];
+        var idx = steps.indexOf(mins);
+        return idx >= 0 ? idx : 0;
     }
 
     function syncMins(idx) {
-        return [0, 5, 10, 15, 30, 60][idx] || 0
+        return [0, 5, 10, 15, 30, 60][idx] || 0;
     }
 
     function indexOr(list, value, fallback) {
-        var idx = list.indexOf(value)
-        return idx >= 0 ? idx : fallback
+        var idx = list.indexOf(value);
+        return idx >= 0 ? idx : fallback;
     }
 
     // Nearest supported interface-scale step (float-safe: no exact compare).
     function scaleIndex(v) {
-        var steps = [1.0, 1.1, 1.25, 1.5]
-        var best = 0
+        var steps = [1.0, 1.1, 1.25, 1.5];
+        var best = 0;
         for (var i = 1; i < steps.length; i++) {
             if (Math.abs(v - steps[i]) < Math.abs(v - steps[best]))
-                best = i
+                best = i;
         }
-        return best
+        return best;
     }
 
     function loadCapsAccounts() {
-        var arr = FeedJson.parse(root.backend ? root.backend.accounts_json : "[]", [])
-        root.capsAccounts = arr
+        var arr = FeedJson.parse(root.backend ? root.backend.accounts_json : "[]", []);
+        root.capsAccounts = arr;
         if (arr.length === 0) {
-            root.capsAccountId = -1
-            return
+            root.capsAccountId = -1;
+            return;
         }
-        var cur = root.backend ? root.backend.current_account_id : -1
+        var cur = root.backend ? root.backend.current_account_id : -1;
         for (var i = 0; i < arr.length; i++) {
             if (arr[i].id === root.capsAccountId)
-                return  // keep the current selection
+                // keep the current selection
+                return;
         }
         for (var j = 0; j < arr.length; j++) {
             if (arr[j].id === cur) {
-                root.capsAccountId = cur
-                return
+                root.capsAccountId = cur;
+                return;
             }
         }
-        root.capsAccountId = arr[0].id
+        root.capsAccountId = arr[0].id;
     }
 
     function capsAccountIndex() {
         for (var i = 0; i < root.capsAccounts.length; i++) {
             if (root.capsAccounts[i].id === root.capsAccountId)
-                return i
+                return i;
         }
-        return 0
+        return 0;
     }
 
     function capsAccountEmails() {
-        var out = []
+        var out = [];
         for (var i = 0; i < root.capsAccounts.length; i++)
-            out.push(root.capsAccounts[i].email || root.capsAccounts[i].name || "")
-        return out
+            out.push(root.capsAccounts[i].email || root.capsAccounts[i].name || "");
+        return out;
     }
 
     function refreshCaps() {
         if (!root.backend || !root.backend.refresh_server_capabilities)
-            return
+            return;
         if (root.capsAccountId < 0) {
-            root.capsError = qsTr("Add an account first")
-            return
+            root.capsError = qsTr("Add an account first");
+            return;
         }
-        root.capsError = ""
-        root.capsLoading = true
-        var r = root.backend.refresh_server_capabilities(root.capsAccountId)
+        root.capsError = "";
+        root.capsLoading = true;
+        var r = root.backend.refresh_server_capabilities(root.capsAccountId);
         if (r !== "") {
-            root.capsLoading = false
-            root.capsError = r
+            root.capsLoading = false;
+            root.capsError = r;
         }
     }
 
     onOpened: {
-        settingsBridge.load()
-        root.localSentCopy = settingsBridge.sent_copy_enabled
-        root.localRemoteImages = settingsBridge.load_remote_images
-        root.localSendFormat = settingsBridge.compose_send_format
-        root.localIncludePlain = settingsBridge.compose_include_plain
-        root.localAutoMark = settingsBridge.auto_mark_read
-        root.localMarkDelay = settingsBridge.mark_read_delay_secs
-        root.localCollectContacts = settingsBridge.collect_sent_contacts
-        root.localConfirmDelete = settingsBridge.confirm_delete
-        root.localDensity = settingsBridge.list_density
-        root.localReaderFont = settingsBridge.reader_font_size
-        root.localUiScale = settingsBridge.ui_scale
-        root.localSyncInterval = settingsBridge.sync_interval_minutes
-        root.localSigEnabled = settingsBridge.signature_enabled
-        root.localSigText = settingsBridge.signature_text
-        root.localReplyBelow = settingsBridge.reply_below_quote
-        root.localRequestMdn = settingsBridge.request_mdn
-        root.localSortField = root.backend ? root.backend.sort_field : "date"
-        root.localSortDesc = root.backend ? root.backend.sort_descending : true
-        root.loadCapsAccounts()
-        root.capsEmail = ""
-        root.capsHost = ""
-        root.serverCaps = []
-        root.capsError = ""
-        root.refreshCaps()
+        settingsBridge.load();
+        root.localSentCopy = settingsBridge.sent_copy_enabled;
+        root.localRemoteImages = settingsBridge.load_remote_images;
+        root.localSendFormat = settingsBridge.compose_send_format;
+        root.localIncludePlain = settingsBridge.compose_include_plain;
+        root.localAutoMark = settingsBridge.auto_mark_read;
+        root.localMarkDelay = settingsBridge.mark_read_delay_secs;
+        root.localCollectContacts = settingsBridge.collect_sent_contacts;
+        root.localConfirmDelete = settingsBridge.confirm_delete;
+        root.localDensity = settingsBridge.list_density;
+        root.localReaderFont = settingsBridge.reader_font_size;
+        root.localUiScale = settingsBridge.ui_scale;
+        root.localSyncInterval = settingsBridge.sync_interval_minutes;
+        root.localSigEnabled = settingsBridge.signature_enabled;
+        root.localSigText = settingsBridge.signature_text;
+        root.localReplyBelow = settingsBridge.reply_below_quote;
+        root.localRequestMdn = settingsBridge.request_mdn;
+        root.localSortField = root.backend ? root.backend.sort_field : "date";
+        root.localSortDesc = root.backend ? root.backend.sort_descending : true;
+        root.loadCapsAccounts();
+        root.capsEmail = "";
+        root.capsHost = "";
+        root.serverCaps = [];
+        root.capsError = "";
+        root.refreshCaps();
     }
 
     // The bridge exposes its signal under the Rust name, so the handler is
@@ -252,20 +255,21 @@ AppDialog {
         target: root.backend
         function onJob_finished(kind, status) {
             if (kind !== "Capabilities")
-                return
+                return;
             try {
-                var p = JSON.parse(status)
+                var p = JSON.parse(status);
                 if (p.account_id !== undefined && p.account_id !== root.capsAccountId)
-                    return  // stale response for a previously selected account
-                root.capsLoading = false
-                root.capsEmail = p.email || ""
-                root.capsHost = p.imap_host || ""
-                root.serverCaps = p.capabilities || []
-                root.capsError = p.error || ""
+                    // stale response for a previously selected account
+                    return;
+                root.capsLoading = false;
+                root.capsEmail = p.email || "";
+                root.capsHost = p.imap_host || "";
+                root.serverCaps = p.capabilities || [];
+                root.capsError = p.error || "";
             } catch (e) {
-                root.capsLoading = false
-                root.capsError = status
-                root.serverCaps = []
+                root.capsLoading = false;
+                root.capsError = status;
+                root.serverCaps = [];
             }
         }
     }
@@ -282,8 +286,7 @@ AppDialog {
         // Keyboard: Tab focuses the list, Up/Down switch sections.
         ListView {
             id: nav
-            Layout.preferredWidth: root.compactNav ? Math.round(44 * Theme.uiScale)
-                                                   : Math.round(168 * Theme.uiScale)
+            Layout.preferredWidth: root.compactNav ? Math.round(44 * Theme.uiScale) : Math.round(168 * Theme.uiScale)
             Layout.fillHeight: true
             clip: true
             spacing: 2
@@ -292,12 +295,30 @@ AppDialog {
             Accessible.role: Accessible.PageTabList
             Accessible.name: qsTr("Settings sections")
             model: ListModel {
-                ListElement { icon: "Aa"; label: qsTr("Interface") }
-                ListElement { icon: "📥"; label: qsTr("Mailbox") }
-                ListElement { icon: "📖"; label: qsTr("Reading") }
-                ListElement { icon: "✏️"; label: qsTr("Composing") }
-                ListElement { icon: "☁️"; label: qsTr("Accounts & sync") }
-                ListElement { icon: "ℹ️"; label: qsTr("About") }
+                ListElement {
+                    icon: "Aa"
+                    label: qsTr("Interface")
+                }
+                ListElement {
+                    icon: "📥"
+                    label: qsTr("Mailbox")
+                }
+                ListElement {
+                    icon: "📖"
+                    label: qsTr("Reading")
+                }
+                ListElement {
+                    icon: "✏️"
+                    label: qsTr("Composing")
+                }
+                ListElement {
+                    icon: "☁️"
+                    label: qsTr("Accounts & sync")
+                }
+                ListElement {
+                    icon: "ℹ️"
+                    label: qsTr("About")
+                }
             }
             delegate: Item {
                 id: navItem
@@ -383,16 +404,19 @@ AppDialog {
                     width: interfaceScroll.availableWidth
                     spacing: Theme.sm
 
-                    SectionCaption { text: qsTr("INTERFACE") }
+                    SectionCaption {
+                        text: qsTr("INTERFACE")
+                    }
 
                     ChoiceRow {
                         caption: qsTr("Interface scale")
                         model: [qsTr("100%"), qsTr("110%"), qsTr("125%"), qsTr("150%")]
                         currentIndex: scaleIndex(root.localUiScale)
-                        help: qsTr("Scales type and controls across the whole app. The desktop zoom still applies on top of this.")
+                        help: qsTr(
+                                  "Scales type and controls across the whole app. The desktop zoom still applies on top of this.")
                         onChosen: index => {
-                            root.localUiScale = [1.0, 1.1, 1.25, 1.5][index]
-                        }
+                                      root.localUiScale = [1.0, 1.1, 1.25, 1.5][index];
+                                  }
                     }
                     ChoiceRow {
                         caption: qsTr("Mail text size")
@@ -400,8 +424,8 @@ AppDialog {
                         currentIndex: indexOr(["small", "normal", "large"], root.localReaderFont, 1)
                         help: qsTr("Applies to plain-text mail; HTML mail brings its own sizes.")
                         onChosen: index => {
-                            root.localReaderFont = ["small", "normal", "large"][index]
-                        }
+                                      root.localReaderFont = ["small", "normal", "large"][index];
+                                  }
                     }
                 }
             }
@@ -418,23 +442,25 @@ AppDialog {
                     width: mailboxScroll.availableWidth
                     spacing: Theme.sm
 
-                    SectionCaption { text: qsTr("MAILBOX VIEW") }
+                    SectionCaption {
+                        text: qsTr("MAILBOX VIEW")
+                    }
 
                     ChoiceRow {
                         caption: qsTr("Sort messages by")
                         model: [qsTr("Date"), qsTr("Sender"), qsTr("Subject")]
                         currentIndex: indexOr(["date", "from", "subject"], root.localSortField, 0)
                         onChosen: index => {
-                            root.localSortField = ["date", "from", "subject"][index]
-                        }
+                                      root.localSortField = ["date", "from", "subject"][index];
+                                  }
                     }
                     ChoiceRow {
                         caption: qsTr("Order")
                         model: [qsTr("Newest first"), qsTr("Oldest first")]
                         currentIndex: root.localSortDesc ? 0 : 1
                         onChosen: index => {
-                            root.localSortDesc = index === 0
-                        }
+                                      root.localSortDesc = index === 0;
+                                  }
                     }
                     ChoiceRow {
                         caption: qsTr("Density")
@@ -442,8 +468,8 @@ AppDialog {
                         currentIndex: root.localDensity === "compact" ? 1 : 0
                         help: qsTr("Compact hides the preview line and tightens the rows.")
                         onChosen: index => {
-                            root.localDensity = index === 1 ? "compact" : "comfortable"
-                        }
+                                      root.localDensity = index === 1 ? "compact" : "comfortable";
+                                  }
                     }
                     AppCheckBox {
                         Layout.fillWidth: true
@@ -453,7 +479,8 @@ AppDialog {
                         onToggled: root.localConfirmDelete = checked
                     }
                     HintLabel {
-                        text: qsTr("Single deletes, bulk deletes and the Delete key ask first. Permanent deletes always ask.")
+                        text: qsTr(
+                                  "Single deletes, bulk deletes and the Delete key ask first. Permanent deletes always ask.")
                     }
                 }
             }
@@ -470,7 +497,9 @@ AppDialog {
                     width: readingScroll.availableWidth
                     spacing: Theme.sm
 
-                    SectionCaption { text: qsTr("READING MAIL") }
+                    SectionCaption {
+                        text: qsTr("READING MAIL")
+                    }
 
                     AppCheckBox {
                         Layout.fillWidth: true
@@ -481,12 +510,14 @@ AppDialog {
                     ChoiceRow {
                         caption: qsTr("Mark as read")
                         enabled: root.localAutoMark
-                        model: [qsTr("Immediately"), qsTr("After 3 seconds"), qsTr("After 5 seconds"), qsTr("After 10 seconds"), qsTr("After 30 seconds")]
+                        model: [qsTr("Immediately"), qsTr("After 3 seconds"), qsTr("After 5 seconds"), qsTr(
+                                "After 10 seconds"), qsTr("After 30 seconds")]
                         currentIndex: delayIndex(root.localMarkDelay)
-                        help: qsTr("With a delay, only messages still open when the timer elapses count as read. Right-click any message to mark it read or unread manually.")
+                        help: qsTr(
+                                  "With a delay, only messages still open when the timer elapses count as read. Right-click any message to mark it read or unread manually.")
                         onChosen: index => {
-                            root.localMarkDelay = delaySecs(index)
-                        }
+                                      root.localMarkDelay = delaySecs(index);
+                                  }
                     }
                     AppCheckBox {
                         Layout.fillWidth: true
@@ -496,7 +527,8 @@ AppDialog {
                         onToggled: root.localRemoteImages = checked
                     }
                     HintLabel {
-                        text: qsTr("Remote images can track opens. Blocked images still offer a one-click “Show once” banner per message.")
+                        text: qsTr(
+                                  "Remote images can track opens. Blocked images still offer a one-click “Show once” banner per message.")
                     }
                 }
             }
@@ -513,15 +545,18 @@ AppDialog {
                     width: composingScroll.availableWidth
                     spacing: Theme.sm
 
-                    SectionCaption { text: qsTr("COMPOSING MAIL") }
+                    SectionCaption {
+                        text: qsTr("COMPOSING MAIL")
+                    }
 
                     ChoiceRow {
                         caption: qsTr("Send mail as")
-                        model: [qsTr("Automatic (recommended)"), qsTr("Plain text (safest)"), qsTr("Multipart plain + HTML"), qsTr("HTML only")]
+                        model: [qsTr("Automatic (recommended)"), qsTr("Plain text (safest)"), qsTr(
+                                "Multipart plain + HTML"), qsTr("HTML only")]
                         currentIndex: formatIndex(root.localSendFormat)
                         onChosen: index => {
-                            root.localSendFormat = ["auto", "plain", "multipart", "html"][index]
-                        }
+                                      root.localSendFormat = ["auto", "plain", "multipart", "html"][index];
+                                  }
                     }
                     AppCheckBox {
                         Layout.fillWidth: true
@@ -530,15 +565,16 @@ AppDialog {
                         onToggled: root.localIncludePlain = checked
                     }
                     HintLabel {
-                        text: qsTr("Automatic sends plain text unless the message uses formatting (bold, links, lists, quotes); attachments always travel as multipart. The plain-text twin keeps every client readable.")
+                        text: qsTr(
+                                  "Automatic sends plain text unless the message uses formatting (bold, links, lists, quotes); attachments always travel as multipart. The plain-text twin keeps every client readable.")
                     }
                     ChoiceRow {
                         caption: qsTr("Replies start")
                         model: [qsTr("Above the quote"), qsTr("Below the quote")]
                         currentIndex: root.localReplyBelow ? 1 : 0
                         onChosen: index => {
-                            root.localReplyBelow = index === 1
-                        }
+                                      root.localReplyBelow = index === 1;
+                                  }
                     }
                     AppCheckBox {
                         Layout.fillWidth: true
@@ -578,7 +614,8 @@ AppDialog {
                         onToggled: root.localRequestMdn = checked
                     }
                     HintLabel {
-                        text: qsTr("Adds a receipt-request header to sent mail. Recipients may ignore it; it only asks.")
+                        text: qsTr(
+                                  "Adds a receipt-request header to sent mail. Recipients may ignore it; it only asks.")
                     }
                 }
             }
@@ -595,7 +632,9 @@ AppDialog {
                     width: accountsScroll.availableWidth
                     spacing: Theme.sm
 
-                    SectionCaption { text: qsTr("ACCOUNTS & SYNC") }
+                    SectionCaption {
+                        text: qsTr("ACCOUNTS & SYNC")
+                    }
 
                     AppCheckBox {
                         Layout.fillWidth: true
@@ -614,12 +653,13 @@ AppDialog {
                     }
                     ChoiceRow {
                         caption: qsTr("Check for new mail")
-                        model: [qsTr("Manually"), qsTr("Every 5 minutes"), qsTr("Every 10 minutes"), qsTr("Every 15 minutes"), qsTr("Every 30 minutes"), qsTr("Every hour")]
+                        model: [qsTr("Manually"), qsTr("Every 5 minutes"), qsTr("Every 10 minutes"), qsTr(
+                                "Every 15 minutes"), qsTr("Every 30 minutes"), qsTr("Every hour")]
                         currentIndex: syncIndex(root.localSyncInterval)
                         help: qsTr("Automatic checks only run while the app is idle, never mid-action.")
                         onChosen: index => {
-                            root.localSyncInterval = syncMins(index)
-                        }
+                                      root.localSyncInterval = syncMins(index);
+                                  }
                     }
                 }
             }
@@ -636,7 +676,9 @@ AppDialog {
                     width: aboutScroll.availableWidth
                     spacing: Theme.sm
 
-                    SectionCaption { text: qsTr("ABOUT") }
+                    SectionCaption {
+                        text: qsTr("ABOUT")
+                    }
 
                     Label {
                         Layout.fillWidth: true
@@ -652,7 +694,8 @@ AppDialog {
                         font.pixelSize: Theme.fontBase
                     }
                     HintLabel {
-                        text: qsTr("Free software under the MIT and Apache-2.0 licenses; see the source for the full texts.")
+                        text: qsTr(
+                                  "Free software under the MIT and Apache-2.0 licenses; see the source for the full texts.")
                     }
                     Label {
                         Layout.fillWidth: true
@@ -662,7 +705,9 @@ AppDialog {
                         font.pixelSize: Theme.fontSmall
                     }
 
-                    SectionCaption { text: qsTr("SERVER CAPABILITIES") }
+                    SectionCaption {
+                        text: qsTr("SERVER CAPABILITIES")
+                    }
 
                     HintLabel {
                         text: qsTr("Live IMAP features reported by each account's server. Refresh contacts the server.")
@@ -677,11 +722,11 @@ AppDialog {
                             model: root.capsAccountEmails()
                             currentIndex: root.capsAccountIndex()
                             onActivated: index => {
-                                if (index >= 0 && index < root.capsAccounts.length) {
-                                    root.capsAccountId = root.capsAccounts[index].id
-                                    root.refreshCaps()
-                                }
-                            }
+                                             if (index >= 0 && index < root.capsAccounts.length) {
+                                                 root.capsAccountId = root.capsAccounts[index].id;
+                                                 root.refreshCaps();
+                                             }
+                                         }
                         }
                         AppButton {
                             text: qsTr("Refresh")
@@ -692,7 +737,8 @@ AppDialog {
                     Label {
                         Layout.fillWidth: true
                         visible: root.capsEmail !== "" || root.capsHost !== ""
-                        text: root.capsEmail !== "" ? qsTr("%1 · %2").arg(root.capsEmail).arg(root.capsHost) : root.capsHost
+                        text: root.capsEmail !== "" ? qsTr("%1 · %2").arg(root.capsEmail).arg(root.capsHost) :
+                                                      root.capsHost
                         color: Theme.textMuted
                         font.pixelSize: Theme.fontSmall
                         elide: Text.ElideRight
@@ -739,7 +785,8 @@ AppDialog {
                     }
                     HintLabel {
                         visible: !root.capsLoading && root.capsError === "" && root.serverCaps.length === 0
-                        text: root.capsAccounts.length === 0 ? qsTr("Add an account first.") : qsTr("No capabilities loaded yet — press Refresh.")
+                        text: root.capsAccounts.length === 0 ? qsTr("Add an account first.") : qsTr(
+                                                                   "No capabilities loaded yet — press Refresh.")
                     }
                 }
             }
@@ -747,28 +794,27 @@ AppDialog {
     }
 
     onAccepted: {
-        settingsBridge.sent_copy_enabled = root.localSentCopy
-        settingsBridge.load_remote_images = root.localRemoteImages
-        settingsBridge.compose_send_format = root.localSendFormat
-        settingsBridge.compose_include_plain = root.localIncludePlain
-        settingsBridge.auto_mark_read = root.localAutoMark
-        settingsBridge.mark_read_delay_secs = root.localMarkDelay
-        settingsBridge.collect_sent_contacts = root.localCollectContacts
-        settingsBridge.confirm_delete = root.localConfirmDelete
-        settingsBridge.list_density = root.localDensity
-        settingsBridge.reader_font_size = root.localReaderFont
-        settingsBridge.ui_scale = root.localUiScale
-        settingsBridge.sync_interval_minutes = root.localSyncInterval
-        settingsBridge.signature_enabled = root.localSigEnabled
-        settingsBridge.signature_text = root.localSigText
-        settingsBridge.reply_below_quote = root.localReplyBelow
-        settingsBridge.request_mdn = root.localRequestMdn
-        var saveError = settingsBridge.save()
+        settingsBridge.sent_copy_enabled = root.localSentCopy;
+        settingsBridge.load_remote_images = root.localRemoteImages;
+        settingsBridge.compose_send_format = root.localSendFormat;
+        settingsBridge.compose_include_plain = root.localIncludePlain;
+        settingsBridge.auto_mark_read = root.localAutoMark;
+        settingsBridge.mark_read_delay_secs = root.localMarkDelay;
+        settingsBridge.collect_sent_contacts = root.localCollectContacts;
+        settingsBridge.confirm_delete = root.localConfirmDelete;
+        settingsBridge.list_density = root.localDensity;
+        settingsBridge.reader_font_size = root.localReaderFont;
+        settingsBridge.ui_scale = root.localUiScale;
+        settingsBridge.sync_interval_minutes = root.localSyncInterval;
+        settingsBridge.signature_enabled = root.localSigEnabled;
+        settingsBridge.signature_text = root.localSigText;
+        settingsBridge.reply_below_quote = root.localReplyBelow;
+        settingsBridge.request_mdn = root.localRequestMdn;
+        var saveError = settingsBridge.save();
         // Sort lives on Bridge (shared with the list header menu).
-        if (root.backend && root.backend.set_sort
-                && (root.localSortField !== root.backend.sort_field
-                    || root.localSortDesc !== root.backend.sort_descending))
-            root.backend.set_sort(root.localSortField, root.localSortDesc)
-        root.statusMessage(saveError !== "" ? saveError : qsTr("Settings saved"))
+        if (root.backend && root.backend.set_sort && (root.localSortField !== root.backend.sort_field
+                                                      || root.localSortDesc !== root.backend.sort_descending))
+            root.backend.set_sort(root.localSortField, root.localSortDesc);
+        root.statusMessage(saveError !== "" ? saveError : qsTr("Settings saved"));
     }
 }

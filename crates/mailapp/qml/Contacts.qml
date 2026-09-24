@@ -23,37 +23,36 @@ AppDialog {
     signal statusMessage(string text)
 
     function escapeHtml(t) {
-        return (t || "").toString()
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;")
-            .replace(/'/g, "&#39;")
+        return (t || "").toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g,
+                                                                                                               "&quot;").replace(
+                    /'/g, "&#39;");
     }
 
     function reload() {
-        root.rows = FeedJson.parse(root.backend.contacts_json(root.searchQuery), [])
+        root.rows = FeedJson.parse(root.backend.contacts_json(root.searchQuery), []);
     }
 
     function saveAlias(addr, newAlias) {
-        var r = root.backend.update_contact_alias(addr, newAlias)
+        var r = root.backend.update_contact_alias(addr, newAlias);
         if (r !== "") {
-            root.statusMessage(r)
+            root.statusMessage(r);
         } else {
-            root.editingAddress = ""
-            root.reload()
+            root.editingAddress = "";
+            root.reload();
         }
     }
 
     onOpened: {
-        root.searchQuery = ""
-        root.editingAddress = ""
-        root.reload()
+        root.searchQuery = "";
+        root.editingAddress = "";
+        root.reload();
     }
 
     footer: RowLayout {
         spacing: Theme.sm
-        Item { Layout.fillWidth: true }
+        Item {
+            Layout.fillWidth: true
+        }
         AppButton {
             Layout.rightMargin: Theme.lg + 8
             Layout.bottomMargin: Theme.md
@@ -71,7 +70,8 @@ AppDialog {
             wrapMode: Text.Wrap
             color: Theme.textMuted
             font.pixelSize: Theme.fontSmall
-            text: qsTr("Contacts are auto-collected from transferred real names in mail headers. You can customize the alias name for any contact.")
+            text: qsTr(
+                      "Contacts are auto-collected from transferred real names in mail headers. You can customize the alias name for any contact.")
         }
 
         // Search bar
@@ -86,13 +86,13 @@ AppDialog {
                 text: root.searchQuery
                 Accessible.name: qsTr("Search contacts")
                 onTextEdited: {
-                    root.searchQuery = text
-                    root.reload()
+                    root.searchQuery = text;
+                    root.reload();
                 }
                 Keys.onDownPressed: {
                     if (contactList.count > 0) {
-                        contactList.forceActiveFocus()
-                        contactList.currentIndex = 0
+                        contactList.forceActiveFocus();
+                        contactList.currentIndex = 0;
                     }
                 }
             }
@@ -104,10 +104,10 @@ AppDialog {
                 tooltip: qsTr("Clear search")
                 Accessible.name: qsTr("Clear search")
                 onClicked: {
-                    root.searchQuery = ""
-                    searchInput.text = ""
-                    root.reload()
-                    searchInput.forceActiveFocus()
+                    root.searchQuery = "";
+                    searchInput.text = "";
+                    root.reload();
+                    searchInput.forceActiveFocus();
                 }
             }
         }
@@ -134,15 +134,16 @@ AppDialog {
 
             Keys.onReturnPressed: {
                 if (currentIndex >= 0 && currentIndex < count && root.editingAddress === "") {
-                    root.editingAddress = model[currentIndex].address
+                    root.editingAddress = model[currentIndex].address;
                 }
             }
             Keys.onDeletePressed: {
                 if (currentIndex >= 0 && currentIndex < count && root.editingAddress === "") {
-                    var addr = model[currentIndex].address
-                    var r = root.backend.delete_contact(addr)
-                    if (r !== "") root.statusMessage(r)
-                    root.reload()
+                    var addr = model[currentIndex].address;
+                    var r = root.backend.delete_contact(addr);
+                    if (r !== "")
+                        root.statusMessage(r);
+                    root.reload();
                 }
             }
 
@@ -150,23 +151,25 @@ AppDialog {
                 id: rowDelegate
                 width: ListView.view.width
                 implicitHeight: {
-                    var contentH = isEditing ? editLayout.implicitHeight : displayLayout.implicitHeight
-                    var baseH = Math.round((isEditing ? 72 : 54) * Theme.uiScale)
-                    return Math.max(baseH, contentH + Theme.sm * 2)
+                    var contentH = isEditing ? editLayout.implicitHeight : displayLayout.implicitHeight;
+                    var baseH = Math.round((isEditing ? 72 : 54) * Theme.uiScale);
+                    return Math.max(baseH, contentH + Theme.sm * 2);
                 }
-                color: isEditing ? Theme.bgRaised
-                                 : (contactHover.hovered || ListView.isCurrentItem ? Theme.bgAlt : "transparent")
+                color: isEditing ? Theme.bgRaised : (contactHover.hovered || ListView.isCurrentItem ? Theme.bgAlt :
+                                                                                                      "transparent")
                 radius: Theme.radius
                 border.width: isEditing ? 1 : (ListView.isCurrentItem ? 1 : 0)
                 border.color: isEditing ? Theme.accent : Theme.border
 
                 readonly property bool isEditing: root.editingAddress === modelData.address
 
-                HoverHandler { id: contactHover }
+                HoverHandler {
+                    id: contactHover
+                }
 
                 TapHandler {
                     onDoubleTapped: {
-                        root.editingAddress = modelData.address
+                        root.editingAddress = modelData.address;
                     }
                 }
 
@@ -193,14 +196,18 @@ AppDialog {
                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                             textFormat: Text.StyledText
                             text: {
-                                var aliasPart = modelData.alias
-                                    ? ("<span style='font-size: " + Theme.fontMedium + "px; font-weight: bold; color: " + Theme.text + ";'>"
-                                       + root.escapeHtml(modelData.alias) + "</span>")
-                                    : ("<span style='font-size: " + Theme.fontMedium + "px; color: " + Theme.textMuted + "; font-style: italic;'>"
-                                       + qsTr("(No alias)") + "</span>")
-                                var addrPart = "<span style='font-size: " + Theme.fontSmall + "px; color: " + Theme.textMuted + ";'>&lt;"
-                                    + root.escapeHtml(modelData.address) + "&gt;</span>"
-                                return aliasPart + " " + addrPart
+                                var aliasPart = modelData.alias ? ("<span style='font-size: " + Theme.fontMedium
+                                                                   + "px; font-weight: bold; color: " + Theme.text
+                                                                   + ";'>" + root.escapeHtml(modelData.alias)
+                                                                   + "</span>") : ("<span style='font-size: "
+                                                                                   + Theme.fontMedium + "px; color: "
+                                                                                   + Theme.textMuted
+                                                                                   + "; font-style: italic;'>" + qsTr(
+                                                                                       "(No alias)") + "</span>");
+                                var addrPart = "<span style='font-size: " + Theme.fontSmall + "px; color: "
+                                        + Theme.textMuted + ";'>&lt;" + root.escapeHtml(modelData.address)
+                                        + "&gt;</span>";
+                                return aliasPart + " " + addrPart;
                             }
                         }
 
@@ -208,7 +215,10 @@ AppDialog {
                             Layout.fillWidth: true
                             Layout.minimumWidth: 0
                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                            text: modelData.name && modelData.name !== modelData.alias ? qsTr("Transferred real name: ") + root.escapeHtml(modelData.name) : ""
+                            text: modelData.name && modelData.name !== modelData.alias ? qsTr(
+                                                                                             "Transferred real name: ")
+                                                                                         + root.escapeHtml(
+                                                                                             modelData.name) : ""
                             textFormat: Text.StyledText
                             color: Theme.textMuted
                             font.pixelSize: Theme.fontTiny
@@ -242,7 +252,7 @@ AppDialog {
                         tooltip: qsTr("Edit alias")
                         Accessible.name: qsTr("Edit alias for %1").arg(modelData.alias || modelData.address)
                         onClicked: {
-                            root.editingAddress = modelData.address
+                            root.editingAddress = modelData.address;
                         }
                     }
 
@@ -253,9 +263,10 @@ AppDialog {
                         tooltip: qsTr("Remove contact")
                         Accessible.name: qsTr("Remove contact %1").arg(modelData.alias || modelData.address)
                         onClicked: {
-                            var r = root.backend.delete_contact(modelData.address)
-                            if (r !== "") root.statusMessage(r)
-                            root.reload()
+                            var r = root.backend.delete_contact(modelData.address);
+                            if (r !== "")
+                                root.statusMessage(r);
+                            root.reload();
                         }
                     }
                 }
@@ -291,12 +302,13 @@ AppDialog {
                             Layout.fillWidth: true
                             Layout.minimumWidth: 0
                             text: modelData.alias || ""
-                            placeholderText: modelData.name ? qsTr("Alias (default: %1)").arg(modelData.name) : qsTr("Alias name…")
+                            placeholderText: modelData.name ? qsTr("Alias (default: %1)").arg(modelData.name) : qsTr(
+                                                                  "Alias name…")
                             Accessible.name: qsTr("Alias for %1").arg(modelData.address)
                             Component.onCompleted: {
                                 if (rowDelegate.isEditing) {
-                                    forceActiveFocus()
-                                    selectAll()
+                                    forceActiveFocus();
+                                    selectAll();
                                 }
                             }
                             Keys.onReturnPressed: root.saveAlias(modelData.address, text.trim())
