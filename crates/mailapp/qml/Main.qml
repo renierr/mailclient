@@ -589,6 +589,36 @@ ApplicationWindow {
         }
     }
 
+    // Jump request from the bar widget / a notification (`mailapp --open`):
+    // takes "<account_id>\n<folder>" (empty folder = inbox), switches the
+    // account, lands on the folder and raises the window. Take-once on the
+    // Rust side — each click jumps exactly once. Returns true when a jump
+    // happened.
+    function consumePendingOpen() {
+        var r = backend.consume_pending_open();
+        if (r === "")
+            return false;
+        var nl = r.indexOf("\n");
+        var id = parseInt(nl < 0 ? r : r.slice(0, nl), 10);
+        var folder = nl < 0 ? "" : r.slice(nl + 1);
+        if (!isFinite(id) || id <= 0)
+            return false;
+        if (id !== backend.current_account_id)
+            selectAccount(id);
+        // Let the account switch settle (feeds reload) before landing.
+        var target = folder;
+        Qt.callLater(function () {
+            if (backend.current_account_id !== id)
+                return;
+            if (target !== "" && target !== root.currentFolder)
+                selectFolder(target);
+            // The click came from outside: raise above the bar popup.
+            root.raise();
+            root.requestActivate();
+        });
+        return true;
+    }
+
     function selectAccount(id) {
         var r = backend.select_account(id);
         if (r === "") {
@@ -760,6 +790,17 @@ ApplicationWindow {
         onTriggered: root.kickServerSearch()
     }
 
+    // Picks up `mailapp --open` clicks while the window is already up:
+    // one cheap settings read every 2s, a queued jump switches account,
+    // lands on the inbox and raises the window.
+    Timer {
+        id: pendingOpenTimer
+        interval: 2000
+        running: true
+        repeat: true
+        onTriggered: root.consumePendingOpen()
+    }
+
     // Automatic mail check: only while idle (never mid-action), manual-only
     // when the interval is 0. Bound to the setting, so Save applies it live.
     Timer {
@@ -781,6 +822,14 @@ ApplicationWindow {
             accountSetup.openNew();
         } else if (r !== "") {
             root.statusText = r;
+        } else if (root.consumePendingOpen()) {
+            // Cold start from a widget/notification click: already on the
+            // right account + inbox. A switch syncs by itself; same-account
+            // clicks refresh here (the deferred switch sync skips on busy).
+            Qt.callLater(function () {
+                if (!root.busy && backend.account_count > 0)
+                    root.syncNow();
+            });
         } else {
             root.statusText = qsTr("Ready");
             // Refresh on startup: show the cache immediately, then sync.

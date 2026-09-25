@@ -157,8 +157,33 @@ Item {
         };
         var headline = count === 1 ? "New mail" : "New mail (" + count + ")";
         var body = String(root.unread) + " unread";
-        root.bar.run("omarchy notification send -g " + q("󰇮") + " " + q(headline) + " " + q(body) + " --exec " + q(
-                         root.mailBin));
+        // Newest unread first: the click lands on its account + inbox.
+        // (--exec takes program + separate args, not a shell line.)
+        var target = (root.recent && root.recent.length > 0) ? root.recent[0] : null;
+        var exec = q(root.mailBin);
+        if (target && target.account_email)
+            exec += " --open " + q(String(target.account_email)) + " " + q(String(target.folder || "INBOX"));
+        root.bar.run("omarchy notification send -g " + q("󰇮") + " " + q(headline) + " " + q(body) + " --exec " + exec);
+    }
+
+    // Open the app on one account's folder (`--open` queues the jump; a
+    // running window picks it up, otherwise it boots there directly).
+    // Falls back to a plain open when no account is known.
+    function openAccount(accountEmail, folder) {
+        var email = String(accountEmail || "");
+        if (email === "") {
+            openApp();
+            return;
+        }
+        var f = String(folder || "INBOX");
+        if (root.bar && typeof root.bar.run === "function") {
+            var q = root.bar.shellQuote ? root.bar.shellQuote : function (s) {
+                return "'" + String(s).replace(/'/g, "'\\''") + "'";
+            };
+            root.bar.run(q(root.mailBin) + " --open " + q(email) + " " + q(f));
+        } else {
+            Quickshell.execDetached([root.mailBin, "--open", email, f]);
+        }
     }
 
     function openApp() {

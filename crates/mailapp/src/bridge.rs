@@ -77,6 +77,11 @@ pub mod qobject {
         #[qinvokable]
         fn select_account(self: Pin<&mut Self>, id: i64) -> QString;
 
+        /// Take a queued `mailapp --open` jump request: `"<id>\n<folder>"`
+        /// (empty folder = inbox) or `""`. Take-once — each click jumps once.
+        #[qinvokable]
+        fn consume_pending_open(self: Pin<&mut Self>) -> QString;
+
         /// Delete an account with its folders/messages and keyring secrets.
         /// Returns `""` or an error message.
         #[qinvokable]

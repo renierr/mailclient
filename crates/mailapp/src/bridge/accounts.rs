@@ -194,6 +194,21 @@ impl qobject::Bridge {
         qstring("")
     }
 
+    /// Take a queued `mailapp --open` jump request (widget/notification
+    /// click): returns `"<account_id>\n<folder>"` (folder may be empty =
+    /// inbox), or `""` when nothing is queued. Take-once by design — each
+    /// click jumps exactly once, polled by the GUI startup and timer.
+    pub fn consume_pending_open(self: Pin<&mut Self>) -> QString {
+        let db = match shared_db() {
+            Ok(d) => d,
+            Err(_) => return qstring(""),
+        };
+        match settings::take_pending_open(db) {
+            Some((id, folder)) => qstring(&format!("{id}\n{folder}")),
+            None => qstring(""),
+        }
+    }
+
     pub fn delete_account(mut self: Pin<&mut Self>, id: i64) -> QString {
         // A queued or running job holds its account's id; deleting under it
         // would cascade away its outbox row or strand a draft mid-save.

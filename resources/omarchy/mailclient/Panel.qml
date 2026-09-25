@@ -238,7 +238,7 @@ BarWidget {
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: {
-                                    mail.openApp();
+                                    mail.openAccount(modelData.account_email, modelData.folder);
                                     root.close();
                                 }
                             }

@@ -64,6 +64,12 @@ pub const LAST_ACTIVE_ACCOUNT_ID: &str = "last_active_account_id";
 /// bookkeeping for the discovery throttle — not a user preference, no
 /// default): `last_full_discovery_{account_id}`.
 pub const LAST_FULL_DISCOVERY_PREFIX: &str = "last_full_discovery_";
+/// Account a `mailapp --open` click wants the GUI to show (row id). Read
+/// once and cleared by the consumer — cross-process jump request from the
+/// bar widget or a notification into a (possibly already running) GUI.
+pub const PENDING_OPEN_ACCOUNT_ID: &str = "pending_open_account_id";
+/// Folder path the pending open should land on (empty = account's inbox).
+pub const PENDING_OPEN_FOLDER: &str = "pending_open_folder";
 
 /// Built-in default for a known key, if any.
 #[must_use]
@@ -155,6 +161,30 @@ pub fn set_last_full_discovery(db: &Db, account_id: i64, unix_secs: i64) -> Resu
         &format!("{LAST_FULL_DISCOVERY_PREFIX}{account_id}"),
         &unix_secs.max(0).to_string(),
     )
+}
+
+/// Queue a GUI jump request (`mailapp --open`): account id plus optional
+/// folder path (empty = that account's inbox).
+pub fn set_pending_open(db: &Db, account_id: i64, folder: &str) -> Result<()> {
+    set(db, PENDING_OPEN_ACCOUNT_ID, &account_id.max(0).to_string())?;
+    set(db, PENDING_OPEN_FOLDER, folder.trim())
+}
+
+/// Take a queued jump request, clearing it so each click jumps exactly
+/// once. Returns `None` when nothing is queued or the id is invalid.
+pub fn take_pending_open(db: &Db) -> Option<(i64, String)> {
+    let id = get(db, PENDING_OPEN_ACCOUNT_ID)
+        .ok()
+        .flatten()
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|id| *id > 0)?;
+    let folder = get(db, PENDING_OPEN_FOLDER)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let _ = set(db, PENDING_OPEN_ACCOUNT_ID, "0");
+    let _ = set(db, PENDING_OPEN_FOLDER, "");
+    Some((id, folder))
 }
 
 /// Outgoing send format, resilient: unknown values become `auto`.
@@ -444,6 +474,19 @@ mod tests {
         assert_eq!(get_last_full_discovery(&db, 2), None);
         set(&db, "last_full_discovery_1", "nonsense").unwrap();
         assert_eq!(get_last_full_discovery(&db, 1), None);
+    }
+
+    #[test]
+    fn pending_open_is_take_once() {
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(take_pending_open(&db), None);
+        set_pending_open(&db, 7, "INBOX").unwrap();
+        assert_eq!(take_pending_open(&db), Some((7, "INBOX".to_string())));
+        // Consumed: second take finds nothing.
+        assert_eq!(take_pending_open(&db), None);
+        // Invalid ids never surface.
+        set_pending_open(&db, -3, "").unwrap();
+        assert_eq!(take_pending_open(&db), None);
     }
 
     #[test]
