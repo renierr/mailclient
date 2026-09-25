@@ -14,7 +14,7 @@ use lettre::{SmtpTransport, Transport};
 use crate::db::Db;
 use crate::error::{Result, StoreError};
 use crate::models::{Account, FolderRole};
-use crate::store::{contacts, folders, queue, settings};
+use crate::store::{accounts, contacts, folders, queue, settings};
 use crate::sync::imap::ImapSync;
 use crate::sync::traits::MailSender;
 
@@ -386,6 +386,18 @@ impl SmtpSender {
             })
     }
 
+    /// Gmail files every accepted SMTP submission into Sent Mail itself.
+    /// APPENDing our own copy afterwards delivers once but files twice —
+    /// the "double in Sent" every Gmail user reports. Host-based on
+    /// purpose: it describes one provider's server behaviour, not the
+    /// user's mail content.
+    fn gmail_autofiles_sent(account: &Account) -> bool {
+        [&account.imap_host, &account.smtp_host].iter().any(|h| {
+            let lower = h.to_ascii_lowercase();
+            lower.contains("gmail") || lower.contains("googlemail")
+        })
+    }
+
     /// File the sent MIME bytes into the account's Sent folder over a session
     /// the caller already holds.
     ///
@@ -402,6 +414,13 @@ impl SmtpSender {
         imap: &mut ImapSync,
         raw: &[u8],
     ) -> Result<()> {
+        let account = accounts::get(db, account_id).map_err(|e| {
+            StoreError::InvalidInput(format!("cannot load account, skipping sent copy: {e}"))
+        })?;
+        if Self::gmail_autofiles_sent(&account) {
+            log::info!("smtp: Gmail files submissions itself, skipping APPEND copy");
+            return Ok(());
+        }
         let Some(sent_path) = Self::sent_copy_target(db, account_id)? else {
             return Ok(());
         };
@@ -436,6 +455,10 @@ impl SmtpSender {
         let account = crate::store::accounts::get(db, account_id).map_err(|e| {
             StoreError::InvalidInput(format!("cannot load account, skipping sent copy: {e}"))
         })?;
+        if Self::gmail_autofiles_sent(&account) {
+            log::info!("smtp: Gmail files submissions itself, skipping APPEND copy");
+            return Ok(());
+        }
         let mut imap = ImapSync::new(&account);
         imap.connect(imap_password).await.map_err(|e| {
             StoreError::InvalidInput(format!("IMAP connect failed, skipping sent copy: {e}"))
@@ -460,6 +483,17 @@ mod tests {
         let ep = endpoint_for(&test_account());
         assert_eq!(ep.addr, "smtp.x:587");
         assert!(!ep.implicit_tls);
+    }
+
+    #[test]
+    fn gmail_autofiles_detection_covers_hosts() {
+        let mut a = test_account();
+        assert!(!SmtpSender::gmail_autofiles_sent(&a));
+        a.smtp_host = "smtp.gmail.com".to_string();
+        assert!(SmtpSender::gmail_autofiles_sent(&a));
+        a.smtp_host = "smtp.x".to_string();
+        a.imap_host = "imap.googlemail.com".to_string();
+        assert!(SmtpSender::gmail_autofiles_sent(&a));
     }
 
     #[test]

@@ -7,6 +7,49 @@
 use super::*;
 
 impl ImapSync {
+    /// True when SELECT proves the mailbox is exactly what we cached: same
+    /// UIDVALIDITY generation, same CONDSTORE modseq, same UIDNEXT and same
+    /// message count, with no QRESYNC VANISHED ranges. Only meaningful for a
+    /// folder we fully synced before (`highest_modseq > 0`); fresh folders
+    /// always take the full window. Callers check VANISHED separately.
+    fn folder_unchanged(folder: &Folder, mb: &SelectResult) -> bool {
+        folder.highest_modseq > 0
+            && mb
+                .highest_modseq
+                .is_some_and(|m| m == folder.highest_modseq)
+            && folder.uid_next.is_some()
+            && mb.uid_next == folder.uid_next
+            && mb
+                .uid_validity
+                .is_some_and(|v| Some(v) == folder.uid_validity)
+            && folder
+                .server_total
+                .is_some_and(|t| t == u64::from(mb.exists))
+    }
+
+    /// Trash "always seen": mark locally-unread Trash rows `\Seen` on the
+    /// server. Local-driven and cheap (one STORE only when needed), so the
+    /// unchanged fast path below keeps it instead of skipping it.
+    async fn sweep_trash_seen(&mut self, db: &Db, account_id: i64, folder_id: i64) -> Result<()> {
+        let session = self.session()?;
+        if let Ok(unread_uids) = messages::list_unread_uids(db, folder_id) {
+            if !unread_uids.is_empty() {
+                if let Err(e) = session
+                    .uid_store_flags(&unread_uids, StoreType::Add, vec![Flag::Seen])
+                    .await
+                {
+                    log::warn!("imap: trash seen sweep failed: {e}");
+                }
+                for uid in &unread_uids {
+                    let _ = messages::set_flags_by_uid(
+                        db, account_id, folder_id, *uid, true, false, false,
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Synchronize a folder window using CONDSTORE / QRESYNC delta sync when supported.
     pub async fn sync_folder_window(
         &mut self,
@@ -60,6 +103,32 @@ impl ImapSync {
         }
 
         let local_uids: HashSet<u32> = messages::list_uids(db, folder_id)?.into_iter().collect();
+
+        // Fast path: the server reports exactly the state we cached, so UID
+        // SEARCH + flag refresh + body FETCH would all be no-ops — one
+        // SELECT instead of a dozen round-trips per unchanged folder. This
+        // is what keeps a big-but-quiet folder (e.g. Gmail Sent with 3k+
+        // mails) cheap: only folders with real changes pay the window.
+        if !validity_changed && mb.vanished.is_empty() && Self::folder_unchanged(&folder, &mb) {
+            log::debug!("imap: {} unchanged, skipping window sync", folder.path);
+            if folder.role == FolderRole::Trash {
+                self.sweep_trash_seen(db, account.id, folder_id).await?;
+            }
+            folders::set_sync_state(
+                db,
+                folder_id,
+                mb.uid_validity.unwrap_or(folder.uid_validity.unwrap_or(0)),
+                mb.uid_next.unwrap_or(folder.uid_next.unwrap_or(0)),
+                u64::from(mb.exists),
+                mb.highest_modseq.unwrap_or(folder.highest_modseq),
+            )?;
+            return Ok(SyncReport {
+                fetched: 0,
+                expunged: 0,
+                folders: 0,
+            });
+        }
+
         let (server_uids, search_lo) = search_recent_uids(session, window, mb.uid_next).await?;
 
         // Newest-N relevance window: UIDs grow monotonically, so the largest
@@ -174,21 +243,7 @@ impl ImapSync {
 
         // 6. If this is Trash, ensure any unread messages in local DB are marked \Seen on server.
         if is_trash {
-            if let Ok(unread_uids) = messages::list_unread_uids(db, folder_id) {
-                if !unread_uids.is_empty() {
-                    if let Err(e) = session
-                        .uid_store_flags(&unread_uids, StoreType::Add, vec![Flag::Seen])
-                        .await
-                    {
-                        log::warn!("imap: trash seen sweep failed: {e}");
-                    }
-                    for uid in &unread_uids {
-                        let _ = messages::set_flags_by_uid(
-                            db, account.id, folder_id, *uid, true, false, false,
-                        );
-                    }
-                }
-            }
+            self.sweep_trash_seen(db, account.id, folder_id).await?;
         }
 
         let validity = mb.uid_validity.unwrap_or(folder.uid_validity.unwrap_or(0));
@@ -357,5 +412,69 @@ impl ImapSync {
             }
         }
         pushed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn synced_folder() -> Folder {
+        Folder {
+            id: 1,
+            account_id: 1,
+            path: "INBOX".to_string(),
+            delimiter: "/".to_string(),
+            role: FolderRole::Inbox,
+            uid_validity: Some(42),
+            uid_next: Some(100),
+            server_total: Some(50),
+            highest_modseq: 9000,
+            subscribed: true,
+            last_sync_at: None,
+        }
+    }
+
+    fn same_select() -> SelectResult {
+        SelectResult {
+            exists: 50,
+            uid_validity: Some(42),
+            uid_next: Some(100),
+            highest_modseq: Some(9000),
+            vanished: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn unchanged_folder_is_detected() {
+        assert!(ImapSync::folder_unchanged(&synced_folder(), &same_select()));
+    }
+
+    #[test]
+    fn any_server_change_disables_the_fast_path() {
+        let folder = synced_folder();
+        let mut changed = same_select();
+        changed.highest_modseq = Some(9001);
+        assert!(!ImapSync::folder_unchanged(&folder, &changed));
+        let mut changed = same_select();
+        changed.uid_next = Some(101);
+        assert!(!ImapSync::folder_unchanged(&folder, &changed));
+        let mut changed = same_select();
+        changed.exists = 49;
+        assert!(!ImapSync::folder_unchanged(&folder, &changed));
+        let mut changed = same_select();
+        changed.uid_validity = Some(43);
+        assert!(!ImapSync::folder_unchanged(&folder, &changed));
+    }
+
+    #[test]
+    fn fresh_or_condstore_less_folders_never_skip() {
+        let mut folder = synced_folder();
+        folder.highest_modseq = 0;
+        assert!(!ImapSync::folder_unchanged(&folder, &same_select()));
+        let folder = synced_folder();
+        let mut no_modseq = same_select();
+        no_modseq.highest_modseq = None;
+        assert!(!ImapSync::folder_unchanged(&folder, &no_modseq));
     }
 }

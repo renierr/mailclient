@@ -1,6 +1,7 @@
 //! Finding out what the server has: LIST / LSUB / NAMESPACE, plus the
 //! NOOP that doubles as a liveness probe for pooled sessions.
 
+use super::super::utf7::decode_modified_utf7;
 use super::*;
 
 impl ImapSession {
@@ -21,7 +22,7 @@ impl ImapSession {
             {
                 let name = match mailbox {
                     Mailbox::Inbox => "INBOX".to_string(),
-                    Mailbox::Other(o) => String::from_utf8_lossy(o.as_ref()).to_string(),
+                    Mailbox::Other(o) => decode_modified_utf7(&String::from_utf8_lossy(o.as_ref())),
                 };
                 let delim = delimiter
                     .map(|d| d.inner().to_string())
@@ -53,7 +54,7 @@ impl ImapSession {
             {
                 let name = match mailbox {
                     Mailbox::Inbox => "INBOX".to_string(),
-                    Mailbox::Other(o) => String::from_utf8_lossy(o.as_ref()).to_string(),
+                    Mailbox::Other(o) => decode_modified_utf7(&String::from_utf8_lossy(o.as_ref())),
                 };
                 let delim = delimiter
                     .map(|d| d.inner().to_string())

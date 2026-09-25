@@ -43,8 +43,8 @@ use super::{
     session::ImapSession,
     tls::{build_tls_connector, server_name_for},
     types::{
-        endpoint_for, ArchiveOutcome, ImapEndpoint, MoveOutcome, ServerSearchReport, TrashOutcome,
-        COMMAND_TIMEOUT, CONNECT_TIMEOUT, FETCH_CHUNK, FULL_SYNC_WINDOW,
+        endpoint_for, ArchiveOutcome, ImapEndpoint, MoveOutcome, SelectResult, ServerSearchReport,
+        TrashOutcome, COMMAND_TIMEOUT, CONNECT_TIMEOUT, FETCH_CHUNK, FULL_SYNC_WINDOW,
     },
     vec1,
 };

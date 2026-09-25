@@ -13,16 +13,31 @@ use crate::bridge::session::{
 use crate::bridge::worker::{spawn_job, JobRefresh};
 use crate::bridge::{push_feeds, qstring, shared_db, DEFAULT_MESSAGE_LIMIT};
 
+/// "in 7s" / "in 2m 05s" suffix for job summaries, so the status line says
+/// how long a sync actually took.
+fn format_job_duration(started: std::time::Instant) -> String {
+    let secs = started.elapsed().as_secs();
+    if secs < 60 {
+        format!("in {secs}s")
+    } else {
+        format!("in {}m {:02}s", secs / 60, secs % 60)
+    }
+}
+
 impl qobject::Bridge {
     pub fn sync_now(self: Pin<&mut Self>) -> QString {
         let wanted = *self.current_account_id();
         let current = *self.current_folder_id();
-        spawn_job(self, "Sync", move |db, _progress| async move {
+        spawn_job(self, "Sync", move |db, progress| async move {
+            let started = std::time::Instant::now();
             let acc = job_account(db, wanted)?;
             // Shared orchestration (outbox flush, flag push, folder sweep);
             // the GUI lends its pooled session, the CLI brings a fresh one.
             let mut imap = checkout_session(&acc).await?;
-            let r = headless::sync_account(db, &acc, &mut imap).await;
+            let report_progress = |done: usize, total: usize, path: &str| {
+                progress.report(&format!("Syncing {done}/{total}: {path}"));
+            };
+            let r = headless::sync_account(db, &acc, &mut imap, Some(&report_progress)).await;
             imap.checkin();
             let all = folders::list_by_account(db, acc.id).map_err(|e| e.to_string())?;
             let folder_id = all
@@ -58,8 +73,11 @@ impl qobject::Bridge {
             };
             Ok((
                 format!(
-                    "Synced {} folders: +{} new, -{} removed{flags}{scope}{hidden}{errs}",
-                    r.folders_synced, r.fetched, r.expunged,
+                    "Synced {} folders: +{} new, -{} removed{flags}{scope}{hidden}{errs}, {}",
+                    r.folders_synced,
+                    r.fetched,
+                    r.expunged,
+                    format_job_duration(started),
                 ),
                 Some(JobRefresh::feeds(acc.id, folder_id)),
             ))
@@ -70,6 +88,7 @@ impl qobject::Bridge {
         let wanted = *self.current_account_id();
         let path = path.to_string();
         spawn_job(self, "Sync", move |db, _progress| async move {
+            let started = std::time::Instant::now();
             let acc = job_account(db, wanted)?;
             let folder = folders::get_by_path(db, acc.id, &path).map_err(|e| e.to_string())?;
             let mut imap = checkout_session(&acc).await?;
@@ -81,8 +100,11 @@ impl qobject::Bridge {
             imap.checkin();
             Ok((
                 format!(
-                    "Synced {}: +{} new, -{} removed",
-                    folder.path, r.fetched, r.expunged
+                    "Synced {}: +{} new, -{} removed, {}",
+                    folder.path,
+                    r.fetched,
+                    r.expunged,
+                    format_job_duration(started),
                 ),
                 Some(JobRefresh::feeds(acc.id, folder.id)),
             ))
@@ -96,6 +118,7 @@ impl qobject::Bridge {
             return qstring("no folder selected");
         }
         spawn_job(self, "Sync", move |db, _progress| async move {
+            let started = std::time::Instant::now();
             let acc = job_account(db, wanted)?;
             let folder = folders::get(db, folder_id).map_err(|e| e.to_string())?;
             if folder.account_id != acc.id {
@@ -108,9 +131,16 @@ impl qobject::Bridge {
                 .map_err(|e| e.to_string())?;
             imap.checkin();
             let status = if r.fetched > 0 {
-                format!("Loaded {} older messages", r.fetched)
+                format!(
+                    "Loaded {} older messages, {}",
+                    r.fetched,
+                    format_job_duration(started)
+                )
             } else {
-                "Caught up — no older messages on the server".to_string()
+                format!(
+                    "Caught up — no older messages on the server, {}",
+                    format_job_duration(started)
+                )
             };
             Ok((
                 status,

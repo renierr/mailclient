@@ -4,6 +4,7 @@
 //! server rejects it, and turns the extension off for the rest of the
 //! session rather than retrying it on every folder.
 
+use super::super::utf7::mailbox_for_wire;
 use super::*;
 
 impl ImapSession {
@@ -13,8 +14,7 @@ impl ImapSession {
         path: &str,
         qresync: Option<(u32, u64)>,
     ) -> Result<SelectResult> {
-        let mailbox = Mailbox::try_from(path.to_string())
-            .map_err(|e| StoreError::InvalidInput(format!("invalid mailbox {path}: {e}")))?;
+        let mailbox = mailbox_for_wire(path)?;
 
         let (body, has_extension) = if self.qresync_enabled && qresync.is_some_and(|(_, m)| m > 0) {
             let (validity, modseq) = qresync.unwrap();

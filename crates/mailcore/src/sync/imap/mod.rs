@@ -20,6 +20,7 @@ mod seq;
 mod session;
 mod tls;
 mod types;
+mod utf7;
 
 #[cfg(test)]
 pub(crate) mod mock;
@@ -35,3 +36,4 @@ pub use types::{
     ServerSearchReport, TrashOutcome, FULL_SYNC_WINDOW, MAX_ATTACHMENTS_PER_MESSAGE,
     MAX_ATTACHMENT_BYTES, OLDER_BATCH, QUICK_SYNC_WINDOW,
 };
+pub use utf7::{decode_modified_utf7, encode_modified_utf7, mailbox_for_wire};

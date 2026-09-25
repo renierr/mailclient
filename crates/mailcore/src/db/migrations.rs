@@ -3,12 +3,12 @@
 //! Rule (see AGENT.md): never edit a released migration in place —
 //! add a new `migrate_vN` and bump [`SCHEMA_VERSION`].
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 11;
+pub const SCHEMA_VERSION: u32 = 12;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -149,11 +149,68 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         // v11: stop the FTS trigger re-indexing bodies on every flag change.
         conn.execute_batch(SCHEMA_V11)?;
     }
+    if current < 12 {
+        // v12: folder paths were stored as raw IMAP modified UTF-7
+        // (`Entw&APw-rfe`). Discovery now stores decoded Unicode
+        // (`Entwürfe`), so rename existing rows — otherwise the next sync
+        // would file the same mailbox twice (raw row orphaned, decoded
+        // row fresh). Merging into an already-decoded row moves its
+        // messages first (conflicting UIDs stay with the survivor).
+        if let Err(e) = migrate_folder_paths_utf7(conn) {
+            log::warn!("migration v12: folder UTF-7 rename failed: {e}");
+        }
+    }
     if current != SCHEMA_VERSION {
         conn.execute(
             "update schema_meta set value = ?1 where key = 'version'",
             [SCHEMA_VERSION.to_string()],
         )?;
+    }
+    Ok(())
+}
+
+/// Decode raw IMAP modified-UTF-7 folder paths to Unicode (see v12).
+fn migrate_folder_paths_utf7(conn: &Connection) -> Result<()> {
+    let rows: Vec<(i64, i64, String)> = {
+        let mut stmt =
+            conn.prepare("select id, account_id, path from folders where path like '%&%-%'")?;
+        let mapped = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        mapped.collect::<std::result::Result<Vec<_>, _>>()?
+    };
+    for (id, account_id, path) in rows {
+        let decoded = crate::sync::imap::decode_modified_utf7(&path);
+        if decoded == path {
+            continue;
+        }
+        let survivor: Option<i64> = conn
+            .query_row(
+                "select id from folders where account_id = ?1 and path = ?2",
+                rusqlite::params![account_id, decoded],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match survivor {
+            Some(keep) if keep != id => {
+                conn.execute(
+                    "delete from messages where folder_id = ?1 and uid in
+                     (select uid from messages where folder_id = ?2)",
+                    rusqlite::params![id, keep],
+                )?;
+                conn.execute(
+                    "update messages set folder_id = ?1 where folder_id = ?2",
+                    rusqlite::params![keep, id],
+                )?;
+                conn.execute("delete from folders where id = ?1", [id])?;
+                log::info!("migration v12: merged folder {path} into existing {decoded}");
+            }
+            _ => {
+                conn.execute(
+                    "update folders set path = ?1 where id = ?2",
+                    rusqlite::params![decoded, id],
+                )?;
+                log::info!("migration v12: renamed folder {path} to {decoded}");
+            }
+        }
     }
     Ok(())
 }
@@ -245,6 +302,47 @@ mod tests {
         assert_eq!(version, SCHEMA_VERSION.to_string());
         conn.execute("select highest_modseq from folders", [])
             .unwrap();
+    }
+
+    #[test]
+    fn v12_migration_decodes_utf7_folder_paths() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_FULL).unwrap();
+        conn.execute(
+            "insert into schema_meta (key, value) values ('version', '11')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "insert into accounts (name, email_address, imap_host, smtp_host,
+              auth_vault_key, created_at, updated_at)
+             values ('t', 't@example.com', 'i', 's', 'k', 't', 't')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "insert into folders (account_id, path, delimiter, role, created_at, updated_at)
+             values (1, '[Google Mail]/Entw&APw-rfe', '/', 'custom', 't', 't')",
+            [],
+        )
+        .unwrap();
+
+        ensure_schema(&conn).unwrap();
+
+        let version: String = conn
+            .query_row(
+                "select value from schema_meta where key = 'version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION.to_string());
+        let path: String = conn
+            .query_row("select path from folders where account_id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(path, "[Google Mail]/Entwürfe");
     }
 
     #[test]

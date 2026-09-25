@@ -655,6 +655,9 @@ ApplicationWindow {
                     composer.markClean();
                 }
                 root.statusText = qsTr("Sent");
+            } else if (kind === "Sync" && status !== "") {
+                // Per-folder progress from the sync job ("Syncing 3/15: …").
+                root.statusText = status;
             }
         }
 
@@ -1114,12 +1117,11 @@ ApplicationWindow {
             onArchiveRequested: uid => root.archiveMessage(uid)
             onMoveRequested: uid => root.openMove(uid)
             onMarkReadRequested: (uid, read) => {
-                                     var r = backend.mark_read(uid, read);
-                                     reloadFolders();
-                                     reloadMessages();
-                                     root.statusText = r !== "" ? r : (read ? qsTr("Marked as read") : qsTr(
-                                                                                  "Marked as unread"));
-                                 }
+                var r = backend.mark_read(uid, read);
+                reloadFolders();
+                reloadMessages();
+                root.statusText = r !== "" ? r : (read ? qsTr("Marked as read") : qsTr("Marked as unread"));
+            }
             onDeleteRequested: uid => root.deleteMessage(uid)
             onPurgeRequested: uid => root.confirmPurge(uid)
             onBulkMarkReadRequested: (uids, read) => root.bulkMarkRead(uids, read)
@@ -1180,12 +1182,17 @@ ApplicationWindow {
                 color: Theme.accent
                 font.pixelSize: Theme.fontSmall
             }
-            Label {
+            // Read-only TextEdit instead of a Label so the status line can be
+            // selected and copied (drag + Ctrl+C); styled to look identical.
+            TextEdit {
                 Layout.fillWidth: true
                 text: root.statusText
                 color: Theme.textMuted
                 font.pixelSize: Theme.fontSmall
-                elide: Text.ElideRight
+                readOnly: true
+                selectByMouse: true
+                wrapMode: Text.NoWrap
+                clip: true
             }
             Label {
                 text: backend.current_account_email
@@ -1210,46 +1217,45 @@ ApplicationWindow {
         replyBelowQuote: appSettings.reply_below_quote
         onStatusMessage: text => root.statusText = text
         onSendRequested: payload => {
-                             root.statusText = qsTr("Sending…");
-                             var r = backend.send_mail(payload);
-                             if (r !== "") {
-                                 root.statusText = r;
-                             } else {
-                                 // Validated + queued locally (no network yet): close at once
-                                 // instead of waiting out the SMTP transaction. A later
-                                 // failure reopens the composer with the text still in place.
-                                 composer.sendPending = true;
-                                 composer.markClean();
-                                 composer.close();
-                             }
-                         }
+            root.statusText = qsTr("Sending…");
+            var r = backend.send_mail(payload);
+            if (r !== "") {
+                root.statusText = r;
+            } else {
+                // Validated + queued locally (no network yet): close at once
+                // instead of waiting out the SMTP transaction. A later
+                // failure reopens the composer with the text still in place.
+                composer.sendPending = true;
+                composer.markClean();
+                composer.close();
+            }
+        }
         onSaveDraftRequested: payload => {
-                                  root.statusText = qsTr("Saving draft…");
-                                  // Stays open until the job reports back: closing on the queue
-                                  // acknowledgement would discard the text if the save then failed.
-                                  var r = backend.save_draft(payload);
-                                  if (r !== "")
-                                  root.statusText = r;
-                                  else
-                                  composer.saving = true;
-                              }
+            root.statusText = qsTr("Saving draft…");
+            // Stays open until the job reports back: closing on the queue
+            // acknowledgement would discard the text if the save then failed.
+            var r = backend.save_draft(payload);
+            if (r !== "")
+                root.statusText = r;
+            else
+                composer.saving = true;
+        }
     }
 
     AccountSetup {
         id: accountSetup
         onStatusMessage: text => root.statusText = text
         onAccountSubmit: payload => {
-                             var r = backend.add_account(payload);
-                             if (r === "") {
-                                 var wasEditing = accountSetup.editing;
-                                 accountSetup.close();
-                                 reloadAll();
-                                 root.statusText = wasEditing ? qsTr("Account updated") : qsTr(
-                                                                    "Account added — press ⟳ to sync");
-                             } else {
-                                 root.statusText = r;
-                             }
-                         }
+            var r = backend.add_account(payload);
+            if (r === "") {
+                var wasEditing = accountSetup.editing;
+                accountSetup.close();
+                reloadAll();
+                root.statusText = wasEditing ? qsTr("Account updated") : qsTr("Account added — press ⟳ to sync");
+            } else {
+                root.statusText = r;
+            }
+        }
     }
 
     Accounts {
@@ -1261,10 +1267,10 @@ ApplicationWindow {
         onEditRequested: id => accountSetup.openEdit(backend.account_form(id), id)
         onAccountSelected: id => root.selectAccount(id)
         onDeleteConfirmed: id => {
-                               var r = backend.delete_account(id);
-                               reloadAll();
-                               showResult(qsTr("Account removed"), r);
-                           }
+            var r = backend.delete_account(id);
+            reloadAll();
+            showResult(qsTr("Account removed"), r);
+        }
     }
 
     Contacts {
@@ -1288,21 +1294,21 @@ ApplicationWindow {
                 root.statusText = r;
         }
         onVisibilityToggled: (path, subscribed) => {
-                                 showResult("", backend.set_folder_subscribed(path, subscribed));
-                                 reloadFolders();
-                             }
+            showResult("", backend.set_folder_subscribed(path, subscribed));
+            reloadFolders();
+        }
         onCreateRequested: path => {
-                               foldersDialog.clearNewFolder();
-                               root.statusText = qsTr("Creating folder…");
-                               var r = backend.create_folder(path);
-                               if (r !== "")
-                               root.statusText = r;
-                           }
+            foldersDialog.clearNewFolder();
+            root.statusText = qsTr("Creating folder…");
+            var r = backend.create_folder(path);
+            if (r !== "")
+                root.statusText = r;
+        }
         onFolderSelected: path => {
-                              foldersDialog.close();
-                              // Out of the click handler: selecting rebuilds the feed.
-                              Qt.callLater(root.selectFolder, path);
-                          }
+            foldersDialog.close();
+            // Out of the click handler: selecting rebuilds the feed.
+            Qt.callLater(root.selectFolder, path);
+        }
     }
 
     MoveTo {
@@ -1310,26 +1316,25 @@ ApplicationWindow {
         folders: folderModel
         currentFolder: root.currentFolder
         onFolderChosen: path => {
-                            var targets = moveDialog.uids && moveDialog.uids.length > 0 ? moveDialog.uids.slice() :
-                                                                                          [moveDialog.uid];
-                            moveDialog.close();
-                            // Out of the click handler: moving rebuilds the feed.
-                            Qt.callLater(function () {
-                                var r;
-                                root.statusText = qsTr("Moving…");
-                                if (targets.length > 1 || (moveDialog.uids && moveDialog.uids.length > 0)) {
-                                    root.dropPreviewIfGone(targets);
-                                    r = backend.move_many(JSON.stringify(targets), path);
-                                } else {
-                                    var target = targets[0];
-                                    if (root.currentUid === target)
-                                        root.currentUid = -1;
-                                    r = backend.move_message(target, path);
-                                }
-                                if (r !== "")
-                                    root.statusText = r;
-                            });
-                        }
+            var targets = moveDialog.uids && moveDialog.uids.length > 0 ? moveDialog.uids.slice() : [moveDialog.uid];
+            moveDialog.close();
+            // Out of the click handler: moving rebuilds the feed.
+            Qt.callLater(function () {
+                var r;
+                root.statusText = qsTr("Moving…");
+                if (targets.length > 1 || (moveDialog.uids && moveDialog.uids.length > 0)) {
+                    root.dropPreviewIfGone(targets);
+                    r = backend.move_many(JSON.stringify(targets), path);
+                } else {
+                    var target = targets[0];
+                    if (root.currentUid === target)
+                        root.currentUid = -1;
+                    r = backend.move_message(target, path);
+                }
+                if (r !== "")
+                    root.statusText = r;
+            });
+        }
     }
 
     // Trash is reversible (unlike purge), so the move variant uses the
@@ -1474,10 +1479,10 @@ ApplicationWindow {
         backend: backend
         dbPath: backend.db_path
         onStatusMessage: text => {
-                             // The image setting changes what the feed sanitizes to, so the
-                             // open message must re-render from a fresh feed.
-                             reloadMessages();
-                             root.statusText = text;
-                         }
+            // The image setting changes what the feed sanitizes to, so the
+            // open message must re-render from a fresh feed.
+            reloadMessages();
+            root.statusText = text;
+        }
     }
 }

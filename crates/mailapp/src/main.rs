@@ -208,7 +208,7 @@ fn run_headless(args: &[String]) -> i32 {
                         imap.connect(&s.imap_password)
                             .await
                             .map_err(|e| e.to_string())?;
-                        let ar = headless::sync_account(&db, &a, &mut imap).await;
+                        let ar = headless::sync_account(&db, &a, &mut imap, None).await;
                         imap.logout().await;
                         Ok((s, ar))
                     })

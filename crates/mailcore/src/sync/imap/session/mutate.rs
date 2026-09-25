@@ -3,6 +3,7 @@
 //!
 //! Destroying messages is the delicate one -- see [`ImapSession::uid_expunge`].
 
+use super::super::utf7::mailbox_for_wire;
 use super::*;
 
 impl ImapSession {
@@ -31,8 +32,7 @@ impl ImapSession {
             return Ok(());
         }
         let sequence_set = uids_to_sequence_set(uids)?;
-        let mailbox = Mailbox::try_from(dest.to_string())
-            .map_err(|e| StoreError::InvalidInput(format!("invalid mailbox {dest}: {e}")))?;
+        let mailbox = mailbox_for_wire(dest)?;
         let body = CommandBody::copy(sequence_set, mailbox, true)
             .map_err(|e| StoreError::InvalidInput(format!("copy args: {e}")))?;
         self.execute(body).await?;
@@ -50,8 +50,7 @@ impl ImapSession {
             .any(|c| c.eq_ignore_ascii_case("move"));
 
         let sequence_set = uids_to_sequence_set(uids)?;
-        let mailbox = Mailbox::try_from(dest.to_string())
-            .map_err(|e| StoreError::InvalidInput(format!("invalid mailbox {dest}: {e}")))?;
+        let mailbox = mailbox_for_wire(dest)?;
 
         if has_move {
             let body = CommandBody::Move {
@@ -125,8 +124,7 @@ impl ImapSession {
         raw: &[u8],
         flags: Vec<Flag<'static>>,
     ) -> Result<()> {
-        let mailbox = Mailbox::try_from(folder.to_string())
-            .map_err(|e| StoreError::InvalidInput(format!("invalid mailbox {folder}: {e}")))?;
+        let mailbox = mailbox_for_wire(folder)?;
         let literal = Literal::try_from(raw.to_vec())
             .map_err(|e| StoreError::InvalidInput(format!("literal error: {e}")))?;
 
@@ -142,8 +140,7 @@ impl ImapSession {
 
     /// CREATE mailbox.
     pub async fn create_folder(&mut self, folder: &str) -> Result<()> {
-        let mailbox = Mailbox::try_from(folder.to_string())
-            .map_err(|e| StoreError::InvalidInput(format!("invalid mailbox {folder}: {e}")))?;
+        let mailbox = mailbox_for_wire(folder)?;
         let body = CommandBody::create(mailbox)
             .map_err(|e| StoreError::InvalidInput(format!("create args: {e}")))?;
         self.execute(body).await?;

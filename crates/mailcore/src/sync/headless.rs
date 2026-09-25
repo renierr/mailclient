@@ -77,12 +77,22 @@ pub struct RecentUnread {
     pub date: String,
 }
 
+/// Per-folder sync progress, called as `report(done, total, path)` before
+/// each folder sync so the GUI can show "3/15: …" instead of a bare
+/// spinner; the headless CLI passes `None`.
+pub type SyncProgress<'a> = &'a dyn Fn(usize, usize, &str);
+
 /// Sync one account over an already-connected session.
 ///
 /// Flushes the SMTP outbox, pushes local flag changes, refreshes the folder
 /// list, then syncs every subscribed folder (INBOX full window, the rest
 /// quick). Per-folder failures are recorded in `errors` and skipped.
-pub async fn sync_account(db: &Db, account: &Account, imap: &mut ImapSync) -> AccountSyncResult {
+pub async fn sync_account(
+    db: &Db,
+    account: &Account,
+    imap: &mut ImapSync,
+    progress: Option<SyncProgress<'_>>,
+) -> AccountSyncResult {
     let mut out = AccountSyncResult {
         account_id: account.id,
         email: account.email_address.clone(),
@@ -125,10 +135,16 @@ pub async fn sync_account(db: &Db, account: &Account, imap: &mut ImapSync) -> Ac
         }
     };
 
+    let subscribed_total = remote.iter().filter(|f| f.subscribed).count();
+    let mut folders_attempted = 0usize;
     for f in &remote {
         if !f.subscribed {
             out.folders_skipped_hidden += 1;
             continue;
+        }
+        folders_attempted += 1;
+        if let Some(report) = progress {
+            report(folders_attempted, subscribed_total, &f.path);
         }
         let window = if f.role == FolderRole::Inbox {
             FULL_SYNC_WINDOW
@@ -183,7 +199,7 @@ pub async fn sync_all_accounts(db: &Db) -> SyncAllReport {
         let result = match secrets {
             Ok(s) => match imap.connect(&s.imap_password).await {
                 Ok(()) => {
-                    let r = sync_account(db, acc, &mut imap).await;
+                    let r = sync_account(db, acc, &mut imap, None).await;
                     imap.logout().await;
                     r
                 }
