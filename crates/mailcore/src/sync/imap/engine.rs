@@ -70,6 +70,14 @@ impl ImapSync {
             .as_mut()
             .ok_or_else(|| StoreError::Network("session disconnected".to_string()))
     }
+
+    /// Quick folder refresh: pass-1 LIST only (one round-trip). The
+    /// auto-sync path calls this every run and escalates to the full
+    /// [`SyncProvider::sync_folders`] discovery when the tree changed or
+    /// the interval lapsed — see `folders::full_discovery_due`.
+    pub async fn sync_folders_quick(&mut self, db: &Db, account_id: i64) -> Result<Vec<Folder>> {
+        super::folders::discover_folders_quick(self.session()?, db, account_id).await
+    }
 }
 
 impl SyncProvider for ImapSync {

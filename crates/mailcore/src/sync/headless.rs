@@ -23,8 +23,8 @@ use crate::auth;
 use crate::db::Db;
 use crate::error::Result;
 use crate::models::{Account, FolderRole};
-use crate::store::{accounts, folders, messages};
-use crate::sync::imap::{ImapSync, FULL_SYNC_WINDOW, QUICK_SYNC_WINDOW};
+use crate::store::{accounts, folders, messages, settings};
+use crate::sync::imap::{full_discovery_due, ImapSync, FULL_SYNC_WINDOW, QUICK_SYNC_WINDOW};
 use crate::sync::sender::SmtpSender;
 use crate::sync::traits::SyncProvider;
 
@@ -126,8 +126,37 @@ pub async fn sync_account(
 
     out.pushed_flags += imap.push_dirty_flags(db, account.id).await;
 
-    let remote = match imap.sync_folders(db, account.id).await {
-        Ok(f) => f,
+    // Throttled discovery: one LIST pass every run, full four-pass
+    // discovery only when the tree changed or the interval lapsed —
+    // passes 2-4 cost ~30 round-trips and dominated every Gmail start.
+    let cached_paths: std::collections::HashSet<String> = folders::list_by_account(db, account.id)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|f| f.path)
+        .collect();
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let remote = match imap.sync_folders_quick(db, account.id).await {
+        Ok(quick) => {
+            let quick_paths: std::collections::HashSet<String> =
+                quick.iter().map(|f| f.path.clone()).collect();
+            let last_full = settings::get_last_full_discovery(db, account.id);
+            if full_discovery_due(&cached_paths, &quick_paths, last_full, now_unix) {
+                match imap.sync_folders(db, account.id).await {
+                    Ok(full) => full,
+                    // Quick list already upserted: still syncable, note it.
+                    Err(e) => {
+                        out.errors.push(format!("folder list (full): {e}"));
+                        quick
+                    }
+                }
+            } else {
+                log::debug!("imap: folder tree unchanged and fresh, keeping quick LIST");
+                quick
+            }
+        }
         Err(e) => {
             out.errors.push(format!("folder list: {e}"));
             out.unread = unread_for_account(db, account.id);

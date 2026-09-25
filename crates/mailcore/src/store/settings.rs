@@ -60,6 +60,10 @@ pub const UI_SCALE: &str = "ui_scale";
 /// Last account selected in the UI. Absent/invalid values deliberately leave
 /// startup selection to the normal first-account fallback.
 pub const LAST_ACTIVE_ACCOUNT_ID: &str = "last_active_account_id";
+/// Prefix for per-account full-discovery timestamps (unix seconds, internal
+/// bookkeeping for the discovery throttle — not a user preference, no
+/// default): `last_full_discovery_{account_id}`.
+pub const LAST_FULL_DISCOVERY_PREFIX: &str = "last_full_discovery_";
 
 /// Built-in default for a known key, if any.
 #[must_use]
@@ -133,6 +137,24 @@ pub fn get_last_active_account_id(db: &Db) -> Option<i64> {
 /// Persist the account the user is actively viewing.
 pub fn set_last_active_account_id(db: &Db, account_id: i64) -> Result<()> {
     set(db, LAST_ACTIVE_ACCOUNT_ID, &account_id.max(0).to_string())
+}
+
+/// Last full folder discovery (unix seconds) for one account, if any.
+pub fn get_last_full_discovery(db: &Db, account_id: i64) -> Option<i64> {
+    get(db, &format!("{LAST_FULL_DISCOVERY_PREFIX}{account_id}"))
+        .ok()
+        .flatten()
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|secs| *secs > 0)
+}
+
+/// Stamp a full folder discovery (unix seconds) for one account.
+pub fn set_last_full_discovery(db: &Db, account_id: i64, unix_secs: i64) -> Result<()> {
+    set(
+        db,
+        &format!("{LAST_FULL_DISCOVERY_PREFIX}{account_id}"),
+        &unix_secs.max(0).to_string(),
+    )
 }
 
 /// Outgoing send format, resilient: unknown values become `auto`.
@@ -411,6 +433,17 @@ mod tests {
         assert_eq!(get_last_active_account_id(&db), None);
         set(&db, LAST_ACTIVE_ACCOUNT_ID, "-1").unwrap();
         assert_eq!(get_last_active_account_id(&db), None);
+    }
+
+    #[test]
+    fn full_discovery_stamp_round_trips_per_account() {
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(get_last_full_discovery(&db, 1), None);
+        set_last_full_discovery(&db, 1, 1700000000).unwrap();
+        assert_eq!(get_last_full_discovery(&db, 1), Some(1700000000));
+        assert_eq!(get_last_full_discovery(&db, 2), None);
+        set(&db, "last_full_discovery_1", "nonsense").unwrap();
+        assert_eq!(get_last_full_discovery(&db, 1), None);
     }
 
     #[test]
