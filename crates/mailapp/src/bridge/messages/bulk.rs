@@ -12,9 +12,9 @@ use mailcore::models::FolderRole;
 use mailcore::store::{accounts, folders, messages};
 
 use crate::bridge::qobject;
-use crate::bridge::session::{checkout_session, job_account};
 use crate::bridge::worker::{spawn_flag_push, spawn_job, JobRefresh};
 use crate::bridge::{push_feeds, qstring, shared_db};
+use mailcore::sync::pool::{checkout_session, job_account};
 
 use super::parse_uids_json;
 

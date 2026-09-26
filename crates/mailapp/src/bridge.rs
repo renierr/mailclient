@@ -637,7 +637,6 @@ mod accounts;
 mod capabilities;
 mod composer;
 mod messages;
-mod session;
 mod settings;
 mod sync;
 mod worker;

@@ -5,8 +5,8 @@
 //! with the Dart event stream ([`crate::api::events`]) standing in for the Qt
 //! signal. flutter_rust_bridge would happily run a call on its worker pool,
 //! but one shared thread is what makes the pooled IMAP sessions in
-//! [`crate::session`] sound: they are checked out under a mutex and are not
-//! safe to drive from two places at once.
+//! [`mailcore::sync::pool`] sound: they are checked out under a mutex and are
+//! not safe to drive from two places at once.
 //!
 //! The difference from the Qt worker: a finished job reports *what changed*,
 //! not a rebuilt feed. Dart owns the selection, so it re-reads whatever it is
@@ -18,7 +18,7 @@ use std::sync::{mpsc, Mutex, OnceLock};
 
 use crate::api::events::{emit_event, JobEvent, JobPhase};
 use crate::db::shared_db;
-use crate::session::guard;
+use mailcore::sync::pool::guard;
 
 type JobFn = Box<dyn FnOnce(&tokio::runtime::Runtime) + Send>;
 
@@ -190,11 +190,11 @@ pub(crate) fn spawn_flag_push(account_id: i64) {
             {
                 return;
             }
-            let acc = match crate::session::resolve_account(db, account_id) {
+            let acc = match mailcore::sync::pool::resolve_account(db, account_id) {
                 Ok(a) => a,
                 Err(e) => return log::debug!("flag-push: {e}"),
             };
-            let mut imap = match crate::session::checkout_session(&acc).await {
+            let mut imap = match mailcore::sync::pool::checkout_session(&acc).await {
                 Ok(l) => l,
                 Err(e) => return log::debug!("flag-push: offline, staying dirty: {e}"),
             };

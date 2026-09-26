@@ -7,11 +7,9 @@ use mailcore::sync::imap::{FULL_SYNC_WINDOW, OLDER_BATCH};
 use mailcore::sync::traits::SyncProvider;
 
 use crate::bridge::qobject;
-use crate::bridge::session::{
-    checkout_session, current_account, drop_all_imap_sessions, job_account,
-};
 use crate::bridge::worker::{spawn_job, JobRefresh};
 use crate::bridge::{push_feeds, qstring, shared_db, DEFAULT_MESSAGE_LIMIT};
+use mailcore::sync::pool::{checkout_session, drop_all_sessions, job_account, resolve_account};
 
 /// "in 7s" / "in 2m 05s" suffix for job summaries, so the status line says
 /// how long a sync actually took.
@@ -230,7 +228,7 @@ impl qobject::Bridge {
             Err(e) => return qstring(&e),
         };
         let wanted = *self.current_account_id();
-        let acc = match current_account(db, wanted) {
+        let acc = match resolve_account(db, wanted) {
             Ok(a) => a,
             Err(e) => return qstring(&e),
         };
@@ -252,7 +250,7 @@ impl qobject::Bridge {
             Err(e) => return qstring(&e),
         };
         let wanted = *self.current_account_id();
-        let acc = match current_account(db, wanted) {
+        let acc = match resolve_account(db, wanted) {
             Ok(a) => a,
             Err(e) => return qstring(&e),
         };
@@ -301,6 +299,6 @@ impl qobject::Bridge {
     }
 
     pub fn disconnect_all(&self) {
-        drop_all_imap_sessions();
+        drop_all_sessions();
     }
 }

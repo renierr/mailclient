@@ -10,7 +10,7 @@ use mailcore::models::FolderRole;
 use mailcore::store::folders;
 
 use crate::net::{spawn, JobRefresh};
-use crate::session::{checkout_session, resolve_account};
+use mailcore::sync::pool::{checkout_session, resolve_account};
 
 /// Delete a selection — which means Trash, except where it cannot.
 ///

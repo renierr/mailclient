@@ -125,9 +125,10 @@ Milestone 7 detail — what works and what does not:
   `auth_vault.json`, not the Android Keystore — a stated simplification, see
   `flutter/README.md` ("Android"). Not yet run on a device against a live
   mailbox.
-- **Known duplication**: the IMAP session pool, the account-form handling and
-  the composer form now exist in both `mailapp` and `mailffi`. They belong in
-  `mailcore`; the list is in `flutter/README.md`.
+- **Known duplication**: the account-form handling and the composer form still
+  exist in both `mailapp` and `mailffi`. They belong in `mailcore`; the list
+  is in `flutter/README.md`. (The IMAP session pool already made that move —
+  one copy in `mailcore::sync::pool`.)
 
 Current state detail:
 - `mailcore`: the SQLite schema of §3 (FTS5 index, `settings` key/value store, local-change queueing via `messages.flags_dirty`, attachment bytes cached as BLOBs), typed stores (accounts/folders/messages/queue/contacts/settings incl. `compose_send_format`), `html` sanitizer (std-only tokenize→clean→serialise, remote/private-host gating, entity-aware incl. `&nbsp;`), IMAP sync (SPECIAL-USE role mapping, windowed UID FETCH + MIME parsing incl. Reply-To capture — INBOX newest 200, others newest 50 auto / 200 on open — UIDVALIDITY resync, expunge, flag refresh/push, server-side delete, Sent-copy APPEND, attachment names/sizes extracted with 25 MiB/file + 50-file caps — bytes never auto-download, only `fetch_attachments` on explicit Open/Save spends bandwidth). The default Date list order is IMAP UID/delivery order, not the sender-controlled RFC 5322 `Date:` header. SMTP send with `SendPolicy` + `SendFormat` (auto/plain/multipart/html, resilient fallback to auto; Auto sends text/plain unless the body carries real formatting, with an optional plain twin via `compose_include_plain`; Cc + Bcc; blank/placeholder To sends `To: undisclosed-recipients:;` (or `To: <text>:;`) with the envelope from Cc/Bcc; sender display name from the composer or account default; EHLO uses the sender domain; sanitized outgoing, `multipart/mixed` file attachments with extension-guessed MIME), keyring auth on desktop (app-private vault file on Android), safe JSON feeds (`body_text`/`body_html` sanitized/`is_html`/`has_remote_images` + legacy `body`, plus on-demand `message_html` for Show-once; message rows carry `has_attachments` + attachment metadata, never bytes).

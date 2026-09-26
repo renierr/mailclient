@@ -4,8 +4,8 @@ use cxx_qt_lib::QString;
 use mailcore::store::accounts;
 
 use crate::bridge::qobject;
-use crate::bridge::session::{checkout_session, current_account};
 use crate::bridge::worker::spawn_job;
+use mailcore::sync::pool::{checkout_session, resolve_account};
 
 impl qobject::Bridge {
     pub fn refresh_server_capabilities(self: Pin<&mut Self>, account_id: i64) -> QString {
@@ -26,7 +26,7 @@ impl qobject::Bridge {
                     }
                 }
             } else {
-                match current_account(db, account_id) {
+                match resolve_account(db, account_id) {
                     Ok(a) => a,
                     Err(e) => {
                         let payload = serde_json::json!({

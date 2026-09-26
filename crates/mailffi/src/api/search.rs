@@ -2,7 +2,7 @@
 
 use crate::db::shared_db;
 use crate::net::{spawn, JobRefresh};
-use crate::session::{checkout_session, resolve_account};
+use mailcore::sync::pool::{checkout_session, resolve_account};
 
 /// FTS5 search over subject / sender / body for one account.
 ///

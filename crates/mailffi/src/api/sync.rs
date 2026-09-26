@@ -7,7 +7,7 @@ use mailcore::sync::imap::{FULL_SYNC_WINDOW, OLDER_BATCH};
 use mailcore::sync::traits::SyncProvider;
 
 use crate::net::{spawn, JobRefresh};
-use crate::session::{checkout_session, resolve_account};
+use mailcore::sync::pool::{checkout_session, resolve_account};
 
 /// Full sync for one account: outbox flush, dirty-flag push, folder sweep.
 ///

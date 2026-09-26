@@ -9,8 +9,8 @@ use mailcore::sync::sender::{format_draft, SendFormat, SendPolicy, SendRequest, 
 use crate::bridge::messages::{draft_attachment_path, ensure_attachment_data, safe_filename};
 use crate::bridge::qobject;
 use crate::bridge::qstring;
-use crate::bridge::session::{checkout_session, current_account, evict_imap_session, job_account};
 use crate::bridge::worker::{spawn_job, JobRefresh, BUSY_MESSAGE};
+use mailcore::sync::pool::{checkout_session, evict_session, job_account, resolve_account};
 
 impl qobject::Bridge {
     pub fn send_mail(self: Pin<&mut Self>, form: &QString) -> QString {
@@ -102,7 +102,7 @@ impl qobject::Bridge {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        let acc = match current_account(db, wanted) {
+        let acc = match resolve_account(db, wanted) {
             Ok(a) => a,
             Err(e) => return qstring(&e),
         };
@@ -368,7 +368,7 @@ impl qobject::Bridge {
                 .map_err(|e| e.to_string())?;
             imap.checkin();
             if let Some(e) = remove_error {
-                evict_imap_session(acc.id);
+                evict_session(acc.id);
                 return Err(format!(
                     "draft saved, but could not remove source draft: {e}"
                 ));

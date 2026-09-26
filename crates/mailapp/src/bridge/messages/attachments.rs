@@ -1,8 +1,8 @@
 //! Getting attachment bytes: the on-demand download, and materializing one
 //! file for the composer.
 
-use crate::bridge::session::checkout_session;
 use mailcore::store::{accounts, folders, messages};
+use mailcore::sync::pool::checkout_session;
 
 use super::files::{file_url, safe_filename};
 

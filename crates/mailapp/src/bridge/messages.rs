@@ -6,9 +6,9 @@ use mailcore::store::{accounts, folders, messages, settings};
 use mailcore::sync::imap::{ArchiveOutcome, MoveOutcome, TrashOutcome};
 
 use crate::bridge::qobject;
-use crate::bridge::session::{checkout_session, job_account};
 use crate::bridge::worker::{spawn_flag_push, spawn_job, JobRefresh};
 use crate::bridge::{push_feeds, qstring, shared_db, MAX_MESSAGE_LIMIT};
+use mailcore::sync::pool::{checkout_session, job_account};
 
 mod attachments;
 mod bulk;

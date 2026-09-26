@@ -15,7 +15,7 @@ use mailcore::store::messages;
 
 use crate::db::shared_db;
 use crate::net::spawn;
-use crate::session::{checkout_session, resolve_account};
+use mailcore::sync::pool::{checkout_session, resolve_account};
 
 /// One attachment's bytes, if they are already cached.
 ///

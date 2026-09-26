@@ -60,7 +60,7 @@ pub fn init_app(data_dir: Option<String>) -> anyhow::Result<AppInfo> {
 /// quitting" callback, so this belongs on `AppLifecycleState.detached` —
 /// missing it costs nothing worse than a server-side session timing out.
 pub fn shutdown() {
-    crate::session::drop_all_sessions();
+    mailcore::sync::pool::drop_all_sessions();
 }
 
 fn init_logging() {

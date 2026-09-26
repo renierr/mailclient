@@ -169,13 +169,10 @@ the same SQLite file in that directory.
 
 ## Shared code still to promote
 
-`crates/mailffi/src/session.rs` is a near-copy of
-`crates/mailapp/src/bridge/session.rs` — the IMAP session pool, the lease, and
-the panic guard around background jobs. The logic is Qt-free and just lives on
-the wrong side of the Qt boundary today. It belongs in `mailcore::sync`, with
-both copies deleted, once the Flutter frontend is far enough along that
-changing `mailapp` is worth the risk.
+The account-form handling (`api/accounts.rs::save_account` mirrors
+`mailapp`'s `add_account`) and the composer form are near-copies. They belong
+in `mailcore`; those are the two places where a fix will otherwise have to be
+made twice.
 
-The same is true of the account-form handling (`api/accounts.rs::save_account`
-mirrors `mailapp`'s `add_account`) and the composer form. Those are the three
-places where a fix will otherwise have to be made twice.
+Done before: the IMAP session pool, the lease, and the panic guard lived in
+both bridges and now live once in `mailcore::sync::pool`.

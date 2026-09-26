@@ -6,9 +6,9 @@ use mailcore::models::NewAccount;
 use mailcore::store::{accounts, folders, settings};
 
 use crate::bridge::qobject;
-use crate::bridge::session::evict_imap_session;
 use crate::bridge::worker::BUSY_MESSAGE;
 use crate::bridge::{push_feeds, qstring, shared_db, DEFAULT_MESSAGE_LIMIT};
+use mailcore::sync::pool::evict_session;
 
 impl qobject::Bridge {
     pub fn refresh_accounts(mut self: Pin<&mut Self>) -> QString {
@@ -130,7 +130,7 @@ impl qobject::Bridge {
                 }
                 // Host/user/password may have changed: drop the pooled
                 // session so the next action connects with the new values.
-                evict_imap_session(existing.id);
+                evict_session(existing.id);
                 // Blank password on an edit = keep the stored secret; the
                 // dialog never shows it, so re-typing must not be required.
                 if !password.is_empty() {
@@ -231,7 +231,7 @@ impl qobject::Bridge {
             return qstring(&e.to_string());
         }
         // The account is gone: don't keep a live session for it.
-        evict_imap_session(id);
+        evict_session(id);
         // Fall back to whichever account remains, if any.
         match accounts::list(db).unwrap_or_default().first() {
             Some(next) => {

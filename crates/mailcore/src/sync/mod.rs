@@ -3,5 +3,6 @@
 
 pub mod headless;
 pub mod imap;
+pub mod pool;
 pub mod sender;
 pub mod traits;

@@ -8,7 +8,7 @@ use mailcore::sync::sender::{format_draft, SendFormat, SendPolicy, SmtpSender};
 use crate::api::form::ComposeForm;
 use crate::db::shared_db;
 use crate::net::{spawn, JobRefresh};
-use crate::session::{checkout_session, resolve_account};
+use mailcore::sync::pool::{checkout_session, resolve_account};
 
 /// Send a message from the composer's JSON form
 /// (`{to, cc?, bcc?, from?, from_name?, reply_to?, subject, body, body_html?,

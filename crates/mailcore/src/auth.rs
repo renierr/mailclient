@@ -198,8 +198,7 @@ mod android_vault {
         map.insert(vault_key.to_string(), secret.to_string());
         let data = serde_json::to_string_pretty(&map)
             .map_err(|e| StoreError::Keyring(format!("serialize vault failed: {e}")))?;
-        fs::write(&path, data)
-            .map_err(|e| StoreError::Keyring(format!("write vault failed: {e}")))
+        fs::write(&path, data).map_err(|e| StoreError::Keyring(format!("write vault failed: {e}")))
     }
 
     pub fn delete_secret(vault_key: &str) -> Result<()> {
@@ -212,8 +211,7 @@ mod android_vault {
         map.remove(vault_key);
         let data = serde_json::to_string_pretty(&map)
             .map_err(|e| StoreError::Keyring(format!("serialize vault failed: {e}")))?;
-        fs::write(&path, data)
-            .map_err(|e| StoreError::Keyring(format!("write vault failed: {e}")))
+        fs::write(&path, data).map_err(|e| StoreError::Keyring(format!("write vault failed: {e}")))
     }
 }
 

@@ -7,8 +7,8 @@ use cxx_qt::Threading;
 use cxx_qt_lib::QString;
 
 use crate::bridge::qobject;
-use crate::bridge::session::{checkout_session, guard_sync, job_account};
 use crate::bridge::{push_feeds, qstring, shared_db};
+use mailcore::sync::pool::{checkout_session, guard, job_account};
 
 /// What to refresh on the GUI after a job.
 #[derive(Clone, Copy)]
@@ -155,7 +155,7 @@ fn net_tx() -> &'static mpsc::Sender<JobFn> {
                     // with nothing logged. Jobs that can report a failure to
                     // the user wrap themselves too (see `spawn_job`); this is
                     // the net that catches the ones that cannot.
-                    let _ = guard_sync("background job", || {
+                    let _ = guard("background job", || {
                         job(&rt);
                         Ok::<(), String>(())
                     });
@@ -190,7 +190,7 @@ where
         kind: kind_owned.clone(),
     };
     let _ = net_tx().send(Box::new(move |rt| {
-        let outcome = guard_sync(&kind_owned, || {
+        let outcome = guard(&kind_owned, || {
             rt.block_on(async {
                 let db = shared_db()?;
                 op(db, progress).await

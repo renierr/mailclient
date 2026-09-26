@@ -27,7 +27,6 @@
 
 mod db;
 mod net;
-mod session;
 
 pub mod api;
 

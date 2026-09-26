@@ -109,7 +109,7 @@ pub fn save_account(form: String) -> anyhow::Result<i64> {
             accounts::update_connection(db, existing.id, &draft)?;
             // Host, user or password may have changed: drop the pooled
             // session so the next action connects with the new values.
-            crate::session::evict_session(existing.id);
+            mailcore::sync::pool::evict_session(existing.id);
             // A blank password on an edit keeps the stored secret — the
             // dialog never shows it, so re-typing must not be required.
             if !password.is_empty() {
@@ -159,7 +159,7 @@ pub fn delete_account(id: i64) -> anyhow::Result<i64> {
     }
     accounts::delete(db, id)?;
     // The account is gone; don't keep a socket authenticated as it.
-    crate::session::evict_session(id);
+    mailcore::sync::pool::evict_session(id);
 
     let next = accounts::list(db)?.first().map(|a| a.id).unwrap_or(-1);
     settings::set_last_active_account_id(db, next.max(0))?;
