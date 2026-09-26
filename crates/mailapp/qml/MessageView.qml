@@ -26,6 +26,10 @@ Rectangle {
 
     property var message
     property bool loadRemoteImages: false
+    // URL currently under the mouse in the HTML body (via WebEngineView's
+    // linkHovered signal; "" when hovering nothing). Drives the statusline
+    // and the custom link context menu.
+    property string hoveredLinkUrl: ""
     // "small" | "normal" (default) | "large": plain-text body size, bound to
     // the `reader_font_size` setting via Main. HTML mail brings its own sizes.
     property string readerFont: "normal"
@@ -68,6 +72,7 @@ Rectangle {
         root.allowRemoteOnce = false;
         root.remoteHtml = "";
         root.headerExpanded = false;
+        root.hoveredLinkUrl = "";
         root.loadHeaders();
         root.reloadHtml();
     }
@@ -148,6 +153,53 @@ Rectangle {
         if (name !== undefined)
             s += "/" + encodeURIComponent(name);
         return s;
+    }
+
+    // Copy to the system clipboard. QML has no Clipboard singleton, so this
+    // goes through a hidden TextEdit (selectAll + copy, no new dependencies).
+    function copyText(s) {
+        clipboardHelper.text = s;
+        clipboardHelper.selectAll();
+        clipboardHelper.copy();
+        clipboardHelper.clear();
+    }
+
+    // QML's JS engine has no WHATWG `URL` constructor, so the examine-link
+    // dialog parses these by hand. Good enough for scheme/host/path display.
+    function urlHost(u) {
+        var s = (u || "").trim();
+        var scheme = s.indexOf("://");
+        var rest = scheme >= 0 ? s.substring(scheme + 3) : s;
+        var end = rest.indexOf("/");
+        var host = end >= 0 ? rest.substring(0, end) : rest;
+        var at = host.lastIndexOf("@");
+        if (at >= 0)
+            host = host.substring(at + 1);
+        var colon = host.indexOf(":");
+        if (colon >= 0)
+            host = host.substring(0, colon);
+        return host === "" ? "—" : host;
+    }
+
+    function urlScheme(u) {
+        var s = (u || "").trim();
+        var scheme = s.indexOf("://");
+        if (scheme > 0)
+            return s.substring(0, scheme).toLowerCase();
+        if (s.indexOf("mailto:") === 0)
+            return "mailto";
+        return "—";
+    }
+
+    function urlPath(u) {
+        var s = (u || "").trim();
+        var scheme = s.indexOf("://");
+        var rest = scheme >= 0 ? s.substring(scheme + 3) : s;
+        var slash = rest.indexOf("/");
+        if (slash < 0)
+            return "—";
+        var p = rest.substring(slash);
+        return p === "" ? "—" : p;
     }
 
     function saveOne(a) {
@@ -669,15 +721,64 @@ Rectangle {
         }
 
         // --- body: sanitized HTML -----------------------------------------
-        Loader {
-            id: bodyLoader
+        // Item wrapper (not the Loader directly): the right-click MouseArea
+        // overlays the body, and anchored items must not sit directly in a
+        // ColumnLayout.
+        Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
             visible: root.isHtml
-            active: root.message !== undefined && root.isHtml
-            sourceComponent: webComp
-            onLoaded: root.reloadHtml()
+
+            Loader {
+                id: bodyLoader
+                anchors.fill: parent
+                clip: true
+                visible: root.isHtml
+                active: root.message !== undefined && root.isHtml
+                sourceComponent: webComp
+                onLoaded: root.reloadHtml()
+            }
+
+            // Right-clicks over a link open our menu instead of Chromium's
+            // default (whose "Copy link" is unreliable with sanitized HTML).
+            // Anything else (including non-link right-clicks) passes through
+            // untouched, so text selection and Chromium's menu keep working.
+            MouseArea {
+                anchors.fill: parent
+                acceptedButtons: Qt.RightButton
+                onPressed: (mouse) => {
+                    if (mouse.button === Qt.RightButton && root.hoveredLinkUrl !== "") {
+                        linkContextMenu.linkUrl = root.hoveredLinkUrl;
+                        linkContextMenu.popup();
+                        mouse.accepted = true;
+                    } else {
+                        mouse.accepted = false;
+                    }
+                }
+            }
+        }
+
+        // --- statusline: hovered link URL ---------------------------------
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: root.hoveredLinkUrl !== "" ? Math.round(28 * Theme.uiScale) : 0
+            visible: root.hoveredLinkUrl !== ""
+            color: Theme.bgAlt
+            border.width: 1
+            border.color: Theme.border
+
+            Label {
+                anchors.fill: parent
+                anchors.leftMargin: Theme.sm
+                anchors.rightMargin: Theme.sm
+                verticalAlignment: Text.AlignVCenter
+                text: root.hoveredLinkUrl
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontTiny
+                elide: Text.ElideRight
+                textFormat: Text.PlainText
+            }
         }
     }
 
@@ -694,6 +795,11 @@ Rectangle {
             settings.autoLoadImages: true
             settings.localContentCanAccessRemoteUrls: root.effectiveAutoLoad()
             settings.pluginsEnabled: false
+            // `hoveredUrl` is a QUrl: stringify explicitly, "" when the mouse
+            // leaves a link (which hides the statusline again).
+            onLinkHovered: (hoveredUrl) => {
+                root.hoveredLinkUrl = hoveredUrl ? hoveredUrl.toString() : "";
+            }
         }
     }
 
@@ -722,6 +828,143 @@ Rectangle {
             glyph: Icons.info
             label: qsTr("Show headers…")
             onTriggered: root.openHeaders()
+        }
+    }
+
+    // --- link context menu ------------------------------------------------
+    // Themed AppMenu (same as everywhere else), opened at the cursor via
+    // popup(). Only shown for right-clicks directly over a link — the
+    // MouseArea above decides, using the last linkHovered URL.
+    AppMenu {
+        id: linkContextMenu
+        property string linkUrl: ""
+
+        AppMenuItem {
+            glyph: Icons.link
+            label: qsTr("Copy link")
+            onTriggered: {
+                if (linkContextMenu.linkUrl !== "")
+                    root.copyText(linkContextMenu.linkUrl);
+            }
+        }
+        AppMenuItem {
+            glyph: Icons.info
+            label: qsTr("Examine link…")
+            onTriggered: {
+                examineLinkDialog.url = linkContextMenu.linkUrl;
+                examineLinkDialog.open();
+            }
+        }
+    }
+
+    // Hidden clipboard helper for copyText(). Zero-size and invisible; the
+    // selectAll/copy calls still hit the system clipboard.
+    TextEdit {
+        id: clipboardHelper
+        visible: false
+        width: 0
+        height: 0
+    }
+
+    // --- examine link dialog ----------------------------------------------
+    // Shows the full URL (selectable) plus its parsed scheme/host/path, so
+    // a suspicious link can be inspected before opening it. Same Dialog
+    // pattern as the Headers dialog below.
+    Dialog {
+        id: examineLinkDialog
+        title: qsTr("Examine link")
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(parent ? parent.width - 80 : 480, 480)
+        padding: Theme.lg
+        property string url: ""
+
+        background: Rectangle {
+            color: Theme.bg
+            radius: Theme.radiusLg
+            border.width: 1
+            border.color: Theme.border
+        }
+
+        footer: RowLayout {
+            spacing: Theme.sm
+            Item {
+                Layout.fillWidth: true
+            }
+            AppButton {
+                Layout.rightMargin: Theme.lg
+                Layout.bottomMargin: Theme.md
+                text: qsTr("Copy")
+                onClicked: root.copyText(examineLinkDialog.url)
+            }
+            AppButton {
+                Layout.rightMargin: Theme.lg
+                Layout.bottomMargin: Theme.md
+                text: qsTr("Close")
+                onClicked: examineLinkDialog.close()
+            }
+        }
+
+        contentItem: ColumnLayout {
+            spacing: Theme.xs
+
+            Label {
+                text: qsTr("Address")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+            }
+            TextArea {
+                Layout.fillWidth: true
+                readOnly: true
+                selectByMouse: true
+                text: examineLinkDialog.url
+                textFormat: TextArea.PlainText
+                wrapMode: TextArea.WrapAnywhere
+                color: Theme.text
+                font.family: "monospace"
+                font.pixelSize: Theme.fontTiny
+                background: Rectangle {
+                    color: Theme.bgAlt
+                    radius: Theme.radius
+                }
+            }
+            Label {
+                text: qsTr("Scheme")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+            }
+            Label {
+                Layout.fillWidth: true
+                text: root.urlScheme(examineLinkDialog.url)
+                color: Theme.text
+                font.pixelSize: Theme.fontSmall
+                textFormat: Text.PlainText
+            }
+            Label {
+                text: qsTr("Domain")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+            }
+            Label {
+                Layout.fillWidth: true
+                text: root.urlHost(examineLinkDialog.url)
+                color: Theme.text
+                font.pixelSize: Theme.fontSmall
+                textFormat: Text.PlainText
+            }
+            Label {
+                text: qsTr("Path")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+            }
+            Label {
+                Layout.fillWidth: true
+                text: root.urlPath(examineLinkDialog.url)
+                color: Theme.text
+                font.pixelSize: Theme.fontSmall
+                wrapMode: Text.WrapAnywhere
+                textFormat: Text.PlainText
+            }
         }
     }
 
