@@ -17,19 +17,20 @@ This file is normative for all coding agents (human or AI) working in this repo.
   one frontend's adapter alone must be a deliberate, stated choice.
   - **Qt/QML** (`crates/mailapp/qml/`) — the mature one.
   - **Flutter** (`flutter/`) — Dart app over `mailffi`, targeting Linux and
-    Windows desktop with Android planned. See `flutter/README.md`.
+    Windows desktop plus a signed Android APK (`./build.sh --apk`).
+    See `flutter/README.md`.
 - Qt frontend: **QML (QtQuick + QtQuick.Controls)**, single source in
   `crates/mailapp/qml/`, embedded via the `Mailclient` QML module
   (`CxxQtBuilder::new_qml_module`). HTML mail rendered via `QtWebEngine`.
 - Storage: **SQLite** via `rusqlite` (bundled). One DB file per user: `~/.local/share/mailclient/mailclient.sqlite`.
-- Mail protocols: IMAP on `imap-next` + `imap-types`, async over `tokio` with `tokio-rustls` for TLS. SMTP send via `lettre`, which also builds the outgoing MIME; incoming MIME is parsed by `mail-parser`. Future protocols (POP3/JMAP/EWS/Graph) must go behind traits in `mailcore::sync`.
+- Mail protocols: IMAP on `imap-next` + `imap-types`, async over `tokio` with `tokio-rustls` for TLS (rustls-only everywhere, no OpenSSL — the Android cross-compile depends on it). SMTP send via `lettre`, which also builds the outgoing MIME; incoming MIME is parsed by `mail-parser`. Future protocols (POP3/JMAP/EWS/Graph) must go behind traits in `mailcore::sync`.
 
 ## 2. Boundaries — what agents MUST / MUST NOT do
 
 ### MUST
 - Keep `mailcore` UI-free and unit-testable. All DB access goes through `mailcore::db` / `store::*`.
 - Evolve the SQLite schema **only via versioned migrations** in `crates/mailcore/src/db/migrations.rs` + `schema.sql`. Never edit a released migration in place; add a new one. Bump `SCHEMA_VERSION`.
-- Keep passwords/secrets **out of SQLite and git**. DB stores only `auth_vault_key`; actual secrets live in the OS keyring (`keyring` crate) or memory.
+- Keep passwords/secrets **out of SQLite and git**. DB stores only `auth_vault_key`; actual secrets live in the OS keyring (`keyring` crate) or memory — on Android, in the app-private `auth_vault.json` (not the Android Keystore; see `flutter/README.md`).
 - Run `cargo fmt`, `cargo clippy -- -D warnings`, and `cargo test -p mailcore` before finishing a backend change. After changing anything in `crates/mailffi/src/api/`, re-run `flutter_rust_bridge_codegen generate` from the repo root and commit both generated files.
 - Run `qmllint`/`qmlformat` (from `/usr/lib/qt6/bin`) on changed QML when available (`qmllint` needs `-I` for the built `Mailclient` import; unresolved-`Mailclient` warnings are expected pre-build).
 - Run `flutter analyze` (must be clean) and `flutter test` in `flutter/` before finishing a Flutter change.
@@ -129,8 +130,10 @@ it needs the same ask.
 
 ## 5. Workflows
 
-- Build: `./build.sh` (Qt release bundle into `dist/`), `./build.sh --flutter`
-  (Flutter release bundle into `dist/mailclient-flutter/`). Dev loop: `./dev.sh`
+- Build: `./build.sh --qt` (Qt release bundle into `dist/`), `./build.sh --flutter`
+  (Flutter Linux bundle into `dist/mailclient-flutter/`), `./build.sh --apk`
+  (signed Android APK into `dist/mailclient-apk/`), `./build.sh --all` (both
+  desktop bundles). Dev loop: `./dev.sh`
   (Qt) or `./dev.sh --flutter`. Both dev loops use `./data/dev.sqlite`
   (`MAILCLIENT_DB` overrides). Install locally: `./scripts/install-local.sh` (`~/.local`). Never hand-roll `cargo build` output paths in docs; point to the scripts.
 - Flutter: `flutter run -d windows` / `-d linux` from `flutter/` (the Rust core builds as part of it). Regenerate FFI glue with `flutter_rust_bridge_codegen generate` from the repo root.
@@ -151,14 +154,25 @@ it needs the same ask.
   consent (`SendPolicy::Unrestricted`). Never add ad-hoc bypasses.
 - **Privacy (hard rule): never write or comment any real account or mail
   information.** No real addresses, credentials, hosts, passwords, subjects,
-  bodies, or sender/recipient data in docs, comments, tests, examples, or
-  commit messages — nowhere that could be committed. Test fixtures use
-  `@example.com` / `@example.org` (RFC 2606) only. Real values live solely in
-  the local gitignored `.env` and the OS keyring.
+   bodies, or sender/recipient data in docs, comments, tests, examples, or
+   commit messages — nowhere that could be committed. Test fixtures use
+   `@example.com` / `@example.org` (RFC 2606) only. Real values live solely in
+   the local gitignored `.env`, the OS keyring (app-private vault file on
+   Android), and the gitignored `flutter/android/key.properties`.
 
 ## 7. Definition of Done (per step)
 
+Verify only what the change can affect — check `git diff --stat` first.
+Changes that cannot alter compiled code or runtime behaviour need no test or
+build runs: docs (`*.md`), ignore files, comment-only edits, and local-only
+gitignored config (`.env`, `flutter/android/key.properties`,
+`local.properties`). State that verification was skipped and why instead of
+running suites "just in case". Anything else gets the matching check: Rust →
+item 1, QML → item 2, Dart → `flutter analyze` + `flutter test`, build
+scripts / manifests / Gradle / dependencies → the affected `./build.sh`
+target (`--qt` / `--flutter` / `--apk`).
+
 1. `cargo fmt --check`, `cargo clippy -p mailcore -- -D warnings`, `cargo test -p mailcore` green.
 2. `scripts/qml-check.sh` green on touched QML (lint gate + headless QML tests; or noted as skipped headless with reason). Qt/WebEngine enum and API names verified against the installed headers or Qt docs — QML misspellings of them fail silently.
-3. `./build.sh` produces a runnable `dist/mailclient/bin/mailapp` (or current milestone binary).
+3. The affected `./build.sh` target produces a runnable bundle in `dist/` (`--qt` → `dist/mailclient/bin/mailapp`, `--flutter` → `dist/mailclient-flutter/`, `--apk` → `dist/mailclient-apk/`).
 4. `PROJECT.md` status table updated; no secrets/binaries/`dist/` staged.

@@ -137,7 +137,7 @@ build_apk() {
     cat <<'EOF'
 Done. APK available at:
     ./dist/mailclient-apk/mailclient-release.apk
-Signed with upload keystore (/home/cody/upload-keystore.jks).
+Signed with the release keystore from flutter/android/key.properties.
 EOF
 }
 

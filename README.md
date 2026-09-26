@@ -1,7 +1,7 @@
 # Mailclient
 
-Full-featured desktop mail client for **Omarchy Linux** (Windows later):
-Rust backend + SQLite cache, QML frontend.
+Full-featured mail client for **Omarchy Linux** (Windows and Android via
+Flutter): Rust backend + SQLite cache, QML and Flutter frontends.
 
 - Multiple IMAP/SMTP accounts, folder trees, background sync
 - HTML + text mail, rich-text composer, attachments, drafts
@@ -13,8 +13,11 @@ Details: [`PROJECT.md`](PROJECT.md) (goal, architecture, roadmap) and
 ## Quick start
 
 ```sh
-./dev.sh                # debug build + run (uses ./crates/mailapp/qml live)
-/build.sh              # release bundle -> dist/mailclient/
+./dev.sh                # Qt debug build + run (uses ./crates/mailapp/qml live)
+./dev.sh --flutter      # Flutter debug run (uses ./data/dev.sqlite)
+./build.sh --qt         # Qt release bundle -> dist/mailclient/
+./build.sh --flutter    # Flutter Linux release bundle -> dist/mailclient-flutter/
+./build.sh --apk        # signed Android APK -> dist/mailclient-apk/ (needs NDK + key.properties, see flutter/README.md)
 /scripts/install-local.sh  # install to ~/.local (+ .desktop entry)
 
 cargo test -p mailcore      # backend unit tests
@@ -34,8 +37,8 @@ only ever needs `QMAKE` (or a `qmake` on PATH), so the platform knowledge
 lives in `scripts/qt-env.sh`:
 
 ```sh
-./dev.sh     # debug build + run against ./crates/mailapp/qml
-./build.sh   # release bundle -> dist/mailclient/ (+ windeployqt)
+./dev.sh     # Qt debug build + run against ./crates/mailapp/qml
+./build.sh --qt   # Qt release bundle -> dist/mailclient/ (+ windeployqt)
 ```
 
 `scripts/qt-env.sh` (sourced by both) resolves Qt in this order: `QMAKE`,
@@ -69,9 +72,10 @@ Needed once:
 script means exactly this: no Qt was found. Nothing in the build script can
 substitute for installing it.
 
-Platform differences that are already handled in-tree: the OS keyring backend
+Platform differences that are already handled in-tree: the secret-storage backend
 is selected per target in `crates/mailcore/Cargo.toml` (Secret Service on
-Linux, Credential Manager on Windows, Keychain on macOS), and app data paths
+Linux, Credential Manager on Windows, Keychain on macOS; Android uses an
+app-private vault file — see `flutter/README.md`), and app data paths
 come from the `directories` crate, so on Windows the SQLite cache lands under
 `%APPDATA%` instead of `~/.local/share`.
 
@@ -80,13 +84,16 @@ come from the `directories` crate, so on Windows the SQLite cache lands under
 ```text
 crates/mailcore/   pure-Rust core: db, models, store, sync, search
 crates/mailapp/    cxx-qt bridge binary (Qt models + main) + qml/ UI
+crates/mailffi/    flutter_rust_bridge cdylib exposing mailcore to Flutter
+flutter/           Dart frontend (Linux/Windows desktop + Android APK)
 resources/         .desktop entry + icon + omarchy bar-widget plugin
 scripts/           helpers: install-local.sh, qt-env.sh, smoke.sh
 dist/              gitignored build output
 ```
 
 DB lives at `~/.local/share/mailclient/mailclient.sqlite`
-(override with `MAILCLIENT_DB`); passwords live in the OS keyring, never in git.
+(override with `MAILCLIENT_DB`); passwords live in the OS keyring
+(app-private vault file on Android), never in git.
 
 ## Deliverability: DKIM and DMARC
 

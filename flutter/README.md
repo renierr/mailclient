@@ -94,6 +94,7 @@ From the repository root:
 ```sh
 ./dev.sh --flutter   # debug loop: flutter run -d linux against ./data/dev.sqlite
 ./build.sh --flutter # release bundle → dist/mailclient-flutter/
+./build.sh --apk     # signed Android APK → dist/mailclient-apk/ (see Android below)
 ```
 
 `flutter run -d windows` and `flutter run -d linux` build the Rust core as
@@ -138,18 +139,33 @@ platform-conditional rather than wholesale.
 
 ## Android
 
-The Gradle wiring is in place, but **the core does not compile for Android
-yet**. `mailcore::auth` uses the `keyring` crate unconditionally, while
-`crates/mailcore/Cargo.toml` only depends on it for Linux, Windows and macOS —
-so an Android build has no keyring backend to compile against. Android has no
-Secret Service either; the equivalent is the Android Keystore, reached through
-a platform channel or a Rust binding, which is a `mailcore` design decision
-rather than a build fix.
+`./build.sh --apk` produces a signed release APK in
+`dist/mailclient-apk/mailclient-release.apk`. The Gradle build compiles the
+Rust core for `arm64-v8a`, `armeabi-v7a` and `x86_64` via cargo-ndk
+(`android/app/mailffi.gradle.kts`) before packaging.
 
-Beyond that, an Android build needs the NDK, `cargo install cargo-ndk`, and
-the Rust targets (`aarch64-linux-android`, `armv7-linux-androideabi`,
-`x86_64-linux-android`). Storage is already handled: `init_app` takes a data
-directory and the Dart side passes the app's private support directory there.
+Needed once:
+
+- the Android NDK (SDK Manager → SDK Tools → NDK), `cargo install cargo-ndk`,
+  and the Rust targets (`aarch64-linux-android`,
+  `armv7-linux-androideabi`, `x86_64-linux-android`);
+- a release keystore plus `flutter/android/key.properties` (gitignored) with
+  `storeFile`, `storePassword`, `keyAlias` and `keyPassword`. Without it the
+  release build falls back to the debug signing config.
+
+The NDK is located as `ANDROID_NDK_HOME` first, otherwise
+`<sdk.dir>/ndk/<flutter.ndkVersion>` — the same version
+`ndkVersion = flutter.ndkVersion` pins in `build.gradle.kts` (handed to the
+mailffi script as an extra property). No machine-specific path is baked in.
+
+Two things differ from desktop. TLS is rustls-only (`lettre` with
+`rustls-tls`, `tokio-rustls` with `ring`): there is no OpenSSL in the
+dependency tree, which is what makes the Android cross-compile possible. And
+secrets do not use the OS keyring: on Android `mailcore::auth` keeps them in
+an app-private `auth_vault.json` inside the data directory `init_app`
+receives (`set_vault_dir`) — deliberately *not* the Android Keystore, a file
+the sandbox already protects with no platform-channel round trip. Storage is
+the same SQLite file in that directory.
 
 ## Shared code still to promote
 

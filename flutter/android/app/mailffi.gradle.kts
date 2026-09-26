@@ -11,11 +11,9 @@
 //   * `rustup target add aarch64-linux-android armv7-linux-androideabi \
 //        x86_64-linux-android`
 //
-// It also does not yet work: `mailcore` depends on the `keyring` crate only
-// on Linux, Windows and macOS, so `mailcore::auth` has no backend to compile
-// against for Android. See `flutter/README.md` ("Android") for what that
-// needs. The wiring is here so that work is a `mailcore` change and not also
-// a build-system change.
+// The NDK location resolves as: ANDROID_NDK_HOME wins, otherwise
+// <sdk.dir>/ndk/<flutter.ndkVersion> (the same version `ndkVersion =
+// flutter.ndkVersion` pins in build.gradle.kts).
 
 import org.gradle.api.tasks.Exec
 
@@ -27,6 +25,44 @@ val jniLibsDir = file("${projectDir}/src/main/jniLibs")
 val releaseAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
 val debugAbis = listOf("arm64-v8a", "x86_64")
 
+fun resolveNdkDir(): String {
+    // 1. Explicit env wins — CI and non-standard SDK layouts.
+    System.getenv("ANDROID_NDK_HOME")?.takeIf { it.isNotBlank() }?.let { return it }
+    // 2. Derive from the SDK location so no machine-specific path is baked in.
+    val localProps = java.util.Properties()
+    val localPropsFile = rootProject.file("local.properties")
+    if (localPropsFile.exists()) {
+        java.io.FileInputStream(localPropsFile).use(localProps::load)
+    }
+    val sdkDir = System.getenv("ANDROID_SDK_ROOT")
+        ?: System.getenv("ANDROID_HOME")
+        ?: localProps.getProperty("sdk.dir")
+        ?: throw GradleException(
+            "Cannot find Android NDK: ANDROID_NDK_HOME is unset and no " +
+            "sdk.dir in android/local.properties. Set ANDROID_NDK_HOME or " +
+            "install the NDK via SDK Manager."
+        )
+    // 3. Prefer the Flutter-pinned version so this stays in sync with
+    // `ndkVersion = flutter.ndkVersion` in build.gradle.kts (handed over via
+    // the mailffiNdkVersion extra property, as the `flutter` extension is not
+    // visible from an applied script).
+    val pinned = findProperty("mailffiNdkVersion") as? String
+    if (pinned != null) {
+        val dir = file("$sdkDir/ndk/$pinned")
+        if (dir.isDirectory) return dir.absolutePath
+        throw GradleException(
+            "NDK $pinned (flutter.ndkVersion) not found at ${dir.absolutePath}. " +
+            "Install it via SDK Manager or set ANDROID_NDK_HOME."
+        )
+    }
+    return file("$sdkDir/ndk").listFiles()?.filter { it.isDirectory }
+        ?.maxByOrNull { it.name }?.absolutePath
+        ?: throw GradleException(
+            "No NDK found under $sdkDir/ndk. Install one via SDK Manager " +
+            "or set ANDROID_NDK_HOME."
+        )
+}
+
 fun registerCargoNdk(name: String, abis: List<String>, profileArgs: List<String>) =
     tasks.register<Exec>(name) {
         group = "build"
@@ -37,9 +73,7 @@ fun registerCargoNdk(name: String, abis: List<String>, profileArgs: List<String>
         if (!cargoPath.split(":").contains(extraPath)) {
             environment("PATH", "${extraPath}:${cargoPath}")
         }
-        if (System.getenv("ANDROID_NDK_HOME") == null) {
-            environment("ANDROID_NDK_HOME", "/home/cody/Android/Sdk/ndk/28.2.13676358")
-        }
+        environment("ANDROID_NDK_HOME", resolveNdkDir())
         commandLine(
             listOf("cargo", "ndk") +
                 abis.flatMap { listOf("-t", it) } +

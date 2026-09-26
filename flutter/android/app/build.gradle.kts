@@ -77,4 +77,7 @@ flutter {
 }
 
 // Builds the Rust core into src/main/jniLibs before Gradle packages it.
+// The applied script cannot see the `flutter` extension, so hand over the
+// pinned NDK version explicitly (see resolveNdkDir in mailffi.gradle.kts).
+extra["mailffiNdkVersion"] = flutter.ndkVersion
 apply(from = "mailffi.gradle.kts")
