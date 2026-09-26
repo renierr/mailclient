@@ -71,10 +71,10 @@ QtObject {
 
     // Deterministic avatar colour per sender (same name, same colour).
     function avatarColor(seed) {
-        var s = seed || "?"
-        var h = 0
+        var s = seed || "?";
+        var h = 0;
         for (var i = 0; i < s.length; i++)
-            h = (h * 31 + s.charCodeAt(i)) % 360
-        return Qt.hsla(h / 360, dark ? 0.42 : 0.5, dark ? 0.46 : 0.52, 1)
+            h = (h * 31 + s.charCodeAt(i)) % 360;
+        return Qt.hsla(h / 360, dark ? 0.42 : 0.5, dark ? 0.46 : 0.52, 1);
     }
 }

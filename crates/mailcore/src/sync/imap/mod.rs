@@ -20,6 +20,7 @@ mod seq;
 mod session;
 mod tls;
 mod types;
+mod utf7;
 
 #[cfg(test)]
 pub(crate) mod mock;
@@ -27,6 +28,7 @@ pub(crate) mod mock;
 mod tests;
 
 pub use engine::ImapSync;
+pub(crate) use folders::full_discovery_due;
 pub use roles::{attr_text, is_selectable, map_folder_role, normalize_folder_path, role_from_name};
 pub use session::ImapSession;
 pub(crate) use types::vec1;
@@ -35,3 +37,4 @@ pub use types::{
     ServerSearchReport, TrashOutcome, FULL_SYNC_WINDOW, MAX_ATTACHMENTS_PER_MESSAGE,
     MAX_ATTACHMENT_BYTES, OLDER_BATCH, QUICK_SYNC_WINDOW,
 };
+pub use utf7::{decode_modified_utf7, encode_modified_utf7, mailbox_for_wire};

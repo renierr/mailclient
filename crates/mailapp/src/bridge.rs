@@ -77,6 +77,11 @@ pub mod qobject {
         #[qinvokable]
         fn select_account(self: Pin<&mut Self>, id: i64) -> QString;
 
+        /// Take a queued `mailapp --open` jump request: `"<id>\n<folder>"`
+        /// (empty folder = inbox) or `""`. Take-once — each click jumps once.
+        #[qinvokable]
+        fn consume_pending_open(self: Pin<&mut Self>) -> QString;
+
         /// Delete an account with its folders/messages and keyring secrets.
         /// Returns `""` or an error message.
         #[qinvokable]
@@ -347,6 +352,7 @@ pub mod qobject {
         #[qproperty(bool, confirm_delete)]
         #[qproperty(QString, list_density)]
         #[qproperty(QString, reader_font_size)]
+        #[qproperty(QString, link_click_action)]
         #[qproperty(i32, sync_interval_minutes)]
         #[qproperty(bool, signature_enabled)]
         #[qproperty(QString, signature_text)]
@@ -360,9 +366,9 @@ pub mod qobject {
         #[qinvokable]
         fn load(self: Pin<&mut Self>);
 
-        /// Persist current properties to the settings store.
+        /// Persist current properties to the settings store; `""` or the error.
         #[qinvokable]
-        fn save(self: Pin<&mut Self>);
+        fn save(self: Pin<&mut Self>) -> QString;
     }
 
     impl cxx_qt::Threading for Bridge {}
@@ -594,6 +600,7 @@ pub struct SettingsBridgeRust {
     confirm_delete: bool,
     list_density: QString,
     reader_font_size: QString,
+    link_click_action: QString,
     sync_interval_minutes: i32,
     signature_enabled: bool,
     signature_text: QString,
@@ -615,6 +622,7 @@ impl Default for SettingsBridgeRust {
             confirm_delete: true,
             list_density: qstring("comfortable"),
             reader_font_size: qstring("normal"),
+            link_click_action: qstring("examine"),
             sync_interval_minutes: 0,
             signature_enabled: false,
             signature_text: qstring(""),

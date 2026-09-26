@@ -19,10 +19,19 @@ ApplicationWindow {
     // 1080p laptop and pushes the reader pane off the edge.
     width: Math.min(1320, Screen.desktopAvailableWidth - 80)
     height: Math.min(860, Screen.desktopAvailableHeight - 80)
-    minimumWidth: 720
+    minimumWidth: 380
     minimumHeight: 460
     title: qsTr("Mailclient")
     color: Theme.bg
+
+    // The bundled vector icon font. Loaded once, application-global from
+    // then on. The file sits next to this one, so the relative source
+    // resolves in embedded, dist and dev runs alike (the dist copy mirrors
+    // qml/ one to one, and the same path is embedded via qrc_resources).
+    FontLoader {
+        id: iconFontLoader
+        source: "fonts/MaterialIcons-Regular.ttf"
+    }
 
     // Pooled IMAP sessions stay logged in between actions — drop them on
     // quit (no LOGOUT round-trip, so this never blocks on a dead line).
@@ -54,10 +63,24 @@ ApplicationWindow {
     property bool busy: backend.busy
     property bool readerFullscreen: false
 
+    // --- responsive panes -------------------------------------------------
+    // Wide shows all three panes; medium pairs the sidebar with the list or
+    // the reader (whichever the selection calls for); narrow shows one pane
+    // at a time and navigates between them. The manual sidebar toggle only
+    // exists where there is a choice — the wide layout.
+    readonly property bool wideLayout: root.width >= 1100
+    readonly property bool mediumLayout: root.width >= 720 && root.width < 1100
+    property bool sidebarOpen: true
+    // Narrow navigation: folders | list | reader.
+    property string narrowPane: "list"
+    // Toolbar controls grow with the interface scale but the window minimum
+    // does not, so below this width the secondary actions fold into a menu.
+    readonly property bool compactToolbar: root.width < Math.round(700 * Theme.uiScale)
+
     function toggleReaderFullscreen() {
         if (!root.readerFullscreen && (root.currentUid < 0 || root.currentMessage === undefined))
-            return
-        root.readerFullscreen = !root.readerFullscreen
+            return;
+        root.readerFullscreen = !root.readerFullscreen;
     }
 
     // Fullscreen hides everything except the reader — including the exit
@@ -67,7 +90,21 @@ ApplicationWindow {
     // pane that no button (and no Esc reaching past WebEngine focus) can leave.
     onCurrentMessageChanged: {
         if (root.currentMessage === undefined && root.readerFullscreen)
-            root.readerFullscreen = false
+            root.readerFullscreen = false;
+        // Same trap in the narrow layout: the reader's Back button lives in
+        // the message header, so an emptied reader pane has no way out.
+        if (root.currentMessage === undefined && root.narrowPane === "reader")
+            root.narrowPane = "list";
+    }
+
+    // Leave the reader (medium/narrow Back): drop the selection, so the same
+    // row opens again on the next click, and cancel a pending delayed
+    // mark-as-read, since the user stopped viewing before it elapsed.
+    function closeReader() {
+        markReadTimer.stop();
+        root.currentUid = -1;
+        root.currentMessage = undefined;
+        root.narrowPane = "list";
     }
 
     Bridge {
@@ -86,8 +123,12 @@ ApplicationWindow {
         value: appSettings.ui_scale
     }
 
-    ListModel { id: folderModel }
-    ListModel { id: accountModel }
+    ListModel {
+        id: folderModel
+    }
+    ListModel {
+        id: accountModel
+    }
 
     // The message feed is kept as plain JavaScript objects, not a ListModel.
     // `ListModel.get()` hands out QObjects the model owns, so the reader pane
@@ -116,59 +157,59 @@ ApplicationWindow {
     function reloadFolders() {
         // Synced in place, never cleared: clearing destroys every sidebar
         // delegate on every click (see qml/ModelSync.qml).
-        ModelSync.sync(folderModel, FeedJson.parse(backend.folders_json, []), "name")
+        ModelSync.sync(folderModel, FeedJson.parse(backend.folders_json, []), "name");
         // The sidebar shows a subscribed-only subset, and in-place row edits
         // don't re-fire `onFoldersChanged` — refresh the subset explicitly.
-        sidebar.refreshShown()
+        sidebar.refreshShown();
         // Keep selection if still present, else inbox, else first.
-        var found = false
+        var found = false;
         for (var j = 0; j < folderModel.count; j++) {
             if (folderModel.get(j).name === root.currentFolder) {
-                found = true
-                break
+                found = true;
+                break;
             }
         }
         if (!found) {
-            var inbox = ""
+            var inbox = "";
             for (var k = 0; k < folderModel.count; k++) {
                 if (folderModel.get(k).role === "inbox")
-                    inbox = folderModel.get(k).name
+                    inbox = folderModel.get(k).name;
             }
-            root.currentFolder = inbox !== "" ? inbox : (folderModel.count > 0 ? folderModel.get(0).name : "")
+            root.currentFolder = inbox !== "" ? inbox : (folderModel.count > 0 ? folderModel.get(0).name : "");
         }
     }
 
     function reloadMessages() {
-        root.messageRows = FeedJson.parse(backend.messages_json, [])
+        root.messageRows = FeedJson.parse(backend.messages_json, []);
         // Drop the selection only if that message really is gone.
         if (root.messageByUid(root.currentUid) === undefined)
-            root.currentUid = -1
+            root.currentUid = -1;
         if (root.currentUid >= 0)
-            root.currentMessage = FeedJson.parse(backend.message_json(root.currentUid), undefined)
+            root.currentMessage = FeedJson.parse(backend.message_json(root.currentUid), undefined);
         else
-            root.currentMessage = undefined
+            root.currentMessage = undefined;
     }
 
     function reloadAccounts() {
-        ModelSync.sync(accountModel, FeedJson.parse(backend.accounts_json, []), "id")
+        ModelSync.sync(accountModel, FeedJson.parse(backend.accounts_json, []), "id");
     }
 
     function reloadAll() {
-        var r = backend.refresh_accounts()
-        reloadAccounts()
-        reloadFolders()
-        reloadMessages()
-        return r
+        var r = backend.refresh_accounts();
+        reloadAccounts();
+        reloadFolders();
+        reloadMessages();
+        return r;
     }
 
     function messageByUid(uid) {
         if (uid < 0)
-            return undefined
+            return undefined;
         for (var i = 0; i < root.messageRows.length; i++) {
             if (root.messageRows[i].uid === uid)
-                return root.messageRows[i]
+                return root.messageRows[i];
         }
-        return undefined
+        return undefined;
     }
 
     // Full reader payload when the mail is open (it carries reply_to and
@@ -176,12 +217,12 @@ ApplicationWindow {
     // reply/forward from anywhere see the same recipient and quote.
     function messageForAnswer(uid) {
         if (root.currentMessage && root.currentMessage.uid === uid)
-            return root.currentMessage
-        return root.messageByUid(uid)
+            return root.currentMessage;
+        return root.messageByUid(uid);
     }
 
     function showResult(okMessage, result) {
-        root.statusText = result === "" ? okMessage : result
+        root.statusText = result === "" ? okMessage : result;
     }
 
     // Toolbar search: short input filters the loaded folder feed (see
@@ -192,19 +233,19 @@ ApplicationWindow {
     // server-search debounce — a job-finish refresh must not, or the
     // finished job would retrigger itself forever.
     function updateSearch(fromTyping) {
-        var q = searchField.text.trim()
+        var q = searchField.text.trim();
         if (q.length >= 3) {
-            root.searching = true
-            root.searchRows = FeedJson.parse(backend.search_json(q, root.searchScope()), [])
+            root.searching = true;
+            root.searchRows = FeedJson.parse(backend.search_json(q, root.searchScope()), []);
             // Thin local hits get topped up from the server once typing
             // settles (debounced below); the job refresh re-runs this.
             if (fromTyping)
-                serverSearchTimer.restart()
+                serverSearchTimer.restart();
         } else {
-            root.searching = false
-            root.searchRows = []
-            root.lastServerQuery = ""
-            serverSearchTimer.stop()
+            root.searching = false;
+            root.searchRows = [];
+            root.lastServerQuery = "";
+            serverSearchTimer.stop();
         }
     }
 
@@ -213,8 +254,8 @@ ApplicationWindow {
     // whole account — also while no folder is selected yet).
     function searchScope() {
         if (folderScopeCheck.checked && root.currentFolder !== "")
-            return root.currentFolder
-        return ""
+            return root.currentFolder;
+        return "";
     }
 
     // Ask the server too when the local index runs thin (full local pages
@@ -222,100 +263,113 @@ ApplicationWindow {
     // same-query guard stop overlapping or repeated jobs.
     function kickServerSearch() {
         if (!root.searching || root.serverSearching)
-            return
-        var q = searchField.text.trim()
+            return;
+        var q = searchField.text.trim();
         if (q.length < 3 || q === root.lastServerQuery || root.searchRows.length >= 50)
-            return
-        var r = backend.search_server(q, root.searchScope())
+            return;
+        var r = backend.search_server(q, root.searchScope());
         if (r === "") {
-            root.lastServerQuery = q
-            root.serverSearching = true
-            root.statusText = qsTr("Searching server…")
+            root.lastServerQuery = q;
+            root.serverSearching = true;
+            root.statusText = qsTr("Searching server…");
         } else {
-            serverSearchTimer.restart()
+            serverSearchTimer.restart();
         }
     }
 
     // Open a search hit: leave search mode, jump to its folder, open it.
     function jumpToSearchResult(path, uid) {
-        searchField.text = ""
-        root.selectFolder(path)
+        searchField.text = "";
+        root.selectFolder(path);
         if (root.currentFolder === path)
-            root.openMessage(uid)
+            root.openMessage(uid);
     }
 
     // --- actions ----------------------------------------------------------
 
     function openMessage(uid) {
         if (uid < 0 || uid === root.currentUid)
-            return  // already open: re-clicking a row must not reload anything
+            // already open: re-clicking a row must not reload anything
+            return;
         for (var i = 0; i < folderModel.count; i++) {
-            if (folderModel.get(i).name === root.currentFolder
-                    && folderModel.get(i).role === "drafts") {
-                root.statusText = qsTr("Opening draft…")
-                var r = backend.draft_form(uid)
+            if (folderModel.get(i).name === root.currentFolder && folderModel.get(i).role === "drafts") {
+                root.statusText = qsTr("Opening draft…");
+                var r = backend.draft_form(uid);
                 if (r !== "")
-                    root.statusText = r
-                return
+                    root.statusText = r;
+                return;
             }
         }
-        root.currentUid = uid
-        root.currentMessage = FeedJson.parse(backend.message_json(uid), undefined)
-        markReadTimer.stop()
+        root.currentUid = uid;
+        root.currentMessage = FeedJson.parse(backend.message_json(uid), undefined);
+        // Narrow layouts navigate to the reader; wide ones show it already.
+        // Drafts open in the composer instead (above), and a message that
+        // failed to load stays on the list rather than in an empty reader.
+        if (root.currentMessage !== undefined)
+            root.narrowPane = "reader";
+        markReadTimer.stop();
         if (!appSettings.auto_mark_read) {
-            return  // stay unread until the user says otherwise
+            // stay unread until the user says otherwise
+            return;
         }
         if (appSettings.mark_read_delay_secs <= 0) {
-            markAsRead(uid)
+            markAsRead(uid);
         } else {
             // Thunderbird-style: counts as read only if still viewing it
             // when the delay elapses; moving on keeps it unread.
-            markReadTimer.uid = uid
-            markReadTimer.interval = appSettings.mark_read_delay_secs * 1000
-            markReadTimer.start()
+            markReadTimer.uid = uid;
+            markReadTimer.interval = appSettings.mark_read_delay_secs * 1000;
+            markReadTimer.start();
         }
     }
 
     function markAsRead(uid) {
         if (uid < 0)
-            return
-        var r = backend.open_message(uid)
+            return;
+        var r = backend.open_message(uid);
         if (r !== "")
-            root.statusText = r
+            root.statusText = r;
         // messageRows are plain JS objects: mutating row.unread in place
         // never re-renders the delegate. Rebuild the feed like every
         // other mutation path does instead.
-        reloadMessages()
-        reloadFolders()
+        reloadMessages();
+        reloadFolders();
     }
 
     function syncNow() {
         if (backend.account_count === 0) {
-            root.statusText = qsTr("Add an account first")
-            return
+            root.statusText = qsTr("Add an account first");
+            return;
         }
         if (root.busy)
-            return
-        root.statusText = qsTr("Syncing…")
-        var r = backend.sync_now()
+            return;
+        root.statusText = qsTr("Syncing…");
+        var r = backend.sync_now();
         if (r !== "")
-            root.statusText = r
+            root.statusText = r;
     }
 
     function loadOlder() {
         if (root.busy)
-            return
-        root.statusText = qsTr("Loading older messages…")
-        var r = backend.load_older_messages()
+            return;
+        root.statusText = qsTr("Loading older messages…");
+        var r = backend.load_older_messages();
         if (r !== "")
-            root.statusText = r
+            root.statusText = r;
+    }
+
+    // The search scope changed (toolbar checkbox or its menu twin): re-run an
+    // active search under the new scope, server top-up included.
+    function folderScopeToggled() {
+        root.lastServerQuery = "";
+        root.updateSearch(true);
     }
 
     function toggleStar(uid) {
         if (uid < 0)
-            return
-        showResult("", backend.toggle_star(uid))
-        reloadMessages()
+            return;
+        showResult("", backend.toggle_star(uid));
+        reloadMessages();
     }
 
     // Moves to Trash — except spam (destroyed outright, junk never touches
@@ -325,237 +379,269 @@ ApplicationWindow {
     // Whether delete destroys mirrors the backend `trash_message` rules:
     // source folder Junk or Trash, or no Trash folder at all.
     function deleteIsPermanent() {
-        var role = ""
-        var hasTrash = false
+        var role = "";
+        var hasTrash = false;
         for (var i = 0; i < folderModel.count; i++) {
-            var r = folderModel.get(i).role
+            var r = folderModel.get(i).role;
             if (r === "trash")
-                hasTrash = true
+                hasTrash = true;
             if (folderModel.get(i).name === root.currentFolder)
-                role = r
+                role = r;
         }
-        return role === "junk" || role === "trash" || !hasTrash
+        return role === "junk" || role === "trash" || !hasTrash;
     }
 
     function deleteMessage(uid) {
         if (uid < 0)
-            return
+            return;
         if (!appSettings.confirm_delete) {
-            root.doDelete(uid)
-            return
+            root.doDelete(uid);
+            return;
         }
-        var m = root.messageByUid(uid)
-        deleteConfirm.uid = uid
-        deleteConfirm.uids = []
-        deleteConfirm.subject = m !== undefined ? m.subject : ""
-        deleteConfirm.permanent = root.deleteIsPermanent()
-        deleteConfirm.open()
+        var m = root.messageByUid(uid);
+        deleteConfirm.uid = uid;
+        deleteConfirm.uids = [];
+        deleteConfirm.subject = m !== undefined ? m.subject : "";
+        deleteConfirm.permanent = root.deleteIsPermanent();
+        deleteConfirm.open();
     }
 
     function doDelete(uid) {
         if (uid < 0)
-            return
+            return;
         if (root.currentUid === uid) {
-            root.currentUid = -1
-            root.currentMessage = undefined
+            root.currentUid = -1;
+            root.currentMessage = undefined;
         }
-        root.statusText = qsTr("Deleting…")
-        var r = backend.delete_message(uid)
+        root.statusText = qsTr("Deleting…");
+        var r = backend.delete_message(uid);
         if (r !== "")
-            root.statusText = r
+            root.statusText = r;
     }
 
     function archiveMessage(uid) {
         if (uid < 0)
-            return
+            return;
         if (root.currentUid === uid)
-            root.currentUid = -1
-        root.statusText = qsTr("Archiving…")
-        var r = backend.archive_message(uid)
+            root.currentUid = -1;
+        root.statusText = qsTr("Archiving…");
+        var r = backend.archive_message(uid);
         if (r !== "")
-            root.statusText = r
+            root.statusText = r;
     }
 
     // Move picker: remembers which message, the dialog reports the target.
     function openMove(uid) {
         if (uid < 0)
-            return
-        var m = root.messageByUid(uid)
-        moveDialog.uid = uid
-        moveDialog.uids = []
-        moveDialog.subject = m !== undefined ? m.subject : ""
-        moveDialog.open()
+            return;
+        var m = root.messageByUid(uid);
+        moveDialog.uid = uid;
+        moveDialog.uids = [];
+        moveDialog.subject = m !== undefined ? m.subject : "";
+        moveDialog.open();
     }
 
     // Bulk move picker: remembers the whole checkbox set.
     function openBulkMove(uids) {
         if (!uids || uids.length === 0)
-            return
-        moveDialog.uid = -1
-        moveDialog.uids = uids.slice()
-        moveDialog.subject = ""
-        moveDialog.open()
+            return;
+        moveDialog.uid = -1;
+        moveDialog.uids = uids.slice();
+        moveDialog.subject = "";
+        moveDialog.open();
     }
 
     function purgeMessage(uid) {
         if (uid < 0)
-            return
+            return;
         if (root.currentUid === uid)
-            root.currentUid = -1
-        root.statusText = qsTr("Deleting…")
-        var r = backend.purge_message(uid)
+            root.currentUid = -1;
+        root.statusText = qsTr("Deleting…");
+        var r = backend.purge_message(uid);
         if (r !== "")
-            root.statusText = r
+            root.statusText = r;
     }
 
     function confirmPurge(uid) {
         if (uid < 0)
-            return
-        var m = root.messageByUid(uid)
-        purgeConfirm.uid = uid
-        purgeConfirm.uids = []
-        purgeConfirm.subject = m !== undefined ? m.subject : ""
-        purgeConfirm.open()
+            return;
+        var m = root.messageByUid(uid);
+        purgeConfirm.uid = uid;
+        purgeConfirm.uids = [];
+        purgeConfirm.subject = m !== undefined ? m.subject : "";
+        purgeConfirm.open();
     }
 
     function confirmBulkPurge(uids) {
         if (!uids || uids.length === 0)
-            return
-        purgeConfirm.uid = -1
-        purgeConfirm.uids = uids.slice()
-        purgeConfirm.subject = ""
-        purgeConfirm.open()
+            return;
+        purgeConfirm.uid = -1;
+        purgeConfirm.uids = uids.slice();
+        purgeConfirm.subject = "";
+        purgeConfirm.open();
     }
 
     // --- bulk selection actions (Roundcube-style, one backend call) --------
 
     function dropPreviewIfGone(uids) {
         if (root.currentUid >= 0 && uids.indexOf(root.currentUid) !== -1)
-            root.currentUid = -1
+            root.currentUid = -1;
     }
 
     function bulkMarkRead(uids, read) {
         if (!uids || uids.length === 0)
-            return
-        var r = backend.mark_read_many(JSON.stringify(uids), read)
-        reloadFolders()
-        reloadMessages()
-        root.statusText = r
+            return;
+        var r = backend.mark_read_many(JSON.stringify(uids), read);
+        reloadFolders();
+        reloadMessages();
+        root.statusText = r;
     }
 
     function bulkStar(uids, starred) {
         if (!uids || uids.length === 0)
-            return
-        var r = backend.set_star_many(JSON.stringify(uids), starred)
-        reloadMessages()
-        root.statusText = r
+            return;
+        var r = backend.set_star_many(JSON.stringify(uids), starred);
+        reloadMessages();
+        root.statusText = r;
     }
 
     function bulkArchive(uids) {
         if (!uids || uids.length === 0)
-            return
-        root.dropPreviewIfGone(uids)
-        root.statusText = qsTr("Archiving…")
-        var r = backend.archive_many(JSON.stringify(uids))
+            return;
+        root.dropPreviewIfGone(uids);
+        root.statusText = qsTr("Archiving…");
+        var r = backend.archive_many(JSON.stringify(uids));
         if (r !== "")
-            root.statusText = r
+            root.statusText = r;
     }
 
     function bulkDelete(uids) {
         if (!uids || uids.length === 0)
-            return
+            return;
         if (!appSettings.confirm_delete) {
-            root.doBulkDelete(uids)
-            return
+            root.doBulkDelete(uids);
+            return;
         }
-        deleteConfirm.uid = -1
-        deleteConfirm.uids = uids.slice()
-        deleteConfirm.subject = ""
-        deleteConfirm.permanent = root.deleteIsPermanent()
-        deleteConfirm.open()
+        deleteConfirm.uid = -1;
+        deleteConfirm.uids = uids.slice();
+        deleteConfirm.subject = "";
+        deleteConfirm.permanent = root.deleteIsPermanent();
+        deleteConfirm.open();
     }
 
     function doBulkDelete(uids) {
         if (!uids || uids.length === 0)
-            return
-        root.dropPreviewIfGone(uids)
-        root.statusText = qsTr("Deleting…")
-        var r = backend.delete_many(JSON.stringify(uids))
+            return;
+        root.dropPreviewIfGone(uids);
+        root.statusText = qsTr("Deleting…");
+        var r = backend.delete_many(JSON.stringify(uids));
         if (r !== "")
-            root.statusText = r
+            root.statusText = r;
     }
 
     function bulkPurge(uids) {
         if (!uids || uids.length === 0)
-            return
-        root.dropPreviewIfGone(uids)
-        root.statusText = qsTr("Deleting…")
-        var r = backend.purge_many(JSON.stringify(uids))
+            return;
+        root.dropPreviewIfGone(uids);
+        root.statusText = qsTr("Deleting…");
+        var r = backend.purge_many(JSON.stringify(uids));
         if (r !== "")
-            root.statusText = r
+            root.statusText = r;
     }
 
     function changeSort(field, descending) {
-        var r = backend.set_sort(field, descending)
+        var r = backend.set_sort(field, descending);
         if (r !== "") {
-            root.statusText = r
-            return
+            root.statusText = r;
+            return;
         }
-        reloadMessages()
-        var label = field === "from" ? qsTr("From") : field === "subject" ? qsTr("Subject") : qsTr("Date")
-        var dir = descending ? qsTr("descending") : qsTr("ascending")
-        root.statusText = qsTr("Sorted by %1 (%2)").arg(label).arg(dir)
+        reloadMessages();
+        var label = field === "from" ? qsTr("From") : field === "subject" ? qsTr("Subject") : qsTr("Date");
+        var dir = descending ? qsTr("descending") : qsTr("ascending");
+        root.statusText = qsTr("Sorted by %1 (%2)").arg(label).arg(dir);
     }
 
     function selectFolder(path) {
-        var r = backend.select_folder(path)
+        var r = backend.select_folder(path);
         if (r === "") {
-            markReadTimer.stop()
-            messageList.setSelectionMode(false)
-            root.currentFolder = path
-            root.currentUid = -1
-            reloadMessages()
+            markReadTimer.stop();
+            messageList.setSelectionMode(false);
+            root.currentFolder = path;
+            root.currentUid = -1;
+            // Narrow layouts return to the list; wide ones show it already.
+            root.narrowPane = "list";
+            reloadMessages();
             // A folder-scoped search follows the selection: fresh scope,
             // fresh server top-up for the newly shown folder.
             if (folderScopeCheck.checked)
-                root.lastServerQuery = ""
-            root.updateSearch(true)
+                root.lastServerQuery = "";
+            root.updateSearch(true);
             // A folder click must only read the local cache. `sync_folder_now`
             // SELECTs, SEARCHes every server UID and can download a 200-mail
             // window; doing that synchronously here freezes Qt long enough for
             // the desktop's "not responding" watchdog. Startup, auto-check
             // and the toolbar Sync button refresh the server separately.
-            root.statusText = qsTr("Folder: %1").arg(path)
+            root.statusText = qsTr("Folder: %1").arg(path);
             if (!root.busy)
-                backend.sync_folder_now(path)
+                backend.sync_folder_now(path);
         } else {
-            root.statusText = r
+            root.statusText = r;
         }
     }
 
+    // Jump request from the bar widget / a notification (`mailapp --open`):
+    // takes "<account_id>\n<folder>" (empty folder = inbox), switches the
+    // account, lands on the folder and raises the window. Take-once on the
+    // Rust side — each click jumps exactly once. Returns true when a jump
+    // happened.
+    function consumePendingOpen() {
+        var r = backend.consume_pending_open();
+        if (r === "")
+            return false;
+        var nl = r.indexOf("\n");
+        var id = parseInt(nl < 0 ? r : r.slice(0, nl), 10);
+        var folder = nl < 0 ? "" : r.slice(nl + 1);
+        if (!isFinite(id) || id <= 0)
+            return false;
+        if (id !== backend.current_account_id)
+            selectAccount(id);
+        // Let the account switch settle (feeds reload) before landing.
+        var target = folder;
+        Qt.callLater(function () {
+            if (backend.current_account_id !== id)
+                return;
+            if (target !== "" && target !== root.currentFolder)
+                selectFolder(target);
+            // The click came from outside: raise above the bar popup.
+            root.raise();
+            root.requestActivate();
+        });
+        return true;
+    }
+
     function selectAccount(id) {
-        var r = backend.select_account(id)
+        var r = backend.select_account(id);
         if (r === "") {
-            markReadTimer.stop()
-            messageList.setSelectionMode(false)
-            root.currentUid = -1
-            root.currentFolder = ""
-            reloadAccounts()
-            reloadFolders()
-            reloadMessages()
+            markReadTimer.stop();
+            messageList.setSelectionMode(false);
+            root.currentUid = -1;
+            root.currentFolder = "";
+            reloadAccounts();
+            reloadFolders();
+            reloadMessages();
             // An active search belongs to the previous account: re-run it
             // here so results (and any server top-up) follow the switch.
-            root.updateSearch(true)
-            root.statusText = qsTr("Account: %1").arg(backend.current_account_email)
+            root.updateSearch(true);
+            root.statusText = qsTr("Account: %1").arg(backend.current_account_email);
             // Render the selected account's cache before the synchronous
             // account-scoped refresh begins. `sync_now` only ever uses
             // `current_account_id`, so inactive accounts are never loaded.
             Qt.callLater(function () {
                 if (!root.busy && backend.current_account_id === id)
-                    root.syncNow()
-            })
+                    root.syncNow();
+            });
         } else {
-            root.statusText = r
+            root.statusText = r;
         }
     }
 
@@ -573,7 +659,9 @@ ApplicationWindow {
 
     Connections {
         target: Application.styleHints
-        function onColorSchemeChanged() { backend.apply_native_theme(Theme.dark) }
+        function onColorSchemeChanged() {
+            backend.apply_native_theme(Theme.dark);
+        }
     }
 
     // The bridge exposes its signal under the Rust name, so the handler is
@@ -588,85 +676,97 @@ ApplicationWindow {
 
         // SMTP has accepted the message; the Sent copy and the folder
         // resync still have to run, but the user is done waiting.
+        // Only while this send is still pending: once released, the composer
+        // may already hold a newer message the user started.
         function onJob_progress(kind, status) {
             if (kind === "Send") {
-                composer.markClean()
-                composer.close()
-                root.statusText = qsTr("Sent")
+                if (composer.sendPending) {
+                    composer.sendPending = false;
+                    composer.markClean();
+                }
+                root.statusText = qsTr("Sent");
+            } else if (kind === "Sync" && status !== "") {
+                // Per-folder progress from the sync job ("Syncing 3/15: …").
+                root.statusText = status;
             }
         }
 
         function onJob_finished(kind, status) {
             if (jobConnections.readOnlyKinds.indexOf(kind) < 0) {
-                reloadAccounts()
-                reloadFolders()
-                reloadMessages()
+                reloadAccounts();
+                reloadFolders();
+                reloadMessages();
             }
             // A sync can change what the index holds: re-run an active
             // search so results never go stale behind a fresh feed (local
             // re-query only — never re-arms the server debounce).
             if (root.searching)
-                root.updateSearch(false)
+                root.updateSearch(false);
             if (kind === "Search")
-                root.serverSearching = false
+                root.serverSearching = false;
             if (kind === "Capabilities") {
                 // Owned by the Settings About pane (its own Connections parses
                 // the JSON payload); keep it off the status bar.
-                return
+                return;
             }
             if (kind === "Send") {
-                // Normally already closed when queued; closing an
-                // already-closed dialog is a no-op, and this is the backstop
-                // for the case where it never arrived. "sent, but …"
-                // means the bookkeeping failed, never the delivery.
-                if (status === "" || status.indexOf("sent, but") === 0) {
-                    composer.markClean()
-                    composer.close()
-                } else {
-                    // Genuine send failure after the optimistic close: the
-                    // fields still hold the text (nothing cleared them), so
-                    // reopen and flag dirty — cancelling then asks before
-                    // discarding. Edge: text composed since is shown instead;
-                    // the error status still says what failed.
-                    composer.dirty = true
-                    composer.open()
+                // Closed when queued. `sendPending` still set means progress
+                // never arrived, so the composer still holds this message
+                // (new compositions are refused meanwhile). Cleared means it
+                // was released at SMTP acceptance and may hold a newer mail
+                // by now: never touch it then. "sent, but …" means the
+                // bookkeeping failed, never the delivery.
+                if (composer.sendPending) {
+                    composer.sendPending = false;
+                    if (status === "" || status.indexOf("sent, but") === 0) {
+                        composer.markClean();
+                        composer.close();
+                    } else {
+                        // Genuine send failure after the optimistic close:
+                        // the fields still hold the text, so reopen and flag
+                        // dirty — cancelling then asks before discarding.
+                        composer.dirty = true;
+                        composer.open();
+                    }
                 }
                 if (status !== "")
-                    root.statusText = status
-                return
+                    root.statusText = status;
+                return;
             }
             if (kind === "Save draft") {
-                // Same reasoning: a partial save already appended the
+                // Editing was locked for the save, so the fields still hold
+                // exactly what was saved. A partial save already appended the
                 // replacement, so reopening and retrying would duplicate it.
+                composer.saving = false;
                 if (status === "" || status.indexOf("draft saved, but") === 0) {
-                    composer.markClean()
-                    composer.close()
-                    root.statusText = status === "" ? qsTr("Draft saved") : status
+                    composer.markClean();
+                    composer.close();
+                    root.statusText = status === "" ? qsTr("Draft saved") : status;
                 } else {
-                    root.statusText = status
+                    root.statusText = status;
                 }
-                return
+                return;
             }
             if (kind === "Open") {
                 if (status.indexOf("file://") === 0)
-                    Qt.openUrlExternally(status)
+                    Qt.openUrlExternally(status);
                 else
-                    root.statusText = status
-                return
+                    root.statusText = status;
+                return;
             }
             if (kind === "Open draft") {
                 try {
-                    var draft = JSON.parse(status)
+                    var draft = JSON.parse(status);
                     if (draft.draft_uid === undefined)
-                        root.statusText = qsTr("Draft is no longer available")
+                        root.statusText = qsTr("Draft is no longer available");
                     else
-                        composer.openForDraft(draft)
+                        composer.openForDraft(draft);
                 } catch (e) {
-                    root.statusText = status === "" ? qsTr("Draft is no longer available") : status
+                    root.statusText = status === "" ? qsTr("Draft is no longer available") : status;
                 }
-                return
+                return;
             }
-            root.statusText = status
+            root.statusText = status;
         }
     }
 
@@ -677,7 +777,7 @@ ApplicationWindow {
         repeat: false
         onTriggered: {
             if (markReadTimer.uid >= 0 && markReadTimer.uid === root.currentUid)
-                root.markAsRead(markReadTimer.uid)
+                root.markAsRead(markReadTimer.uid);
         }
     }
 
@@ -690,6 +790,17 @@ ApplicationWindow {
         onTriggered: root.kickServerSearch()
     }
 
+    // Picks up `mailapp --open` clicks while the window is already up:
+    // one cheap settings read every 2s, a queued jump switches account,
+    // lands on the inbox and raises the window.
+    Timer {
+        id: pendingOpenTimer
+        interval: 2000
+        running: true
+        repeat: true
+        onTriggered: root.consumePendingOpen()
+    }
+
     // Automatic mail check: only while idle (never mid-action), manual-only
     // when the interval is 0. Bound to the setting, so Save applies it live.
     Timer {
@@ -699,48 +810,88 @@ ApplicationWindow {
         repeat: true
         onTriggered: {
             if (!root.busy && backend.account_count > 0)
-                root.syncNow()
+                root.syncNow();
         }
     }
 
     Component.onCompleted: {
-        appSettings.load()
-        var r = reloadAll()
+        appSettings.load();
+        var r = reloadAll();
         if (backend.account_count === 0) {
-            root.statusText = qsTr("Add an account to start")
-            accountSetup.openNew()
+            root.statusText = qsTr("Add an account to start");
+            accountSetup.openNew();
         } else if (r !== "") {
-            root.statusText = r
+            root.statusText = r;
+        } else if (root.consumePendingOpen()) {
+            // Cold start from a widget/notification click: already on the
+            // right account + inbox. A switch syncs by itself; same-account
+            // clicks refresh here (the deferred switch sync skips on busy).
+            Qt.callLater(function () {
+                if (!root.busy && backend.account_count > 0)
+                    root.syncNow();
+            });
         } else {
-            root.statusText = qsTr("Ready")
+            root.statusText = qsTr("Ready");
             // Refresh on startup: show the cache immediately, then sync.
             // Deferred so first paint happens first (sync blocks on network).
             Qt.callLater(function () {
                 if (backend.account_count > 0)
-                    root.syncNow()
-            })
+                    root.syncNow();
+            });
         }
     }
 
     // --- keyboard ---------------------------------------------------------
 
-    Shortcut { sequences: ["Ctrl+N"]; onActivated: composer.openBlank() }
-    Shortcut { sequences: ["Ctrl+R", "F5"]; onActivated: root.syncNow() }
-    Shortcut { sequences: ["Ctrl+F"]; onActivated: searchField.forceActiveFocus() }
-    Shortcut { sequences: ["Down"]; onActivated: messageList.step(1) }
-    Shortcut { sequences: ["Up"]; onActivated: messageList.step(-1) }
-    Shortcut { sequences: ["Delete"]; onActivated: root.deleteMessage(root.currentUid) }
-    Shortcut { sequences: ["Shift+Delete"]; onActivated: root.confirmPurge(root.currentUid) }
-    Shortcut { sequences: ["S"]; onActivated: root.toggleStar(root.currentUid) }
-    Shortcut { sequences: ["A"]; onActivated: root.archiveMessage(root.currentUid) }
-    Shortcut { sequences: ["M"]; onActivated: root.openMove(root.currentUid) }
+    Shortcut {
+        sequences: ["Ctrl+N"]
+        onActivated: composer.openBlank()
+    }
+    Shortcut {
+        sequences: ["Ctrl+R", "F5"]
+        onActivated: root.syncNow()
+    }
+    Shortcut {
+        sequences: ["Ctrl+F"]
+        onActivated: searchField.forceActiveFocus()
+    }
+    Shortcut {
+        sequences: ["Down"]
+        onActivated: messageList.step(1)
+    }
+    Shortcut {
+        sequences: ["Up"]
+        onActivated: messageList.step(-1)
+    }
+    Shortcut {
+        sequences: ["Delete"]
+        onActivated: root.deleteMessage(root.currentUid)
+    }
+    Shortcut {
+        sequences: ["Shift+Delete"]
+        onActivated: root.confirmPurge(root.currentUid)
+    }
+    Shortcut {
+        sequences: ["S"]
+        onActivated: root.toggleStar(root.currentUid)
+    }
+    Shortcut {
+        sequences: ["A"]
+        onActivated: root.archiveMessage(root.currentUid)
+    }
+    Shortcut {
+        sequences: ["M"]
+        onActivated: root.openMove(root.currentUid)
+    }
     Shortcut {
         sequences: ["R"]
-        onActivated: if (root.currentUid >= 0) composer.openForReply(root.messageForAnswer(root.currentUid))
+        onActivated: if (root.currentUid >= 0)
+                         composer.openForReply(root.messageForAnswer(root.currentUid))
     }
     Shortcut {
         sequences: ["F"]
-        onActivated: if (root.currentUid >= 0) composer.openForForward(root.messageForAnswer(root.currentUid))
+        onActivated: if (root.currentUid >= 0)
+                         composer.openForForward(root.messageForAnswer(root.currentUid))
     }
     Shortcut {
         sequences: ["F11"]
@@ -748,7 +899,8 @@ ApplicationWindow {
     }
     Shortcut {
         sequences: ["Esc"]
-        onActivated: if (root.readerFullscreen) root.toggleReaderFullscreen()
+        onActivated: if (root.readerFullscreen)
+                         root.toggleReaderFullscreen()
     }
 
     // --- chrome -----------------------------------------------------------
@@ -773,14 +925,35 @@ ApplicationWindow {
             spacing: Theme.sm
 
             IconButton {
-                text: "☰"
+                visible: root.wideLayout
+                text: Icons.menu
+                iconFont: true
                 tooltip: qsTr("Toggle sidebar")
-                onClicked: sidebar.visible = !sidebar.visible
+                onClicked: root.sidebarOpen = !root.sidebarOpen
+            }
+            // Narrow layouts have no sidebar to toggle: this steps back to
+            // the folder pane instead.
+            IconButton {
+                visible: !root.wideLayout && !root.mediumLayout && root.narrowPane === "list"
+                text: Icons.arrowBack
+                iconFont: true
+                tooltip: qsTr("Folders")
+                onClicked: root.narrowPane = "folders"
             }
 
             AppButton {
+                visible: !root.compactToolbar
                 text: qsTr("✎  Compose")
                 intent: "primary"
+                enabled: backend.account_count > 0
+                onClicked: composer.openBlank()
+            }
+            IconButton {
+                visible: root.compactToolbar
+                text: Icons.edit
+                iconFont: true
+                tooltip: qsTr("Compose (Ctrl+N)")
+                contentColor: Theme.accent
                 enabled: backend.account_count > 0
                 onClicked: composer.openBlank()
             }
@@ -791,11 +964,14 @@ ApplicationWindow {
             TextField {
                 id: searchField
                 Layout.fillWidth: true
+                Layout.minimumWidth: 60
                 Layout.maximumWidth: 460
                 implicitHeight: Theme.controlHeight
-                placeholderText: folderScopeCheck.checked
-                    ? qsTr("Search this folder… (3+ letters: folder + server)")
-                    : qsTr("Search mail… (3+ letters: account + server)")
+                placeholderText: root.compactToolbar ? (folderScopeCheck.checked ? qsTr("Search folder…") : qsTr(
+                                                                                       "Search…")) :
+                                                       folderScopeCheck.checked ? qsTr(
+                                                                                      "Search this folder… (3+ letters: folder + server)") :
+                                                                                  qsTr("Search mail… (3+ letters: account + server)")
                 color: Theme.text
                 placeholderTextColor: Theme.textMuted
                 font.pixelSize: Theme.fontBase
@@ -818,7 +994,8 @@ ApplicationWindow {
                     width: Theme.miniButton
                     height: Theme.miniButton
                     visible: searchField.text !== ""
-                    text: "✕"
+                    text: Icons.close
+                    iconFont: true
                     fontSize: Theme.fontSmall
                     tooltip: qsTr("Clear search")
                     onClicked: searchField.text = ""
@@ -829,45 +1006,98 @@ ApplicationWindow {
             // Folder scope: limits the FTS index and the server backfill
             // to the selected folder (off = whole account). Toggling
             // re-runs an active search under the new scope.
+            // Compact toolbars hide it; the overflow menu toggles the same
+            // state (the checkbox keeps holding it either way).
             CheckBox {
                 id: folderScopeCheck
+                visible: !root.compactToolbar
                 text: root.width > 640 ? qsTr("Folder") : ""
+                Accessible.name: qsTr("Search only the current folder")
                 ToolTip.text: qsTr("Search only the current folder")
                 ToolTip.visible: hovered
-                onToggled: {
-                    root.lastServerQuery = ""
-                    root.updateSearch(true)
-                }
+                onToggled: root.folderScopeToggled()
             }
 
-            Item { Layout.fillWidth: true }
+            Item {
+                Layout.fillWidth: true
+            }
 
             IconButton {
-                text: "⟳"
+                text: Icons.sync
+                iconFont: true
                 tooltip: qsTr("Sync now (Ctrl+R)")
                 enabled: backend.account_count > 0 && !root.busy
                 onClicked: root.syncNow()
             }
             IconButton {
-                text: "🗂"
+                visible: !root.compactToolbar
+                text: Icons.folder
+                iconFont: true
                 tooltip: qsTr("Manage IMAP folders")
                 enabled: backend.account_count > 0
                 onClicked: foldersDialog.open()
             }
             IconButton {
-                text: "✉"
-                tooltip: qsTr("Accounts")
-                onClicked: accountsDialog.open()
-            }
-            IconButton {
-                text: "@"
+                visible: !root.compactToolbar
+                text: Icons.contacts
+                iconFont: true
                 tooltip: qsTr("Contacts")
                 onClicked: contactsDialog.open()
             }
             IconButton {
-                text: "⚙"
+                visible: !root.compactToolbar
+                text: Icons.person
+                iconFont: true
+                tooltip: qsTr("Accounts")
+                onClicked: accountsDialog.open()
+            }
+            IconButton {
+                visible: !root.compactToolbar
+                text: Icons.settings
+                iconFont: true
                 tooltip: qsTr("Settings")
                 onClicked: settingsDialog.open()
+            }
+            IconButton {
+                id: overflowButton
+                visible: root.compactToolbar
+                text: Icons.moreVert
+                iconFont: true
+                tooltip: qsTr("More")
+                onClicked: overflowMenu.popup(overflowButton, 0, overflowButton.height)
+            }
+        }
+
+        AppMenu {
+            id: overflowMenu
+            AppMenuItem {
+                glyph: folderScopeCheck.checked ? Icons.checkBox : Icons.checkBoxBlank
+                label: qsTr("Search only this folder")
+                onTriggered: {
+                    folderScopeCheck.checked = !folderScopeCheck.checked;
+                    root.folderScopeToggled();
+                }
+            }
+            AppMenuItem {
+                glyph: Icons.folder
+                label: qsTr("Manage IMAP folders")
+                enabled: backend.account_count > 0
+                onTriggered: foldersDialog.open()
+            }
+            AppMenuItem {
+                glyph: Icons.contacts
+                label: qsTr("Contacts")
+                onTriggered: contactsDialog.open()
+            }
+            AppMenuItem {
+                glyph: Icons.person
+                label: qsTr("Accounts")
+                onTriggered: accountsDialog.open()
+            }
+            AppMenuItem {
+                glyph: Icons.settings
+                label: qsTr("Settings")
+                onTriggered: settingsDialog.open()
             }
         }
     }
@@ -875,15 +1105,27 @@ ApplicationWindow {
     SplitView {
         anchors.fill: parent
 
-        handle: Rectangle {
-            implicitWidth: 1
-            color: SplitHandle.pressed || SplitHandle.hovered ? Theme.accent : Theme.border
+        // A grabbable split: the hit area is wide, only the line is thin.
+        handle: Item {
+            implicitWidth: 9
+            Rectangle {
+                width: 1
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.horizontalCenter: parent.horizontalCenter
+                color: SplitHandle.pressed || SplitHandle.hovered ? Theme.accent : Theme.border
+            }
+            HoverHandler {
+                cursorShape: Qt.SplitHCursor
+            }
         }
 
         Sidebar {
             id: sidebar
-            visible: !root.readerFullscreen
-            enabled: !root.readerFullscreen
+            visible: !root.readerFullscreen && (root.wideLayout ? root.sidebarOpen : root.mediumLayout ? true :
+                                                                                                         root.narrowPane
+                                                                                                         === "folders")
+            enabled: visible
             SplitView.preferredWidth: 250
             SplitView.minimumWidth: 160
             folders: folderModel
@@ -900,8 +1142,9 @@ ApplicationWindow {
 
         MessageList {
             id: messageList
-            visible: !root.readerFullscreen
-            enabled: !root.readerFullscreen
+            visible: !root.readerFullscreen && (root.wideLayout ? true : root.mediumLayout ? root.currentUid < 0 : root.narrowPane
+                                                                                             === "list")
+            enabled: visible
             SplitView.preferredWidth: 360
             SplitView.minimumWidth: 240
             messages: root.messageRows
@@ -923,10 +1166,10 @@ ApplicationWindow {
             onArchiveRequested: uid => root.archiveMessage(uid)
             onMoveRequested: uid => root.openMove(uid)
             onMarkReadRequested: (uid, read) => {
-                var r = backend.mark_read(uid, read)
-                reloadFolders()
-                reloadMessages()
-                root.statusText = r !== "" ? r : (read ? qsTr("Marked as read") : qsTr("Marked as unread"))
+                var r = backend.mark_read(uid, read);
+                reloadFolders();
+                reloadMessages();
+                root.statusText = r !== "" ? r : (read ? qsTr("Marked as read") : qsTr("Marked as unread"));
             }
             onDeleteRequested: uid => root.deleteMessage(uid)
             onPurgeRequested: uid => root.confirmPurge(uid)
@@ -944,10 +1187,14 @@ ApplicationWindow {
             id: messageView
             SplitView.fillWidth: true
             SplitView.minimumWidth: 260
-            visible: true
+            visible: root.wideLayout ? true : root.mediumLayout ? root.currentUid >= 0 : root.narrowPane === "reader"
+            enabled: visible
             isFullscreen: root.readerFullscreen
+            showBack: root.mediumLayout ? root.currentUid >= 0 : !root.wideLayout && root.narrowPane === "reader"
+            onBackRequested: root.closeReader()
             loadRemoteImages: appSettings.load_remote_images
             readerFont: appSettings.reader_font_size
+            linkClickAction: appSettings.link_click_action
             backend: backend
             message: root.currentMessage
             onReplyRequested: composer.openForReply(root.currentMessage)
@@ -980,16 +1227,22 @@ ApplicationWindow {
             spacing: Theme.sm
 
             Label {
-                text: root.busy ? "⟳" : ""
+                text: root.busy ? Icons.sync : ""
+                font.family: Icons.fontFamily
                 color: Theme.accent
                 font.pixelSize: Theme.fontSmall
             }
-            Label {
+            // Read-only TextEdit instead of a Label so the status line can be
+            // selected and copied (drag + Ctrl+C); styled to look identical.
+            TextEdit {
                 Layout.fillWidth: true
                 text: root.statusText
                 color: Theme.textMuted
                 font.pixelSize: Theme.fontSmall
-                elide: Text.ElideRight
+                readOnly: true
+                selectByMouse: true
+                wrapMode: Text.NoWrap
+                clip: true
             }
             Label {
                 text: backend.current_account_email
@@ -1014,25 +1267,28 @@ ApplicationWindow {
         replyBelowQuote: appSettings.reply_below_quote
         onStatusMessage: text => root.statusText = text
         onSendRequested: payload => {
-            root.statusText = qsTr("Sending…")
-            var r = backend.send_mail(payload)
+            root.statusText = qsTr("Sending…");
+            var r = backend.send_mail(payload);
             if (r !== "") {
-                root.statusText = r
+                root.statusText = r;
             } else {
                 // Validated + queued locally (no network yet): close at once
                 // instead of waiting out the SMTP transaction. A later
                 // failure reopens the composer with the text still in place.
-                composer.markClean()
-                composer.close()
+                composer.sendPending = true;
+                composer.markClean();
+                composer.close();
             }
         }
         onSaveDraftRequested: payload => {
-            root.statusText = qsTr("Saving draft…")
+            root.statusText = qsTr("Saving draft…");
             // Stays open until the job reports back: closing on the queue
             // acknowledgement would discard the text if the save then failed.
-            var r = backend.save_draft(payload)
+            var r = backend.save_draft(payload);
             if (r !== "")
-                root.statusText = r
+                root.statusText = r;
+            else
+                composer.saving = true;
         }
     }
 
@@ -1040,15 +1296,14 @@ ApplicationWindow {
         id: accountSetup
         onStatusMessage: text => root.statusText = text
         onAccountSubmit: payload => {
-            var r = backend.add_account(payload)
+            var r = backend.add_account(payload);
             if (r === "") {
-                var wasEditing = accountSetup.editing
-                accountSetup.close()
-                reloadAll()
-                root.statusText = wasEditing ? qsTr("Account updated")
-                                             : qsTr("Account added — press ⟳ to sync")
+                var wasEditing = accountSetup.editing;
+                accountSetup.close();
+                reloadAll();
+                root.statusText = wasEditing ? qsTr("Account updated") : qsTr("Account added — press ⟳ to sync");
             } else {
-                root.statusText = r
+                root.statusText = r;
             }
         }
     }
@@ -1062,9 +1317,9 @@ ApplicationWindow {
         onEditRequested: id => accountSetup.openEdit(backend.account_form(id), id)
         onAccountSelected: id => root.selectAccount(id)
         onDeleteConfirmed: id => {
-            var r = backend.delete_account(id)
-            reloadAll()
-            showResult(qsTr("Account removed"), r)
+            var r = backend.delete_account(id);
+            reloadAll();
+            showResult(qsTr("Account removed"), r);
         }
     }
 
@@ -1082,27 +1337,27 @@ ApplicationWindow {
         onStatusMessage: text => root.statusText = text
         onRefreshRequested: {
             if (root.busy)
-                return
-            root.statusText = qsTr("Refreshing folders…")
-            var r = backend.refresh_folders()
+                return;
+            root.statusText = qsTr("Refreshing folders…");
+            var r = backend.refresh_folders();
             if (r !== "")
-                root.statusText = r
+                root.statusText = r;
         }
         onVisibilityToggled: (path, subscribed) => {
-            showResult("", backend.set_folder_subscribed(path, subscribed))
-            reloadFolders()
+            showResult("", backend.set_folder_subscribed(path, subscribed));
+            reloadFolders();
         }
         onCreateRequested: path => {
-            foldersDialog.clearNewFolder()
-            root.statusText = qsTr("Creating folder…")
-            var r = backend.create_folder(path)
+            foldersDialog.clearNewFolder();
+            root.statusText = qsTr("Creating folder…");
+            var r = backend.create_folder(path);
             if (r !== "")
-                root.statusText = r
+                root.statusText = r;
         }
         onFolderSelected: path => {
-            foldersDialog.close()
+            foldersDialog.close();
             // Out of the click handler: selecting rebuilds the feed.
-            Qt.callLater(root.selectFolder, path)
+            Qt.callLater(root.selectFolder, path);
         }
     }
 
@@ -1111,26 +1366,24 @@ ApplicationWindow {
         folders: folderModel
         currentFolder: root.currentFolder
         onFolderChosen: path => {
-            var targets = moveDialog.uids && moveDialog.uids.length > 0
-                ? moveDialog.uids.slice()
-                : [moveDialog.uid]
-            moveDialog.close()
+            var targets = moveDialog.uids && moveDialog.uids.length > 0 ? moveDialog.uids.slice() : [moveDialog.uid];
+            moveDialog.close();
             // Out of the click handler: moving rebuilds the feed.
             Qt.callLater(function () {
-                var r
-                root.statusText = qsTr("Moving…")
+                var r;
+                root.statusText = qsTr("Moving…");
                 if (targets.length > 1 || (moveDialog.uids && moveDialog.uids.length > 0)) {
-                    root.dropPreviewIfGone(targets)
-                    r = backend.move_many(JSON.stringify(targets), path)
+                    root.dropPreviewIfGone(targets);
+                    r = backend.move_many(JSON.stringify(targets), path);
                 } else {
-                    var target = targets[0]
+                    var target = targets[0];
                     if (root.currentUid === target)
-                        root.currentUid = -1
-                    r = backend.move_message(target, path)
+                        root.currentUid = -1;
+                    r = backend.move_message(target, path);
                 }
                 if (r !== "")
-                    root.statusText = r
-            })
+                    root.statusText = r;
+            });
         }
     }
 
@@ -1142,7 +1395,8 @@ ApplicationWindow {
         title: deleteConfirm.permanent ? qsTr("Delete permanently?") : qsTr("Move to Trash?")
         modal: true
         anchors.centerIn: parent
-        width: 420
+        // Clamped to the window, which may be narrower than the default.
+        width: Math.min(420, root.width - 16)
         padding: Theme.lg
 
         property int uid: -1
@@ -1159,7 +1413,9 @@ ApplicationWindow {
 
         footer: RowLayout {
             spacing: Theme.sm
-            Item { Layout.fillWidth: true }
+            Item {
+                Layout.fillWidth: true
+            }
             AppButton {
                 text: qsTr("Cancel")
                 onClicked: deleteConfirm.close()
@@ -1171,18 +1427,17 @@ ApplicationWindow {
                 text: deleteConfirm.permanent ? qsTr("Delete permanently") : qsTr("Move to Trash")
                 intent: deleteConfirm.permanent ? "danger" : "primary"
                 onClicked: {
-                    var targets = deleteConfirm.uids && deleteConfirm.uids.length > 0
-                        ? deleteConfirm.uids.slice()
-                        : [deleteConfirm.uid]
-                    var bulk = deleteConfirm.uids && deleteConfirm.uids.length > 0
-                    deleteConfirm.close()
+                    var targets = deleteConfirm.uids && deleteConfirm.uids.length > 0 ? deleteConfirm.uids.slice() :
+                                                                                        [deleteConfirm.uid];
+                    var bulk = deleteConfirm.uids && deleteConfirm.uids.length > 0;
+                    deleteConfirm.close();
                     // Out of the click handler: deleting rebuilds the feed.
                     Qt.callLater(function () {
                         if (bulk)
-                            root.doBulkDelete(targets)
+                            root.doBulkDelete(targets);
                         else
-                            root.doDelete(targets[0])
-                    })
+                            root.doDelete(targets[0]);
+                    });
                 }
             }
         }
@@ -1192,15 +1447,15 @@ ApplicationWindow {
             wrapMode: Text.Wrap
             color: Theme.text
             font.pixelSize: Theme.fontBase
-            text: deleteConfirm.uids && deleteConfirm.uids.length > 0
-                  ? (deleteConfirm.permanent
-                     ? qsTr("%n message(s) will be destroyed. This cannot be undone.", "", deleteConfirm.uids.length)
-                     : qsTr("%n message(s) will be moved to Trash.", "", deleteConfirm.uids.length))
-                  : (deleteConfirm.permanent
-                     ? qsTr("“%1” will be destroyed. This cannot be undone.")
-                       .arg(deleteConfirm.subject)
-                     : qsTr("“%1” will be moved to Trash.")
-                       .arg(deleteConfirm.subject))
+            text: deleteConfirm.uids && deleteConfirm.uids.length > 0 ? (deleteConfirm.permanent ? qsTr("%n message(s) will be destroyed. This cannot be undone.",
+                                                                                                        "", deleteConfirm.uids.length) :
+                                                                                                   qsTr("%n message(s) will be moved to Trash.",
+                                                                                                        "", deleteConfirm.uids.length)) :
+                                                                        (deleteConfirm.permanent ? qsTr(
+                                                                                                       "“%1” will be destroyed. This cannot be undone.").arg(
+                                                                                                       deleteConfirm.subject) :
+                                                                                                   qsTr("“%1” will be moved to Trash.").arg(
+                                                                                                       deleteConfirm.subject))
         }
     }
 
@@ -1209,7 +1464,8 @@ ApplicationWindow {
         title: qsTr("Delete permanently?")
         modal: true
         anchors.centerIn: parent
-        width: 420
+        // Clamped to the window, which may be narrower than the default.
+        width: Math.min(420, root.width - 16)
         padding: Theme.lg
 
         property int uid: -1
@@ -1225,7 +1481,9 @@ ApplicationWindow {
 
         footer: RowLayout {
             spacing: Theme.sm
-            Item { Layout.fillWidth: true }
+            Item {
+                Layout.fillWidth: true
+            }
             AppButton {
                 text: qsTr("Cancel")
                 onClicked: purgeConfirm.close()
@@ -1237,18 +1495,17 @@ ApplicationWindow {
                 text: qsTr("Delete permanently")
                 intent: "danger"
                 onClicked: {
-                    var targets = purgeConfirm.uids && purgeConfirm.uids.length > 0
-                        ? purgeConfirm.uids.slice()
-                        : [purgeConfirm.uid]
-                    var bulk = purgeConfirm.uids && purgeConfirm.uids.length > 0
-                    purgeConfirm.close()
+                    var targets = purgeConfirm.uids && purgeConfirm.uids.length > 0 ? purgeConfirm.uids.slice() :
+                                                                                      [purgeConfirm.uid];
+                    var bulk = purgeConfirm.uids && purgeConfirm.uids.length > 0;
+                    purgeConfirm.close();
                     // Out of the click handler: purging rebuilds the feed.
                     Qt.callLater(function () {
                         if (bulk)
-                            root.bulkPurge(targets)
+                            root.bulkPurge(targets);
                         else
-                            root.purgeMessage(targets[0])
-                    })
+                            root.purgeMessage(targets[0]);
+                    });
                 }
             }
         }
@@ -1258,10 +1515,11 @@ ApplicationWindow {
             wrapMode: Text.Wrap
             color: Theme.text
             font.pixelSize: Theme.fontBase
-            text: purgeConfirm.uids && purgeConfirm.uids.length > 0
-                  ? qsTr("%n messages will be destroyed on the server. This cannot be undone.", "", purgeConfirm.uids.length)
-                  : qsTr("“%1” will be destroyed on the server. This cannot be undone.")
-                    .arg(purgeConfirm.subject)
+            text: purgeConfirm.uids && purgeConfirm.uids.length > 0 ? qsTr(
+                                                                          "%n messages will be destroyed on the server. This cannot be undone.",
+                                                                          "", purgeConfirm.uids.length) : qsTr(
+                                                                          "“%1” will be destroyed on the server. This cannot be undone.").arg(
+                                                                          purgeConfirm.subject)
         }
     }
 
@@ -1273,8 +1531,8 @@ ApplicationWindow {
         onStatusMessage: text => {
             // The image setting changes what the feed sanitizes to, so the
             // open message must re-render from a fresh feed.
-            reloadMessages()
-            root.statusText = text
+            reloadMessages();
+            root.statusText = text;
         }
     }
 }

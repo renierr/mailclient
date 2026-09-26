@@ -14,7 +14,7 @@ use lettre::{SmtpTransport, Transport};
 use crate::db::Db;
 use crate::error::{Result, StoreError};
 use crate::models::{Account, FolderRole};
-use crate::store::{contacts, folders, queue, settings};
+use crate::store::{accounts, contacts, folders, queue, settings};
 use crate::sync::imap::ImapSync;
 use crate::sync::traits::MailSender;
 
@@ -212,7 +212,7 @@ impl SmtpSender {
     /// manual retry cannot deliver the same message twice.
     pub fn submit(&mut self, db: &Db, account_id: i64, req: &SendRequest<'_>) -> Result<Vec<u8>> {
         let (queue_id, raw) = self.enqueue_send(db, account_id, req)?;
-        if let Err(e) = self.submit_queued(db, queue_id, req.password) {
+        if let Err(e) = self.submit_claimed(db, queue_id, req.password) {
             // The user is about to see this failure and owns the retry. Leaving
             // submittable bytes behind would let the next sync deliver the same
             // message again, duplicating whatever they resend by hand.
@@ -235,10 +235,12 @@ impl SmtpSender {
     }
 }
 impl SmtpSender {
-    /// Submit one persisted outbox row. Crash-safe: MIME is already on disk,
-    /// `sending` is set before the SMTP round-trip, and the same bytes are
-    /// retried after a restart.
-    pub fn submit_queued(&self, db: &Db, queue_id: i64, password: &str) -> Result<()> {
+    /// Submit one outbox row the caller already owns: one it just created with
+    /// [`Self::enqueue_send`] (rows are born claimed) or won via
+    /// [`queue::claim`]. Crash-safe: MIME is already on disk and the row stays
+    /// `sending` through the SMTP round-trip, so a crash leaves it for
+    /// [`queue::requeue_interrupted`] to retry with the same bytes.
+    pub fn submit_claimed(&self, db: &Db, queue_id: i64, password: &str) -> Result<()> {
         let row = queue::get(db, queue_id)?;
         let raw = row
             .raw_mime
@@ -257,10 +259,14 @@ impl SmtpSender {
                 "queued send has no envelope recipients".into(),
             ));
         }
-        queue::mark_sending(db, queue_id)?;
         match self.submit_raw(from, &row.envelope_to, raw, password) {
             Ok(()) => {
-                queue::mark_sent(db, queue_id)?;
+                // The server accepted it, so it IS sent. A bookkeeping failure
+                // (the row vanished with its account mid-send) must not turn
+                // that into "send failed" and invite a duplicate resend.
+                if let Err(e) = queue::mark_sent(db, queue_id) {
+                    log::warn!("smtp: sent, but outbox entry {queue_id} not updated: {e}");
+                }
                 Ok(())
             }
             Err(e) => {
@@ -273,6 +279,8 @@ impl SmtpSender {
     /// Retry every submittable outbox row for this account — rows left in
     /// `sending` by a crash, or earlier flushes that failed transiently. A row
     /// whose failure already reached the user has no MIME left and is skipped.
+    /// Every row is claimed atomically first, so a GUI and a `--sync-once` run
+    /// flushing the same DB at once never both submit it.
     ///
     /// Each row is delivered exactly as the original send would have been,
     /// Sent copy included. One row failing does not stop the rest: a permanent
@@ -292,7 +300,15 @@ impl SmtpSender {
         let mut sent = 0u64;
         let mut first_error = None;
         for row in queue::list_submittable(db, account_id)? {
-            match self.submit_queued(db, row.id, password) {
+            match queue::claim(db, row.id) {
+                Ok(true) => {}
+                Ok(false) => continue, // another submitter owns it now
+                Err(e) => {
+                    first_error.get_or_insert(e);
+                    continue;
+                }
+            }
+            match self.submit_claimed(db, row.id, password) {
                 Ok(()) => {
                     sent += 1;
                     if settings::get_bool(db, settings::COLLECT_SENT_CONTACTS).unwrap_or(true) {
@@ -370,6 +386,18 @@ impl SmtpSender {
             })
     }
 
+    /// Gmail files every accepted SMTP submission into Sent Mail itself.
+    /// APPENDing our own copy afterwards delivers once but files twice —
+    /// the "double in Sent" every Gmail user reports. Host-based on
+    /// purpose: it describes one provider's server behaviour, not the
+    /// user's mail content.
+    fn gmail_autofiles_sent(account: &Account) -> bool {
+        [&account.imap_host, &account.smtp_host].iter().any(|h| {
+            let lower = h.to_ascii_lowercase();
+            lower.contains("gmail") || lower.contains("googlemail")
+        })
+    }
+
     /// File the sent MIME bytes into the account's Sent folder over a session
     /// the caller already holds.
     ///
@@ -386,6 +414,13 @@ impl SmtpSender {
         imap: &mut ImapSync,
         raw: &[u8],
     ) -> Result<()> {
+        let account = accounts::get(db, account_id).map_err(|e| {
+            StoreError::InvalidInput(format!("cannot load account, skipping sent copy: {e}"))
+        })?;
+        if Self::gmail_autofiles_sent(&account) {
+            log::info!("smtp: Gmail files submissions itself, skipping APPEND copy");
+            return Ok(());
+        }
         let Some(sent_path) = Self::sent_copy_target(db, account_id)? else {
             return Ok(());
         };
@@ -420,6 +455,10 @@ impl SmtpSender {
         let account = crate::store::accounts::get(db, account_id).map_err(|e| {
             StoreError::InvalidInput(format!("cannot load account, skipping sent copy: {e}"))
         })?;
+        if Self::gmail_autofiles_sent(&account) {
+            log::info!("smtp: Gmail files submissions itself, skipping APPEND copy");
+            return Ok(());
+        }
         let mut imap = ImapSync::new(&account);
         imap.connect(imap_password).await.map_err(|e| {
             StoreError::InvalidInput(format!("IMAP connect failed, skipping sent copy: {e}"))
@@ -444,6 +483,17 @@ mod tests {
         let ep = endpoint_for(&test_account());
         assert_eq!(ep.addr, "smtp.x:587");
         assert!(!ep.implicit_tls);
+    }
+
+    #[test]
+    fn gmail_autofiles_detection_covers_hosts() {
+        let mut a = test_account();
+        assert!(!SmtpSender::gmail_autofiles_sent(&a));
+        a.smtp_host = "smtp.gmail.com".to_string();
+        assert!(SmtpSender::gmail_autofiles_sent(&a));
+        a.smtp_host = "smtp.x".to_string();
+        a.imap_host = "imap.googlemail.com".to_string();
+        assert!(SmtpSender::gmail_autofiles_sent(&a));
     }
 
     #[test]

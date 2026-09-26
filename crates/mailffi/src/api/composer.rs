@@ -56,7 +56,7 @@ pub fn send_mail(account_id: i64, folder_id: i64, form: String) -> anyhow::Resul
             let secrets = auth::load_account_secrets(&acc.auth_vault_key)
                 .map_err(|e| format!("no password in keyring: {e}"))?;
             if let Err(e) =
-                SmtpSender::new(&acc).submit_queued(db, queue_id, &secrets.smtp_password)
+                SmtpSender::new(&acc).submit_claimed(db, queue_id, &secrets.smtp_password)
             {
                 // Drop the built MIME rather than leaving it queued: an automatic
                 // retry could deliver the message twice. The user sees the error

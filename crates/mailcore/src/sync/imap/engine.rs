@@ -43,8 +43,8 @@ use super::{
     session::ImapSession,
     tls::{build_tls_connector, server_name_for},
     types::{
-        endpoint_for, ArchiveOutcome, ImapEndpoint, MoveOutcome, ServerSearchReport, TrashOutcome,
-        COMMAND_TIMEOUT, CONNECT_TIMEOUT, FETCH_CHUNK, FULL_SYNC_WINDOW,
+        endpoint_for, ArchiveOutcome, ImapEndpoint, MoveOutcome, SelectResult, ServerSearchReport,
+        TrashOutcome, COMMAND_TIMEOUT, CONNECT_TIMEOUT, FETCH_CHUNK, FULL_SYNC_WINDOW,
     },
     vec1,
 };
@@ -69,6 +69,14 @@ impl ImapSync {
         self.session
             .as_mut()
             .ok_or_else(|| StoreError::Network("session disconnected".to_string()))
+    }
+
+    /// Quick folder refresh: pass-1 LIST only (one round-trip). The
+    /// auto-sync path calls this every run and escalates to the full
+    /// [`SyncProvider::sync_folders`] discovery when the tree changed or
+    /// the interval lapsed — see `folders::full_discovery_due`.
+    pub async fn sync_folders_quick(&mut self, db: &Db, account_id: i64) -> Result<Vec<Folder>> {
+        super::folders::discover_folders_quick(self.session()?, db, account_id).await
     }
 }
 

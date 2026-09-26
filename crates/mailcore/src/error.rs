@@ -17,6 +17,11 @@ pub enum StoreError {
     /// Invalid input (bad address, bad folder path, ...).
     #[error("invalid input: {0}")]
     InvalidInput(String),
+    /// OS keyring (Secret Service / Keychain / Credential Manager) failure.
+    /// Separate variant so callers can tell "password store unreachable"
+    /// apart from bad input (e.g. a transient D-Bus blip vs. a wrong path).
+    #[error("keyring: {0}")]
+    Keyring(String),
     /// Time handling failure.
     #[error("time error: {0}")]
     Time(#[from] chrono::ParseError),

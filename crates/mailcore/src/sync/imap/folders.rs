@@ -21,6 +21,29 @@ use super::{
     session::ImapSession,
 };
 
+/// Full folder discovery at most this often; in between, a single LIST
+/// pass suffices when it matches the cache (folder trees barely change,
+/// but every auto-sync paid all four discovery passes before the first
+/// folder — the slowest part of a Gmail sync start).
+pub(crate) const FULL_DISCOVERY_INTERVAL_SECS: i64 = 2 * 3600;
+
+/// Pure decision: full discovery when the quick LIST disagrees with the
+/// cache (new/renamed server folders show up immediately) or the last
+/// full run is older than the interval (backstop for folders a bare LIST
+/// never reports, Tobit-style). `None` last-full means "never": go full.
+#[must_use]
+pub(crate) fn full_discovery_due(
+    cached_paths: &std::collections::HashSet<String>,
+    quick_paths: &std::collections::HashSet<String>,
+    last_full_unix: Option<i64>,
+    now_unix: i64,
+) -> bool {
+    if cached_paths != quick_paths {
+        return true;
+    }
+    last_full_unix.is_none_or(|t| now_unix.saturating_sub(t) >= FULL_DISCOVERY_INTERVAL_SECS)
+}
+
 /// Run all discovery passes and upsert the merged folder list.
 pub(crate) async fn discover_folders(
     session: &mut ImapSession,
@@ -168,11 +191,97 @@ pub(crate) async fn discover_folders(
             "imap: discovery LIST*={list_count} LSUB={lsub_count} subtrees={subtree_count} namespaces={ns_count} merged={}",
             discovered.len()
         );
-    let mut out = Vec::new();
-    for (path, delimiter, role) in &discovered {
-        let id = folders::upsert(db, account_id, path, delimiter, *role)?;
-        out.push(folders::get(db, id)?);
+    let out = upsert_discovered(db, account_id, &discovered)?;
+    // Stamp the full run so throttled auto-syncs can skip passes 2-4 until
+    // the interval lapses (manual refreshes stamp here too — they call this).
+    if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        let _ =
+            crate::store::settings::set_last_full_discovery(db, account_id, now.as_secs() as i64);
     }
     log::info!("imap: {} folders", out.len());
     Ok(out)
+}
+
+/// Quick refresh: pass 1 (`LIST "" "*"`) only, upserted the same way.
+/// The auto-sync path runs this every time and escalates to the full
+/// discovery only when it disagrees with the cache or the interval lapsed
+/// (see [`full_discovery_due`]) — one round-trip instead of ~30 in the
+/// common case. Never stamps: only full runs move the timestamp.
+pub(crate) async fn discover_folders_quick(
+    session: &mut ImapSession,
+    db: &Db,
+    account_id: i64,
+) -> Result<Vec<Folder>> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut discovered: Vec<(String, String, FolderRole)> = Vec::new();
+    for n in session.list("", "*").await?.iter() {
+        if !is_selectable(&n.attributes) {
+            continue;
+        }
+        if seen.insert(n.name.clone()) {
+            log::info!(
+                "imap: [LIST] [{}] delim={:?} {} -> {}",
+                attr_text(&n.attributes),
+                n.delimiter,
+                n.name,
+                map_folder_role(&n.attributes, &n.name).as_str()
+            );
+            discovered.push((
+                n.name.clone(),
+                n.delimiter.clone(),
+                map_folder_role(&n.attributes, &n.name),
+            ));
+        }
+    }
+    upsert_discovered(db, account_id, &discovered)
+}
+
+/// Insert or refresh the merged folder list. Shared by full and quick
+/// discovery; never touches visibility (`subscribed`) or sync state.
+fn upsert_discovered(
+    db: &Db,
+    account_id: i64,
+    discovered: &[(String, String, FolderRole)],
+) -> Result<Vec<Folder>> {
+    let mut out = Vec::new();
+    for (path, delimiter, role) in discovered {
+        let id = folders::upsert(db, account_id, path, delimiter, *role)?;
+        out.push(folders::get(db, id)?);
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn paths(names: &[&str]) -> std::collections::HashSet<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn unchanged_tree_with_fresh_stamp_skips_full_discovery() {
+        let cached = paths(&["INBOX", "Sent"]);
+        assert!(!full_discovery_due(&cached, &cached, Some(1000), 1000 + 60));
+    }
+
+    #[test]
+    fn changed_tree_triggers_full_discovery_at_once() {
+        let cached = paths(&["INBOX"]);
+        let quick = paths(&["INBOX", "Sent"]);
+        assert!(full_discovery_due(&cached, &quick, Some(1000), 1000 + 60));
+    }
+
+    #[test]
+    fn stale_stamp_triggers_full_discovery_despite_match() {
+        let cached = paths(&["INBOX"]);
+        assert!(full_discovery_due(
+            &cached,
+            &cached,
+            Some(1000),
+            1000 + FULL_DISCOVERY_INTERVAL_SECS + 1
+        ));
+        // Never ran: always full.
+        assert!(full_discovery_due(&cached, &cached, None, 2000));
+    }
 }

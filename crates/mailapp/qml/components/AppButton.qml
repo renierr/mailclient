@@ -20,16 +20,15 @@ Button {
     font.pixelSize: Theme.fontBase
     font.bold: intent === "primary"
 
-    readonly property color baseColor: intent === "primary" ? Theme.accent
-                                     : intent === "danger" ? Theme.danger
-                                     : Theme.bgRaised
+    readonly property color baseColor: intent === "primary" ? Theme.accent : intent === "danger" ? Theme.danger :
+                                                                                                   Theme.bgRaised
 
     background: Rectangle {
         radius: Theme.radius
-        color: !control.enabled ? Theme.border
-             : control.pressed ? Qt.darker(control.baseColor, 1.25)
-             : control.hovered ? Qt.lighter(control.baseColor, control.intent === "quiet" ? 1.08 : 1.12)
-             : control.baseColor
+        color: !control.enabled ? Theme.border : control.pressed ? Qt.darker(control.baseColor, 1.25) : control.hovered
+                                                                   ? Qt.lighter(control.baseColor, control.intent
+                                                                                === "quiet" ? 1.08 : 1.12) :
+                                                                     control.baseColor
         border.width: control.intent === "quiet" ? 1 : 0
         border.color: Theme.border
     }
@@ -37,9 +36,7 @@ Button {
     contentItem: Text {
         text: control.text
         font: control.font
-        color: !control.enabled ? Theme.textMuted
-             : control.intent === "quiet" ? Theme.text
-             : Theme.accentText
+        color: !control.enabled ? Theme.textMuted : control.intent === "quiet" ? Theme.text : Theme.accentText
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
         leftPadding: Theme.md

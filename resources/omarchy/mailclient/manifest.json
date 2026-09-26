@@ -4,7 +4,7 @@
   "name": "Mailclient unread",
   "version": "1.0.0",
   "author": "mailclient",
-  "description": "Unread mail count from the mailclient app. Left-click opens mail, right-click syncs now.",
+  "description": "Unread mail count from the mailclient app. Left-click toggles the mail panel, middle-click syncs now, right-click opens the app.",
   "kinds": [
     "bar-widget"
   ],
@@ -13,7 +13,7 @@
   },
   "barWidget": {
     "displayName": "Mailclient unread",
-    "description": "Unread mail count; opens the mail app on click and notifies on new mail.",
+    "description": "Unread mail count; click for the mail panel (open app, sync now) and notifies on new mail.",
     "category": "Mail",
     "allowMultiple": false,
     "defaultSection": "right",

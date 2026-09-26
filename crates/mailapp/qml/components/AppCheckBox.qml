@@ -20,14 +20,13 @@ CheckBox {
         radius: Theme.xs
         color: control.checked ? Theme.accent : Theme.bg
         border.width: 1
-        border.color: control.checked ? Theme.accent
-                    : control.hovered ? Theme.accent
-                    : Theme.border
+        border.color: control.checked ? Theme.accent : control.hovered ? Theme.accent : Theme.border
 
         Text {
             anchors.centerIn: parent
             visible: control.checked
-            text: "✓"
+            text: Icons.done
+            font.family: Icons.fontFamily
             color: Theme.accentText
             font.pixelSize: Theme.fontSmall
             font.bold: true

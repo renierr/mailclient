@@ -19,6 +19,7 @@ Details: [`PROJECT.md`](PROJECT.md) (goal, architecture, roadmap) and
 
 cargo test -p mailcore      # backend unit tests
 qmllint crates/mailapp/qml/*.qml crates/mailapp/qml/components/*.qml  # QML lint (qmllint in /usr/lib/qt6/bin)
+scripts/qml-check.sh        # QML lint gate + headless QML unit tests
 ```
 
 Prerequisites (already present on Omarchy): Rust stable, CMake, Qt 6
@@ -41,6 +42,11 @@ lives in `scripts/qt-env.sh`:
 `qmake.exe` on PATH, then the newest matching kit under `QT_ROOT_DIR`, `QTDIR`,
 `C:/Qt`, `D:/Qt`, `$USERPROFILE/Qt`. It also prepends Qt's `bin/` to PATH,
 which Windows needs to load the Qt DLLs at runtime.
+
+Bare `cargo` outside the wrappers (`cargo clippy --workspace`, `cargo test
+--workspace`) gets none of that: set `QMAKE` to the kit's `qmake6.exe`, and
+put the kit's `bin/` on PATH before running the `mailapp` tests — otherwise the
+test binary exits with `STATUS_DLL_NOT_FOUND` before a single test runs.
 
 Needed once:
 

@@ -20,31 +20,33 @@ Rectangle {
 
     signal folderSelected(string path)
     signal accountSelected(int id)
-    signal manageAccountsRequested()
-    signal manageFoldersRequested()
-    signal addAccountRequested()
+    signal manageAccountsRequested
+    signal manageFoldersRequested
+    signal addAccountRequested
 
     // Visible subset of `folders` (subscribed !== false). Kept as its own
     // model so hiding a folder never destroys the full feed the manager
     // dialog reads — same in-place update discipline as ModelSync.
-    ListModel { id: shown }
+    ListModel {
+        id: shown
+    }
 
     function refreshShown() {
-        var rows = []
+        var rows = [];
         if (root.folders) {
             for (var i = 0; i < root.folders.count; i++) {
-                var f = root.folders.get(i)
+                var f = root.folders.get(i);
                 if (f.subscribed === false)
-                    continue
+                    continue;
                 rows.push({
-                    name: f.name,
-                    role: f.role,
-                    unread: f.unread,
-                    count: f.count !== undefined ? f.count : 0
-                })
+                              name: f.name,
+                              role: f.role,
+                              unread: f.unread,
+                              count: f.count !== undefined ? f.count : 0
+                          });
             }
         }
-        ModelSync.sync(shown, rows, "name")
+        ModelSync.sync(shown, rows, "name");
     }
 
     onFoldersChanged: root.refreshShown()
@@ -54,9 +56,9 @@ Rectangle {
     // handler (see MessageList.emitLater for the crash this avoids).
     function emitLater(sig, arg) {
         if (arg === undefined)
-            Qt.callLater(sig)
+            Qt.callLater(sig);
         else
-            Qt.callLater(sig, arg)
+            Qt.callLater(sig, arg);
     }
 
     color: Theme.bgAlt
@@ -107,9 +109,9 @@ Rectangle {
                         Layout.fillWidth: true
                     }
                     Label {
-                        text: root.accounts && root.accounts.count > 1
-                              ? qsTr("%1 accounts — switch").arg(root.accounts.count)
-                              : qsTr("Manage account")
+                        text: root.accounts && root.accounts.count > 1 ? qsTr("%1 accounts — switch").arg(
+                                                                             root.accounts.count) : qsTr(
+                                                                             "Manage account")
                         color: Theme.textMuted
                         font.pixelSize: Theme.fontTiny
                         elide: Text.ElideRight
@@ -117,7 +119,8 @@ Rectangle {
                     }
                 }
                 Label {
-                    text: "⌄"
+                    text: Icons.expandMore
+                    font.family: Icons.fontFamily
                     color: Theme.textMuted
                 }
             }
@@ -126,19 +129,22 @@ Rectangle {
                 id: accountMenu
                 Repeater {
                     model: root.accounts
-                    MenuItem {
+                    AppMenuItem {
                         required property var model
-                        text: (model.id === root.currentAccountId ? "● " : "   ") + model.email
+                        glyph: model.id === root.currentAccountId ? Icons.currentDot : ""
+                        label: model.email
                         onTriggered: root.emitLater(root.accountSelected, model.id)
                     }
                 }
                 MenuSeparator {}
-                MenuItem {
-                    text: qsTr("Add account…")
+                AppMenuItem {
+                    glyph: Icons.add
+                    label: qsTr("Add account…")
                     onTriggered: root.emitLater(root.addAccountRequested)
                 }
-                MenuItem {
-                    text: qsTr("Manage accounts…")
+                AppMenuItem {
+                    glyph: Icons.settings
+                    label: qsTr("Manage accounts…")
                     onTriggered: root.emitLater(root.manageAccountsRequested)
                 }
             }
@@ -162,7 +168,8 @@ Rectangle {
             }
 
             IconButton {
-                text: "⛭"
+                text: Icons.settings
+                iconFont: true
                 tooltip: qsTr("Manage IMAP folders…")
                 onClicked: root.manageFoldersRequested()
             }
@@ -175,7 +182,9 @@ Rectangle {
             clip: true
             model: shown
             boundsBehavior: Flickable.StopAtBounds
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            ScrollBar.vertical: ScrollBar {
+                policy: ScrollBar.AsNeeded
+            }
 
             delegate: ItemDelegate {
                 id: folderRow
@@ -187,9 +196,7 @@ Rectangle {
 
                 onClicked: root.emitLater(root.folderSelected, folderRow.model.name)
                 ToolTip.visible: folderRow.hovered
-                ToolTip.text: qsTr("%1 total · %2 unread")
-                              .arg(folderRow.model.count || 0)
-                              .arg(folderRow.model.unread)
+                ToolTip.text: qsTr("%1 total · %2 unread").arg(folderRow.model.count || 0).arg(folderRow.model.unread)
                 // Padding, not anchors: a control's contentItem is sized by
                 // the control, so anchor margins inside it are ignored.
                 leftPadding: Theme.md + Theme.sm
@@ -200,9 +207,7 @@ Rectangle {
                     anchors.leftMargin: Theme.sm
                     anchors.rightMargin: Theme.sm
                     radius: Theme.radius
-                    color: folderRow.current ? Theme.selected
-                         : folderRow.hovered ? Theme.hover
-                         : "transparent"
+                    color: folderRow.current ? Theme.selected : folderRow.hovered ? Theme.hover : "transparent"
                 }
 
                 contentItem: RowLayout {
@@ -211,15 +216,23 @@ Rectangle {
                     Label {
                         text: {
                             switch (folderRow.model.role) {
-                            case "inbox": return "📥"
-                            case "drafts": return "📝"
-                            case "sent": return "📤"
-                            case "archive": return "🗄"
-                            case "junk": return "🚫"
-                            case "trash": return "🗑"
-                            default: return "📁"
+                            case "inbox":
+                                return Icons.inbox;
+                            case "drafts":
+                                return Icons.drafts;
+                            case "sent":
+                                return Icons.send;
+                            case "archive":
+                                return Icons.archive;
+                            case "junk":
+                                return Icons.block;
+                            case "trash":
+                                return Icons.trash;
+                            default:
+                                return Icons.folder;
                             }
                         }
+                        font.family: Icons.fontFamily
                         font.pixelSize: Theme.fontBase
                     }
                     Label {
@@ -263,8 +276,8 @@ Rectangle {
             Layout.fillWidth: true
             Layout.margins: Theme.md
             visible: shown.count === 0
-            text: root.currentEmail === "" ? qsTr("Add an account to begin.")
-                                            : qsTr("No folders yet — press ⟳ to sync.")
+            text: root.currentEmail === "" ? qsTr("Add an account to begin.") : qsTr(
+                                                 "No folders yet — press ⟳ to sync.")
             color: Theme.textMuted
             font.pixelSize: Theme.fontSmall
             wrapMode: Text.Wrap

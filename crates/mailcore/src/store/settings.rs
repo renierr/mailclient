@@ -42,6 +42,9 @@ pub const LIST_DENSITY: &str = "list_density";
 /// Plain-text reader size: `small` | `normal` (default) | `large`.
 /// Unknown/empty values fall back to `normal`.
 pub const READER_FONT_SIZE: &str = "reader_font_size";
+/// Clicking a link in HTML mail: `examine` (default, safety dialog first)
+/// | `browser` (open directly). Unknown/empty values fall back to `examine`.
+pub const LINK_CLICK_ACTION: &str = "link_click_action";
 /// Automatic mail check, in minutes (`0` = manually only, default).
 /// Clamped to 0..1440; the UI offers fixed steps.
 pub const SYNC_INTERVAL_MINUTES: &str = "sync_interval_minutes";
@@ -60,6 +63,16 @@ pub const UI_SCALE: &str = "ui_scale";
 /// Last account selected in the UI. Absent/invalid values deliberately leave
 /// startup selection to the normal first-account fallback.
 pub const LAST_ACTIVE_ACCOUNT_ID: &str = "last_active_account_id";
+/// Prefix for per-account full-discovery timestamps (unix seconds, internal
+/// bookkeeping for the discovery throttle — not a user preference, no
+/// default): `last_full_discovery_{account_id}`.
+pub const LAST_FULL_DISCOVERY_PREFIX: &str = "last_full_discovery_";
+/// Account a `mailapp --open` click wants the GUI to show (row id). Read
+/// once and cleared by the consumer — cross-process jump request from the
+/// bar widget or a notification into a (possibly already running) GUI.
+pub const PENDING_OPEN_ACCOUNT_ID: &str = "pending_open_account_id";
+/// Folder path the pending open should land on (empty = account's inbox).
+pub const PENDING_OPEN_FOLDER: &str = "pending_open_folder";
 
 /// Built-in default for a known key, if any.
 #[must_use]
@@ -77,6 +90,7 @@ pub fn defaults(key: &str) -> Option<&'static str> {
         CONFIRM_DELETE => Some("1"),
         LIST_DENSITY => Some("comfortable"),
         READER_FONT_SIZE => Some("normal"),
+        LINK_CLICK_ACTION => Some("examine"),
         SYNC_INTERVAL_MINUTES => Some("0"),
         SIGNATURE_ENABLED => Some("0"),
         SIGNATURE_TEXT => Some(""),
@@ -133,6 +147,48 @@ pub fn get_last_active_account_id(db: &Db) -> Option<i64> {
 /// Persist the account the user is actively viewing.
 pub fn set_last_active_account_id(db: &Db, account_id: i64) -> Result<()> {
     set(db, LAST_ACTIVE_ACCOUNT_ID, &account_id.max(0).to_string())
+}
+
+/// Last full folder discovery (unix seconds) for one account, if any.
+pub fn get_last_full_discovery(db: &Db, account_id: i64) -> Option<i64> {
+    get(db, &format!("{LAST_FULL_DISCOVERY_PREFIX}{account_id}"))
+        .ok()
+        .flatten()
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|secs| *secs > 0)
+}
+
+/// Stamp a full folder discovery (unix seconds) for one account.
+pub fn set_last_full_discovery(db: &Db, account_id: i64, unix_secs: i64) -> Result<()> {
+    set(
+        db,
+        &format!("{LAST_FULL_DISCOVERY_PREFIX}{account_id}"),
+        &unix_secs.max(0).to_string(),
+    )
+}
+
+/// Queue a GUI jump request (`mailapp --open`): account id plus optional
+/// folder path (empty = that account's inbox).
+pub fn set_pending_open(db: &Db, account_id: i64, folder: &str) -> Result<()> {
+    set(db, PENDING_OPEN_ACCOUNT_ID, &account_id.max(0).to_string())?;
+    set(db, PENDING_OPEN_FOLDER, folder.trim())
+}
+
+/// Take a queued jump request, clearing it so each click jumps exactly
+/// once. Returns `None` when nothing is queued or the id is invalid.
+pub fn take_pending_open(db: &Db) -> Option<(i64, String)> {
+    let id = get(db, PENDING_OPEN_ACCOUNT_ID)
+        .ok()
+        .flatten()
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|id| *id > 0)?;
+    let folder = get(db, PENDING_OPEN_FOLDER)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let _ = set(db, PENDING_OPEN_ACCOUNT_ID, "0");
+    let _ = set(db, PENDING_OPEN_FOLDER, "");
+    Some((id, folder))
 }
 
 /// Outgoing send format, resilient: unknown values become `auto`.
@@ -250,6 +306,23 @@ pub fn get_reader_font(db: &Db) -> String {
     match get(db, READER_FONT_SIZE) {
         Ok(Some(v)) => normalize_reader_font(&v).to_string(),
         _ => defaults(READER_FONT_SIZE).unwrap_or("normal").to_string(),
+    }
+}
+
+/// Validated link-click action: `examine` | `browser`.
+#[must_use]
+pub fn normalize_link_click(raw: &str) -> &'static str {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "browser" | "direct" | "open" => "browser",
+        _ => "examine",
+    }
+}
+
+/// Current link-click action, resilient to unknown stored values.
+pub fn get_link_click(db: &Db) -> String {
+    match get(db, LINK_CLICK_ACTION) {
+        Ok(Some(v)) => normalize_link_click(&v).to_string(),
+        _ => defaults(LINK_CLICK_ACTION).unwrap_or("examine").to_string(),
     }
 }
 
@@ -414,6 +487,30 @@ mod tests {
     }
 
     #[test]
+    fn full_discovery_stamp_round_trips_per_account() {
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(get_last_full_discovery(&db, 1), None);
+        set_last_full_discovery(&db, 1, 1700000000).unwrap();
+        assert_eq!(get_last_full_discovery(&db, 1), Some(1700000000));
+        assert_eq!(get_last_full_discovery(&db, 2), None);
+        set(&db, "last_full_discovery_1", "nonsense").unwrap();
+        assert_eq!(get_last_full_discovery(&db, 1), None);
+    }
+
+    #[test]
+    fn pending_open_is_take_once() {
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(take_pending_open(&db), None);
+        set_pending_open(&db, 7, "INBOX").unwrap();
+        assert_eq!(take_pending_open(&db), Some((7, "INBOX".to_string())));
+        // Consumed: second take finds nothing.
+        assert_eq!(take_pending_open(&db), None);
+        // Invalid ids never surface.
+        set_pending_open(&db, -3, "").unwrap();
+        assert_eq!(take_pending_open(&db), None);
+    }
+
+    #[test]
     fn message_sort_resilient_and_persisted() {
         assert_eq!(normalize_sort_field("date"), "date");
         assert_eq!(normalize_sort_field(" From "), "from");
@@ -439,6 +536,11 @@ mod tests {
         assert_eq!(normalize_reader_font("small"), "small");
         assert_eq!(normalize_reader_font("LARGE"), "large");
         assert_eq!(normalize_reader_font("huge"), "normal");
+        assert_eq!(normalize_link_click("browser"), "browser");
+        assert_eq!(normalize_link_click(" BROWSER "), "browser");
+        assert_eq!(normalize_link_click("examine"), "examine");
+        assert_eq!(normalize_link_click(""), "examine");
+        assert_eq!(normalize_link_click("weird"), "examine");
         assert_eq!(normalize_sync_interval(-5), 0);
         assert_eq!(normalize_sync_interval(15), 15);
         assert_eq!(normalize_sync_interval(99999), 1440);
@@ -446,6 +548,11 @@ mod tests {
         assert!(get_bool(&db, CONFIRM_DELETE).unwrap());
         assert_eq!(get_density(&db), "comfortable");
         assert_eq!(get_reader_font(&db), "normal");
+        assert_eq!(get_link_click(&db), "examine");
+        set(&db, LINK_CLICK_ACTION, "browser").unwrap();
+        assert_eq!(get_link_click(&db), "browser");
+        set(&db, LINK_CLICK_ACTION, "nonsense").unwrap();
+        assert_eq!(get_link_click(&db), "examine");
         assert_eq!(get_sync_interval(&db), 0);
         assert_eq!(get_signature_text(&db), "");
         assert!(!get_bool(&db, SIGNATURE_ENABLED).unwrap());

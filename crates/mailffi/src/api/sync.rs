@@ -25,7 +25,7 @@ pub fn sync_account(account_id: i64) -> anyhow::Result<()> {
             // The shared orchestration `mailapp` and the CLI both use; we only
             // lend it a pooled session.
             let mut imap = checkout_session(&acc).await?;
-            let r = headless::sync_account(db, &acc, &mut imap).await;
+            let r = headless::sync_account(db, &acc, &mut imap, None).await;
             imap.checkin();
 
             let flags = match r.pushed_flags {

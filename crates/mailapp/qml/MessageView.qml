@@ -26,31 +26,44 @@ Rectangle {
 
     property var message
     property bool loadRemoteImages: false
+    // URL currently under the mouse in the HTML body (via WebEngineView's
+    // linkHovered signal; "" when hovering nothing). Drives the statusline
+    // and the custom link context menu.
+    property string hoveredLinkUrl: ""
     // "small" | "normal" (default) | "large": plain-text body size, bound to
     // the `reader_font_size` setting via Main. HTML mail brings its own sizes.
     property string readerFont: "normal"
+    // What a link click does: `examine` (default, safety dialog first) or
+    // `browser` (open directly). Bound to the `link_click_action` setting
+    // via Main.
+    property string linkClickAction: "examine"
     // Rust Bridge, for the on-demand "Show once" re-sanitize. Set by Main.
     property var backend
     property string remoteHtml: ""
-    signal replyRequested()
-    signal replyAllRequested()
-    signal forwardRequested()
-    signal starRequested()
-    signal archiveRequested()
-    signal moveRequested()
-    signal deleteRequested()
+    signal replyRequested
+    signal replyAllRequested
+    signal forwardRequested
+    signal starRequested
+    signal archiveRequested
+    signal moveRequested
+    signal deleteRequested
     signal statusMessage(string text)
 
     color: Theme.bg
 
     // Derived, decided in Rust — no QML `<`/`>` guessing.
     readonly property bool isHtml: message !== undefined && message.is_html === true
-    readonly property string plainBody: message ? (message.body_text !== undefined ? message.body_text : (message.body || "")) : ""
+    readonly property string plainBody: message ? (message.body_text !== undefined ? message.body_text : (message.body
+                                                                                                          || "")) : ""
     readonly property string htmlBody: message ? (message.body_html !== undefined ? message.body_html : "") : ""
     readonly property bool hasRemote: message !== undefined && message.has_remote_images === true
     property bool allowRemoteOnce: false
     property bool isFullscreen: false
-    signal fullscreenRequested()
+    signal fullscreenRequested
+    // Narrower layouts give the reader the whole content area; the chevron
+    // back is how the user returns to the list. Set by Main.
+    property bool showBack: false
+    signal backRequested
 
     // Keyed on the UID, not on `message` itself: the feed is re-parsed after
     // every open, star, delete and sync, so `message` is a fresh object each
@@ -60,17 +73,18 @@ Rectangle {
 
     onMessageUidChanged: {
         // One-shot remote consent is per-message.
-        root.allowRemoteOnce = false
-        root.remoteHtml = ""
-        root.headerExpanded = false
-        root.loadHeaders()
-        root.reloadHtml()
+        root.allowRemoteOnce = false;
+        root.remoteHtml = "";
+        root.headerExpanded = false;
+        root.hoveredLinkUrl = "";
+        root.loadHeaders();
+        root.reloadHtml();
     }
     onHtmlBodyChanged: {
         // A fresh feed (sync, settings toggle) invalidates the one-shot copy.
         if (!root.allowRemoteOnce)
-            root.remoteHtml = ""
-        root.reloadHtml()
+            root.remoteHtml = "";
+        root.reloadHtml();
     }
     onRemoteHtmlChanged: root.reloadHtml()
     onLoadRemoteImagesChanged: root.reloadHtml()
@@ -78,54 +92,53 @@ Rectangle {
 
     function reloadHtml() {
         if (root.isHtml && bodyLoader.item) {
-            var body = root.remoteHtml !== "" ? root.remoteHtml : root.htmlBody
-            bodyLoader.item.loadHtml(root.wrapDoc(body), "")
+            var body = root.remoteHtml !== "" ? root.remoteHtml : root.htmlBody;
+            bodyLoader.item.loadHtml(root.wrapDoc(body), "");
         }
     }
 
     function showRemoteOnce() {
         if (!root.message || root.message.uid === undefined)
-            return
+            return;
         // The feed stripped remote URLs (setting off), so re-sanitize the
         // stored raw body with remotes kept for this view only.
-        var html = ""
+        var html = "";
         if (root.backend && root.backend.message_html)
-            html = root.backend.message_html(root.message.uid, true)
+            html = root.backend.message_html(root.message.uid, true);
         if (html !== "")
-            root.remoteHtml = html
-        root.allowRemoteOnce = true
-        root.statusMessage(qsTr("Remote images allowed for this message only"))
+            root.remoteHtml = html;
+        root.allowRemoteOnce = true;
+        root.statusMessage(qsTr("Remote images allowed for this message only"));
     }
 
     function effectiveAutoLoad() {
-        return root.loadRemoteImages || root.allowRemoteOnce
+        return root.loadRemoteImages || root.allowRemoteOnce;
     }
 
     // Non-inline files from the Rust feed (bytes stay in SQLite until saved).
     readonly property var fileAttachments: {
-        if (root.message === undefined || root.message === null
-                || root.message.attachments === undefined)
-            return []
-        var out = []
+        if (root.message === undefined || root.message === null || root.message.attachments === undefined)
+            return [];
+        var out = [];
         for (var i = 0; i < root.message.attachments.length; i++) {
             if (root.message.attachments[i].is_inline !== true)
-                out.push(root.message.attachments[i])
+                out.push(root.message.attachments[i]);
         }
-        return out
+        return out;
     }
 
     function formatSize(n) {
         if (n === undefined || n === null)
-            return ""
+            return "";
         if (n < 1024)
-            return qsTr("%1 B").arg(n)
+            return qsTr("%1 B").arg(n);
         if (n < 1024 * 1024)
-            return qsTr("%1 KB").arg((n / 1024).toFixed(1))
-        return qsTr("%1 MB").arg((n / (1024 * 1024)).toFixed(1))
+            return qsTr("%1 KB").arg((n / 1024).toFixed(1));
+        return qsTr("%1 MB").arg((n / (1024 * 1024)).toFixed(1));
     }
 
     function displayName(a) {
-        return a.filename || qsTr("attachment-%1.bin").arg(a.id)
+        return a.filename || qsTr("attachment-%1.bin").arg(a.id);
     }
 
     // Join a downloads-folder value with a filename into a `file://` URL
@@ -134,88 +147,125 @@ Rectangle {
     // The filename is encoded so spaces/`#` survive the string→QUrl trip
     // (Rust decodes it back).
     function joinFileUrl(dir, name) {
-        var s = dir.toString().replace(/\\/g, "/")
+        var s = dir.toString().replace(/\\/g, "/");
         if (s.indexOf("file:") !== 0) {
             if (s.length >= 2 && s[1] === ":")
-                s = "/" + s
-            s = "file://" + s
+                s = "/" + s;
+            s = "file://" + s;
         }
-        s = s.replace(/\/+$/, "")
+        s = s.replace(/\/+$/, "");
         if (name !== undefined)
-            s += "/" + encodeURIComponent(name)
-        return s
+            s += "/" + encodeURIComponent(name);
+        return s;
+    }
+
+    // Copy to the system clipboard. QML has no Clipboard singleton, so this
+    // goes through a hidden TextEdit (selectAll + copy, no new dependencies).
+    function copyText(s) {
+        clipboardHelper.text = s;
+        clipboardHelper.selectAll();
+        clipboardHelper.copy();
+        clipboardHelper.clear();
+    }
+
+    // One place deciding what a clicked link does (left, middle and
+    // Ctrl+click all land here). The pure policy (scheme gate, action
+    // normalization) lives in the tested `LinkSafety` singleton; only the
+    // side effects stay here.
+    function handleLinkUrl(url) {
+        if (!LinkSafety.isWebScheme(url))
+            return;
+        if (LinkSafety.actionFor(root.linkClickAction) === "browser") {
+            Qt.openUrlExternally(url);
+            root.statusMessage(qsTr("Opened in browser"));
+        } else {
+            root.openExamineDialog(url);
+        }
+    }
+
+    // Open the examine dialog for a clicked or right-clicked link. One
+    // function (not inline in the WebEngineView) so exactly one place
+    // touches the dialog.
+    function openExamineDialog(url) {
+        examineLinkDialog.url = url;
+        examineLinkDialog.open();
     }
 
     function saveOne(a) {
         if (!root.backend || !root.backend.save_attachment)
-            return
-        saveOneDialog.attachmentId = a.id
-        var base = StandardPaths.writableLocation(StandardPaths.DownloadLocation)
-        saveOneDialog.selectedFile = root.joinFileUrl(base, root.displayName(a))
-        saveOneDialog.open()
+            return;
+        saveOneDialog.attachmentId = a.id;
+        var base = StandardPaths.writableLocation(StandardPaths.DownloadLocation);
+        saveOneDialog.selectedFile = root.joinFileUrl(base, root.displayName(a));
+        saveOneDialog.open();
     }
 
     function saveAll() {
         if (!root.backend || !root.backend.save_all_attachments)
-            return
-        var base = StandardPaths.writableLocation(StandardPaths.DownloadLocation)
+            return;
+        var base = StandardPaths.writableLocation(StandardPaths.DownloadLocation);
         if (base.toString() !== "")
-            saveAllDialog.selectedFolder = root.joinFileUrl(base)
-        saveAllDialog.open()
+            saveAllDialog.selectedFolder = root.joinFileUrl(base);
+        saveAllDialog.open();
     }
 
     // Open in the system viewer — downloads first when not cached yet.
     function openOne(a) {
         if (!root.backend || !root.backend.open_attachment)
-            return
-        root.statusMessage(qsTr("Opening…"))
-        var url = root.backend.open_attachment(a.id)
+            return;
+        root.statusMessage(qsTr("Opening…"));
+        var url = root.backend.open_attachment(a.id);
         if (url !== "")
-            root.statusMessage(url)
+            root.statusMessage(url);
     }
 
     // Full headers for the opened mail (sender display name, To/Cc, full
     // date) — same on-demand source as the Headers dialog, loaded once per
     // message so the header shows more than the bare From address.
     function loadHeaders() {
-        root.headersInfo = ({})
+        root.headersInfo = ({});
         if (!root.backend || !root.backend.message_headers_json || root.messageUid < 0)
-            return
-        root.headersInfo = FeedJson.parse(root.backend.message_headers_json(root.messageUid), ({}))
+            return;
+        root.headersInfo = FeedJson.parse(root.backend.message_headers_json(root.messageUid), ({}));
     }
 
     // "Name <addr>" -> {name, addr}; a bare address yields both identical.
     function splitAddr(full) {
-        var s = (full || "").trim()
-        var lt = s.indexOf("<")
-        var gt = s.lastIndexOf(">")
+        var s = (full || "").trim();
+        var lt = s.indexOf("<");
+        var gt = s.lastIndexOf(">");
         if (lt >= 0 && gt > lt) {
-            var name = s.substring(0, lt).trim().replace(/^["']|["']$/g, "")
-            var addr = s.substring(lt + 1, gt).trim()
-            return {"name": name !== "" ? name : addr, "addr": addr}
+            var name = s.substring(0, lt).trim().replace(/^["']|["']$/g, "");
+            var addr = s.substring(lt + 1, gt).trim();
+            return {
+                "name": name !== "" ? name : addr,
+                "addr": addr
+            };
         }
-        return {"name": s, "addr": s}
+        return {
+            "name": s,
+            "addr": s
+        };
     }
 
-    readonly property var sender: root.splitAddr(
-        root.headersInfo.from || (root.message ? root.message.from : ""))
+    readonly property var sender: root.splitAddr(root.headersInfo.from || (root.message ? root.message.from : ""))
     // Reply-To pointing elsewhere than the sender: answering goes there,
     // not to From. Compared on the bare address, case-insensitively.
     readonly property string replyToAddr: (root.headersInfo.reply_to || "").trim()
-    readonly property bool replyToDiffers: root.replyToAddr !== ""
-        && root.replyToAddr.toLowerCase() !== root.sender.addr.trim().toLowerCase()
+    readonly property bool replyToDiffers: root.replyToAddr !== "" && root.replyToAddr.toLowerCase()
+                                           !== root.sender.addr.trim().toLowerCase()
     readonly property string toLine: root.joinAddrs(root.headersInfo.to)
     readonly property string ccLine: root.joinAddrs(root.headersInfo.cc)
-    readonly property string fullDate:
-        (root.headersInfo.date || "") !== "" ? root.headersInfo.date
-        : (root.message ? root.message.date : "")
+    readonly property string fullDate: (root.headersInfo.date || "") !== "" ? root.headersInfo.date : (root.message
+                                                                                                       ? root.message.date :
+                                                                                                         "")
 
     // Collapsible extra header info. Auto-collapses on narrow panes so the
     // body keeps its space; the chevron re-opens it on demand.
     property bool headerExpanded: false
     onWidthChanged: {
-        if (root.width < 480)
-            root.headerExpanded = false
+        if (root.width < Math.round(480 * Theme.uiScale))
+            root.headerExpanded = false;
     }
 
     // Header details for the Headers dialog (Roundcube-style "Kopfzeilen"):
@@ -225,35 +275,39 @@ Rectangle {
 
     function joinAddrs(v) {
         if (v === undefined || v === null)
-            return ""
+            return "";
         if (typeof v === "string")
-            return v
+            return v;
         if (v.length === undefined)
-            return ""
-        var out = []
+            return "";
+        var out = [];
         for (var i = 0; i < v.length; i++)
-            out.push(v[i])
-        return out.join(", ")
+            out.push(v[i]);
+        return out.join(", ");
     }
 
     function openHeaders() {
-        root.loadHeaders()
-        headersDialog.open()
+        root.loadHeaders();
+        headersDialog.open();
     }
 
     // Trusted wrapper added AFTER Rust sanitizing (so layout CSS is ours).
     // Colours come from the theme so HTML mail matches the app in dark mode.
     function wrapDoc(inner) {
-        return "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
-            + "<style>body{font-family:sans-serif;font-size:" + Math.round(14 * Theme.uiScale) + "px;line-height:1.55;"
-            + "max-width:78ch;margin:16px;word-wrap:break-word;"
-            + "color:" + Theme.text + ";background:" + Theme.bg + "}"
-            + "a{color:" + Theme.accent + "}"
-            + "img{max-width:100%;height:auto}pre{white-space:pre-wrap}"
-            + "blockquote{margin:8px 0;padding-left:12px;border-left:3px solid "
-            + Theme.border + ";color:" + Theme.textMuted + "}"
-            + "table{border-collapse:collapse}td,th{padding:4px 8px}</style>"
-            + "</head><body>" + inner + "</body></html>"
+        return "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" + "<style>body{font-family:sans-serif;font-size:"
+                + Math.round(14 * Theme.uiScale) + "px;line-height:1.55;"
+                + "max-width:78ch;margin:16px;word-wrap:break-word;" + "color:" + Theme.text + ";background:"
+                + Theme.bg + "}" + "a{color:" + Theme.accent + "}"
+                + "img{max-width:100%;height:auto}pre{white-space:pre-wrap}"
+                + "blockquote{margin:8px 0;padding-left:12px;border-left:3px solid " + Theme.border + ";color:"
+                + Theme.textMuted + "}" +
+                // Newsletter tables carry fixed cell widths (the sanitizer keeps
+                // the attribute): author CSS beats presentational attributes, so
+                // this lets them shrink to the pane instead of scrolling sideways.
+                "table{border-collapse:collapse;max-width:100%!important}"
+                + "td,th{padding:4px 8px;overflow-wrap:anywhere}"
+                + "table[width],td[width],th[width]{width:auto!important}</style>" + "</head><body>" + inner
+                + "</body></html>";
     }
 
     ColumnLayout {
@@ -282,15 +336,26 @@ Rectangle {
                 anchors.margins: Theme.lg
                 spacing: Theme.md
 
-                Label {
+                RowLayout {
                     Layout.fillWidth: true
-                    text: root.message ? root.message.subject : ""
-                    color: Theme.text
-                    font.pixelSize: Theme.fontTitle
-                    font.bold: true
-                    wrapMode: Text.Wrap
-                    maximumLineCount: 3
-                    elide: Text.ElideRight
+                    spacing: Theme.sm
+                    IconButton {
+                        visible: root.showBack
+                        text: Icons.arrowBack
+                        iconFont: true
+                        tooltip: qsTr("Back to the list")
+                        onClicked: root.backRequested()
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.message ? root.message.subject : ""
+                        color: Theme.text
+                        font.pixelSize: Theme.fontTitle
+                        font.bold: true
+                        wrapMode: Text.Wrap
+                        maximumLineCount: 3
+                        elide: Text.ElideRight
+                    }
                 }
 
                 // Sender block: avatar + display name / address + recipient.
@@ -325,9 +390,8 @@ Rectangle {
                                 // `date_key` names the one case whose text is
                                 // a word; mailcore cannot translate it itself
                                 // (see feed::ShortDate).
-                                text: !root.message ? ""
-                                    : root.message.date_key === "yesterday" ? qsTr("Yesterday")
-                                    : root.message.date
+                                text: !root.message ? "" : root.message.date_key === "yesterday" ? qsTr("Yesterday") :
+                                                                                                   root.message.date
                                 color: Theme.textMuted
                                 font.pixelSize: Theme.fontSmall
                             }
@@ -352,7 +416,7 @@ Rectangle {
                         // the Headers dialog): replies go there, not to From.
                         Label {
                             visible: root.replyToDiffers
-                            text: qsTr("↩ Replies go to %1, not to the sender").arg(root.replyToAddr)
+                            text: qsTr("Replies go to %1, not to the sender").arg(root.replyToAddr)
                             color: Theme.danger
                             font.pixelSize: Theme.fontSmall
                             elide: Text.ElideRight
@@ -361,7 +425,8 @@ Rectangle {
                     }
 
                     IconButton {
-                        text: root.headerExpanded ? "⌄" : "›"
+                        text: root.headerExpanded ? Icons.expandMore : Icons.chevronRight
+                        iconFont: true
                         fontSize: Theme.fontMedium
                         tooltip: root.headerExpanded ? qsTr("Hide details") : qsTr("Show details")
                         onClicked: root.headerExpanded = !root.headerExpanded
@@ -377,7 +442,11 @@ Rectangle {
                     columnSpacing: Theme.md
                     rowSpacing: Theme.xs
 
-                    Label { text: qsTr("From"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+                    Label {
+                        text: qsTr("From")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                    }
                     Label {
                         Layout.fillWidth: true
                         text: root.headersInfo.from || root.sender.addr
@@ -386,7 +455,11 @@ Rectangle {
                         wrapMode: Text.WrapAnywhere
                         textFormat: Text.PlainText
                     }
-                    Label { text: qsTr("To"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+                    Label {
+                        text: qsTr("To")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                    }
                     Label {
                         Layout.fillWidth: true
                         text: root.toLine
@@ -410,7 +483,11 @@ Rectangle {
                         textFormat: Text.PlainText
                         visible: text !== ""
                     }
-                    Label { text: qsTr("Date"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+                    Label {
+                        text: qsTr("Date")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                    }
                     Label {
                         Layout.fillWidth: true
                         text: root.fullDate
@@ -439,36 +516,44 @@ Rectangle {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: Theme.xs
-                    Item { Layout.fillWidth: true }
+                    Item {
+                        Layout.fillWidth: true
+                    }
                     IconButton {
-                        text: "↩"
+                        text: Icons.reply
+                        iconFont: true
                         tooltip: qsTr("Reply (R)")
                         onClicked: root.replyRequested()
                     }
                     IconButton {
-                        text: "→"
+                        text: Icons.forward
+                        iconFont: true
                         tooltip: qsTr("Forward (F)")
                         onClicked: root.forwardRequested()
                     }
                     IconButton {
-                        text: root.message && root.message.starred ? "★" : "☆"
+                        text: root.message && root.message.starred ? Icons.star : Icons.starBorder
+                        iconFont: true
                         contentColor: root.message && root.message.starred ? Theme.star : Theme.text
                         tooltip: qsTr("Star (S)")
                         onClicked: root.starRequested()
                     }
                     IconButton {
-                        text: "🗑"
+                        text: Icons.trash
+                        iconFont: true
                         tooltip: qsTr("Delete (Del)")
                         contentColor: Theme.danger
                         onClicked: root.deleteRequested()
                     }
                     IconButton {
-                        text: root.isFullscreen ? "⤢" : "⤡"
+                        text: root.isFullscreen ? Icons.closeFullscreen : Icons.openFullscreen
+                        iconFont: true
                         tooltip: root.isFullscreen ? qsTr("Exit full screen") : qsTr("Enter full screen")
                         onClicked: root.fullscreenRequested()
                     }
                     IconButton {
-                        text: "⋯"
+                        text: Icons.moreVert
+                        iconFont: true
                         tooltip: qsTr("More actions")
                         onClicked: moreMenu.popup()
                     }
@@ -493,7 +578,8 @@ Rectangle {
                 anchors.rightMargin: Theme.sm
                 spacing: Theme.sm
                 Label {
-                    text: "🛡"
+                    text: Icons.imageBlocked
+                    font.family: Icons.fontFamily
                 }
                 Label {
                     Layout.fillWidth: true
@@ -538,7 +624,8 @@ Rectangle {
                     Layout.fillWidth: true
                     spacing: Theme.sm
                     Label {
-                        text: "📎"
+                        text: Icons.attachFile
+                        font.family: Icons.fontFamily
                     }
                     Label {
                         Layout.fillWidth: true
@@ -558,9 +645,9 @@ Rectangle {
                 Repeater {
                     model: root.fileAttachments
                     RowLayout {
+                        id: fileRow
                         Layout.fillWidth: true
                         spacing: Theme.sm
-                        id: fileRow
                         required property var modelData
                         Label {
                             Layout.fillWidth: true
@@ -601,7 +688,9 @@ Rectangle {
             contentWidth: width
             contentHeight: plainText.implicitHeight + Theme.lg * 2
             boundsBehavior: Flickable.StopAtBounds
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            ScrollBar.vertical: ScrollBar {
+                policy: ScrollBar.AsNeeded
+            }
 
             TextEdit {
                 id: plainText
@@ -614,22 +703,80 @@ Rectangle {
                 readOnly: true
                 selectByMouse: true
                 color: Theme.text
-                font.pixelSize: root.readerFont === "small" ? Theme.fontSmall
-                              : root.readerFont === "large" ? Theme.fontMedium + 3
-                              : Theme.fontBase + 1
+                font.pixelSize: root.readerFont === "small" ? Theme.fontSmall : root.readerFont === "large" ? Theme.fontMedium
+                                                                                                              + 3 : Theme.fontBase
+                                                                                                              + 1
             }
         }
 
         // --- body: sanitized HTML -----------------------------------------
-        Loader {
-            id: bodyLoader
+        // Item wrapper (not the Loader directly): the right-click MouseArea
+        // overlays the body, and anchored items must not sit directly in a
+        // ColumnLayout.
+        Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
             visible: root.isHtml
-            active: root.message !== undefined && root.isHtml
-            sourceComponent: webComp
-            onLoaded: root.reloadHtml()
+
+            Loader {
+                id: bodyLoader
+                anchors.fill: parent
+                clip: true
+                visible: root.isHtml
+                active: root.message !== undefined && root.isHtml
+                sourceComponent: webComp
+                onLoaded: root.reloadHtml()
+            }
+
+            // Right-clicks over a link open our menu instead of Chromium's
+            // default (whose "Copy link" is unreliable with sanitized HTML).
+            // Anything else (including non-link right-clicks) passes through
+            // untouched, so text selection and Chromium's menu keep working.
+            MouseArea {
+                anchors.fill: parent
+                acceptedButtons: Qt.RightButton
+                onPressed: mouse => {
+                    if (mouse.button === Qt.RightButton && root.hoveredLinkUrl !== "") {
+                        linkContextMenu.linkUrl = root.hoveredLinkUrl;
+                        linkContextMenu.popup();
+                        mouse.accepted = true;
+                    } else {
+                        mouse.accepted = false;
+                    }
+                }
+            }
+        }
+    }
+
+    // --- statusline: hovered link URL (floating overlay) ------------------
+    // Anchored over the bottom-left corner like a browser status bubble. It
+    // is NOT a layout child, so showing/hiding it never shifts content.
+    Rectangle {
+        anchors.left: parent.left
+        anchors.leftMargin: Theme.md
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: Theme.md
+        width: Math.min(statusLabel.implicitWidth + Theme.sm * 2, parent.width - Theme.md * 2)
+        implicitHeight: Math.round(28 * Theme.uiScale)
+        visible: root.hoveredLinkUrl !== ""
+        radius: Theme.radius
+        color: Theme.bgAlt
+        border.width: 1
+        border.color: Theme.border
+        z: 10
+
+        Label {
+            id: statusLabel
+            anchors.fill: parent
+            anchors.leftMargin: Theme.sm
+            anchors.rightMargin: Theme.sm
+            verticalAlignment: Text.AlignVCenter
+            text: root.hoveredLinkUrl
+            color: Theme.textMuted
+            font.pixelSize: Theme.fontTiny
+            elide: Text.ElideRight
+            textFormat: Text.PlainText
         }
     }
 
@@ -646,6 +793,65 @@ Rectangle {
             settings.autoLoadImages: true
             settings.localContentCanAccessRemoteUrls: root.effectiveAutoLoad()
             settings.pluginsEnabled: false
+            // No-network hardening (verified against the Qt 6 WebEngineSettings
+            // docs; several of these already default off, set explicitly so a
+            // Qt default change cannot silently start leaking):
+            // - local files: the mail document must not reach file:// URLs.
+            // - DNS prefetch: no resolving link domains on load/hover.
+            // - hyperlink auditing: no <a ping> beacons (also stripped).
+            // - page icons: loadHtml documents have no favicon to fetch.
+            // - local storage: no JS exists to use it.
+            // - drop navigation: dropping a URL/file must not navigate away.
+            // - JS popups: no JS exists to open them.
+            settings.localContentCanAccessFileUrls: false
+            settings.dnsPrefetchEnabled: false
+            settings.hyperlinkAuditingEnabled: false
+            settings.autoLoadIconsForPage: false
+            settings.localStorageEnabled: false
+            settings.navigateOnDropEnabled: false
+            settings.javascriptCanOpenWindows: false
+            // `hoveredUrl` is a QUrl: stringify explicitly, "" when the mouse
+            // leaves a link (which hides the statusline again).
+            onLinkHovered: hoveredUrl => {
+                root.hoveredLinkUrl = hoveredUrl ? hoveredUrl.toString() : "";
+            }
+            // Clicking a link must not navigate the reader away from the
+            // mail. The request is blocked FIRST, before any handling below:
+            // even if that handling hit an error, the message stays put.
+            // http(s)/mailto links then either open directly in the system
+            // browser / mail client or land in the examine dialog first
+            // (default per `link_click_action`). Forms and odd schemes are
+            // ignored. Our own loadHtml calls are untouched, or the body
+            // would never render.
+            // Clicking a link must not navigate the reader away from the
+            // mail. Qt 6 API, verified against the Qt 6.11 headers and docs:
+            // the type lives on `WebEngineNavigationRequest`
+            // (`LinkClickedNavigation`, …) — `WebEngineView.NavigationType…`
+            // does not exist in QML and fails silently — and the verdict is
+            // `request.accept()` / `request.reject()`, not `request.action`.
+            // Only TypedNavigation (our own loadHtml) is accepted; everything
+            // else is rejected, so the message stays put no matter what.
+            // http(s)/mailto clicks then either open directly in the system
+            // browser / mail client or land in the examine dialog first
+            // (default per `link_click_action`).
+            onNavigationRequested: request => {
+                if (request.navigationType === WebEngineNavigationRequest.TypedNavigation) {
+                    request.accept();
+                    return;
+                }
+                request.reject();
+                if (request.navigationType !== WebEngineNavigationRequest.LinkClickedNavigation)
+                    return;
+                root.handleLinkUrl(request.url.toString());
+            }
+
+            // Middle-click / Ctrl+click asks for a new window instead of a
+            // navigation. Never open one (the mail stays put); treat it like
+            // a normal click. Left unhandled the load would just fail, but
+            // routing it keeps every click consistent.
+            onNewWindowRequested: request => {
+                root.handleLinkUrl(request.requestedUrl.toString());
+            }
         }
     }
 
@@ -654,22 +860,169 @@ Rectangle {
     AppMenu {
         id: moreMenu
 
-        MenuItem {
-            text: qsTr("Reply all")
+        AppMenuItem {
+            glyph: Icons.replyAll
+            label: qsTr("Reply all")
             onTriggered: root.replyAllRequested()
         }
-        MenuItem {
-            text: qsTr("Archive (A)")
+        AppMenuItem {
+            glyph: Icons.archive
+            label: qsTr("Archive (A)")
             onTriggered: root.archiveRequested()
         }
-        MenuItem {
-            text: qsTr("Move to… (M)")
+        AppMenuItem {
+            glyph: Icons.driveFileMove
+            label: qsTr("Move to… (M)")
             onTriggered: root.moveRequested()
         }
         MenuSeparator {}
-        MenuItem {
-            text: qsTr("Show headers…")
+        AppMenuItem {
+            glyph: Icons.info
+            label: qsTr("Show headers…")
             onTriggered: root.openHeaders()
+        }
+    }
+
+    // --- link context menu ------------------------------------------------
+    // Themed AppMenu (same as everywhere else), opened at the cursor via
+    // popup(). Only shown for right-clicks directly over a link — the
+    // MouseArea above decides, using the last linkHovered URL.
+    AppMenu {
+        id: linkContextMenu
+        property string linkUrl: ""
+
+        AppMenuItem {
+            glyph: Icons.link
+            label: qsTr("Copy link")
+            onTriggered: {
+                if (linkContextMenu.linkUrl !== "")
+                    root.copyText(linkContextMenu.linkUrl);
+            }
+        }
+        AppMenuItem {
+            glyph: Icons.info
+            label: qsTr("Examine link…")
+            onTriggered: {
+                root.openExamineDialog(linkContextMenu.linkUrl);
+            }
+        }
+    }
+
+    // Hidden clipboard helper for copyText(). Zero-size and invisible; the
+    // selectAll/copy calls still hit the system clipboard.
+    TextEdit {
+        id: clipboardHelper
+        visible: false
+        width: 0
+        height: 0
+    }
+
+    // --- examine link dialog ----------------------------------------------
+    // Shows the full URL (selectable) plus its parsed scheme/host/path, so
+    // a suspicious link can be inspected before opening it. Same Dialog
+    // pattern as the Headers dialog below.
+    Dialog {
+        id: examineLinkDialog
+        title: qsTr("Examine link")
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(parent ? parent.width - 80 : 480, 480)
+        padding: Theme.lg
+        property string url: ""
+
+        background: Rectangle {
+            color: Theme.bg
+            radius: Theme.radiusLg
+            border.width: 1
+            border.color: Theme.border
+        }
+
+        footer: RowLayout {
+            spacing: Theme.sm
+            Item {
+                Layout.fillWidth: true
+            }
+            AppButton {
+                Layout.bottomMargin: Theme.md
+                text: qsTr("Open in browser")
+                onClicked: {
+                    Qt.openUrlExternally(examineLinkDialog.url);
+                    examineLinkDialog.close();
+                }
+            }
+            AppButton {
+                Layout.bottomMargin: Theme.md
+                text: qsTr("Copy")
+                onClicked: root.copyText(examineLinkDialog.url)
+            }
+            AppButton {
+                Layout.rightMargin: Theme.lg
+                Layout.bottomMargin: Theme.md
+                text: qsTr("Close")
+                onClicked: examineLinkDialog.close()
+            }
+        }
+
+        contentItem: ColumnLayout {
+            spacing: Theme.xs
+
+            Label {
+                text: qsTr("Address")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+            }
+            TextArea {
+                Layout.fillWidth: true
+                readOnly: true
+                selectByMouse: true
+                text: examineLinkDialog.url
+                textFormat: TextArea.PlainText
+                wrapMode: TextArea.WrapAnywhere
+                color: Theme.text
+                font.family: "monospace"
+                font.pixelSize: Theme.fontTiny
+                background: Rectangle {
+                    color: Theme.bgAlt
+                    radius: Theme.radius
+                }
+            }
+            Label {
+                text: qsTr("Scheme")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+            }
+            Label {
+                Layout.fillWidth: true
+                text: LinkSafety.schemeOf(examineLinkDialog.url)
+                color: Theme.text
+                font.pixelSize: Theme.fontSmall
+                textFormat: Text.PlainText
+            }
+            Label {
+                text: qsTr("Domain")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+            }
+            Label {
+                Layout.fillWidth: true
+                text: LinkSafety.hostOf(examineLinkDialog.url)
+                color: Theme.text
+                font.pixelSize: Theme.fontSmall
+                textFormat: Text.PlainText
+            }
+            Label {
+                text: qsTr("Path")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+            }
+            Label {
+                Layout.fillWidth: true
+                text: LinkSafety.pathOf(examineLinkDialog.url)
+                color: Theme.text
+                font.pixelSize: Theme.fontSmall
+                wrapMode: Text.WrapAnywhere
+                textFormat: Text.PlainText
+            }
         }
     }
 
@@ -680,7 +1033,8 @@ Rectangle {
         visible: root.message === undefined
         Label {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: "✉"
+            text: Icons.mail
+            font.family: Icons.fontFamily
             font.pixelSize: 40
             color: Theme.textMuted
             opacity: 0.6
@@ -701,10 +1055,10 @@ Rectangle {
         property int attachmentId: -1
         onAccepted: {
             if (root.backend && root.backend.save_attachment) {
-                root.statusMessage(qsTr("Saving…"))
-                var r = root.backend.save_attachment(attachmentId, selectedFile.toString())
+                root.statusMessage(qsTr("Saving…"));
+                var r = root.backend.save_attachment(attachmentId, selectedFile.toString());
                 if (r !== "")
-                    root.statusMessage(r)
+                    root.statusMessage(r);
             }
         }
     }
@@ -714,10 +1068,10 @@ Rectangle {
         title: qsTr("Save all attachments")
         onAccepted: {
             if (root.backend && root.backend.save_all_attachments) {
-                root.statusMessage(qsTr("Saving…"))
-                var r = root.backend.save_all_attachments(root.messageUid, selectedFolder.toString())
+                root.statusMessage(qsTr("Saving…"));
+                var r = root.backend.save_all_attachments(root.messageUid, selectedFolder.toString());
                 if (r !== "")
-                    root.statusMessage(r)
+                    root.statusMessage(r);
             }
         }
     }
@@ -741,7 +1095,9 @@ Rectangle {
 
         footer: RowLayout {
             spacing: Theme.sm
-            Item { Layout.fillWidth: true }
+            Item {
+                Layout.fillWidth: true
+            }
             AppButton {
                 Layout.rightMargin: Theme.lg
                 Layout.bottomMargin: Theme.md
@@ -768,7 +1124,11 @@ Rectangle {
                     columnSpacing: Theme.md
                     rowSpacing: Theme.xs
 
-                    Label { text: qsTr("From"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+                    Label {
+                        text: qsTr("From")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                    }
                     Label {
                         Layout.fillWidth: true
                         text: root.headersInfo.from || ""
@@ -777,7 +1137,11 @@ Rectangle {
                         wrapMode: Text.WrapAnywhere
                         textFormat: Text.PlainText
                     }
-                    Label { text: qsTr("To"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
+                    Label {
+                        text: qsTr("To")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                    }
                     Label {
                         Layout.fillWidth: true
                         text: root.joinAddrs(root.headersInfo.to)
@@ -787,66 +1151,74 @@ Rectangle {
                         textFormat: Text.PlainText
                     }
                     Label {
-                text: qsTr("Cc")
-                color: Theme.textMuted
-                font.pixelSize: Theme.fontSmall
-                visible: root.joinAddrs(root.headersInfo.cc) !== ""
+                        text: qsTr("Cc")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                        visible: root.joinAddrs(root.headersInfo.cc) !== ""
                     }
                     Label {
-                Layout.fillWidth: true
-                text: root.joinAddrs(root.headersInfo.cc)
-                color: Theme.text
-                font.pixelSize: Theme.fontSmall
-                wrapMode: Text.WrapAnywhere
-                textFormat: Text.PlainText
-                visible: text !== ""
-                    }
-                    Label { text: qsTr("Date"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
-                    Label {
-                Layout.fillWidth: true
-                text: root.headersInfo.date || ""
-                color: Theme.text
-                font.pixelSize: Theme.fontSmall
-                textFormat: Text.PlainText
-                    }
-                    Label { text: qsTr("Subject"); color: Theme.textMuted; font.pixelSize: Theme.fontSmall }
-                    Label {
-                Layout.fillWidth: true
-                text: root.headersInfo.subject || ""
-                color: Theme.text
-                font.pixelSize: Theme.fontSmall
-                wrapMode: Text.Wrap
-                textFormat: Text.PlainText
+                        Layout.fillWidth: true
+                        text: root.joinAddrs(root.headersInfo.cc)
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSmall
+                        wrapMode: Text.WrapAnywhere
+                        textFormat: Text.PlainText
+                        visible: text !== ""
                     }
                     Label {
-                text: qsTr("Message-ID")
-                color: Theme.textMuted
-                font.pixelSize: Theme.fontSmall
-                visible: (root.headersInfo.message_id || "") !== ""
+                        text: qsTr("Date")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
                     }
                     Label {
-                Layout.fillWidth: true
-                text: root.headersInfo.message_id || ""
-                color: Theme.text
-                font.pixelSize: Theme.fontSmall
-                wrapMode: Text.WrapAnywhere
-                textFormat: Text.PlainText
-                visible: text !== ""
+                        Layout.fillWidth: true
+                        text: root.headersInfo.date || ""
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSmall
+                        textFormat: Text.PlainText
                     }
                     Label {
-                text: qsTr("Reply-To")
-                color: Theme.textMuted
-                font.pixelSize: Theme.fontSmall
-                visible: (root.headersInfo.reply_to || "") !== ""
+                        text: qsTr("Subject")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
                     }
                     Label {
-                Layout.fillWidth: true
-                text: root.headersInfo.reply_to || ""
-                color: Theme.text
-                font.pixelSize: Theme.fontSmall
-                wrapMode: Text.WrapAnywhere
-                textFormat: Text.PlainText
-                visible: text !== ""
+                        Layout.fillWidth: true
+                        text: root.headersInfo.subject || ""
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSmall
+                        wrapMode: Text.Wrap
+                        textFormat: Text.PlainText
+                    }
+                    Label {
+                        text: qsTr("Message-ID")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                        visible: (root.headersInfo.message_id || "") !== ""
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.headersInfo.message_id || ""
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSmall
+                        wrapMode: Text.WrapAnywhere
+                        textFormat: Text.PlainText
+                        visible: text !== ""
+                    }
+                    Label {
+                        text: qsTr("Reply-To")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                        visible: (root.headersInfo.reply_to || "") !== ""
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.headersInfo.reply_to || ""
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSmall
+                        wrapMode: Text.WrapAnywhere
+                        textFormat: Text.PlainText
+                        visible: text !== ""
                     }
                 }
 
@@ -863,7 +1235,8 @@ Rectangle {
                         anchors.leftMargin: Theme.xs
                         spacing: Theme.xs
                         Label {
-                            text: rawHeaders.visible ? "⌄" : "›"
+                            text: rawHeaders.visible ? Icons.expandMore : Icons.chevronRight
+                            font.family: Icons.fontFamily
                             color: Theme.textMuted
                             font.pixelSize: Theme.fontMedium
                         }
@@ -873,15 +1246,20 @@ Rectangle {
                             font.pixelSize: Theme.fontSmall
                         }
                     }
-                    HoverHandler { id: disclosureHover }
-                    TapHandler { onTapped: rawHeaders.visible = !rawHeaders.visible }
+                    HoverHandler {
+                        id: disclosureHover
+                    }
+                    TapHandler {
+                        onTapped: rawHeaders.visible = !rawHeaders.visible
+                    }
                 }
                 TextArea {
                     id: rawHeaders
                     Layout.fillWidth: true
                     Layout.preferredHeight: visible ? implicitHeight + Theme.md * 2 : 0
                     visible: false
-                    text: root.headersInfo.raw || qsTr("Complete headers are unavailable until this message is downloaded again.")
+                    text: root.headersInfo.raw || qsTr(
+                              "Complete headers are unavailable until this message is downloaded again.")
                     readOnly: true
                     selectByMouse: true
                     wrapMode: TextArea.WrapAnywhere
@@ -889,7 +1267,10 @@ Rectangle {
                     color: Theme.text
                     font.family: "monospace"
                     font.pixelSize: Theme.fontTiny
-                    background: Rectangle { color: Theme.bgAlt; radius: Theme.radius }
+                    background: Rectangle {
+                        color: Theme.bgAlt
+                        radius: Theme.radius
+                    }
                 }
             }
         }

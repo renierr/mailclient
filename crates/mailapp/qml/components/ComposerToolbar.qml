@@ -10,9 +10,9 @@ Rectangle {
 
     property bool sourceMode: false
     property var bodyEditor
-    signal linkRequested()
-    signal attachRequested()
-    signal toggleSourceRequested()
+    signal linkRequested
+    signal attachRequested
+    signal toggleSourceRequested
 
     implicitHeight: Math.round(38 * Theme.uiScale)
     radius: Theme.radius
@@ -32,7 +32,8 @@ Rectangle {
             enabled: !root.sourceMode
             active: root.bodyEditor ? root.bodyEditor.boldActive : false
             font.bold: true
-            onClicked: if (root.bodyEditor) root.bodyEditor.exec("bold")
+            onClicked: if (root.bodyEditor)
+                           root.bodyEditor.exec("bold")
         }
         IconButton {
             text: "I"
@@ -40,7 +41,8 @@ Rectangle {
             enabled: !root.sourceMode
             active: root.bodyEditor ? root.bodyEditor.italicActive : false
             font.italic: true
-            onClicked: if (root.bodyEditor) root.bodyEditor.exec("italic")
+            onClicked: if (root.bodyEditor)
+                           root.bodyEditor.exec("italic")
         }
         IconButton {
             text: "U"
@@ -48,7 +50,8 @@ Rectangle {
             enabled: !root.sourceMode
             active: root.bodyEditor ? root.bodyEditor.underlineActive : false
             font.underline: true
-            onClicked: if (root.bodyEditor) root.bodyEditor.exec("underline")
+            onClicked: if (root.bodyEditor)
+                           root.bodyEditor.exec("underline")
         }
 
         Rectangle {
@@ -58,38 +61,48 @@ Rectangle {
         }
 
         IconButton {
-            text: "•≡"
+            text: Icons.formatListBulleted
+            iconFont: true
             tooltip: qsTr("Bullet list")
             enabled: !root.sourceMode
             active: root.bodyEditor ? root.bodyEditor.listActive : false
-            onClicked: if (root.bodyEditor) root.bodyEditor.exec("insertUnorderedList")
+            onClicked: if (root.bodyEditor)
+                           root.bodyEditor.exec("insertUnorderedList")
         }
         IconButton {
-            text: "❝"
+            text: Icons.formatQuote
+            iconFont: true
             tooltip: qsTr("Quote")
             enabled: !root.sourceMode
             active: root.bodyEditor ? root.bodyEditor.quoteActive : false
-            onClicked: if (root.bodyEditor) root.bodyEditor.exec("formatBlock", root.bodyEditor.quoteActive ? "p" : "blockquote")
+            onClicked: if (root.bodyEditor)
+                           root.bodyEditor.exec("formatBlock", root.bodyEditor.quoteActive ? "p" : "blockquote")
         }
         IconButton {
-            text: "🔗"
+            text: Icons.link
+            iconFont: true
             tooltip: qsTr("Insert link")
             enabled: !root.sourceMode
             onClicked: root.linkRequested()
         }
         IconButton {
-            text: "✕"
+            text: Icons.close
+            iconFont: true
             tooltip: qsTr("Clear formatting")
             enabled: !root.sourceMode
-            onClicked: if (root.bodyEditor) root.bodyEditor.exec("removeFormat")
+            onClicked: if (root.bodyEditor)
+                           root.bodyEditor.exec("removeFormat")
         }
         IconButton {
-            text: "📎"
+            text: Icons.attachFile
+            iconFont: true
             tooltip: qsTr("Attach files")
             onClicked: root.attachRequested()
         }
 
-        Item { Layout.fillWidth: true }
+        Item {
+            Layout.fillWidth: true
+        }
 
         IconButton {
             text: "</>"

@@ -6,7 +6,7 @@ use mailcore::store::{accounts, folders, messages, settings};
 use mailcore::sync::imap::{ArchiveOutcome, MoveOutcome, TrashOutcome};
 
 use crate::bridge::qobject;
-use crate::bridge::session::{checkout_session, current_account};
+use crate::bridge::session::{checkout_session, job_account};
 use crate::bridge::worker::{spawn_flag_push, spawn_job, JobRefresh};
 use crate::bridge::{push_feeds, qstring, shared_db, MAX_MESSAGE_LIMIT};
 
@@ -51,6 +51,19 @@ pub(crate) fn parse_uids_json(raw: &str) -> Result<Vec<u32>, String> {
         return Err("no messages selected".to_string());
     }
     Ok(out)
+}
+
+/// Persist a local read/star change. `""` on success, else the error for the
+/// status line -- a swallowed failure would report "Marked as read" while the
+/// flag silently stayed put (the rebuilt feed shows the unchanged DB state).
+fn save_flags(db: &mailcore::Db, message_id: i64, read: bool, starred: bool) -> QString {
+    match messages::set_flags(db, message_id, read, starred) {
+        Ok(_) => qstring(""),
+        Err(e) => {
+            log::warn!("flags: message {message_id} not updated: {e}");
+            qstring(&format!("could not update the message: {e}"))
+        }
+    }
 }
 
 impl qobject::Bridge {
@@ -216,8 +229,9 @@ impl qobject::Bridge {
         let Ok(msg) = messages::get_by_uid(db, folder_id, uid as u32) else {
             return qstring("");
         };
+        let mut result = qstring("");
         if !msg.is_read {
-            let _ = messages::set_flags(db, msg.id, true, msg.is_starred);
+            result = save_flags(db, msg.id, true, msg.is_starred);
             // Seen is pushed promptly in the background (plus again on the
             // next sync), so closing the app right after reading loses nothing.
             spawn_flag_push(acc_id);
@@ -227,7 +241,7 @@ impl qobject::Bridge {
         // Without this messages_json/folders_json stay stale and the marker
         // only clears on the next folder switch (which pushes feeds).
         push_feeds(&mut self, db, acc_id, folder_id);
-        qstring("")
+        result
     }
 
     pub fn mark_read(mut self: Pin<&mut Self>, uid: i32, read: bool) -> QString {
@@ -237,13 +251,13 @@ impl qobject::Bridge {
         };
         let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
         let Ok(msg) = messages::get_by_uid(db, folder_id, uid as u32) else {
-            return qstring("");
+            return qstring("message is no longer available");
         };
         // Queued locally, pushed promptly in the background (see open_message).
-        let _ = messages::set_flags(db, msg.id, read, msg.is_starred);
+        let result = save_flags(db, msg.id, read, msg.is_starred);
         spawn_flag_push(acc_id);
         push_feeds(&mut self, db, acc_id, folder_id);
-        qstring("")
+        result
     }
 
     pub fn toggle_star(mut self: Pin<&mut Self>, uid: i32) -> QString {
@@ -253,13 +267,13 @@ impl qobject::Bridge {
         };
         let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
         let Ok(msg) = messages::get_by_uid(db, folder_id, uid as u32) else {
-            return qstring("");
+            return qstring("message is no longer available");
         };
         // Queued locally, pushed promptly in the background (see open_message).
-        let _ = messages::set_flags(db, msg.id, msg.is_read, !msg.is_starred);
+        let result = save_flags(db, msg.id, msg.is_read, !msg.is_starred);
         spawn_flag_push(acc_id);
         push_feeds(&mut self, db, acc_id, folder_id);
-        qstring("")
+        result
     }
 
     pub fn delete_message(self: Pin<&mut Self>, uid: i32) -> QString {
@@ -313,7 +327,7 @@ impl qobject::Bridge {
         let current = *self.current_folder_id();
         let path = path.to_string();
         spawn_job(self, "Move", move |db, _progress| async move {
-            let acc = current_account(db, wanted)?;
+            let acc = job_account(db, wanted)?;
             let msg = messages::get_by_uid(db, current, uid as u32)
                 .map_err(|_| "message is no longer available".to_string())?;
             let dest = folders::get_by_path(db, acc.id, &path).map_err(|e| e.to_string())?;

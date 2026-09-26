@@ -31,7 +31,8 @@ ComboBox {
     indicator: Text {
         x: control.width - width - Theme.sm
         y: control.topPadding + (control.availableHeight - height) / 2
-        text: "⌄"
+        text: Icons.expandMore
+        font.family: Icons.fontFamily
         color: Theme.textMuted
         font.pixelSize: Theme.fontBase
     }
@@ -66,8 +67,7 @@ ComboBox {
         required property int index
 
         contentItem: Text {
-            text: item.model[control.textRole] !== undefined ? item.model[control.textRole]
-                                                             : item.model.modelData
+            text: item.model[control.textRole] !== undefined ? item.model[control.textRole] : item.model.modelData
             color: Theme.text
             font.pixelSize: Theme.fontBase
             verticalAlignment: Text.AlignVCenter
@@ -76,9 +76,7 @@ ComboBox {
         }
 
         background: Rectangle {
-            color: control.highlightedIndex === item.index ? Theme.selected
-                 : item.hovered ? Theme.hover
-                 : "transparent"
+            color: control.highlightedIndex === item.index ? Theme.selected : item.hovered ? Theme.hover : "transparent"
         }
     }
 }

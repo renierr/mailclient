@@ -7,9 +7,12 @@
 //! [`sync_all_accounts`]. Either way the folder sweep, windows, and counts
 //! cannot drift apart.
 //!
-//! [`SyncLock`] serializes writers across processes (GUI + CLI + timer):
-//! SQLite WAL already prevents corruption, the lock turns collisions into a
-//! clean "skip this run" instead of a `database is locked` error.
+//! [`SyncLock`] serializes the `--sync-once` runs (CLI + bar timer) with each
+//! other: SQLite WAL already prevents corruption, the lock turns collisions
+//! into a clean "skip this run" instead of a `database is locked` error. The
+//! GUI does not take it — a user-driven sync or send must never be skipped —
+//! so a GUI and a CLI run can overlap. The outbox is safe under that overlap
+//! because every submit first wins an atomic [`crate::store::queue::claim`].
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -20,8 +23,8 @@ use crate::auth;
 use crate::db::Db;
 use crate::error::Result;
 use crate::models::{Account, FolderRole};
-use crate::store::{accounts, folders, messages};
-use crate::sync::imap::{ImapSync, FULL_SYNC_WINDOW, QUICK_SYNC_WINDOW};
+use crate::store::{accounts, folders, messages, settings};
+use crate::sync::imap::{full_discovery_due, ImapSync, FULL_SYNC_WINDOW, QUICK_SYNC_WINDOW};
 use crate::sync::sender::SmtpSender;
 use crate::sync::traits::SyncProvider;
 
@@ -74,22 +77,33 @@ pub struct RecentUnread {
     pub date: String,
 }
 
+/// Per-folder sync progress, called as `report(done, total, path)` before
+/// each folder sync so the GUI can show "3/15: …" instead of a bare
+/// spinner; the headless CLI passes `None`.
+pub type SyncProgress<'a> = &'a dyn Fn(usize, usize, &str);
+
 /// Sync one account over an already-connected session.
 ///
 /// Flushes the SMTP outbox, pushes local flag changes, refreshes the folder
 /// list, then syncs every subscribed folder (INBOX full window, the rest
 /// quick). Per-folder failures are recorded in `errors` and skipped.
-pub async fn sync_account(db: &Db, account: &Account, imap: &mut ImapSync) -> AccountSyncResult {
+pub async fn sync_account(
+    db: &Db,
+    account: &Account,
+    imap: &mut ImapSync,
+    progress: Option<SyncProgress<'_>>,
+) -> AccountSyncResult {
     let mut out = AccountSyncResult {
         account_id: account.id,
         email: account.email_address.clone(),
         ..Default::default()
     };
 
-    let secrets = match auth::load_account_secrets(&account.auth_vault_key) {
+    let secrets = match auth::load_account_secrets_retry(&account.auth_vault_key).await {
         Ok(s) => s,
         Err(e) => {
-            out.errors.push(format!("keyring: {e}"));
+            // `StoreError::Keyring` already displays with a "keyring: " prefix.
+            out.errors.push(format!("{e}"));
             out.unread = unread_for_account(db, account.id);
             return out;
         }
@@ -112,8 +126,37 @@ pub async fn sync_account(db: &Db, account: &Account, imap: &mut ImapSync) -> Ac
 
     out.pushed_flags += imap.push_dirty_flags(db, account.id).await;
 
-    let remote = match imap.sync_folders(db, account.id).await {
-        Ok(f) => f,
+    // Throttled discovery: one LIST pass every run, full four-pass
+    // discovery only when the tree changed or the interval lapsed —
+    // passes 2-4 cost ~30 round-trips and dominated every Gmail start.
+    let cached_paths: std::collections::HashSet<String> = folders::list_by_account(db, account.id)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|f| f.path)
+        .collect();
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let remote = match imap.sync_folders_quick(db, account.id).await {
+        Ok(quick) => {
+            let quick_paths: std::collections::HashSet<String> =
+                quick.iter().map(|f| f.path.clone()).collect();
+            let last_full = settings::get_last_full_discovery(db, account.id);
+            if full_discovery_due(&cached_paths, &quick_paths, last_full, now_unix) {
+                match imap.sync_folders(db, account.id).await {
+                    Ok(full) => full,
+                    // Quick list already upserted: still syncable, note it.
+                    Err(e) => {
+                        out.errors.push(format!("folder list (full): {e}"));
+                        quick
+                    }
+                }
+            } else {
+                log::debug!("imap: folder tree unchanged and fresh, keeping quick LIST");
+                quick
+            }
+        }
         Err(e) => {
             out.errors.push(format!("folder list: {e}"));
             out.unread = unread_for_account(db, account.id);
@@ -121,10 +164,16 @@ pub async fn sync_account(db: &Db, account: &Account, imap: &mut ImapSync) -> Ac
         }
     };
 
+    let subscribed_total = remote.iter().filter(|f| f.subscribed).count();
+    let mut folders_attempted = 0usize;
     for f in &remote {
         if !f.subscribed {
             out.folders_skipped_hidden += 1;
             continue;
+        }
+        folders_attempted += 1;
+        if let Some(report) = progress {
+            report(folders_attempted, subscribed_total, &f.path);
         }
         let window = if f.role == FolderRole::Inbox {
             FULL_SYNC_WINDOW
@@ -175,11 +224,11 @@ pub async fn sync_all_accounts(db: &Db) -> SyncAllReport {
     };
     for acc in &list {
         let mut imap = ImapSync::new(acc);
-        let secrets = auth::load_account_secrets(&acc.auth_vault_key);
+        let secrets = auth::load_account_secrets_retry(&acc.auth_vault_key).await;
         let result = match secrets {
             Ok(s) => match imap.connect(&s.imap_password).await {
                 Ok(()) => {
-                    let r = sync_account(db, acc, &mut imap).await;
+                    let r = sync_account(db, acc, &mut imap, None).await;
                     imap.logout().await;
                     r
                 }
@@ -200,7 +249,7 @@ pub async fn sync_all_accounts(db: &Db) -> SyncAllReport {
                     email: acc.email_address.clone(),
                     ..Default::default()
                 };
-                r.errors.push(format!("keyring: {e}"));
+                r.errors.push(format!("{e}"));
                 r.unread = unread_for_account(db, acc.id);
                 r
             }

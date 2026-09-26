@@ -1,0 +1,5 @@
+# Formatting-only commits, skipped by git blame.
+# Local use: git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# style(qml): adopt qmlformat
+51650c09a17a03badc48745dd318b11845b574b4

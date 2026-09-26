@@ -27,14 +27,13 @@ import QtQuick
 QtObject {
     function parse(text, fallback) {
         if (text === undefined || text === null || text === "")
-            return fallback
+            return fallback;
         try {
-            var parsed = JSON.parse(text)
-            return (parsed === null || parsed === undefined) ? fallback : parsed
+            var parsed = JSON.parse(text);
+            return (parsed === null || parsed === undefined) ? fallback : parsed;
         } catch (e) {
-            console.warn("bridge payload did not parse:", e,
-                         "- length", String(text).length)
-            return fallback
+            console.warn("bridge payload did not parse:", e, "- length", String(text).length);
+            return fallback;
         }
     }
 }
