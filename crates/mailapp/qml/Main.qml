@@ -1194,6 +1194,7 @@ ApplicationWindow {
             onBackRequested: root.closeReader()
             loadRemoteImages: appSettings.load_remote_images
             readerFont: appSettings.reader_font_size
+            linkClickAction: appSettings.link_click_action
             backend: backend
             message: root.currentMessage
             onReplyRequested: composer.openForReply(root.currentMessage)

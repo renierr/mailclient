@@ -352,6 +352,7 @@ pub mod qobject {
         #[qproperty(bool, confirm_delete)]
         #[qproperty(QString, list_density)]
         #[qproperty(QString, reader_font_size)]
+        #[qproperty(QString, link_click_action)]
         #[qproperty(i32, sync_interval_minutes)]
         #[qproperty(bool, signature_enabled)]
         #[qproperty(QString, signature_text)]
@@ -599,6 +600,7 @@ pub struct SettingsBridgeRust {
     confirm_delete: bool,
     list_density: QString,
     reader_font_size: QString,
+    link_click_action: QString,
     sync_interval_minutes: i32,
     signature_enabled: bool,
     signature_text: QString,
@@ -620,6 +622,7 @@ impl Default for SettingsBridgeRust {
             confirm_delete: true,
             list_density: qstring("comfortable"),
             reader_font_size: qstring("normal"),
+            link_click_action: qstring("examine"),
             sync_interval_minutes: 0,
             signature_enabled: false,
             signature_text: qstring(""),

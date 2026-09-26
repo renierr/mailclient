@@ -42,6 +42,9 @@ pub const LIST_DENSITY: &str = "list_density";
 /// Plain-text reader size: `small` | `normal` (default) | `large`.
 /// Unknown/empty values fall back to `normal`.
 pub const READER_FONT_SIZE: &str = "reader_font_size";
+/// Clicking a link in HTML mail: `examine` (default, safety dialog first)
+/// | `browser` (open directly). Unknown/empty values fall back to `examine`.
+pub const LINK_CLICK_ACTION: &str = "link_click_action";
 /// Automatic mail check, in minutes (`0` = manually only, default).
 /// Clamped to 0..1440; the UI offers fixed steps.
 pub const SYNC_INTERVAL_MINUTES: &str = "sync_interval_minutes";
@@ -87,6 +90,7 @@ pub fn defaults(key: &str) -> Option<&'static str> {
         CONFIRM_DELETE => Some("1"),
         LIST_DENSITY => Some("comfortable"),
         READER_FONT_SIZE => Some("normal"),
+        LINK_CLICK_ACTION => Some("examine"),
         SYNC_INTERVAL_MINUTES => Some("0"),
         SIGNATURE_ENABLED => Some("0"),
         SIGNATURE_TEXT => Some(""),
@@ -305,6 +309,23 @@ pub fn get_reader_font(db: &Db) -> String {
     }
 }
 
+/// Validated link-click action: `examine` | `browser`.
+#[must_use]
+pub fn normalize_link_click(raw: &str) -> &'static str {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "browser" | "direct" | "open" => "browser",
+        _ => "examine",
+    }
+}
+
+/// Current link-click action, resilient to unknown stored values.
+pub fn get_link_click(db: &Db) -> String {
+    match get(db, LINK_CLICK_ACTION) {
+        Ok(Some(v)) => normalize_link_click(&v).to_string(),
+        _ => defaults(LINK_CLICK_ACTION).unwrap_or("examine").to_string(),
+    }
+}
+
 /// Clamp an auto-check interval into the sane range (minutes, 0 = manual).
 #[must_use]
 pub fn normalize_sync_interval(raw: i64) -> i64 {
@@ -515,6 +536,11 @@ mod tests {
         assert_eq!(normalize_reader_font("small"), "small");
         assert_eq!(normalize_reader_font("LARGE"), "large");
         assert_eq!(normalize_reader_font("huge"), "normal");
+        assert_eq!(normalize_link_click("browser"), "browser");
+        assert_eq!(normalize_link_click(" BROWSER "), "browser");
+        assert_eq!(normalize_link_click("examine"), "examine");
+        assert_eq!(normalize_link_click(""), "examine");
+        assert_eq!(normalize_link_click("weird"), "examine");
         assert_eq!(normalize_sync_interval(-5), 0);
         assert_eq!(normalize_sync_interval(15), 15);
         assert_eq!(normalize_sync_interval(99999), 1440);
@@ -522,6 +548,11 @@ mod tests {
         assert!(get_bool(&db, CONFIRM_DELETE).unwrap());
         assert_eq!(get_density(&db), "comfortable");
         assert_eq!(get_reader_font(&db), "normal");
+        assert_eq!(get_link_click(&db), "examine");
+        set(&db, LINK_CLICK_ACTION, "browser").unwrap();
+        assert_eq!(get_link_click(&db), "browser");
+        set(&db, LINK_CLICK_ACTION, "nonsense").unwrap();
+        assert_eq!(get_link_click(&db), "examine");
         assert_eq!(get_sync_interval(&db), 0);
         assert_eq!(get_signature_text(&db), "");
         assert!(!get_bool(&db, SIGNATURE_ENABLED).unwrap());

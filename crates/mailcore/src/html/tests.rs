@@ -56,6 +56,67 @@ fn style_attr_dropped() {
 }
 
 #[test]
+fn no_auto_fetch_vectors_survive_sanitizing() {
+    // Everything a renderer would fetch WITHOUT a click must vanish (marker
+    // host). Clickable `href`s intentionally survive (user-gated navigation,
+    // never a fetch) and are covered separately below.
+    let s = sanitize(
+        "<head><meta http-equiv=\"refresh\" content=\"0;url=https://evil.example.net/\">\
+         <link rel=\"preload\" href=\"https://evil.example.net/x.css\" as=\"style\">\
+         <link rel=\"stylesheet\" href=\"https://evil.example.net/x.css\">\
+         <base href=\"https://evil.example.net/\">\
+         <style>@import url(https://evil.example.net/x.css); \
+         p { background-image: url(https://evil.example.net/x.png); }</style></head>\
+         <p>hello</p>\
+         <img srcset=\"https://evil.example.net/x.png 1x\" src=\"cid:k\" alt=\"t\">\
+         <table background=\"https://evil.example.net/x.png\"><tr><td>v</td></tr></table>\
+         <svg><image href=\"https://evil.example.net/x.png\"/></svg>\
+         <video poster=\"https://evil.example.net/x.png\" src=\"https://evil.example.net/x.mp4\"></video>\
+         <audio src=\"https://evil.example.net/x.mp3\"></audio>\
+         <iframe src=\"https://evil.example.net/\"></iframe>\
+         <object data=\"https://evil.example.net/x.swf\"></object>\
+         <embed src=\"https://evil.example.net/x.swf\">\
+         <form action=\"https://evil.example.net/s\"><input name=\"q\"></form>",
+        false,
+    );
+    assert!(
+        !s.html.contains("evil.example.net"),
+        "network leak: {}",
+        s.html
+    );
+    for kept in ["hello", "cid:k", "<table>", "v</td>"] {
+        assert!(s.html.contains(kept), "lost legit content: {kept}");
+    }
+}
+
+#[test]
+fn link_vectors_keep_link_drop_beacon() {
+    // `ping` (hyperlink auditing beacon) is stripped; the link itself stays
+    // clickable. `javascript:`/`data:` hrefs lose the URL, keep the text.
+    let s = sanitize(
+        "<a href=\"https://example.com/\" ping=\"https://evil.example.net/p\">x</a>",
+        false,
+    );
+    assert!(!s.html.contains("ping="), "beacon kept: {}", s.html);
+    assert!(
+        !s.html.contains("evil.example.net"),
+        "beacon kept: {}",
+        s.html
+    );
+    assert!(
+        s.html.contains("<a href=\"https://example.com/\""),
+        "link lost: {}",
+        s.html
+    );
+    let js = sanitize("<a href=\"javascript:alert(1)\">y</a>", false);
+    assert!(!js.html.contains("javascript"));
+    assert!(js.html.contains("y</a>"));
+    let data = sanitize("<a href=\"data:text/html,<p>z</p>\">w</a>", false);
+    assert!(!data.html.contains("data:text"));
+    assert!(data.html.contains("w</a>"));
+}
+
+#[test]
 fn html_to_text_keeps_lines() {
     assert_eq!(html_to_text("<p>hi<br>there</p>"), "hi\nthere");
 }

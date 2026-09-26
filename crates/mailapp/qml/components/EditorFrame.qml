@@ -131,13 +131,16 @@ Item {
                               }
                           }
 
-        // Clicking a link in the draft must not navigate the editor away;
-        // everything else (including this view's own initial loadHtml) is
-        // allowed, or the document would never appear.
+        // Clicking a link in the draft must not navigate the editor away.
+        // Same Qt 6 API note as the reader (MessageView): the type lives on
+        // `WebEngineNavigationRequest` and the verdict is accept()/reject().
+        // Only TypedNavigation (our own loadHtml) is accepted.
         onNavigationRequested: request => {
-                                   if (request.navigationType === WebEngineView.NavigationTypeLinkClicked
-                                       || request.navigationType === WebEngineView.NavigationTypeFormSubmitted)
-                                   request.action = WebEngineView.IgnoreRequest;
+                                   if (request.navigationType
+                                       === WebEngineNavigationRequest.TypedNavigation)
+                                   request.accept();
+                                   else
+                                   request.reject();
                                }
 
         Component.onCompleted: view.loadHtml(root.documentHtml, "")

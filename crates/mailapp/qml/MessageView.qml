@@ -33,6 +33,10 @@ Rectangle {
     // "small" | "normal" (default) | "large": plain-text body size, bound to
     // the `reader_font_size` setting via Main. HTML mail brings its own sizes.
     property string readerFont: "normal"
+    // What a link click does: `examine` (default, safety dialog first) or
+    // `browser` (open directly). Bound to the `link_click_action` setting
+    // via Main.
+    property string linkClickAction: "examine"
     // Rust Bridge, for the on-demand "Show once" re-sanitize. Set by Main.
     property var backend
     property string remoteHtml: ""
@@ -162,6 +166,29 @@ Rectangle {
         clipboardHelper.selectAll();
         clipboardHelper.copy();
         clipboardHelper.clear();
+    }
+
+    // One place deciding what a clicked link does (left, middle and
+    // Ctrl+click all land here): scheme gate, then the `link_click_action`
+    // setting branch.
+    function handleLinkUrl(url) {
+        if (url.indexOf("http://") !== 0 && url.indexOf("https://") !== 0
+            && url.indexOf("mailto:") !== 0)
+            return;
+        if (root.linkClickAction === "browser") {
+            Qt.openUrlExternally(url);
+            root.statusMessage(qsTr("Opened in browser"));
+        } else {
+            root.openExamineDialog(url);
+        }
+    }
+
+    // Open the examine dialog for a clicked or right-clicked link. One
+    // function (not inline in the WebEngineView) so exactly one place
+    // touches the dialog.
+    function openExamineDialog(url) {
+        examineLinkDialog.url = url;
+        examineLinkDialog.open();
     }
 
     // QML's JS engine has no WHATWG `URL` constructor, so the examine-link
@@ -805,10 +832,64 @@ Rectangle {
             settings.autoLoadImages: true
             settings.localContentCanAccessRemoteUrls: root.effectiveAutoLoad()
             settings.pluginsEnabled: false
+            // No-network hardening (verified against the Qt 6 WebEngineSettings
+            // docs; several of these already default off, set explicitly so a
+            // Qt default change cannot silently start leaking):
+            // - local files: the mail document must not reach file:// URLs.
+            // - DNS prefetch: no resolving link domains on load/hover.
+            // - hyperlink auditing: no <a ping> beacons (also stripped).
+            // - page icons: loadHtml documents have no favicon to fetch.
+            // - local storage: no JS exists to use it.
+            // - drop navigation: dropping a URL/file must not navigate away.
+            // - JS popups: no JS exists to open them.
+            settings.localContentCanAccessFileUrls: false
+            settings.dnsPrefetchEnabled: false
+            settings.hyperlinkAuditingEnabled: false
+            settings.autoLoadIconsForPage: false
+            settings.localStorageEnabled: false
+            settings.navigateOnDropEnabled: false
+            settings.javascriptCanOpenWindows: false
             // `hoveredUrl` is a QUrl: stringify explicitly, "" when the mouse
             // leaves a link (which hides the statusline again).
             onLinkHovered: (hoveredUrl) => {
                 root.hoveredLinkUrl = hoveredUrl ? hoveredUrl.toString() : "";
+            }
+            // Clicking a link must not navigate the reader away from the
+            // mail. The request is blocked FIRST, before any handling below:
+            // even if that handling hit an error, the message stays put.
+            // http(s)/mailto links then either open directly in the system
+            // browser / mail client or land in the examine dialog first
+            // (default per `link_click_action`). Forms and odd schemes are
+            // ignored. Our own loadHtml calls are untouched, or the body
+            // would never render.
+            // Clicking a link must not navigate the reader away from the
+            // mail. Qt 6 API, verified against the Qt 6.11 headers and docs:
+            // the type lives on `WebEngineNavigationRequest`
+            // (`LinkClickedNavigation`, …) — `WebEngineView.NavigationType…`
+            // does not exist in QML and fails silently — and the verdict is
+            // `request.accept()` / `request.reject()`, not `request.action`.
+            // Only TypedNavigation (our own loadHtml) is accepted; everything
+            // else is rejected, so the message stays put no matter what.
+            // http(s)/mailto clicks then either open directly in the system
+            // browser / mail client or land in the examine dialog first
+            // (default per `link_click_action`).
+            onNavigationRequested: (request) => {
+                if (request.navigationType === WebEngineNavigationRequest.TypedNavigation) {
+                    request.accept();
+                    return;
+                }
+                request.reject();
+                if (request.navigationType !== WebEngineNavigationRequest.LinkClickedNavigation)
+                    return;
+                root.handleLinkUrl(request.url.toString());
+            }
+
+            // Middle-click / Ctrl+click asks for a new window instead of a
+            // navigation. Never open one (the mail stays put); treat it like
+            // a normal click. Left unhandled the load would just fail, but
+            // routing it keeps every click consistent.
+            onNewWindowRequested: (request) => {
+                root.handleLinkUrl(request.requestedUrl.toString());
             }
         }
     }
@@ -861,8 +942,7 @@ Rectangle {
             glyph: Icons.info
             label: qsTr("Examine link…")
             onTriggered: {
-                examineLinkDialog.url = linkContextMenu.linkUrl;
-                examineLinkDialog.open();
+                root.openExamineDialog(linkContextMenu.linkUrl);
             }
         }
     }
@@ -902,7 +982,14 @@ Rectangle {
                 Layout.fillWidth: true
             }
             AppButton {
-                Layout.rightMargin: Theme.lg
+                Layout.bottomMargin: Theme.md
+                text: qsTr("Open in browser")
+                onClicked: {
+                    Qt.openUrlExternally(examineLinkDialog.url);
+                    examineLinkDialog.close();
+                }
+            }
+            AppButton {
                 Layout.bottomMargin: Theme.md
                 text: qsTr("Copy")
                 onClicked: root.copyText(examineLinkDialog.url)

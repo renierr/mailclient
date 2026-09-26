@@ -38,6 +38,7 @@ AppDialog {
     property bool localConfirmDelete: true
     property string localDensity: "comfortable"
     property string localReaderFont: "normal"
+    property string localLinkClick: "examine"
     property real localUiScale: 1.0
     property int localSyncInterval: 0
     property bool localSigEnabled: false
@@ -233,6 +234,7 @@ AppDialog {
         root.localConfirmDelete = settingsBridge.confirm_delete;
         root.localDensity = settingsBridge.list_density;
         root.localReaderFont = settingsBridge.reader_font_size;
+        root.localLinkClick = settingsBridge.link_click_action;
         root.localUiScale = settingsBridge.ui_scale;
         root.localSyncInterval = settingsBridge.sync_interval_minutes;
         root.localSigEnabled = settingsBridge.signature_enabled;
@@ -528,7 +530,17 @@ AppDialog {
                     }
                     HintLabel {
                         text: qsTr(
-                                  "Remote images can track opens. Blocked images still offer a one-click “Show once” banner per message.")
+                                   "Remote images can track opens. Blocked images still offer a one-click “Show once” banner per message.")
+                    }
+                    ChoiceRow {
+                        caption: qsTr("Clicking a link in a message")
+                        model: [qsTr("Show safety dialog first (recommended)"), qsTr("Open directly in browser")]
+                        currentIndex: root.localLinkClick === "browser" ? 1 : 0
+                        help: qsTr(
+                                   "The safety dialog shows the link's real address before anything opens, so disguised links cannot surprise you.")
+                        onChosen: index => {
+                                      root.localLinkClick = index === 1 ? "browser" : "examine";
+                                  }
                     }
                 }
             }
@@ -804,6 +816,7 @@ AppDialog {
         settingsBridge.confirm_delete = root.localConfirmDelete;
         settingsBridge.list_density = root.localDensity;
         settingsBridge.reader_font_size = root.localReaderFont;
+        settingsBridge.link_click_action = root.localLinkClick;
         settingsBridge.ui_scale = root.localUiScale;
         settingsBridge.sync_interval_minutes = root.localSyncInterval;
         settingsBridge.signature_enabled = root.localSigEnabled;

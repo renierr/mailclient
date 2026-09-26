@@ -65,6 +65,8 @@ impl qobject::SettingsBridge {
             self.as_mut()
                 .set_reader_font_size(qstring(&mailcore::store::settings::get_reader_font(db)));
             self.as_mut()
+                .set_link_click_action(qstring(&mailcore::store::settings::get_link_click(db)));
+            self.as_mut()
                 .set_sync_interval_minutes(mailcore::store::settings::get_sync_interval(db) as i32);
             self.as_mut().set_signature_enabled(
                 mailcore::store::settings::get_bool(
@@ -121,6 +123,9 @@ impl qobject::SettingsBridge {
                 .to_string();
         let reader_font =
             mailcore::store::settings::normalize_reader_font(&self.reader_font_size().to_string())
+                .to_string();
+        let link_click =
+            mailcore::store::settings::normalize_link_click(&self.link_click_action().to_string())
                 .to_string();
         let sync_interval = *self.sync_interval_minutes() as i64;
         let signature_enabled = *self.signature_enabled();
@@ -202,6 +207,14 @@ impl qobject::SettingsBridge {
                 db,
                 mailcore::store::settings::READER_FONT_SIZE,
                 &reader_font,
+            ),
+        );
+        note(
+            "link click action",
+            mailcore::store::settings::set(
+                db,
+                mailcore::store::settings::LINK_CLICK_ACTION,
+                &link_click,
             ),
         );
         note(
