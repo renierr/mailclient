@@ -24,6 +24,8 @@ Available targets:
                                Output: dist/mailclient-flutter/
   --apk, --flutter-apk         Build signed Flutter Android APK
                                Output: dist/mailclient-apk/mailclient-release.apk
+  --aab, --bundle              Build signed Flutter Android App Bundle (AAB)
+                               Output: dist/mailclient-aab/mailclient-release.aab
   --all                        Build all desktop targets (Qt + Flutter Linux)
   -h, --help                   Show this help message
 
@@ -31,6 +33,7 @@ Examples:
   ./build.sh --qt
   ./build.sh --flutter
   ./build.sh --apk
+  ./build.sh --aab
 EOF
 }
 
@@ -141,10 +144,34 @@ Signed with the release keystore from flutter/android/key.properties.
 EOF
 }
 
+build_aab() {
+    echo "==> flutter build appbundle --release"
+    (cd flutter && flutter build appbundle --release)
+
+    echo "==> assembling dist/mailclient-aab"
+    aab="flutter/build/app/outputs/bundle/release/app-release.aab"
+    [ -f "$aab" ] || { echo "expected aab at $aab -- build failed?" >&2; exit 1; }
+    if ! rm -rf dist/mailclient-aab 2>/dev/null; then
+        echo "cannot clear dist/mailclient-aab -- files are in use." >&2
+        exit 1
+    fi
+    mkdir -p dist/mailclient-aab
+    cp "$aab" dist/mailclient-aab/mailclient-release.aab
+    write_version dist/mailclient-aab
+
+    cat <<'EOF'
+Done. AAB bundle available at:
+    ./dist/mailclient-aab/mailclient-release.aab
+Signed with the release keystore from flutter/android/key.properties.
+Ready for upload to Google Play Console.
+EOF
+}
+
 case "$target" in
     --qt | --qml) build_qt ;;
     --flutter | --flutter-linux) build_flutter ;;
     --apk | --flutter-apk) build_apk ;;
+    --aab | --flutter-aab | --bundle) build_aab ;;
     --all) build_qt; build_flutter ;;
     *)
         echo "Error: Unknown option '$target'" >&2
