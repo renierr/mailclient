@@ -11,11 +11,35 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-target="${1:- --qt}"
-case "$target" in
-    --qt | --flutter | --all) ;;
-    *) echo "usage: $0 [--qt|--flutter|--all]" >&2; exit 1 ;;
-esac
+show_usage() {
+    cat <<'EOF'
+mailclient release build & packaging script
+
+Usage: ./build.sh <target>
+
+Available targets:
+  --qt, --qml                  Build Qt/QML release bundle
+                               Output: dist/mailclient/
+  --flutter, --flutter-linux   Build Flutter Linux desktop release bundle
+                               Output: dist/mailclient-flutter/
+  --apk, --flutter-apk         Build signed Flutter Android APK
+                               Output: dist/mailclient-apk/mailclient-release.apk
+  --all                        Build all desktop targets (Qt + Flutter Linux)
+  -h, --help                   Show this help message
+
+Examples:
+  ./build.sh --qt
+  ./build.sh --flutter
+  ./build.sh --apk
+EOF
+}
+
+if [ $# -eq 0 ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+    show_usage
+    exit 0
+fi
+
+target="$1"
 
 write_version() {
     git rev-parse --short HEAD 2>/dev/null > "$1/VERSION" \
@@ -95,8 +119,37 @@ Bundle layout (lib/libmailffi.so is the Rust core, loaded in-process).
 EOF
 }
 
+build_apk() {
+    echo "==> flutter build apk --release"
+    (cd flutter && flutter build apk --release)
+
+    echo "==> assembling dist/mailclient-apk"
+    apk="flutter/build/app/outputs/flutter-apk/app-release.apk"
+    [ -f "$apk" ] || { echo "expected apk at $apk -- build failed?" >&2; exit 1; }
+    if ! rm -rf dist/mailclient-apk 2>/dev/null; then
+        echo "cannot clear dist/mailclient-apk -- files are in use." >&2
+        exit 1
+    fi
+    mkdir -p dist/mailclient-apk
+    cp "$apk" dist/mailclient-apk/mailclient-release.apk
+    write_version dist/mailclient-apk
+
+    cat <<'EOF'
+Done. APK available at:
+    ./dist/mailclient-apk/mailclient-release.apk
+Signed with upload keystore (/home/cody/upload-keystore.jks).
+EOF
+}
+
 case "$target" in
-    --qt) build_qt ;;
-    --flutter) build_flutter ;;
+    --qt | --qml) build_qt ;;
+    --flutter | --flutter-linux) build_flutter ;;
+    --apk | --flutter-apk) build_apk ;;
     --all) build_qt; build_flutter ;;
+    *)
+        echo "Error: Unknown option '$target'" >&2
+        echo "" >&2
+        show_usage >&2
+        exit 1
+        ;;
 esac
