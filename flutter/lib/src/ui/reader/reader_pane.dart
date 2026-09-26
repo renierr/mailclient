@@ -15,6 +15,7 @@ import '../composer/composer_dialog.dart';
 import '../menu_row.dart';
 import '../message_list/message_list_pane.dart' show confirmDelete;
 import '../move_to/move_to_dialog.dart';
+import 'link_safety.dart';
 import 'mail_html_view.dart';
 
 /// The selected message.
@@ -38,6 +39,7 @@ class _ReaderPaneState extends State<ReaderPane> {
   String? _htmlWithRemoteImages;
   int _shownForUid = -1;
   bool _details = false;
+  String? _hoveredLinkUrl;
 
   /// Full `From:` header for the display name. The list feed only carries the
   /// bare address, so the name comes from here — the same source the Qt
@@ -58,6 +60,7 @@ class _ReaderPaneState extends State<ReaderPane> {
     }
     if (_shownForUid != message.uid) {
       _htmlWithRemoteImages = null;
+      _hoveredLinkUrl = null;
       _shownForUid = message.uid;
       _details = false;
     }
@@ -70,43 +73,113 @@ class _ReaderPaneState extends State<ReaderPane> {
           .catchError((_) => null);
     }
 
+    final theme = Theme.of(context);
     final scale = state.settings.readerScale;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    return Stack(
       children: [
-        _Header(
-          message: message,
-          headersFuture: _headersFuture,
-          details: _details,
-          onToggleDetails: () =>
-              setState(() => _details = !_details),
-          onClose: widget.onClose,
-        ),
-        const Divider(height: 1),
-        if (message.hasRemoteImages &&
-            _htmlWithRemoteImages == null &&
-            !state.settings.loadRemoteImages)
-          _RemoteImagesBanner(onShowOnce: () => _showRemoteImages(message)),
-        Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
-            child: message.isHtml
-                ? MailHtmlView(
-                    html: _htmlWithRemoteImages ?? message.bodyHtml,
-                    textScale: scale,
-                  )
-                : MediaQuery(
-                    data: MediaQuery.of(context).copyWith(
-                      textScaler: TextScaler.linear(scale),
-                    ),
-                    child: SelectableText(message.bodyText),
-                  ),
+        Positioned.fill(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _Header(
+                message: message,
+                headersFuture: _headersFuture,
+                details: _details,
+                onToggleDetails: () =>
+                    setState(() => _details = !_details),
+                onClose: widget.onClose,
+              ),
+              const Divider(height: 1),
+              if (message.hasRemoteImages &&
+                  _htmlWithRemoteImages == null &&
+                  !state.settings.loadRemoteImages)
+                _RemoteImagesBanner(
+                    onShowOnce: () => _showRemoteImages(message)),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  child: message.isHtml
+                      ? MailHtmlView(
+                          html: _htmlWithRemoteImages ?? message.bodyHtml,
+                          textScale: scale,
+                          onHoverUrl: (url) {
+                            if (_hoveredLinkUrl != url) {
+                              setState(() => _hoveredLinkUrl = url);
+                            }
+                          },
+                          onTapUrl: (url) => _handleLinkUrl(context, url),
+                        )
+                      : MediaQuery(
+                          data: MediaQuery.of(context).copyWith(
+                            textScaler: TextScaler.linear(scale),
+                          ),
+                          child: SelectableText(message.bodyText),
+                        ),
+                ),
+              ),
+              if (message.attachments.any((a) => !a.isInline))
+                _AttachmentBar(message: message),
+            ],
           ),
         ),
-        if (message.attachments.any((a) => !a.isInline))
-          _AttachmentBar(message: message),
+        if (_hoveredLinkUrl != null && _hoveredLinkUrl!.isNotEmpty)
+          Positioned(
+            left: 16,
+            bottom: 16,
+            child: IgnorePointer(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: MediaQuery.sizeOf(context).width - 32,
+                ),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(6),
+                    border:
+                        Border.all(color: theme.colorScheme.outlineVariant),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.12),
+                        blurRadius: 4,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Text(
+                    _hoveredLinkUrl!,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontFamily: 'monospace',
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+            ),
+          ),
       ],
     );
+  }
+
+  Future<void> _handleLinkUrl(BuildContext context, String url) async {
+    if (!LinkSafety.isWebScheme(url)) return;
+    final state = context.read<MailState>();
+    final action = LinkSafety.actionFor(state.settings.linkClickAction);
+    if (action == 'browser') {
+      await LinkSafety.openUrl(url);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Opened in browser')),
+        );
+      }
+    } else {
+      if (context.mounted) {
+        await ExamineLinkDialog.show(context, url);
+      }
+    }
   }
 
   Future<void> _showRemoteImages(MessageBody message) async {

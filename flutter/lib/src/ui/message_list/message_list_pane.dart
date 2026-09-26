@@ -142,26 +142,61 @@ class _MessageListPaneState extends State<MessageListPane> {
                     // Search rows navigate only: mutating a row that lives in
                     // another folder from here would act on the wrong mailbox.
                     return ListTile(
-                      title: Text(h.subject,
-                          overflow: TextOverflow.ellipsis),
+                      title: Row(
+                        children: [
+                          Expanded(
+                            child: Text(h.subject,
+                                overflow: TextOverflow.ellipsis),
+                          ),
+                          if (h.starred) ...[
+                            const SizedBox(width: 4),
+                            Icon(Icons.star,
+                                size: 14, color: Colors.amber.shade700),
+                          ],
+                        ],
+                      ),
                       subtitle: Text(
                         '${h.from} · ${h.folder}\n${h.snippet}',
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
                       isThreeLine: true,
-                      trailing: h.unread
-                          ? Container(
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (h.unread)
+                            Container(
                               width: 8,
                               height: 8,
+                              margin: const EdgeInsets.only(right: 8),
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
                                 color: Theme.of(context)
                                     .colorScheme
                                     .primary,
                               ),
-                            )
-                          : null,
+                            ),
+                          PopupMenuButton<String>(
+                            tooltip: 'Actions',
+                            icon: const Icon(Icons.more_vert, size: 18),
+                            onSelected: (v) {
+                              if (v == 'open') {
+                                state.jumpToHit(h);
+                                widget.onMessageOpened?.call();
+                              }
+                            },
+                            itemBuilder: (context) => const [
+                              PopupMenuItem(
+                                value: 'open',
+                                child: MenuRow(
+                                  icon: Icons.open_in_new,
+                                  text: 'Jump to message',
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                       onTap: () {
                         state.jumpToHit(h);
                         widget.onMessageOpened?.call();
@@ -524,10 +559,26 @@ class _MessageTile extends StatelessWidget {
       title: Row(
         children: [
           Expanded(
-            child: Text(
-              message.from,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodyMedium?.copyWith(fontWeight: weight),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    message.from,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        theme.textTheme.bodyMedium?.copyWith(fontWeight: weight),
+                  ),
+                ),
+                if (message.starred) ...[
+                  const SizedBox(width: 4),
+                  Icon(
+                    Icons.star,
+                    size: 14,
+                    color: Colors.amber.shade700,
+                  ),
+                ],
+              ],
             ),
           ),
           const SizedBox(width: 8),
@@ -568,22 +619,11 @@ class _MessageTile extends StatelessWidget {
             ),
         ],
       ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            tooltip: message.starred ? 'Unstar' : 'Star',
-            icon: Icon(
-              message.starred ? Icons.star : Icons.star_border,
-              size: 18,
-              color: message.starred ? Colors.amber.shade700 : null,
-            ),
-            onPressed: () => state.toggleStar(message.uid),
-          ),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert, size: 18),
-            onSelected: (v) => _rowAction(context, state, v),
-            itemBuilder: (context) => [
+      trailing: PopupMenuButton<String>(
+        tooltip: 'Message actions',
+        icon: const Icon(Icons.more_vert, size: 18),
+        onSelected: (v) => _rowAction(context, state, v),
+        itemBuilder: (context) => [
               PopupMenuItem(
                 value: 'read',
                 child: MenuRow(
@@ -627,8 +667,6 @@ class _MessageTile extends StatelessWidget {
               ),
             ],
           ),
-        ],
-      ),
     );
   }
 

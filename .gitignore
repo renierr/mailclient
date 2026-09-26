@@ -44,8 +44,6 @@ Thumbs.db
 /tmp/
 *.log
 kotlin-desktop/
-flutter/
-
 
 # Flutter frontend
 flutter/build/

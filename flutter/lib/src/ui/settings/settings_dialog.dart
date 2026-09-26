@@ -224,6 +224,18 @@ class _SettingsDialogState extends State<SettingsDialog> {
             help:
                 'Remote images tell the sender you opened the message. Off means the Show-once banner.',
           ),
+          _choice<String>(
+            'Clicking a link in a message',
+            _draft.linkClickAction,
+            const ['examine', 'browser'],
+            (v) => switch (v) {
+              'browser' => 'Open directly in browser',
+              _ => 'Show safety dialog first (recommended)',
+            },
+            (v) => setState(() => _draft = _draft.copyWith(linkClickAction: v)),
+            help:
+                "The safety dialog shows the link's real address before anything opens, so disguised links cannot surprise you.",
+          ),
         ],
       );
 
@@ -401,6 +413,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
         SettingKeys.confirmDelete: _yn(d.confirmDelete),
         SettingKeys.listDensity: d.density,
         SettingKeys.readerFontSize: d.readerFontSize,
+        SettingKeys.linkClickAction: d.linkClickAction,
         SettingKeys.syncInterval: '${d.syncIntervalMinutes}',
         SettingKeys.signatureEnabled: _yn(d.signatureEnabled),
         SettingKeys.signatureText: d.signatureText,

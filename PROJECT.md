@@ -75,7 +75,7 @@ Secrets live in the OS keyring keyed by `accounts.auth_vault_key`, never in SQLi
 | 4 | Contacts + settings UI extras (threading, notifications explicitly dropped — not needed) | ✅ done (contacts manager, About with version/licence + server capabilities) |
 | 5 | Polish: background polling sync, offline/error states, onboarding, `.desktop`/icons, Windows feasibility | ✅ done (polling + pooled sessions + manual ⟳ done; offline-first cache + status-bar errors done; empty-state setup onboarding done; `.desktop`+icon installed; IDLE dropped; Windows portable via MSYS2/Git Bash scripts, built as a GUI-subsystem exe with its own icon linked in, so launching it opens no console window; headless `--sync-once`/`--status` JSON + Omarchy bar widget `mailclient.unread` done, see below) |
 | 6 | Bar integration: shared `mailcore::sync::headless` (GUI + CLI same orchestration), `mailapp --sync-once/--status [--json]`, cross-process `.sync.lock` (serializes `--sync-once` runs; the GUI never takes it, the outbox claim keeps GUI + CLI overlap safe), `resources/omarchy/mailclient/` bar-widget plugin (status poll + sync timers, notify-on-rise, click-to-open) | ✅ done |
-| 7 | Flutter frontend: `mailffi` cdylib (flutter_rust_bridge 2, in-process `dart:ffi`), Dart app in `flutter/` with responsive 3/2/1-pane shell, sidebar, list, reader, account setup; CMake wiring for Windows + Linux, Gradle wiring for Android | 🚧 scaffold complete, see below |
+| 7 | Flutter frontend: `mailffi` cdylib (flutter_rust_bridge 2, in-process `dart:ffi`), Dart app in `flutter/` with responsive 3/2/1-pane shell, sidebar, list, reader, account setup; CMake wiring for Windows + Linux, Gradle wiring for Android | ✅ done (full parity with QML: link safety & hover URL overlay, row action menus with passive stars, composer & outbox resilience, release bundle) |
 
 Milestone 7 detail — what works and what does not:
 - **Works**: the whole read path and the local write path. Accounts
@@ -89,28 +89,31 @@ Milestone 7 detail — what works and what does not:
 - **Built in the UI**: composer (plain-text; reply/reply-all/forward with `> `
   quotes, drafts edit/save/delete, contact autocomplete, discard confirm,
   editable From local part with the account domain locked, sender name
-  prefilled from the account, real file picker for outgoing attachments),
-  settings screen (all keys incl. sort, signature, intervals) with About
-  (version/licence/database + per-account IMAP capabilities), search UI (FTS
-  with folder/account scope + debounced server backfill + jump-to-message),
-  contacts manager (search, alias, remove), multi-select with bulk bar
-  (read/unread/star/archive/move/trash/purge + select menus + shift-range),
-  folder manager (create, show/hide, refresh, open), move picker, accounts
-  manager, reader actions (reply/forward/star/archive/move/delete, headers
-  dialog, fullscreen on wide layouts, sender display name from the stored
+  prefilled from the account, real file picker for outgoing attachments,
+  re-entry and double-send protection while SMTP submission or draft saving
+  is pending), settings screen (all keys incl. sort, signature, intervals,
+  `link_click_action`) with About (version/licence/database + per-account IMAP
+  capabilities), search UI (FTS with folder/account scope + debounced server
+  backfill + jump-to-message), contacts manager (search, alias, remove),
+  multi-select with bulk bar (read/unread/star/archive/move/trash/purge + select
+  menus + shift-range), folder manager (create, show/hide, refresh, open),
+  move picker, accounts manager, reader actions (reply/forward/star/archive/move/delete,
+  headers dialog, fullscreen on wide layouts, sender display name from the stored
   headers) with working attachment Open/Save/Save-all, sort menu,
   delete/purge confirms, auto-sync timer, mark-read delay, interface scale,
-  resizable sidebar/list panes, avatar + unread-dot rows, icon menus.
+  resizable sidebar/list panes, avatar + unread-dot rows, message list `⋮` row
+  actions menu with passive star cue beside sender, reader floating link hover
+  statusline overlay, link safety policy and Examine link dialog with external
+  `url_launcher` navigation.
   On Linux the file dialogs need zenity, kdialog or qarma installed —
   without one the picker says so instead of failing silently.
 - **Deliberately simpler than QML**: plain-text composer instead of WYSIWYG
-  (auto send format stays plain), no reader fullscreen, no per-row context
-  menu beyond the `⋯` (same actions), no global Up/Down/Delete/R/F keyboard
+  (auto send format stays plain), no global Up/Down/Delete/R/F keyboard
   map beyond compose/sync/search-focus shortcuts.
 - **Not verified against a live server**: nothing in the Flutter path has been
   run against a real mailbox yet. `cargo test`, `cargo clippy -D warnings`,
-  `flutter analyze` and `flutter test` are clean, and `flutter build windows`
-  produces a bundle with `mailffi.dll` in it, but a live run needs explicit
+  `flutter analyze` and `flutter test` are clean, and `./build.sh --flutter`
+  produces a runnable release bundle with `libmailffi.so`, but a live run needs explicit
   per-run consent (`AGENT.md` §2).
 - **Android does not compile**: `mailcore::auth` uses `keyring`
   unconditionally while `mailcore`'s manifest only depends on it for Linux,

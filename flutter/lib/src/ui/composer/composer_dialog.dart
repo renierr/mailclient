@@ -234,7 +234,13 @@ class _ComposerDialogState extends State<ComposerDialog> {
   bool _showBcc = false;
   bool _showReplyTo = false;
   bool _dirty = false;
-  bool _working = false;
+  bool _sending = false;
+  bool _savingDraft = false;
+  bool get _working => _sending || _savingDraft;
+  bool get _hasRecipients =>
+      _to.text.trim().isNotEmpty ||
+      _cc.text.trim().isNotEmpty ||
+      _bcc.text.trim().isNotEmpty;
   String? _error;
 
   static String _localPartOf(String address) {
@@ -311,40 +317,49 @@ class _ComposerDialogState extends State<ComposerDialog> {
     final state = context.watch<MailState>();
     final account = state.account;
     final width = MediaQuery.sizeOf(context).width;
-    return Dialog(
-      insetPadding: EdgeInsets.symmetric(
-        horizontal: width < 700 ? 8 : 40,
-        vertical: 24,
-      ),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 640, maxHeight: 720),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      _title,
-                      style: Theme.of(context).textTheme.titleLarge,
+    return PopScope(
+      canPop: !_working && !_dirty,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && !_working) {
+          _maybeClose();
+        }
+      },
+      child: Dialog(
+        insetPadding: EdgeInsets.symmetric(
+          horizontal: width < 700 ? 8 : 40,
+          vertical: 24,
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 640, maxHeight: 720),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _title,
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
                     ),
-                  ),
-                  Text(
-                    'Send as ${state.settings.sendFormat}',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
+                    Text(
+                      'Send as ${state.settings.sendFormat}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+                if (widget.initial.replyNotice.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  _Notice(text: widget.initial.replyNotice),
                 ],
-              ),
-              if (widget.initial.replyNotice.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                _Notice(text: widget.initial.replyNotice),
-              ],
-              const SizedBox(height: 12),
-              Expanded(
-                child: SingleChildScrollView(
+                const SizedBox(height: 12),
+                Expanded(
+                  child: AbsorbPointer(
+                    absorbing: _working,
+                    child: SingleChildScrollView(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -449,6 +464,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
                   ),
                 ),
               ),
+              ),
               const SizedBox(height: 12),
               Wrap(
                 alignment: WrapAlignment.end,
@@ -466,7 +482,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
                   ),
                   OutlinedButton(
                     onPressed: _working ? null : _saveDraft,
-                    child: _working
+                    child: _savingDraft
                         ? const SizedBox(
                             width: 16,
                             height: 16,
@@ -477,13 +493,21 @@ class _ComposerDialogState extends State<ComposerDialog> {
                   ),
                   FilledButton(
                     onPressed: _working ? null : _send,
-                    child: const Text('Send'),
+                    child: _sending
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child:
+                                CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Send'),
                   ),
                 ],
               ),
             ],
           ),
         ),
+      ),
       ),
     );
   }
@@ -523,9 +547,14 @@ class _ComposerDialogState extends State<ComposerDialog> {
   }
 
   Future<void> _send() async {
+    if (_working) return;
+    if (!_hasRecipients) {
+      setState(() => _error = 'Add at least one recipient (To, Cc or Bcc)');
+      return;
+    }
     final state = context.read<MailState>();
     setState(() {
-      _working = true;
+      _sending = true;
       _error = null;
     });
     try {
@@ -540,16 +569,17 @@ class _ComposerDialogState extends State<ComposerDialog> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _working = false;
+        _sending = false;
         _error = _message(e);
       });
     }
   }
 
   Future<void> _saveDraft() async {
+    if (_working) return;
     final state = context.read<MailState>();
     setState(() {
-      _working = true;
+      _savingDraft = true;
       _error = null;
     });
     try {
@@ -559,13 +589,14 @@ class _ComposerDialogState extends State<ComposerDialog> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _working = false;
+        _savingDraft = false;
         _error = _message(e);
       });
     }
   }
 
   Future<void> _deleteDraft() async {
+    if (_working) return;
     final state = context.read<MailState>();
     final confirmed = await showDialog<bool>(
           context: context,

@@ -15,6 +15,7 @@ void main() {
         'confirm_delete': false,
         'list_density': 'compact',
         'reader_font_size': 'large',
+        'link_click_action': 'browser',
         'sync_interval_minutes': 15,
         'signature_enabled': true,
         'signature_text': 'kind regards',
@@ -29,6 +30,7 @@ void main() {
       expect(s.confirmDelete, isFalse);
       expect(s.isCompact, isTrue);
       expect(s.readerScale, 1.2);
+      expect(s.linkClickAction, 'browser');
       expect(s.syncIntervalMinutes, 15);
       expect(s.uiScale, 1.25);
       expect(s.sortField, 'from');
@@ -42,6 +44,7 @@ void main() {
       expect(s.confirmDelete, isTrue);
       expect(s.isCompact, isFalse);
       expect(s.readerScale, 1.0);
+      expect(s.linkClickAction, 'examine');
       expect(s.uiScale, 1.0);
       expect(s.sortDescending, isTrue);
     });

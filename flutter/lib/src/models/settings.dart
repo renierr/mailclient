@@ -17,6 +17,7 @@ abstract final class SettingKeys {
   static const confirmDelete = 'confirm_delete';
   static const listDensity = 'list_density';
   static const readerFontSize = 'reader_font_size';
+  static const linkClickAction = 'link_click_action';
   static const syncInterval = 'sync_interval_minutes';
   static const signatureEnabled = 'signature_enabled';
   static const signatureText = 'signature_text';
@@ -40,6 +41,7 @@ class AppSettings {
     required this.confirmDelete,
     required this.density,
     required this.readerFontSize,
+    required this.linkClickAction,
     required this.syncIntervalMinutes,
     required this.signatureEnabled,
     required this.signatureText,
@@ -60,6 +62,7 @@ class AppSettings {
   final bool confirmDelete;
   final String density;
   final String readerFontSize;
+  final String linkClickAction;
   final int syncIntervalMinutes;
   final bool signatureEnabled;
   final String signatureText;
@@ -82,6 +85,7 @@ class AppSettings {
     confirmDelete: true,
     density: 'comfortable',
     readerFontSize: 'normal',
+    linkClickAction: 'examine',
     syncIntervalMinutes: 0,
     signatureEnabled: false,
     signatureText: '',
@@ -103,6 +107,8 @@ class AppSettings {
         confirmDelete: _flag(j[SettingKeys.confirmDelete], orElse: true),
         density: _str(j[SettingKeys.listDensity], orElse: 'comfortable'),
         readerFontSize: _str(j[SettingKeys.readerFontSize], orElse: 'normal'),
+        linkClickAction:
+            _str(j[SettingKeys.linkClickAction], orElse: 'examine'),
         syncIntervalMinutes: _int(j[SettingKeys.syncInterval]),
         signatureEnabled: _flag(j[SettingKeys.signatureEnabled]),
         signatureText: _str(j[SettingKeys.signatureText]),
@@ -124,6 +130,7 @@ class AppSettings {
     bool? confirmDelete,
     String? density,
     String? readerFontSize,
+    String? linkClickAction,
     int? syncIntervalMinutes,
     bool? signatureEnabled,
     String? signatureText,
@@ -144,6 +151,7 @@ class AppSettings {
         confirmDelete: confirmDelete ?? this.confirmDelete,
         density: density ?? this.density,
         readerFontSize: readerFontSize ?? this.readerFontSize,
+        linkClickAction: linkClickAction ?? this.linkClickAction,
         syncIntervalMinutes: syncIntervalMinutes ?? this.syncIntervalMinutes,
         signatureEnabled: signatureEnabled ?? this.signatureEnabled,
         signatureText: signatureText ?? this.signatureText,
