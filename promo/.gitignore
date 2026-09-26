@@ -1,0 +1,5 @@
+# Generated promo output (rebuilt by ./promo/build.sh)
+*.mp4
+poster.png
+*.srt
+__pycache__/
