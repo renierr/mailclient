@@ -225,6 +225,22 @@ ApplicationWindow {
         root.statusText = result === "" ? okMessage : result;
     }
 
+    function copyToClipboard(text) {
+        if (!text)
+            return;
+        clipboardHelper.text = text;
+        clipboardHelper.selectAll();
+        clipboardHelper.copy();
+        clipboardHelper.clear();
+    }
+
+    TextEdit {
+        id: clipboardHelper
+        visible: false
+        width: 0
+        height: 0
+    }
+
     // Toolbar search: short input filters the loaded folder feed (see
     // MessageList.matches); 3+ letters run the FTS index — account-wide,
     // or limited to the selected folder while the toolbar checkbox is on
@@ -1234,15 +1250,48 @@ ApplicationWindow {
             }
             // Read-only TextEdit instead of a Label so the status line can be
             // selected and copied (drag + Ctrl+C); styled to look identical.
+            // Hovering displays the full text in a ToolTip so larger entries
+            // are not cut off. Double-clicking or clicking the details button
+            // opens a dialog to view and copy the complete message.
             TextEdit {
+                id: statusTextEdit
                 Layout.fillWidth: true
                 text: root.statusText
-                color: Theme.textMuted
+                color: (root.statusText.toLowerCase().indexOf("error") >= 0 || root.statusText.toLowerCase().indexOf("failed") >= 0) ? Theme.danger : Theme.textMuted
                 font.pixelSize: Theme.fontSmall
                 readOnly: true
                 selectByMouse: true
                 wrapMode: Text.NoWrap
                 clip: true
+
+                HoverHandler {
+                    id: statusHoverHandler
+                }
+
+                ToolTip.visible: statusHoverHandler.hovered && root.statusText.length > 0
+                ToolTip.text: root.statusText
+                ToolTip.delay: 400
+
+                TapHandler {
+                    acceptedButtons: Qt.RightButton
+                    onTapped: statusContextMenu.popup()
+                }
+
+                TapHandler {
+                    onDoubleTapped: statusDetailsDialog.open()
+                }
+            }
+
+            IconButton {
+                id: statusDetailsButton
+                visible: root.statusText !== ""
+                implicitWidth: Theme.miniButton
+                implicitHeight: Theme.miniButton
+                fontSize: Theme.fontSmall
+                text: Icons.openInNew
+                iconFont: true
+                tooltip: qsTr("View full status message and copy")
+                onClicked: statusDetailsDialog.open()
             }
             Label {
                 text: backend.current_account_email
@@ -1533,6 +1582,100 @@ ApplicationWindow {
             // open message must re-render from a fresh feed.
             reloadMessages();
             root.statusText = text;
+        }
+    }
+
+    Dialog {
+        id: statusDetailsDialog
+        title: qsTr("Status Details")
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(640, root.width - 32)
+        height: Math.min(380, root.height - 64)
+        padding: Theme.lg
+
+        background: Rectangle {
+            color: Theme.bgRaised
+            radius: Theme.radius
+            border.color: Theme.border
+            border.width: 1
+        }
+
+        footer: RowLayout {
+            spacing: Theme.sm
+            Item {
+                Layout.fillWidth: true
+            }
+            AppButton {
+                text: qsTr("Copy to Clipboard")
+                intent: "primary"
+                onClicked: {
+                    root.copyToClipboard(root.statusText);
+                    statusCopiedFeedback.start();
+                }
+            }
+            AppButton {
+                Layout.rightMargin: Theme.lg
+                Layout.bottomMargin: Theme.md
+                Layout.topMargin: Theme.sm
+                text: qsTr("Close")
+                onClicked: statusDetailsDialog.close()
+            }
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: Theme.sm
+
+            Label {
+                visible: statusCopiedFeedback.running
+                text: qsTr("✓ Copied to clipboard")
+                color: Theme.accent
+                font.pixelSize: Theme.fontSmall
+            }
+
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+
+                TextArea {
+                    id: statusTextArea
+                    text: root.statusText
+                    color: Theme.text
+                    font.pixelSize: Theme.fontBase
+                    readOnly: true
+                    selectByMouse: true
+                    wrapMode: TextArea.WrapAnywhere
+                    textFormat: TextArea.PlainText
+                    background: Rectangle {
+                        color: Theme.bgAlt
+                        radius: Theme.radius
+                        border.color: Theme.border
+                        border.width: 1
+                    }
+                }
+            }
+        }
+    }
+
+    Timer {
+        id: statusCopiedFeedback
+        interval: 2000
+        repeat: false
+    }
+
+    AppMenu {
+        id: statusContextMenu
+        AppMenuItem {
+            label: qsTr("Copy to Clipboard")
+            glyph: Icons.saveAlt
+            onTriggered: root.copyToClipboard(root.statusText)
+        }
+        AppMenuItem {
+            label: qsTr("View Details…")
+            glyph: Icons.openInNew
+            onTriggered: statusDetailsDialog.open()
         }
     }
 }

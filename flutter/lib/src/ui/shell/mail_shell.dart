@@ -408,25 +408,101 @@ class _SearchField extends StatelessWidget {
 
 /// One line of what the core last said. Errors are coloured, not popped up:
 /// a failed background sync should not interrupt what the user is reading.
+/// Tapping the status bar opens a dialog with the full message and copy button.
 class _StatusBar extends StatelessWidget {
   const _StatusBar();
+
+  void _showStatusDialog(BuildContext context, String status, bool isError) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(
+              isError ? Icons.error_outline : Icons.info_outline,
+              color: isError ? Theme.of(ctx).colorScheme.error : null,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(isError ? 'Error Details' : 'Status Details'),
+            ),
+          ],
+        ),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 320),
+          child: SingleChildScrollView(
+            child: SelectableText(
+              status,
+              style: TextStyle(
+                fontSize: 13,
+                fontFamily: isError ? 'monospace' : null,
+              ),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton.icon(
+            icon: const Icon(Icons.copy, size: 18),
+            label: const Text('Copy to Clipboard'),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: status));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Copied to clipboard'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            },
+          ),
+          TextButton(
+            child: const Text('Close'),
+            onPressed: () => Navigator.of(ctx).pop(),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final state = context.watch<MailState>();
     if (state.status.isEmpty) return const SizedBox.shrink();
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: double.infinity,
+    return Material(
       color: scheme.surfaceContainerHighest,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      child: Text(
-        state.status,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(
-          fontSize: 12,
-          color: state.statusIsError ? scheme.error : scheme.onSurfaceVariant,
+      child: InkWell(
+        onTap: () => _showStatusDialog(context, state.status, state.statusIsError),
+        child: Tooltip(
+          message: 'Tap to view full status and copy',
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Row(
+              children: [
+                if (state.statusIsError)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: Icon(Icons.error_outline, size: 14, color: scheme.error),
+                  ),
+                Expanded(
+                  child: Text(
+                    state.status,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: state.statusIsError ? scheme.error : scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Icon(
+                  Icons.open_in_full,
+                  size: 13,
+                  color: state.statusIsError ? scheme.error : scheme.onSurfaceVariant,
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

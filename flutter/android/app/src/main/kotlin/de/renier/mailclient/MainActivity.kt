@@ -1,4 +1,4 @@
-package de.mailclient.mailclient
+package de.renier.mailclient
 
 import io.flutter.embedding.android.FlutterActivity
 
