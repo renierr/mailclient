@@ -8,6 +8,7 @@
 
 use crate::error::{Result, StoreError};
 
+#[cfg(not(target_os = "android"))]
 const SERVICE: &str = "mailclient";
 
 /// Generate a fresh vault key for a new account.
@@ -31,16 +32,28 @@ pub fn save_account_secrets(
     smtp_password: &str,
 ) -> Result<()> {
     let payload = serde_json::json!({"imap": imap_password, "smtp": smtp_password});
-    entry(vault_key)?
-        .set_password(&payload.to_string())
-        .map_err(|e| StoreError::Keyring(format!("store failed: {e}")))
+    #[cfg(not(target_os = "android"))]
+    {
+        entry(vault_key)?
+            .set_password(&payload.to_string())
+            .map_err(|e| StoreError::Keyring(format!("store failed: {e}")))?;
+    }
+    #[cfg(target_os = "android")]
+    {
+        android_vault::set_secret(vault_key, &payload.to_string())?;
+    }
+    Ok(())
 }
 
 /// Load both passwords; empty/missing SMTP falls back to the IMAP password.
 pub fn load_account_secrets(vault_key: &str) -> Result<AccountSecrets> {
+    #[cfg(not(target_os = "android"))]
     let raw = entry(vault_key)?
         .get_password()
         .map_err(|e| StoreError::Keyring(format!("load failed: {e}")))?;
+    #[cfg(target_os = "android")]
+    let raw = android_vault::get_secret(vault_key)?;
+
     // Legacy plain-password entries (M1 harness era): treat whole value as IMAP.
     let (imap, smtp) = match serde_json::from_str::<serde_json::Value>(&raw) {
         Ok(v) => (
@@ -100,14 +113,108 @@ fn resolve_smtp(imap_password: &str, smtp_password: &str) -> String {
 
 /// Delete an account's secrets (account removal).
 pub fn delete_account_secrets(vault_key: &str) -> Result<()> {
-    entry(vault_key)?
-        .delete_credential()
-        .map_err(|e| StoreError::Keyring(format!("delete failed: {e}")))
+    #[cfg(not(target_os = "android"))]
+    {
+        entry(vault_key)?
+            .delete_credential()
+            .map_err(|e| StoreError::Keyring(format!("delete failed: {e}")))?;
+    }
+    #[cfg(target_os = "android")]
+    {
+        android_vault::delete_secret(vault_key)?;
+    }
+    Ok(())
 }
 
+#[cfg(not(target_os = "android"))]
 fn entry(vault_key: &str) -> Result<keyring::Entry> {
     keyring::Entry::new(SERVICE, vault_key)
         .map_err(|e| StoreError::Keyring(format!("unavailable: {e}")))
+}
+
+#[cfg(target_os = "android")]
+pub fn set_vault_dir(dir: std::path::PathBuf) {
+    android_vault::set_vault_dir(dir);
+}
+
+#[cfg(target_os = "android")]
+mod android_vault {
+    use super::*;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    static VAULT_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+    pub fn set_vault_dir(dir: PathBuf) {
+        if let Ok(mut lock) = VAULT_DIR.lock() {
+            *lock = Some(dir);
+        }
+    }
+
+    fn vault_file() -> PathBuf {
+        if let Ok(lock) = VAULT_DIR.lock() {
+            if let Some(dir) = &*lock {
+                return dir.join("auth_vault.json");
+            }
+        }
+        if let Ok(db) = std::env::var("MAILCLIENT_DB") {
+            if let Some(parent) = std::path::Path::new(&db).parent() {
+                return parent.join("auth_vault.json");
+            }
+        }
+        crate::db::default_db_path()
+            .parent()
+            .map(|p| p.join("auth_vault.json"))
+            .unwrap_or_else(|| PathBuf::from("auth_vault.json"))
+    }
+
+    pub fn get_secret(vault_key: &str) -> Result<String> {
+        let path = vault_file();
+        if !path.exists() {
+            return Err(StoreError::Keyring("vault file does not exist".into()));
+        }
+        let data = fs::read_to_string(&path)
+            .map_err(|e| StoreError::Keyring(format!("read vault failed: {e}")))?;
+        let map: HashMap<String, String> = serde_json::from_str(&data)
+            .map_err(|e| StoreError::Keyring(format!("corrupt vault: {e}")))?;
+        map.get(vault_key)
+            .cloned()
+            .ok_or_else(|| StoreError::Keyring("key not found in vault".into()))
+    }
+
+    pub fn set_secret(vault_key: &str, secret: &str) -> Result<()> {
+        let path = vault_file();
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let mut map: HashMap<String, String> = if path.exists() {
+            let data = fs::read_to_string(&path).unwrap_or_default();
+            serde_json::from_str(&data).unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
+        map.insert(vault_key.to_string(), secret.to_string());
+        let data = serde_json::to_string_pretty(&map)
+            .map_err(|e| StoreError::Keyring(format!("serialize vault failed: {e}")))?;
+        fs::write(&path, data)
+            .map_err(|e| StoreError::Keyring(format!("write vault failed: {e}")))
+    }
+
+    pub fn delete_secret(vault_key: &str) -> Result<()> {
+        let path = vault_file();
+        if !path.exists() {
+            return Ok(());
+        }
+        let data = fs::read_to_string(&path).unwrap_or_default();
+        let mut map: HashMap<String, String> = serde_json::from_str(&data).unwrap_or_default();
+        map.remove(vault_key);
+        let data = serde_json::to_string_pretty(&map)
+            .map_err(|e| StoreError::Keyring(format!("serialize vault failed: {e}")))?;
+        fs::write(&path, data)
+            .map_err(|e| StoreError::Keyring(format!("write vault failed: {e}")))
+    }
 }
 
 #[cfg(test)]

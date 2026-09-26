@@ -35,6 +35,8 @@ pub fn init_app(data_dir: Option<String>) -> anyhow::Result<AppInfo> {
     init_logging();
     if let Some(dir) = data_dir {
         let dir = std::path::PathBuf::from(dir);
+        #[cfg(target_os = "android")]
+        mailcore::auth::set_vault_dir(dir.clone());
         // Re-setting the same directory is what a hot restart does; only a
         // genuine move is an error.
         if crate::db::db_path().parent() != Some(dir.as_path()) {

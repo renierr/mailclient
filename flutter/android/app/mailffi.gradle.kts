@@ -32,6 +32,14 @@ fun registerCargoNdk(name: String, abis: List<String>, profileArgs: List<String>
         group = "build"
         description = "Builds libmailffi.so for ${abis.joinToString(", ")}"
         workingDir = workspaceDir
+        val cargoPath = System.getenv("PATH") ?: ""
+        val extraPath = "${System.getProperty("user.home")}/.cargo/bin"
+        if (!cargoPath.split(":").contains(extraPath)) {
+            environment("PATH", "${extraPath}:${cargoPath}")
+        }
+        if (System.getenv("ANDROID_NDK_HOME") == null) {
+            environment("ANDROID_NDK_HOME", "/home/cody/Android/Sdk/ndk/28.2.13676358")
+        }
         commandLine(
             listOf("cargo", "ndk") +
                 abis.flatMap { listOf("-t", it) } +
