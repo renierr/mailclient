@@ -51,7 +51,7 @@ This file is normative for all coding agents (human or AI) working in this repo.
   `CxxQtThread`. Keep it that way — a blocking call on the GUI thread freezes
   the window, and a second runtime is a dependency decision (see §4).
 - SQL: lowercase keywords, `snake_case` tables/columns, explicit `FOREIGN KEY … ON DELETE CASCADE`, indexes for every `(account_id, folder_id, uid)`-style lookup and for date-descending list queries. Every table has `created_at`/`updated_at` (UTC ISO8601 text) unless it is a pure FTS/virtual table.
-- QML: formatted by `qmlformat -i`, which picks up the repo-root `.qmlformat.ini` (indent, line endings, column width) on every platform — pass no style flags, and do not hand-align what it would reflow. One component per file in `crates/mailapp/qml/`, `PascalCase.qml` filenames, `qmllint`-clean, no inline JS business logic beyond formatting. All user-visible strings ready for `qsTr()`. Rust objects reach QML via `#[qml_element]` in the `Mailclient` module — never duplicate QML outside the crate.
+- QML: formatted by `qmlformat -i`, which picks up the repo-root `.qmlformat.ini` (indent, line endings, column width) on every platform — pass no style flags, and do not hand-align what it would reflow. One component per file in `crates/mailapp/qml/`, `PascalCase.qml` filenames, `qmllint`-clean, no inline JS business logic beyond formatting. Pure QML logic (parsing, decisions) lives in `pragma Singleton` helpers (cf. `FeedJson`, `LinkSafety`) with `tst_*.qml` coverage run by `scripts/qml-check.sh`. All user-visible strings ready for `qsTr()`. Rust objects reach QML via `#[qml_element]` in the `Mailclient` module — never duplicate QML outside the crate.
 - QML must stay responsive: dialogs are resizable (`AppDialog` with geometry memory) and windows vary in width, so every pane has to adapt instead of clipping. Rules: wrapping text gets `wrapMode` + a width bound (`Layout.fillWidth`); content inside a `ScrollView` binds its width to the ScrollView's own `availableWidth` via an explicit `id` (never `parent.availableWidth` — ScrollView reparents its children, so `parent` is not the ScrollView and the column falls back to its implicit width, which disables wrapping and pushes trailing controls off-screen); items in a `RowLayout` that must yield get `Layout.minimumWidth: 0` (e.g. a ComboBox next to a button); `Flow` only wraps when its own width is constrained. Verify resizable dialogs at narrow widths, not just the default size.
 - No emojis in code unless the user asks. Concise comments only.
 
@@ -129,6 +129,6 @@ it needs the same ask.
 ## 7. Definition of Done (per step)
 
 1. `cargo fmt --check`, `cargo clippy -p mailcore -- -D warnings`, `cargo test -p mailcore` green.
-2. `qmllint` clean on touched QML (or noted as skipped headless with reason).
+2. `scripts/qml-check.sh` green on touched QML (lint gate + headless QML tests; or noted as skipped headless with reason). Qt/WebEngine enum and API names verified against the installed headers or Qt docs — QML misspellings of them fail silently.
 3. `./build.sh` produces a runnable `dist/mailclient/bin/mailapp` (or current milestone binary).
 4. `PROJECT.md` status table updated; no secrets/binaries/`dist/` staged.

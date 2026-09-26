@@ -169,13 +169,13 @@ Rectangle {
     }
 
     // One place deciding what a clicked link does (left, middle and
-    // Ctrl+click all land here): scheme gate, then the `link_click_action`
-    // setting branch.
+    // Ctrl+click all land here). The pure policy (scheme gate, action
+    // normalization) lives in the tested `LinkSafety` singleton; only the
+    // side effects stay here.
     function handleLinkUrl(url) {
-        if (url.indexOf("http://") !== 0 && url.indexOf("https://") !== 0
-            && url.indexOf("mailto:") !== 0)
+        if (!LinkSafety.isWebScheme(url))
             return;
-        if (root.linkClickAction === "browser") {
+        if (LinkSafety.actionFor(root.linkClickAction) === "browser") {
             Qt.openUrlExternally(url);
             root.statusMessage(qsTr("Opened in browser"));
         } else {
@@ -189,44 +189,6 @@ Rectangle {
     function openExamineDialog(url) {
         examineLinkDialog.url = url;
         examineLinkDialog.open();
-    }
-
-    // QML's JS engine has no WHATWG `URL` constructor, so the examine-link
-    // dialog parses these by hand. Good enough for scheme/host/path display.
-    function urlHost(u) {
-        var s = (u || "").trim();
-        var scheme = s.indexOf("://");
-        var rest = scheme >= 0 ? s.substring(scheme + 3) : s;
-        var end = rest.indexOf("/");
-        var host = end >= 0 ? rest.substring(0, end) : rest;
-        var at = host.lastIndexOf("@");
-        if (at >= 0)
-            host = host.substring(at + 1);
-        var colon = host.indexOf(":");
-        if (colon >= 0)
-            host = host.substring(0, colon);
-        return host === "" ? "—" : host;
-    }
-
-    function urlScheme(u) {
-        var s = (u || "").trim();
-        var scheme = s.indexOf("://");
-        if (scheme > 0)
-            return s.substring(0, scheme).toLowerCase();
-        if (s.indexOf("mailto:") === 0)
-            return "mailto";
-        return "—";
-    }
-
-    function urlPath(u) {
-        var s = (u || "").trim();
-        var scheme = s.indexOf("://");
-        var rest = scheme >= 0 ? s.substring(scheme + 3) : s;
-        var slash = rest.indexOf("/");
-        if (slash < 0)
-            return "—";
-        var p = rest.substring(slash);
-        return p === "" ? "—" : p;
     }
 
     function saveOne(a) {
@@ -774,7 +736,7 @@ Rectangle {
             MouseArea {
                 anchors.fill: parent
                 acceptedButtons: Qt.RightButton
-                onPressed: (mouse) => {
+                onPressed: mouse => {
                     if (mouse.button === Qt.RightButton && root.hoveredLinkUrl !== "") {
                         linkContextMenu.linkUrl = root.hoveredLinkUrl;
                         linkContextMenu.popup();
@@ -785,7 +747,6 @@ Rectangle {
                 }
             }
         }
-
     }
 
     // --- statusline: hovered link URL (floating overlay) ------------------
@@ -851,7 +812,7 @@ Rectangle {
             settings.javascriptCanOpenWindows: false
             // `hoveredUrl` is a QUrl: stringify explicitly, "" when the mouse
             // leaves a link (which hides the statusline again).
-            onLinkHovered: (hoveredUrl) => {
+            onLinkHovered: hoveredUrl => {
                 root.hoveredLinkUrl = hoveredUrl ? hoveredUrl.toString() : "";
             }
             // Clicking a link must not navigate the reader away from the
@@ -873,7 +834,7 @@ Rectangle {
             // http(s)/mailto clicks then either open directly in the system
             // browser / mail client or land in the examine dialog first
             // (default per `link_click_action`).
-            onNavigationRequested: (request) => {
+            onNavigationRequested: request => {
                 if (request.navigationType === WebEngineNavigationRequest.TypedNavigation) {
                     request.accept();
                     return;
@@ -888,7 +849,7 @@ Rectangle {
             // navigation. Never open one (the mail stays put); treat it like
             // a normal click. Left unhandled the load would just fail, but
             // routing it keeps every click consistent.
-            onNewWindowRequested: (request) => {
+            onNewWindowRequested: request => {
                 root.handleLinkUrl(request.requestedUrl.toString());
             }
         }
@@ -1032,7 +993,7 @@ Rectangle {
             }
             Label {
                 Layout.fillWidth: true
-                text: root.urlScheme(examineLinkDialog.url)
+                text: LinkSafety.schemeOf(examineLinkDialog.url)
                 color: Theme.text
                 font.pixelSize: Theme.fontSmall
                 textFormat: Text.PlainText
@@ -1044,7 +1005,7 @@ Rectangle {
             }
             Label {
                 Layout.fillWidth: true
-                text: root.urlHost(examineLinkDialog.url)
+                text: LinkSafety.hostOf(examineLinkDialog.url)
                 color: Theme.text
                 font.pixelSize: Theme.fontSmall
                 textFormat: Text.PlainText
@@ -1056,7 +1017,7 @@ Rectangle {
             }
             Label {
                 Layout.fillWidth: true
-                text: root.urlPath(examineLinkDialog.url)
+                text: LinkSafety.pathOf(examineLinkDialog.url)
                 color: Theme.text
                 font.pixelSize: Theme.fontSmall
                 wrapMode: Text.WrapAnywhere

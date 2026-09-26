@@ -19,6 +19,7 @@ Details: [`PROJECT.md`](PROJECT.md) (goal, architecture, roadmap) and
 
 cargo test -p mailcore      # backend unit tests
 qmllint crates/mailapp/qml/*.qml crates/mailapp/qml/components/*.qml  # QML lint (qmllint in /usr/lib/qt6/bin)
+scripts/qml-check.sh        # QML lint gate + headless QML unit tests
 ```
 
 Prerequisites (already present on Omarchy): Rust stable, CMake, Qt 6
