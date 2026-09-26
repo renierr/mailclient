@@ -759,26 +759,36 @@ Rectangle {
             }
         }
 
-        // --- statusline: hovered link URL ---------------------------------
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: root.hoveredLinkUrl !== "" ? Math.round(28 * Theme.uiScale) : 0
-            visible: root.hoveredLinkUrl !== ""
-            color: Theme.bgAlt
-            border.width: 1
-            border.color: Theme.border
+    }
 
-            Label {
-                anchors.fill: parent
-                anchors.leftMargin: Theme.sm
-                anchors.rightMargin: Theme.sm
-                verticalAlignment: Text.AlignVCenter
-                text: root.hoveredLinkUrl
-                color: Theme.textMuted
-                font.pixelSize: Theme.fontTiny
-                elide: Text.ElideRight
-                textFormat: Text.PlainText
-            }
+    // --- statusline: hovered link URL (floating overlay) ------------------
+    // Anchored over the bottom-left corner like a browser status bubble. It
+    // is NOT a layout child, so showing/hiding it never shifts content.
+    Rectangle {
+        anchors.left: parent.left
+        anchors.leftMargin: Theme.md
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: Theme.md
+        width: Math.min(statusLabel.implicitWidth + Theme.sm * 2, parent.width - Theme.md * 2)
+        implicitHeight: Math.round(28 * Theme.uiScale)
+        visible: root.hoveredLinkUrl !== ""
+        radius: Theme.radius
+        color: Theme.bgAlt
+        border.width: 1
+        border.color: Theme.border
+        z: 10
+
+        Label {
+            id: statusLabel
+            anchors.fill: parent
+            anchors.leftMargin: Theme.sm
+            anchors.rightMargin: Theme.sm
+            verticalAlignment: Text.AlignVCenter
+            text: root.hoveredLinkUrl
+            color: Theme.textMuted
+            font.pixelSize: Theme.fontTiny
+            elide: Text.ElideRight
+            textFormat: Text.PlainText
         }
     }
 
