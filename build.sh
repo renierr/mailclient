@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 # Release build + dist bundle assembly.
 #
-# Usage: ./build.sh [--qt|--flutter|--all]  (default --qt)
+# Usage: ./build.sh --qt|--flutter|--apk|--aab|--all  (no default: bare
+# invocation prints usage and builds nothing)
 #
 # --qt:      cargo build --release -p mailapp
 #            Output: dist/mailclient/{bin/mailapp,qml/,resources/,VERSION}
 # --flutter: flutter build linux --release (the Rust core builds as part of it)
 #            Output: dist/mailclient-flutter/{mailclient,lib/,data/,VERSION}
+# --apk:     flutter build apk --release (signed; needs key.properties)
+#            Output: dist/mailclient-apk/mailclient-release.apk
+# --aab:     flutter build appbundle --release (signed; needs key.properties)
+#            Output: dist/mailclient-aab/mailclient-release.aab
+# --all:     Qt + Flutter Linux desktop bundles
 # Works on Linux and in MSYS2/Git Bash on Windows (Qt path, see scripts/qt-env.sh).
 set -euo pipefail
 cd "$(dirname "$0")"
