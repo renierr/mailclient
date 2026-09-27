@@ -386,10 +386,44 @@ class _Header extends StatelessWidget {
               ],
             ),
           ),
-          if (message.to.isNotEmpty)
+          if (!details && message.to.isNotEmpty)
             Text('To: ${message.to}', style: theme.textTheme.bodySmall),
-          if (details && message.cc.isNotEmpty)
-            Text('Cc: ${message.cc}', style: theme.textTheme.bodySmall),
+          // The expander opens the full address block, like the Qt details
+          // grid — From/To/Cc/Date/Reply-To. It used to reveal only the Cc
+          // line, so on mail without Cc the tap visibly did nothing.
+          if (details)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: FutureBuilder<MessageHeaders?>(
+                future: headersFuture,
+                builder: (context, snap) {
+                  final h = snap.data;
+                  final from = (h?.from.isNotEmpty ?? false)
+                      ? h!.from
+                      : message.from;
+                  final to = (h?.to.isNotEmpty ?? false) ? h!.to : message.to;
+                  final cc = (h?.cc.isNotEmpty ?? false) ? h!.cc : message.cc;
+                  final date = (h?.date.isNotEmpty ?? false)
+                      ? h!.date
+                      : message.date;
+                  final replyTo = (h?.replyTo.isNotEmpty ?? false)
+                      ? h!.replyTo
+                      : message.replyTo;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _DetailRow(label: 'From', value: from),
+                      if (to.isNotEmpty) _DetailRow(label: 'To', value: to),
+                      if (cc.isNotEmpty) _DetailRow(label: 'Cc', value: cc),
+                      if (date.isNotEmpty)
+                        _DetailRow(label: 'Date', value: date),
+                      if (replyTo.isNotEmpty)
+                        _DetailRow(label: 'Reply-To', value: replyTo),
+                    ],
+                  );
+                },
+              ),
+            ),
           // Shown inline, not hidden in a details view: replying to the wrong
           // address is not something the user can take back. Red like Qt —
           // this is a warning, not information.
@@ -728,6 +762,40 @@ class _Placeholder extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Center(
       child: Text(text, style: TextStyle(color: scheme.outline)),
+    );
+  }
+}
+
+/// One row of the expanded address block: fixed-width label, selectable
+/// wrapping value. Selectable so a long address can be copied out.
+class _DetailRow extends StatelessWidget {
+  const _DetailRow({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 64,
+            child: Text(
+              label,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+            ),
+          ),
+          Expanded(
+            child: SelectableText(value, style: theme.textTheme.bodySmall),
+          ),
+        ],
+      ),
     );
   }
 }

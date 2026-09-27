@@ -142,8 +142,10 @@ class _ContactsDialogState extends State<ContactsDialog> {
         ? c.alias
         : (c.name.isNotEmpty ? c.name : '(no alias)');
     return ListTile(
+      dense: true,
       title: Text(
         name,
+        overflow: TextOverflow.ellipsis,
         style: c.alias.isEmpty && c.name.isEmpty
             ? const TextStyle(fontStyle: FontStyle.italic)
             : null,
@@ -151,22 +153,31 @@ class _ContactsDialogState extends State<ContactsDialog> {
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(c.address),
-          if (c.alias.isNotEmpty && c.name.isNotEmpty) Text('Was: ${c.name}'),
+          Text(c.address, overflow: TextOverflow.ellipsis),
+          // The seen-count lived in the trailing row as a Chip next to two
+          // 48px buttons and overflowed the trailing width on narrow dialogs
+          // (RenderFlex +13px). It fits here with no width pressure at all.
+          Text(
+            [
+              'seen ${c.timesSeen}',
+              if (c.alias.isNotEmpty && c.name.isNotEmpty) 'Was: ${c.name}',
+            ].join(' · '),
+            style: Theme.of(context).textTheme.bodySmall,
+            overflow: TextOverflow.ellipsis,
+          ),
         ],
       ),
+      // Compact 32px targets: two full-size IconButtons plus a Chip never fit
+      // the trailing slot of a narrow dialog.
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Flexible(
-            child: Chip(
-              label: Text('seen ${c.timesSeen}'),
-              visualDensity: VisualDensity.compact,
-            ),
-          ),
           IconButton(
             tooltip: 'Edit alias',
-            icon: const Icon(Icons.edit_outlined, size: 18),
+            iconSize: 18,
+            padding: const EdgeInsets.all(4),
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            icon: const Icon(Icons.edit_outlined),
             onPressed: () => setState(() {
               _alias.text = c.alias;
               _editing = c.address;
@@ -174,7 +185,10 @@ class _ContactsDialogState extends State<ContactsDialog> {
           ),
           IconButton(
             tooltip: 'Remove',
-            icon: const Icon(Icons.close, size: 18),
+            iconSize: 18,
+            padding: const EdgeInsets.all(4),
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            icon: const Icon(Icons.close),
             onPressed: () => _remove(c),
           ),
         ],

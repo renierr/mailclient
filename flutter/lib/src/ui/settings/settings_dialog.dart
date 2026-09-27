@@ -64,84 +64,100 @@ class _SettingsDialogState extends State<SettingsDialog> {
       insetPadding: MailDialog.insets(context),
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: maxW, maxHeight: maxH),
-        child: Padding(
-          padding: EdgeInsets.all(narrow ? 12 : 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text('Settings', style: Theme.of(context).textTheme.titleLarge),
-              const SizedBox(height: 12),
-              if (narrow)
-                DropdownButton<_Section>(
-                  value: _section,
-                  isExpanded: true,
-                  items: [
-                    for (final s in _Section.values)
-                      DropdownMenuItem(value: s, child: Text(_label(s))),
-                  ],
-                  onChanged: (s) => setState(() => _section = s ?? _section),
-                ),
-              Expanded(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (!narrow)
-                      NavigationRail(
-                        selectedIndex: _Section.values.indexOf(_section),
-                        onDestinationSelected: (i) =>
-                            setState(() => _section = _Section.values[i]),
-                        labelType: NavigationRailLabelType.all,
-                        destinations: [
-                          for (final s in _Section.values)
-                            NavigationRailDestination(
-                              icon: Icon(_icon(s)),
-                              label: Text(_label(s)),
-                            ),
-                        ],
-                      ),
-                    const VerticalDivider(width: 1),
-                    Expanded(
-                      child: SingleChildScrollView(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: 16,
-                          // Signature field stays above the keyboard.
-                          vertical: 4,
-                        ),
-                        child: Padding(
-                          padding: EdgeInsets.only(
-                            bottom: MediaQuery.viewInsetsOf(context).bottom,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // The rail needs vertical room for six labelled destinations; on
+            // a short screen it overflows the bounded body, so fall back to
+            // the dropdown selector there too — not just on narrow widths.
+            final railMode = !narrow && constraints.maxHeight >= 520;
+            return Padding(
+              padding: EdgeInsets.all(narrow ? 12 : 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'Settings',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 12),
+                  if (!railMode)
+                    DropdownButton<_Section>(
+                      value: _section,
+                      isExpanded: true,
+                      items: [
+                        for (final s in _Section.values)
+                          DropdownMenuItem(value: s, child: Text(_label(s))),
+                      ],
+                      onChanged: (s) =>
+                          setState(() => _section = s ?? _section),
+                    ),
+                  Expanded(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (railMode)
+                          NavigationRail(
+                            selectedIndex: _Section.values.indexOf(_section),
+                            onDestinationSelected: (i) =>
+                                setState(() => _section = _Section.values[i]),
+                            labelType: NavigationRailLabelType.all,
+                            destinations: [
+                              for (final s in _Section.values)
+                                NavigationRailDestination(
+                                  icon: Icon(_icon(s)),
+                                  label: Text(_label(s)),
+                                ),
+                            ],
                           ),
-                          child: _body(),
+                        if (railMode) const VerticalDivider(width: 1),
+                        Expanded(
+                          child: SingleChildScrollView(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              // Signature field stays above the keyboard.
+                              vertical: 4,
+                            ),
+                            child: Padding(
+                              padding: EdgeInsets.only(
+                                bottom: MediaQuery.viewInsetsOf(context).bottom,
+                              ),
+                              child: _body(),
+                            ),
+                          ),
                         ),
+                      ],
+                    ),
+                  ),
+                  if (_error != null)
+                    Text(
+                      _error!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
                       ),
                     ),
-                  ],
-                ),
-              ),
-              if (_error != null)
-                Text(
-                  _error!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
-              const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(
-                    onPressed: _saving
-                        ? null
-                        : () => Navigator.of(context).pop(),
-                    child: const Text('Cancel'),
-                  ),
-                  const SizedBox(width: 8),
-                  FilledButton(
-                    onPressed: _saving ? null : _save,
-                    child: const Text('Save'),
+                  const SizedBox(height: 8),
+                  // Wrap, not Row: Cancel + Save stack instead of overflowing
+                  // on a very narrow dialog.
+                  Wrap(
+                    alignment: WrapAlignment.end,
+                    spacing: 8,
+                    children: [
+                      TextButton(
+                        onPressed: _saving
+                            ? null
+                            : () => Navigator.of(context).pop(),
+                        child: const Text('Cancel'),
+                      ),
+                      FilledButton(
+                        onPressed: _saving ? null : _save,
+                        child: const Text('Save'),
+                      ),
+                    ],
                   ),
                 ],
               ),
-            ],
-          ),
+            );
+          },
         ),
       ),
     );
@@ -514,13 +530,24 @@ class _SettingsDialogState extends State<SettingsDialog> {
               ],
             ),
           ),
-          DropdownButton<T>(
-            value: options.contains(value) ? value : options.first,
-            items: [
-              for (final o in options)
-                DropdownMenuItem(value: o, child: Text(label(o))),
-            ],
-            onChanged: enabled ? (v) => v != null ? onChanged(v) : null : null,
+          const SizedBox(width: 8),
+          // Flexible + isExpanded: the button caps at the remaining width and
+          // ellipsizes instead of overflowing the row on narrow dialogs.
+          Flexible(
+            child: DropdownButton<T>(
+              value: options.contains(value) ? value : options.first,
+              isExpanded: true,
+              items: [
+                for (final o in options)
+                  DropdownMenuItem(
+                    value: o,
+                    child: Text(label(o), overflow: TextOverflow.ellipsis),
+                  ),
+              ],
+              onChanged: enabled
+                  ? (v) => v != null ? onChanged(v) : null
+                  : null,
+            ),
           ),
         ],
       ),

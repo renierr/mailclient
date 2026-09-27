@@ -47,15 +47,17 @@ class AccountsDialog extends StatelessWidget {
                       ),
               ),
               const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
+              // Wrap, not Row: the buttons stack instead of overflowing on a
+              // very narrow dialog.
+              Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 8,
                 children: [
                   OutlinedButton.icon(
                     icon: const Icon(Icons.add, size: 16),
                     label: const Text('Add account…'),
                     onPressed: () => AccountSetupDialog.show(context),
                   ),
-                  const SizedBox(width: 8),
                   TextButton(
                     onPressed: () => Navigator.of(context).pop(),
                     child: const Text('Close'),
@@ -69,10 +71,28 @@ class AccountsDialog extends StatelessWidget {
     );
   }
 
+  Widget _accountButton({
+    required String tooltip,
+    required IconData icon,
+    required VoidCallback onPressed,
+  }) {
+    // Compact 32px targets: three full-size IconButtons plus an "active" chip
+    // overflow the trailing slot on narrow dialogs (RenderFlex).
+    return IconButton(
+      tooltip: tooltip,
+      iconSize: 18,
+      padding: const EdgeInsets.all(4),
+      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+      icon: Icon(icon),
+      onPressed: onPressed,
+    );
+  }
+
   Widget _row(BuildContext context, MailState state, Account a) {
     final current = a.id == state.accountId;
     final avatarBg = avatarColor(context, a.email);
     return ListTile(
+      dense: true,
       leading: CircleAvatar(
         backgroundColor: avatarBg,
         foregroundColor: Theme.of(context).colorScheme.onPrimary,
@@ -81,40 +101,33 @@ class AccountsDialog extends StatelessWidget {
           style: const TextStyle(fontWeight: FontWeight.w600),
         ),
       ),
-      title: Row(
-        children: [
-          Expanded(child: Text(a.email, overflow: TextOverflow.ellipsis)),
-          if (current)
-            const Chip(
-              label: Text('active'),
-              visualDensity: VisualDensity.compact,
-            ),
-        ],
-      ),
+      // Plain title: the "active" chip moved to the subtitle, where it costs
+      // no horizontal width next to up to three trailing buttons.
+      title: Text(a.email, overflow: TextOverflow.ellipsis),
       subtitle: Text(
-        '${a.displayName} · ${a.imapHost}',
+        '${a.displayName} · ${a.imapHost}${current ? ' · active' : ''}',
         overflow: TextOverflow.ellipsis,
       ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           if (!current)
-            IconButton(
+            _accountButton(
               tooltip: 'Use this account',
-              icon: const Icon(Icons.check, size: 18),
+              icon: Icons.check,
               onPressed: () {
                 Navigator.of(context).pop();
                 state.selectAccount(a.id);
               },
             ),
-          IconButton(
+          _accountButton(
             tooltip: 'Edit',
-            icon: const Icon(Icons.edit_outlined, size: 18),
+            icon: Icons.edit_outlined,
             onPressed: () => AccountSetupDialog.show(context, accountId: a.id),
           ),
-          IconButton(
+          _accountButton(
             tooltip: 'Remove',
-            icon: const Icon(Icons.delete_outline, size: 18),
+            icon: Icons.delete_outline,
             onPressed: () => _confirmRemove(context, state, a),
           ),
         ],

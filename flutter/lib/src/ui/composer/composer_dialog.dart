@@ -986,56 +986,67 @@ class _RecipientField extends StatelessWidget {
     final collect = context.select<MailState, bool>(
       (s) => s.settings.collectContacts,
     );
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    final hasToggles =
+        onToggleCc != null || onToggleBcc != null || onToggleReplyTo != null;
+    Widget field() => collect
+        ? Autocomplete<Contact>(
+            fieldViewBuilder: (context, fieldController, focusNode, onSubmit) {
+              // Keep the outer controller authoritative: the inner one
+              // mirrors it, and edits flow back through it.
+              if (fieldController.text != controller.text) {
+                fieldController.text = controller.text;
+              }
+              return TextField(
+                controller: fieldController,
+                focusNode: focusNode,
+                keyboardType: TextInputType.emailAddress,
+                textInputAction: TextInputAction.next,
+                onChanged: (v) {
+                  if (v != controller.text) controller.text = v;
+                },
+                decoration: InputDecoration(labelText: label),
+              );
+            },
+            optionsBuilder: (value) async {
+              final query = _currentSegment(value.text);
+              if (query.isEmpty) return const Iterable<Contact>.empty();
+              try {
+                return await MailCore.instance.contacts(prefix: query);
+              } catch (_) {
+                return const Iterable<Contact>.empty();
+              }
+            },
+            displayStringForOption: (c) => c.address,
+            onSelected: (c) {
+              controller.text = _replaceSegment(controller.text, c.address);
+            },
+          )
+        : TextField(
+            controller: controller,
+            keyboardType: TextInputType.emailAddress,
+            textInputAction: TextInputAction.next,
+            decoration: InputDecoration(labelText: label),
+          );
+    // Field above, Cc/Bcc/Reply-To toggles wrapped below: a single Row of
+    // field + three buttons overflows narrow dialogs (RenderFlex).
+    if (!hasToggles) return field();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
-          child: collect
-              ? Autocomplete<Contact>(
-                  fieldViewBuilder:
-                      (context, fieldController, focusNode, onSubmit) {
-                        // Keep the outer controller authoritative: the inner one
-                        // mirrors it, and edits flow back through it.
-                        if (fieldController.text != controller.text) {
-                          fieldController.text = controller.text;
-                        }
-                        return TextField(
-                          controller: fieldController,
-                          focusNode: focusNode,
-                          onChanged: (v) {
-                            if (v != controller.text) controller.text = v;
-                          },
-                          decoration: InputDecoration(labelText: label),
-                        );
-                      },
-                  optionsBuilder: (value) async {
-                    final query = _currentSegment(value.text);
-                    if (query.isEmpty) return const Iterable<Contact>.empty();
-                    try {
-                      return await MailCore.instance.contacts(prefix: query);
-                    } catch (_) {
-                      return const Iterable<Contact>.empty();
-                    }
-                  },
-                  displayStringForOption: (c) => c.address,
-                  onSelected: (c) {
-                    controller.text = _replaceSegment(
-                      controller.text,
-                      c.address,
-                    );
-                  },
-                )
-              : TextField(
-                  controller: controller,
-                  decoration: InputDecoration(labelText: label),
-                ),
+        field(),
+        Wrap(
+          children: [
+            if (onToggleCc != null)
+              TextButton(onPressed: onToggleCc, child: const Text('Cc')),
+            if (onToggleBcc != null)
+              TextButton(onPressed: onToggleBcc, child: const Text('Bcc')),
+            if (onToggleReplyTo != null)
+              TextButton(
+                onPressed: onToggleReplyTo,
+                child: const Text('Reply-To'),
+              ),
+          ],
         ),
-        if (onToggleCc != null)
-          TextButton(onPressed: onToggleCc, child: const Text('Cc')),
-        if (onToggleBcc != null)
-          TextButton(onPressed: onToggleBcc, child: const Text('Bcc')),
-        if (onToggleReplyTo != null)
-          TextButton(onPressed: onToggleReplyTo, child: const Text('Reply-To')),
       ],
     );
   }

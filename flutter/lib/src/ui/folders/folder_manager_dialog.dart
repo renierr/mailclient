@@ -108,8 +108,11 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
                       ),
               ),
               const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
+              // Wrap, not Row: Refresh + Close stack instead of overflowing
+              // on a very narrow dialog.
+              Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 8,
                 children: [
                   OutlinedButton.icon(
                     icon: state.isBusy
@@ -124,7 +127,6 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
                         ? null
                         : () => state.refreshFolders(),
                   ),
-                  const SizedBox(width: 8),
                   TextButton(
                     onPressed: () => Navigator.of(context).pop(),
                     child: const Text('Close'),

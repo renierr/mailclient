@@ -98,30 +98,49 @@ class _MailShellState extends State<MailShell> {
                 : effective >= Breakpoints.compact
                 ? _twoPane(fullscreen, openUid)
                 : _onePane();
-            return Scaffold(
-              appBar: _TopBar(
-                showBack:
-                    effective < Breakpoints.compact && _pane != _Pane.folders,
-                onBack: () => setState(() => _pane = _pane.previous),
-                searchFocus: _searchFocus,
-                searchController: _searchController,
-                narrow: effective < Breakpoints.compact,
-                sidebarToggle: effective >= Breakpoints.medium
-                    ? IconButton(
-                        tooltip: _sidebarVisible
-                            ? 'Hide folders'
-                            : 'Show folders',
-                        icon: const Icon(Icons.menu),
-                        onPressed: () =>
-                            setState(() => _sidebarVisible = !_sidebarVisible),
-                      )
-                    : null,
-              ),
-              body: Column(
-                children: [
-                  Expanded(child: body),
-                  const _StatusBar(),
-                ],
+            // Android system-back must walk the views (reader → list →
+            // folders) instead of closing the app from a nested pane. The
+            // order mirrors the visible back affordances: fullscreen first,
+            // then search/selection, then the pane stack.
+            final backBlocksPop =
+                fullscreen ||
+                state.searching ||
+                state.selectionMode ||
+                (effective < Breakpoints.compact
+                    ? _pane != _Pane.folders
+                    : openUid >= 0);
+            return PopScope(
+              canPop: !backBlocksPop,
+              onPopInvokedWithResult: (didPop, _) {
+                if (didPop) return;
+                _systemBack(state, effective);
+              },
+              child: Scaffold(
+                appBar: _TopBar(
+                  showBack:
+                      effective < Breakpoints.compact && _pane != _Pane.folders,
+                  onBack: () => setState(() => _pane = _pane.previous),
+                  searchFocus: _searchFocus,
+                  searchController: _searchController,
+                  narrow: effective < Breakpoints.compact,
+                  sidebarToggle: effective >= Breakpoints.medium
+                      ? IconButton(
+                          tooltip: _sidebarVisible
+                              ? 'Hide folders'
+                              : 'Show folders',
+                          icon: const Icon(Icons.menu),
+                          onPressed: () => setState(
+                            () => _sidebarVisible = !_sidebarVisible,
+                          ),
+                        )
+                      : null,
+                ),
+                body: Column(
+                  children: [
+                    Expanded(child: body),
+                    const _StatusBar(),
+                  ],
+                ),
               ),
             );
           },
@@ -143,6 +162,34 @@ class _MailShellState extends State<MailShell> {
   void _escape(MailState state) {
     if (state.readerFullscreen) {
       state.toggleReaderFullscreen();
+      return;
+    }
+    if (state.openUid >= 0) state.closeMessage();
+  }
+
+  /// System-back (Android gesture/button): same steps as the visible back
+  /// affordances, innermost first. Called only when the pop was blocked.
+  void _systemBack(MailState state, double effective) {
+    if (state.readerFullscreen) {
+      state.toggleReaderFullscreen();
+      return;
+    }
+    if (state.searching) {
+      state.exitSearch();
+      return;
+    }
+    if (state.selectionMode) {
+      state.exitSelectionMode();
+      return;
+    }
+    if (effective < Breakpoints.compact) {
+      // Narrow stack: reader → list → folders. Folders is the root there,
+      // so from it the pop is allowed through (app closes).
+      if (_pane == _Pane.reader) {
+        setState(() => _pane = _Pane.list);
+      } else if (_pane == _Pane.list) {
+        setState(() => _pane = _Pane.folders);
+      }
       return;
     }
     if (state.openUid >= 0) state.closeMessage();
@@ -229,24 +276,70 @@ enum _Pane {
   };
 }
 
-/// The draggable split between panes: a visible divider that resizes on
-/// horizontal drag, like the Qt SplitView handle.
-class _PaneDivider extends StatelessWidget {
+/// The draggable split between panes, like the Qt SplitView handle.
+///
+/// The visual line stays 1px but the hit area is ~24px wide: a 9px target is
+/// not grabbable on touch screens, and the drag would lose to scrolling.
+/// A grip pill appears on hover/drag as the grab affordance.
+class _PaneDivider extends StatefulWidget {
   const _PaneDivider({required this.onDelta});
 
   final ValueChanged<double> onDelta;
 
   @override
+  State<_PaneDivider> createState() => _PaneDividerState();
+}
+
+class _PaneDividerState extends State<_PaneDivider> {
+  bool _active = false;
+
+  @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return MouseRegion(
       cursor: SystemMouseCursors.resizeColumn,
+      onEnter: (_) => setState(() => _active = true),
+      onExit: (_) => setState(() => _active = false),
       child: GestureDetector(
         behavior: HitTestBehavior.translucent,
-        onHorizontalDragUpdate: (d) => onDelta(d.delta.dx),
-        child: Container(
-          width: 9,
-          alignment: Alignment.center,
-          child: Container(width: 1, color: Theme.of(context).dividerColor),
+        onHorizontalDragStart: (_) => setState(() => _active = true),
+        onHorizontalDragEnd: (_) => setState(() => _active = false),
+        onHorizontalDragCancel: () => setState(() => _active = false),
+        onHorizontalDragUpdate: (d) => widget.onDelta(d.delta.dx),
+        // Double-tap resets nothing, but the affordance must say grabbable.
+        child: Semantics(
+          label: 'Resize panes',
+          child: Container(
+            width: 24,
+            alignment: Alignment.center,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Container(
+                  width: _active ? 3 : 1,
+                  color: _active
+                      ? scheme.primary
+                      : Theme.of(context).dividerColor,
+                ),
+                Container(
+                  width: 8,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: _active
+                        ? scheme.primaryContainer
+                        : scheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: scheme.outlineVariant),
+                  ),
+                  child: Icon(
+                    Icons.drag_indicator,
+                    size: 8,
+                    color: scheme.outline,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -276,14 +369,20 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<MailState>();
+    final leading = showBack
+        ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: onBack)
+        : sidebarToggle;
     return AppBar(
-      leading: showBack
-          ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: onBack)
-          : sidebarToggle,
-      titleSpacing: 0,
+      leading: leading,
+      // With no leading the title sat flush at the screen edge (titleSpacing
+      // 0 + no back button = "INBOX" touching the bezel). Keep 0 only when a
+      // leading icon already provides the inset.
+      titleSpacing: leading == null ? 16 : 0,
       title: narrow
+          // The folders pane has no back button, which is also how we know
+          // it is showing: label it 'Mail', not the selected folder.
           ? Text(
-              state.folder?.leafName ?? 'Mail',
+              showBack ? (state.folder?.leafName ?? 'Mail') : 'Mail',
               overflow: TextOverflow.ellipsis,
             )
           : _SearchField(focus: searchFocus, controller: searchController),
