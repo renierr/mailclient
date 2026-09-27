@@ -19,7 +19,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:workmanager/workmanager.dart';
+
 
 import '../ffi/mail_core.dart';
 
@@ -75,39 +75,15 @@ Future<void> scheduleBackgroundSync({required int intervalMinutes}) async {
   if (!Platform.isAndroid) return;
   final effective = effectiveBackgroundMinutes(intervalMinutes);
   if (effective <= 0) {
-    await Workmanager().cancelByUniqueName(backgroundSyncTask);
     await _expeditedChannel.invokeMethod('cancelExpedited');
     return;
   }
-  try {
-    await _expeditedChannel.invokeMethod('enqueueExpedited', {
-      'intervalMinutes': effective,
-    });
-  } catch (_) {
-    await Workmanager().registerPeriodicTask(
-      backgroundSyncTask,
-      backgroundSyncTask,
-      frequency: Duration(minutes: effective),
-      initialDelay: Duration(minutes: effective),
-      constraints: Constraints(networkType: NetworkType.connected),
-      existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
-      backoffPolicy: BackoffPolicy.exponential,
-    );
-  }
-}
-
-@pragma('vm:entry-point')
-void backgroundSyncDispatcher() {
-  Workmanager().executeTask((task, _) async {
-    if (task != backgroundSyncTask) return true;
-    try {
-      await runBackgroundCheck();
-      return true;
-    } catch (_) {
-      return false;
-    }
+  await _expeditedChannel.invokeMethod('enqueueExpedited', {
+    'intervalMinutes': effective,
   });
 }
+
+
 
 const _backgroundSyncChannel = MethodChannel('mailclient/background_sync');
 
