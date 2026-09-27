@@ -87,6 +87,10 @@ pub struct NewMail {
     pub folder_id: i64,
     pub folder: String,
     pub uid: u32,
+    /// Folder UIDVALIDITY this UID belongs to. A server reset restarts UIDs
+    /// from low numbers under a new validity, so a notified-UID mark that
+    /// ignores it would silence every later arrival.
+    pub uid_validity: u32,
     pub from: String,
     pub subject: String,
     pub date: String,
@@ -441,6 +445,7 @@ pub fn collect_new_mail(db: &Db) -> Vec<NewMail> {
                 folder_id,
                 folder: r.folder.clone(),
                 uid: r.uid as u32,
+                uid_validity: validity as u32,
                 from: r.from.clone(),
                 subject: r.subject.clone(),
                 date: r.date.clone(),

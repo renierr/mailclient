@@ -110,30 +110,37 @@ Future<void> runBackgroundCheck() async {
   final report = await core.backgroundCheckNow();
   if (report['skipped'] == true) return;
   final settings = await core.settings();
-  if (!settings.notificationsEnabled) return;
   final items = (report['new'] as List<dynamic>? ?? const [])
       .whereType<Map<String, dynamic>>()
       .toList(growable: false);
   if (items.isEmpty) return;
   final prefs = await SharedPreferences.getInstance();
-  final filtered = <Map<String, dynamic>>[];
+  final pending = <_PendingMail>[];
   for (final item in items) {
-    final accountId = _asInt(item['account_id']);
-    final folderId = _asInt(item['folder_id']);
-    final uid = _asInt(item['uid']);
-    final mark = prefs.getInt('notified_uid_${accountId}_$folderId') ?? 0;
-    if (uid > mark) filtered.add(item);
+    final mail = _PendingMail.from(item);
+    if (mail == null) continue;
+    final mark = readNotifiedMark(prefs, mail.accountId, mail.folderId);
+    if (mark != null &&
+        (mark.validity == mail.uidValidity || mark.validity == 0) &&
+        mail.uid <= mark.uid) {
+      continue;
+    }
+    pending.add(mail);
   }
-  if (filtered.isEmpty) return;
-  await showNewMailNotification(filtered);
-  for (final item in filtered) {
-    final accountId = _asInt(item['account_id']);
-    final folderId = _asInt(item['folder_id']);
-    final uid = _asInt(item['uid']);
-    final key = 'notified_uid_${accountId}_$folderId';
-    final current = prefs.getInt(key) ?? 0;
-    if (uid > current) await prefs.setInt(key, uid);
+  if (pending.isEmpty) return;
+  // Alerts off: remember what this run saw so turning them back on does not
+  // ding for mail that arrived in the gap. The Rust cursor has already moved.
+  if (!settings.notificationsEnabled) {
+    await _advanceNotifiedMarks(prefs, pending);
+    return;
   }
+  try {
+    await showNewMailNotification(pending.map((m) => m.item).toList(growable: false));
+  } catch (_) {
+    // Leave the marks where they are so the next run retries the post.
+    return;
+  }
+  await _advanceNotifiedMarks(prefs, pending);
 }
 
 /// Post a mock notification with all display options, for testing from
@@ -240,6 +247,77 @@ int _asInt(Object? v) => switch (v) {
   String s => int.tryParse(s) ?? -1,
   _ => -1,
 };
+
+/// Highest UID already handled for one folder, scoped to a UIDVALIDITY.
+/// A server reset changes the validity and the old UID must not silence
+/// mail that reuses it.
+class _PendingMail {
+  const _PendingMail(this.item, this.accountId, this.folderId, this.uid, this.uidValidity);
+
+  final Map<String, dynamic> item;
+  final int accountId;
+  final int folderId;
+  final int uid;
+  final int uidValidity;
+
+  static _PendingMail? from(Map<String, dynamic> item) {
+    final accountId = _asInt(item['account_id']);
+    final folderId = _asInt(item['folder_id']);
+    final uid = _asInt(item['uid']);
+    final validity = _asInt(item['uid_validity']);
+    if (accountId < 0 || folderId < 0 || uid < 0 || validity < 0) return null;
+    return _PendingMail(item, accountId, folderId, uid, validity);
+  }
+}
+
+({int validity, int uid})? readNotifiedMark(SharedPreferences prefs, int accountId, int folderId) {
+  final key = _notifiedKey(accountId, folderId);
+  // A key previously stored as an int throws on getString. That is the
+  // legacy mark, handled below.
+  final raw = _stringOrNull(prefs, key);
+  if (raw != null) {
+    final parts = raw.split(':');
+    if (parts.length != 2) return null;
+    final validity = int.tryParse(parts[0]);
+    final uid = int.tryParse(parts[1]);
+    if (validity == null || uid == null) return null;
+    return (validity: validity, uid: uid);
+  }
+  // Earlier builds stored a bare UID. Keep it so the format change does not
+  // re-notify mail already alerted; the next advance rewrites the string.
+  final legacy = prefs.getInt(key);
+  if (legacy == null) return null;
+  return (validity: 0, uid: legacy);
+}
+
+String _notifiedKey(int accountId, int folderId) => 'notified_uid_${accountId}_$folderId';
+
+String? _stringOrNull(SharedPreferences prefs, String key) {
+  try {
+    return prefs.getString(key);
+  } catch (_) {
+    return null;
+  }
+}
+
+Future<void> _advanceNotifiedMarks(SharedPreferences prefs, List<_PendingMail> pending) async {
+  final top = <(int, int), ({int validity, int uid})>{};
+  for (final mail in pending) {
+    final key = (mail.accountId, mail.folderId);
+    final current = top[key];
+    if (current == null || mail.uidValidity != current.validity || mail.uid > current.uid) {
+      top[key] = (validity: mail.uidValidity, uid: mail.uid);
+    }
+  }
+  for (final entry in top.entries) {
+    final stored = readNotifiedMark(prefs, entry.key.$1, entry.key.$2);
+    final next = entry.value;
+    if (stored != null && stored.validity == next.validity && stored.uid >= next.uid) {
+      continue;
+    }
+    await prefs.setString(_notifiedKey(entry.key.$1, entry.key.$2), '${next.validity}:${next.uid}');
+  }
+}
 
 /// Ask Android for the runtime notification permission (API 33+ shows a
 /// system prompt; older versions grant it at install time and the native
