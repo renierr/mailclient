@@ -151,7 +151,19 @@ Needed once:
   `armv7-linux-androideabi`, `x86_64-linux-android`);
 - a release keystore plus `flutter/android/key.properties` (gitignored) with
   `storeFile`, `storePassword`, `keyAlias` and `keyPassword`. Without it the
-  release build falls back to the debug signing config.
+  release build falls back to the debug signing config — `build.sh` refuses
+  to build in that case, because a debug-signed "release" APK is exactly what
+  Play Protect flags as harmful.
+
+Installing the APK sideloads it: it is self-signed with your local key, has
+no Play Store reputation, and Play Protect blocks it with a generic
+"harmful app" warning on first install. That verdict is about the unknown
+signature, not the code — the manifest requests only `INTERNET` (plus
+`ACCESS_NETWORK_STATE`), and "Trotzdem installieren" is safe for a build
+from this repo. Only a Play Store listing (Play App Signing plus reputation)
+removes the warning. If a previous install was signed with a *different* key
+(debug vs release), uninstall it first: Android refuses the update with a
+signature mismatch, which is separate from the Play Protect dialog.
 
 The NDK is located as `ANDROID_NDK_HOME` first, otherwise
 `<sdk.dir>/ndk/<flutter.ndkVersion>` — the same version

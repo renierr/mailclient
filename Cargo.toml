@@ -5,3 +5,9 @@ members = [
     "crates/mailapp",
     "crates/mailffi",
 ]
+
+# The single version number for the whole product. Crates inherit it via
+# `version.workspace = true`; the Flutter pubspec mirrors it as versionName
+# (see AGENT.md §5). Bump here, never per-crate.
+[workspace.package]
+version = "0.7.0"

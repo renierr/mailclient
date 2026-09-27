@@ -1,6 +1,6 @@
 [package]
 name = "mailffi"
-version = "0.6.0"
+version.workspace = true
 edition = "2021"
 description = "C-ABI shared library exposing mailcore to the Flutter frontend via flutter_rust_bridge."
 license = "MIT OR Apache-2.0"

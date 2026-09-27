@@ -45,6 +45,11 @@ android {
                 storeFile = keystoreProperties["storeFile"]?.let { file(it as String) }
                 storePassword = keystoreProperties["storePassword"] as String?
             } else {
+                // Loud on purpose: a release signed with the public debug key
+                // is exactly what Play Protect flags as harmful. build.sh
+                // refuses this combination outright; this fallback only exists
+                // so debug builds keep working on machines without a keystore.
+                logger.warn("No flutter/android/key.properties -- signing the release with DEBUG keys. See flutter/README.md.")
                 keyAlias = signingConfigs.getByName("debug").keyAlias
                 keyPassword = signingConfigs.getByName("debug").keyPassword
                 storeFile = signingConfigs.getByName("debug").storeFile

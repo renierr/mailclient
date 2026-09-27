@@ -1418,7 +1418,7 @@ dependencies = [
 
 [[package]]
 name = "mailapp"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "cxx",
  "cxx-qt",
@@ -1435,7 +1435,7 @@ dependencies = [
 
 [[package]]
 name = "mailcore"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "chrono",
  "directories",
@@ -1462,7 +1462,7 @@ dependencies = [
 
 [[package]]
 name = "mailffi"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "android_logger 0.14.1",
  "anyhow",

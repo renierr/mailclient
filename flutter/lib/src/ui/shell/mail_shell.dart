@@ -39,6 +39,10 @@ class _MailShellState extends State<MailShell> {
   double _sidebarWidth = 260;
   double _listWidth = 380;
 
+  /// Same for the two-pane layout, which used to be a fixed 240px sidebar
+  /// behind a static divider — not resizable at all, let alone by touch.
+  double _twoPaneSidebarWidth = 240;
+
   /// Wide-layout sidebar visibility, like the Qt hamburger toggle.
   bool _sidebarVisible = true;
 
@@ -96,7 +100,7 @@ class _MailShellState extends State<MailShell> {
             final body = effective >= Breakpoints.medium
                 ? _threePane(fullscreen)
                 : effective >= Breakpoints.compact
-                ? _twoPane(fullscreen, openUid)
+                ? _twoPane(fullscreen, openUid, width)
                 : _onePane();
             // Android system-back must walk the views (reader → list →
             // folders) instead of closing the app from a nested pane. The
@@ -239,17 +243,28 @@ class _MailShellState extends State<MailShell> {
     );
   }
 
-  Widget _twoPane(bool fullscreen, int openUid) {
+  Widget _twoPane(bool fullscreen, int openUid, double maxWidth) {
     // The reader takes the list's place rather than squeezing a third column
     // into a width where none of them would be usable.
     final main = openUid >= 0
         ? ReaderPane(onClose: context.read<MailState>().closeMessage)
         : const MessageListPane();
     if (fullscreen) return main;
+    // Keep at least ~300px for the main pane: the sidebar cap follows the
+    // window, so shrinking the window can never push the list off-screen.
+    final cap = (maxWidth - 300).clamp(200.0, 480.0);
+    final side = _twoPaneSidebarWidth.clamp(160.0, cap);
     return Row(
       children: [
-        const SizedBox(width: 240, child: FolderSidebar()),
-        const VerticalDivider(width: 1),
+        SizedBox(width: side, child: const FolderSidebar()),
+        _PaneDivider(
+          onDelta: (dx) => setState(
+            () => _twoPaneSidebarWidth = (_twoPaneSidebarWidth + dx).clamp(
+              160.0,
+              cap,
+            ),
+          ),
+        ),
         Expanded(child: main),
       ],
     );

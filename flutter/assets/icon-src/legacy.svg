@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108">
+  <!-- Legacy launcher icon source (pre-Oreo + Play Store listing art):
+       full-bleed brand background with the glyph baked in. The launcher
+       applies its own mask, so the background must reach every edge. -->
+  <rect x="0" y="0" width="108" height="108" fill="#3B82F6"/>
+  <rect x="24" y="32" width="60" height="44" rx="9" fill="#ffffff"/>
+  <path d="M28 38 L54 58 L80 38" fill="none" stroke="#3B82F6" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

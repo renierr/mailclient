@@ -55,6 +55,33 @@ write_version() {
         || echo "unversioned" > "$1/VERSION"
 }
 
+# A "signed" release build only carries the release signature when the
+# keystore from flutter/android/key.properties actually exists: Gradle
+# silently falls back to the public debug key otherwise, and Play Protect
+# flags the result as harmful. Fail loudly instead of shipping that.
+require_keystore() {
+    local props="flutter/android/key.properties"
+    [ -f "$props" ] || {
+        echo "missing $props -- create a release keystore first:" >&2
+        echo "  keytool -genkey -v -keystore ~/mailclient-release.jks -alias mailclient -keyalg RSA -keysize 2048 -validity 10000" >&2
+        echo "then write storeFile/storePassword/keyAlias/keyPassword into $props (gitignored, never commit it)." >&2
+        exit 1
+    }
+    local store
+    # Strip CR: key.properties may carry CRLF line endings (Gradle tolerates
+    # them, shell comparisons do not).
+    store="$(grep -E '^storeFile=' "$props" | cut -d= -f2- | tr -d '\r' || true)"
+    # A relative storeFile resolves against flutter/android/.
+    case "$store" in
+        /*) ;;
+        *) store="flutter/android/$store" ;;
+    esac
+    [ -n "$store" ] && [ -f "$store" ] || {
+        echo "keystore not found at '$store' (storeFile in $props)." >&2
+        exit 1
+    }
+}
+
 build_qt() {
     # shellcheck source=scripts/qt-env.sh
     . ./scripts/qt-env.sh
@@ -129,6 +156,7 @@ EOF
 }
 
 build_apk() {
+    require_keystore
     echo "==> flutter build apk --release"
     (cd flutter && flutter build apk --release)
 
@@ -151,6 +179,7 @@ EOF
 }
 
 build_aab() {
+    require_keystore
     echo "==> flutter build appbundle --release"
     (cd flutter && flutter build appbundle --release)
 
