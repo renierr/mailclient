@@ -620,6 +620,14 @@ class MailState extends ChangeNotifier {
     } else if (folderId != _folderId) {
       await selectFolder(folderId);
     }
+    if (!_messages.any((m) => m.uid == uid)) {
+      unawaited(syncAccount());
+      final deadline = DateTime.now().add(const Duration(seconds: 5));
+      while (!_messages.any((m) => m.uid == uid) &&
+          DateTime.now().isBefore(deadline)) {
+        await Future.delayed(const Duration(milliseconds: 200));
+      }
+    }
     await openMessage(uid);
   }
 
