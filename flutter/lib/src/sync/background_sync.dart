@@ -69,31 +69,33 @@ String encodeOpenPayload({
   return (accountId: ids[0], folderId: ids[1], uid: ids[2]);
 }
 
-/// (Re-)schedule the background worker from the sync-interval setting.
-/// `0` cancels it. No-op off Android — other platforms keep the foreground
-/// timer only.
+const _expeditedChannel = MethodChannel('mailclient/expedited_work');
+
 Future<void> scheduleBackgroundSync({required int intervalMinutes}) async {
   if (!Platform.isAndroid) return;
   final effective = effectiveBackgroundMinutes(intervalMinutes);
   if (effective <= 0) {
     await Workmanager().cancelByUniqueName(backgroundSyncTask);
+    await _expeditedChannel.invokeMethod('cancelExpedited');
     return;
   }
-  await Workmanager().registerPeriodicTask(
-    backgroundSyncTask,
-    backgroundSyncTask,
-    frequency: Duration(minutes: effective),
-    // First run after one full interval: app start already syncs, and an
-    // immediate worker wake would just duplicate it.
-    initialDelay: Duration(minutes: effective),
-    constraints: Constraints(networkType: NetworkType.connected),
-    existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
-    backoffPolicy: BackoffPolicy.exponential,
-  );
+  try {
+    await _expeditedChannel.invokeMethod('enqueueExpedited', {
+      'intervalMinutes': effective,
+    });
+  } catch (_) {
+    await Workmanager().registerPeriodicTask(
+      backgroundSyncTask,
+      backgroundSyncTask,
+      frequency: Duration(minutes: effective),
+      initialDelay: Duration(minutes: effective),
+      constraints: Constraints(networkType: NetworkType.connected),
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
+      backoffPolicy: BackoffPolicy.exponential,
+    );
+  }
 }
 
-/// WorkManager entry point. Must stay a top-level function: the OS wakes it
-/// in a headless isolate with no UI, no provider tree, no [MailState].
 @pragma('vm:entry-point')
 void backgroundSyncDispatcher() {
   Workmanager().executeTask((task, _) async {
@@ -102,10 +104,24 @@ void backgroundSyncDispatcher() {
       await runBackgroundCheck();
       return true;
     } catch (_) {
-      // `false` tells WorkManager to retry with exponential backoff rather
-      // than dropping the run silently.
       return false;
     }
+  });
+}
+
+const _backgroundSyncChannel = MethodChannel('mailclient/background_sync');
+
+void registerBackgroundSyncHandler() {
+  _backgroundSyncChannel.setMethodCallHandler((call) async {
+    if (call.method == 'runBackgroundCheck') {
+      try {
+        await runBackgroundCheck();
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    return null;
   });
 }
 

@@ -5,9 +5,18 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
+import androidx.work.WorkManager
+import androidx.work.Worker
+import androidx.work.WorkerParameters
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.util.concurrent.TimeUnit
 
 /// Hosts the one native call the notification plugins do not cover:
 /// the Android 13+ runtime prompt for `POST_NOTIFICATIONS`
@@ -35,6 +44,26 @@ class MainActivity : FlutterActivity() {
                             1001,
                         )
                     }
+                } else if (call.method == "enqueueExpedited") {
+                    val intervalMinutes = call.argument<Int>("intervalMinutes") ?: 15
+                    val constraints = Constraints.Builder()
+                        .setRequiredNetworkType(NetworkType.CONNECTED)
+                        .build()
+                    val workRequest = OneTimeWorkRequestBuilder<BackgroundSyncWorker>()
+                        .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                        .setConstraints(constraints)
+                        .setInitialDelay(intervalMinutes.toLong(), TimeUnit.MINUTES)
+                        .addTag("mail-background-sync")
+                        .build()
+                    WorkManager.getInstance(this).enqueueUniqueWork(
+                        "mail-background-sync",
+                        ExistingWorkPolicy.REPLACE,
+                        workRequest
+                    )
+                    result.success(true)
+                } else if (call.method == "cancelExpedited") {
+                    WorkManager.getInstance(this).cancelUniqueWork("mail-background-sync")
+                    result.success(true)
                 } else {
                     result.notImplemented()
                 }

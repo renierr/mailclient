@@ -28,6 +28,7 @@ class _MailAppState extends State<MailApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    registerBackgroundSyncHandler();
     WidgetsBinding.instance.addPostFrameCallback((_) => _wireNotifications());
   }
 
