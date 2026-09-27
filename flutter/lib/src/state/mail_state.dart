@@ -41,6 +41,10 @@ class MailState extends ChangeNotifier {
   /// control that started it rather than locking the whole window.
   final Set<String> _busyKinds = {};
 
+  /// Open message a queued move/trash/archive should leave behind, once that
+  /// job finishes successfully. -1 means nothing is waiting to close.
+  int _pendingCloseUid = -1;
+
   AppSettings _settings = AppSettings.defaults;
 
   // --- search ------------------------------------------------------------
@@ -253,6 +257,7 @@ class MailState extends ChangeNotifier {
     'Delete',
     () => _core.deleteMessages(_accountId, _folderId, uids),
     clearSelection: true,
+    closeUid: uids,
   );
 
   /// Destroy a selection server-side. No undo; the UI always confirms first.
@@ -260,18 +265,21 @@ class MailState extends ChangeNotifier {
     'Purge',
     () => _core.purgeMessages(_accountId, _folderId, uids),
     clearSelection: true,
+    closeUid: uids,
   );
 
   Future<void> archiveMessages(List<int> uids) => _queue(
     'Archive',
     () => _core.archiveMessages(_accountId, _folderId, uids),
     clearSelection: true,
+    closeUid: uids,
   );
 
   Future<void> moveMessages(List<int> uids, String destPath) => _queue(
     'Move',
     () => _core.moveMessages(_accountId, _folderId, uids, destPath),
     clearSelection: true,
+    closeUid: uids,
   );
 
   Future<void> markReadMany(List<int> uids, bool read) async {
@@ -506,6 +514,12 @@ class MailState extends ChangeNotifier {
       case JobPhase.finished:
         _busyKinds.remove(e.kind);
         if (e.status.isNotEmpty) showStatus(e.status, isError: !e.ok);
+        if (e.ok && _pendingCloseUid >= 0 && _pendingCloseUid == _openUid) {
+          closeMessage();
+          _pendingCloseUid = -1;
+        } else if (!e.ok) {
+          _pendingCloseUid = -1;
+        }
         _refreshFor(e);
     }
     notifyListeners();
@@ -701,6 +715,7 @@ class MailState extends ChangeNotifier {
     String kind,
     Future<void> Function() start, {
     bool clearSelection = false,
+    List<int> closeUid = const [],
   }) async {
     try {
       await start();
@@ -709,6 +724,7 @@ class MailState extends ChangeNotifier {
         _selectedUids.clear();
         _selectionMode = false;
       }
+      if (closeUid.contains(_openUid)) _pendingCloseUid = _openUid;
       notifyListeners();
     } catch (e) {
       showStatus(_message(e), isError: true);
