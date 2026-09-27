@@ -19,6 +19,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 
 import '../ffi/mail_core.dart';
@@ -101,13 +102,7 @@ void registerBackgroundSyncHandler() {
   });
 }
 
-/// One headless tick: sync every account via the Rust headless check and
-/// notify about mail first seen by this run. Skipped runs (sync lock held
-/// elsewhere) and empty runs stay silent. Notifications can be disabled
-/// independently — the sync still runs, only the alert is suppressed.
 Future<void> runBackgroundCheck() async {
-  // Per-isolate singleton: this re-opens the same database file and vault
-  // the UI uses. `init_app` is idempotent for the same directory.
   final core = await MailCore.load();
   final report = await core.backgroundCheckNow();
   if (report['skipped'] == true) return;
@@ -117,7 +112,25 @@ Future<void> runBackgroundCheck() async {
       .whereType<Map<String, dynamic>>()
       .toList(growable: false);
   if (items.isEmpty) return;
-  await showNewMailNotification(items);
+  final prefs = await SharedPreferences.getInstance();
+  final filtered = <Map<String, dynamic>>[];
+  for (final item in items) {
+    final accountId = _asInt(item['account_id']);
+    final folderId = _asInt(item['folder_id']);
+    final uid = _asInt(item['uid']);
+    final mark = prefs.getInt('notified_uid_${accountId}_$folderId') ?? 0;
+    if (uid > mark) filtered.add(item);
+  }
+  if (filtered.isEmpty) return;
+  await showNewMailNotification(filtered);
+  for (final item in filtered) {
+    final accountId = _asInt(item['account_id']);
+    final folderId = _asInt(item['folder_id']);
+    final uid = _asInt(item['uid']);
+    final key = 'notified_uid_${accountId}_$folderId';
+    final current = prefs.getInt(key) ?? 0;
+    if (uid > current) await prefs.setInt(key, uid);
+  }
 }
 
 /// Post a mock notification with all display options, for testing from
