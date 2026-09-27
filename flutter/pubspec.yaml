@@ -47,7 +47,7 @@ dependencies:
   open_filex: ^4.7.0
   url_launcher: ^6.3.2
   workmanager: ^0.10.10
-  flutter_local_notifications: ^8.2.0
+  flutter_local_notifications: ^22.3.1
   shared_preferences: ^2.5.5
 
 dev_dependencies:

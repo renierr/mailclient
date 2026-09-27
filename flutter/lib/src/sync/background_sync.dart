@@ -135,7 +135,7 @@ Future<void> showNewMailNotification(
   final notifications = plugin ?? FlutterLocalNotificationsPlugin();
   if (plugin == null) {
     await notifications.initialize(
-      const InitializationSettings(
+      settings: const InitializationSettings(
         android: AndroidInitializationSettings('@mipmap/ic_launcher'),
       ),
     );
@@ -148,14 +148,15 @@ Future<void> showNewMailNotification(
   );
   if (items.length == 1) {
     await notifications.show(
-      0,
-      _titleOf(newest),
-      _bodyOf(newest),
-      const NotificationDetails(
+      id: 0,
+      title: _titleOf(newest),
+      body: _bodyOf(newest),
+      notificationDetails: const NotificationDetails(
         android: AndroidNotificationDetails(
           newMailChannelId,
           newMailChannelName,
-          'Alerts for mail that arrived while the app was closed',
+          channelDescription:
+              'Alerts for mail that arrived while the app was closed',
           importance: Importance.high,
           priority: Priority.high,
           groupKey: newMailChannelId,
@@ -170,14 +171,15 @@ Future<void> showNewMailNotification(
       .map((m) => '${_titleOf(m)} — ${_bodyOf(m)}')
       .toList(growable: false);
   await notifications.show(
-    0,
-    '${items.length} new messages',
-    '${_titleOf(newest)} — ${_bodyOf(newest)}',
-    NotificationDetails(
+    id: 0,
+    title: '${items.length} new messages',
+    body: '${_titleOf(newest)} — ${_bodyOf(newest)}',
+    notificationDetails: NotificationDetails(
       android: AndroidNotificationDetails(
         newMailChannelId,
         newMailChannelName,
-        'Alerts for mail that arrived while the app was closed',
+        channelDescription:
+            'Alerts for mail that arrived while the app was closed',
         importance: Importance.high,
         priority: Priority.high,
         styleInformation: InboxStyleInformation(

@@ -39,13 +39,13 @@ class _MailAppState extends State<MailApp> with WidgetsBindingObserver {
     if (!Platform.isAndroid) return;
     final plugin = FlutterLocalNotificationsPlugin();
     await plugin.initialize(
-      const InitializationSettings(
+      settings: const InitializationSettings(
         android: AndroidInitializationSettings('@mipmap/ic_launcher'),
       ),
       // Fires for taps while the app is alive; cold-start taps arrive via
       // the launch details below.
-      onSelectNotification: (payload) async {
-        final target = parseOpenPayload(payload);
+      onDidReceiveNotificationResponse: (response) async {
+        final target = parseOpenPayload(response.payload);
         if (target != null) {
           await _state.openMail(
             accountId: target.accountId,
@@ -64,7 +64,7 @@ class _MailAppState extends State<MailApp> with WidgetsBindingObserver {
     }
     final launch = await plugin.getNotificationAppLaunchDetails();
     if (launch?.didNotificationLaunchApp == true) {
-      final target = parseOpenPayload(launch?.payload);
+      final target = parseOpenPayload(launch?.notificationResponse?.payload);
       if (target != null && _state.hasAccounts) {
         await _state.openMail(
           accountId: target.accountId,
