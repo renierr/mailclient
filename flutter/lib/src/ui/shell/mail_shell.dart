@@ -34,6 +34,25 @@ class _MailShellState extends State<MailShell> {
   final _searchFocus = FocusNode();
   final _searchController = TextEditingController();
 
+  /// Narrow layouts show the search field inline in the AppBar instead of a
+  /// dialog (a dialog plus keyboard leaves no room on a phone).
+  bool _searchOpen = false;
+
+  void _focusSearch() {
+    setState(() => _searchOpen = true);
+    // The inline field may just have appeared; focus it after the frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocus.requestFocus();
+    });
+  }
+
+  void _closeSearch(MailState state) {
+    _searchController.clear();
+    state.exitSearch();
+    _searchFocus.unfocus();
+    setState(() => _searchOpen = false);
+  }
+
   /// Pane widths on the wide layout, dragged at the dividers. Plain fields,
   /// not settings: the Qt SplitView does not remember them either.
   double _sidebarWidth = 260;
@@ -71,7 +90,7 @@ class _MailShellState extends State<MailShell> {
         const SingleActivator(LogicalKeyboardKey.keyR, control: true): () =>
             state.syncAccount(),
         const SingleActivator(LogicalKeyboardKey.keyF, control: true): () =>
-            _searchFocus.requestFocus(),
+            _focusSearch(),
         // Qt parity: Delete trashes, Shift+Delete purges, Esc leaves the
         // reader/fullscreen, F11 toggles reader fullscreen.
         const SingleActivator(LogicalKeyboardKey.delete): () =>
@@ -108,6 +127,7 @@ class _MailShellState extends State<MailShell> {
             // then search/selection, then the pane stack.
             final backBlocksPop =
                 fullscreen ||
+                _searchOpen ||
                 state.searching ||
                 state.selectionMode ||
                 (effective < Breakpoints.compact
@@ -127,6 +147,9 @@ class _MailShellState extends State<MailShell> {
                   searchFocus: _searchFocus,
                   searchController: _searchController,
                   narrow: effective < Breakpoints.compact,
+                  searchOpen: _searchOpen,
+                  onOpenSearch: _focusSearch,
+                  onCloseSearch: () => _closeSearch(state),
                   sidebarToggle: effective >= Breakpoints.medium
                       ? IconButton(
                           tooltip: _sidebarVisible
@@ -176,6 +199,11 @@ class _MailShellState extends State<MailShell> {
   void _systemBack(MailState state, double effective) {
     if (state.readerFullscreen) {
       state.toggleReaderFullscreen();
+      return;
+    }
+    // Inline search field first: one back press leaves search entirely.
+    if (_searchOpen) {
+      _closeSearch(state);
       return;
     }
     if (state.searching) {
@@ -368,6 +396,9 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
     required this.searchFocus,
     required this.searchController,
     required this.narrow,
+    required this.searchOpen,
+    required this.onOpenSearch,
+    required this.onCloseSearch,
     this.sidebarToggle,
   });
 
@@ -376,6 +407,12 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
   final FocusNode searchFocus;
   final TextEditingController searchController;
   final bool narrow;
+
+  /// Narrow layouts trade the title for an inline search field — no dialog,
+  /// so the keyboard can never break it.
+  final bool searchOpen;
+  final VoidCallback onOpenSearch;
+  final VoidCallback onCloseSearch;
   final Widget? sidebarToggle;
 
   @override
@@ -384,7 +421,12 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<MailState>();
-    final leading = showBack
+    final inlineSearch = narrow && searchOpen;
+    final leading = inlineSearch
+        // While searching, the leading affordance closes the search (and
+        // clears it), not the pane navigation underneath.
+        ? IconButton(icon: const Icon(Icons.close), onPressed: onCloseSearch)
+        : showBack
         ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: onBack)
         : sidebarToggle;
     return AppBar(
@@ -393,7 +435,9 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
       // 0 + no back button = "INBOX" touching the bezel). Keep 0 only when a
       // leading icon already provides the inset.
       titleSpacing: leading == null ? 16 : 0,
-      title: narrow
+      title: inlineSearch
+          ? _InlineSearchField(focus: searchFocus, controller: searchController)
+          : narrow
           // The folders pane has no back button, which is also how we know
           // it is showing: label it 'Mail', not the selected folder.
           ? Text(
@@ -402,11 +446,12 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
             )
           : _SearchField(focus: searchFocus, controller: searchController),
       actions: [
-        if (narrow)
+        // The search icon becomes the inline field; hide it while open.
+        if (narrow && !searchOpen)
           IconButton(
             tooltip: 'Search',
             icon: const Icon(Icons.search),
-            onPressed: () => _searchDialog(context, state),
+            onPressed: onOpenSearch,
           ),
         // Wide layouts compose from the sidebar button, like the Qt
         // toolbar; the narrow panes have no sidebar, so they keep an icon.
@@ -490,53 +535,45 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
         SettingsDialog.show(context);
     }
   }
+}
 
-  /// The narrow layout has no room for an inline field; search gets a dialog.
-  /// Keyboard-safe: SafeArea + viewInsets padding so the on-screen keyboard
-  /// never covers the field, and a scroll wrapper for short screens.
-  Future<void> _searchDialog(BuildContext context, MailState state) async {
-    final controller = TextEditingController(text: state.searchQuery);
-    await showDialog(
-      context: context,
-      useSafeArea: true,
-      builder: (context) => SafeArea(
-        child: AnimatedPadding(
-          padding: MediaQuery.viewInsetsOf(context),
-          duration: const Duration(milliseconds: 150),
-          curve: Curves.easeOut,
-          child: AlertDialog(
-            title: const Text('Search'),
-            content: SingleChildScrollView(
-              child: TextField(
-                controller: controller,
-                autofocus: true,
-                keyboardType: TextInputType.text,
-                textInputAction: TextInputAction.search,
-                decoration: const InputDecoration(
-                  hintText: '3 or more letters',
-                  prefixIcon: Icon(Icons.search),
-                ),
-                onChanged: (v) => state.runSearch(v),
-              ),
-            ),
-            actions: [
-              TextButton(
+/// Narrow-layout search field, living inline in the AppBar title slot instead
+/// of a dialog: no route means the keyboard can never break it. The Scaffold
+/// resizes, the list pane underneath shows the hits.
+class _InlineSearchField extends StatelessWidget {
+  const _InlineSearchField({required this.focus, required this.controller});
+
+  final FocusNode focus;
+  final TextEditingController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<MailState>();
+    if (controller.text != state.searchQuery && state.searchQuery.isEmpty) {
+      controller.clear();
+    }
+    return TextField(
+      controller: controller,
+      focusNode: focus,
+      autofocus: true,
+      keyboardType: TextInputType.text,
+      textInputAction: TextInputAction.search,
+      decoration: InputDecoration(
+        hintText: 'Search (3+ letters)',
+        border: InputBorder.none,
+        suffixIcon: state.searchQuery.isEmpty
+            ? null
+            : IconButton(
+                icon: const Icon(Icons.clear, size: 20),
                 onPressed: () {
+                  controller.clear();
                   state.exitSearch();
-                  Navigator.of(context).pop();
                 },
-                child: const Text('Clear'),
               ),
-              FilledButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Done'),
-              ),
-            ],
-          ),
-        ),
       ),
+      onChanged: (v) => state.runSearch(v),
+      onSubmitted: (v) => state.runSearch(v),
     );
-    controller.dispose();
   }
 }
 

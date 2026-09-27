@@ -10,10 +10,18 @@ import '../dialogs/mail_dialog.dart';
 /// right. Everything edits a local copy; Save writes it through, Cancel
 /// reverts by writing nothing at all.
 class SettingsDialog extends StatefulWidget {
-  const SettingsDialog({super.key});
+  const SettingsDialog({super.key, this.fullscreen = false});
+
+  /// Fullscreen page instead of a floating dialog — used on phones, where a
+  /// dialog plus the on-screen keyboard leaves no usable room.
+  final bool fullscreen;
 
   static Future<void> show(BuildContext context) async {
-    await MailDialog.show(context, builder: (_) => const SettingsDialog());
+    await MailDialog.showForm(
+      context,
+      dialog: (_) => const SettingsDialog(),
+      page: (_) => const SettingsDialog(fullscreen: true),
+    );
   }
 
   @override
@@ -57,6 +65,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.fullscreen) return _page();
     final narrow = MailDialog.isNarrow(context);
     final maxW = MailDialog.maxWidth(context, 800);
     final maxH = MailDialog.maxHeight(context, 640);
@@ -80,17 +89,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 12),
-                  if (!railMode)
-                    DropdownButton<_Section>(
-                      value: _section,
-                      isExpanded: true,
-                      items: [
-                        for (final s in _Section.values)
-                          DropdownMenuItem(value: s, child: Text(_label(s))),
-                      ],
-                      onChanged: (s) =>
-                          setState(() => _section = s ?? _section),
-                    ),
+                  if (!railMode) _sectionDropdown(),
                   Expanded(
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -112,17 +111,14 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         if (railMode) const VerticalDivider(width: 1),
                         Expanded(
                           child: SingleChildScrollView(
+                            // No viewInsets padding here: the
+                            // MailDialog.keyboardSafe wrapper already pads
+                            // for the keyboard once.
                             padding: const EdgeInsets.symmetric(
                               horizontal: 16,
-                              // Signature field stays above the keyboard.
                               vertical: 4,
                             ),
-                            child: Padding(
-                              padding: EdgeInsets.only(
-                                bottom: MediaQuery.viewInsetsOf(context).bottom,
-                              ),
-                              child: _body(),
-                            ),
+                            child: _body(),
                           ),
                         ),
                       ],
@@ -516,39 +512,100 @@ class _SettingsDialogState extends State<SettingsDialog> {
     String? help,
     bool enabled = true,
   }) {
+    DropdownButton<T> control({required bool expanded}) => DropdownButton<T>(
+      value: options.contains(value) ? value : options.first,
+      isExpanded: expanded,
+      items: [
+        for (final o in options)
+          DropdownMenuItem(
+            value: o,
+            child: Text(label(o), overflow: TextOverflow.ellipsis),
+          ),
+      ],
+      onChanged: enabled ? (v) => v != null ? onChanged(v) : null : null,
+    );
+    final labels = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title),
+        if (help != null)
+          Text(help, style: Theme.of(context).textTheme.bodySmall),
+      ],
+    );
+    // Label above the control on narrow/zoomed layouts: label-beside-control
+    // rows squeeze the dropdown (or the label) to zero there. Wide screens
+    // keep the compact side-by-side form.
+    if (MailDialog.isNarrow(context)) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            labels,
+            const SizedBox(height: 2),
+            Align(
+              alignment: Alignment.centerRight,
+              child: control(expanded: false),
+            ),
+          ],
+        ),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title),
-                if (help != null)
-                  Text(help, style: Theme.of(context).textTheme.bodySmall),
-              ],
-            ),
-          ),
+          Expanded(child: labels),
           const SizedBox(width: 8),
           // Flexible + isExpanded: the button caps at the remaining width and
           // ellipsizes instead of overflowing the row on narrow dialogs.
-          Flexible(
-            child: DropdownButton<T>(
-              value: options.contains(value) ? value : options.first,
-              isExpanded: true,
-              items: [
-                for (final o in options)
-                  DropdownMenuItem(
-                    value: o,
-                    child: Text(label(o), overflow: TextOverflow.ellipsis),
-                  ),
-              ],
-              onChanged: enabled
-                  ? (v) => v != null ? onChanged(v) : null
-                  : null,
+          Flexible(child: control(expanded: true)),
+        ],
+      ),
+    );
+  }
+
+  /// Section selector dropdown, shared by the dialog (short screens) and the
+  /// fullscreen page (phones always use it — no room for a rail).
+  Widget _sectionDropdown() {
+    return DropdownButton<_Section>(
+      value: _section,
+      isExpanded: true,
+      items: [
+        for (final s in _Section.values)
+          DropdownMenuItem(value: s, child: Text(_label(s))),
+      ],
+      onChanged: (s) => setState(() => _section = s ?? _section),
+    );
+  }
+
+  /// Fullscreen settings page for phones (see [SettingsDialog.fullscreen]).
+  Widget _page() {
+    return MailFormPage(
+      title: 'Settings',
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _save,
+          child: Text(_saving ? 'Saving…' : 'Save'),
+        ),
+      ],
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _sectionDropdown(),
+          const SizedBox(height: 8),
+          _body(),
+          if (_error != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
             ),
-          ),
+          ],
         ],
       ),
     );

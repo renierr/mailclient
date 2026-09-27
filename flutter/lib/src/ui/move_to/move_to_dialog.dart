@@ -38,66 +38,46 @@ class MoveToDialog extends StatelessWidget {
         : subject != null && subject!.isNotEmpty
         ? 'Move “$subject” to:'
         : 'Move to:';
-    return Dialog(
-      insetPadding: MailDialog.insets(context, wideH: 16),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: MailDialog.maxWidth(context, 440),
-          maxHeight: MailDialog.maxHeight(context, 520),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(title, style: Theme.of(context).textTheme.titleLarge),
-              const SizedBox(height: 12),
-              if (folders.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 16),
-                  child: Text('No other folders available.'),
-                )
-              else
-                Flexible(
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: folders.length,
-                    itemBuilder: (context, i) {
-                      final f = folders[i];
-                      final current = f.id == currentId;
-                      return ListTile(
-                        enabled: !current,
-                        contentPadding: EdgeInsets.only(
-                          left: 12.0 + f.depth * 14,
-                          right: 8,
-                        ),
-                        leading: Icon(_iconFor(f.role), size: 20),
-                        title: Text(
-                          f.leafName,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        onTap: current
-                            ? null
-                            : () {
-                                Navigator.of(context).pop();
-                                state.moveMessages(uids, f.path);
-                              },
-                      );
-                    },
-                  ),
+    final list = folders.isEmpty
+        ? const Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Text('No other folders available.'),
+          )
+        : ListView.builder(
+            shrinkWrap: true,
+            itemCount: folders.length,
+            itemBuilder: (context, i) {
+              final f = folders[i];
+              final current = f.id == currentId;
+              return ListTile(
+                enabled: !current,
+                contentPadding: EdgeInsets.only(
+                  left: 12.0 + f.depth * 14,
+                  right: 8,
                 ),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
-                ),
-              ),
-            ],
-          ),
+                leading: Icon(_iconFor(f.role), size: 20),
+                title: Text(f.leafName, overflow: TextOverflow.ellipsis),
+                onTap: current
+                    ? null
+                    : () {
+                        Navigator.of(context).pop();
+                        state.moveMessages(uids, f.path);
+                      },
+              );
+            },
+          );
+    return MailDialogShell(
+      title: title,
+      maxWidth: 440,
+      maxHeight: 520,
+      scrollBody: false,
+      body: list,
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
         ),
-      ),
+      ],
     );
   }
 

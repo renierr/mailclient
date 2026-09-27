@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Same exclusion as backup_rules.xml, for API 31+ (which reads this file
+     instead). See the comment there. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="auth_vault.json" />
+    </cloud-backup>
+</data-extraction-rules>

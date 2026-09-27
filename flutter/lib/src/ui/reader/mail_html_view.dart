@@ -47,8 +47,7 @@ class MailHtmlView extends StatelessWidget {
     return SelectionArea(
       child: HtmlWidget(
         html,
-        factoryBuilder: () =>
-            _LinkHoverWidgetFactory(onHoverUrl: onHoverUrl),
+        factoryBuilder: () => _LinkHoverWidgetFactory(onHoverUrl: onHoverUrl),
         textStyle: theme.textTheme.bodyMedium?.copyWith(
           fontSize: (theme.textTheme.bodyMedium?.fontSize ?? 14) * textScale,
         ),
@@ -64,8 +63,9 @@ class MailHtmlView extends StatelessWidget {
         // here is already the user's choice. This only has to not widen it.
         onErrorBuilder: (context, element, error) => Text(
           '[unrenderable content]',
-          style: theme.textTheme.bodySmall
-              ?.copyWith(color: theme.colorScheme.outline),
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.outline,
+          ),
         ),
       ),
     );

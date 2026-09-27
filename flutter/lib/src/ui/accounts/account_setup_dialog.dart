@@ -12,19 +12,41 @@ import '../dialogs/mail_dialog.dart';
 /// on an edit therefore keeps the stored one — the core relies on that, so the
 /// hint says it out loud rather than making the user guess.
 class AccountSetupDialog extends StatefulWidget {
-  const AccountSetupDialog({super.key, this.accountId});
+  const AccountSetupDialog({
+    super.key,
+    this.accountId,
+    this.fullscreen = false,
+  });
 
   /// Null for a new account.
   final int? accountId;
 
-  static Future<bool> show(BuildContext context, {int? accountId}) async =>
-      await MailDialog.show<bool>(
-        context,
-        // A tap outside must never drop a half-typed account form.
-        barrierDismissible: false,
-        builder: (_) => AccountSetupDialog(accountId: accountId),
-      ) ??
-      false;
+  /// Fullscreen Scaffold page instead of a floating dialog. Used on phones,
+  /// where a dialog plus the on-screen keyboard leaves no usable room.
+  final bool fullscreen;
+
+  static Future<bool> show(BuildContext context, {int? accountId}) async {
+    // Phones get a fullscreen page, not a floating dialog: a Scaffold
+    // resizes for the keyboard natively, while dialog + keyboard on a short
+    // screen squeeze the form to zero and it looks "vanished".
+    if (MailDialog.isNarrow(context)) {
+      return await Navigator.of(context).push<bool>(
+            MaterialPageRoute(
+              fullscreenDialog: true,
+              builder: (_) =>
+                  AccountSetupDialog(accountId: accountId, fullscreen: true),
+            ),
+          ) ??
+          false;
+    }
+    return await MailDialog.show<bool>(
+          context,
+          // A tap outside must never drop a half-typed account form.
+          barrierDismissible: false,
+          builder: (_) => AccountSetupDialog(accountId: accountId),
+        ) ??
+        false;
+  }
 
   @override
   State<AccountSetupDialog> createState() => _AccountSetupDialogState();
@@ -138,7 +160,7 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final editing = widget.accountId != null;
+    if (widget.fullscreen) return _page();
     final maxW = MailDialog.maxWidth(context, 480);
     final maxH = MailDialog.maxHeight(context, 600);
     return Dialog(
@@ -152,107 +174,26 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                editing ? 'Edit account' : 'Add account',
+                widget.accountId != null ? 'Edit account' : 'Add account',
                 style: Theme.of(context).textTheme.titleLarge,
               ),
               const SizedBox(height: 8),
               Flexible(
                 child: Form(
                   key: _form,
-                  child: SingleChildScrollView(
-                    // Keyboard pushes the scrolled form up instead of covering
-                    // the password / save row on phones.
-                    padding: EdgeInsets.only(
-                      bottom: MediaQuery.viewInsetsOf(context).bottom,
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _text(
-                          'email',
-                          'Email address',
-                          required: true,
-                          email: true,
-                          keyboard: TextInputType.emailAddress,
-                        ),
-                        _text(
-                          'name',
-                          'Account name (optional)',
-                          keyboard: TextInputType.text,
-                        ),
-                        _text(
-                          'from_name',
-                          'Sender display name (optional)',
-                          keyboard: TextInputType.text,
-                        ),
-                        const SizedBox(height: 12),
-                        _section('Incoming (IMAP)'),
-                        _text('imap_host', 'Host', required: true),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: _text(
-                                'imap_port',
-                                'Port',
-                                port: true,
-                                keyboard: TextInputType.number,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(child: _security(_imapSec, _onImapSec)),
-                          ],
-                        ),
-                        _text('imap_user', 'Username'),
-                        _text(
-                          'password',
-                          editing
-                              ? 'Password (blank keeps the stored one)'
-                              : 'Password',
-                          obscure: true,
-                          required: !editing,
-                        ),
-                        const SizedBox(height: 12),
-                        _section('Outgoing (SMTP)'),
-                        _text('smtp_host', 'Host', required: true),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: _text(
-                                'smtp_port',
-                                'Port',
-                                port: true,
-                                keyboard: TextInputType.number,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(child: _security(_smtpSec, _onSmtpSec)),
-                          ],
-                        ),
-                        _text('smtp_user', 'Username (blank = same as IMAP)'),
-                        _text(
-                          'smtp_password',
-                          editing
-                              ? 'SMTP password (blank keeps the stored one)'
-                              : 'SMTP password (blank = same as IMAP)',
-                          obscure: true,
-                        ),
-                        if (_error != null) ...[
-                          const SizedBox(height: 12),
-                          Text(
-                            _error!,
-                            style: TextStyle(
-                              color: Theme.of(context).colorScheme.error,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
+                  // No viewInsets padding here: the MailDialog.keyboardSafe
+                  // wrapper already pads for the keyboard once. A second
+                  // padding inside squeezes the form to zero exactly when the
+                  // keyboard opens.
+                  child: SingleChildScrollView(child: _fieldsColumn()),
                 ),
               ),
               const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
+              // Wrap, not Row: the buttons stack instead of overflowing at
+              // large text scales.
+              Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 8,
                 children: [
                   TextButton(
                     onPressed: _saving
@@ -260,7 +201,6 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
                         : () => Navigator.of(context).pop(false),
                     child: const Text('Cancel'),
                   ),
-                  const SizedBox(width: 8),
                   FilledButton(
                     onPressed: _saving ? null : _save,
                     child: Text(_saving ? 'Saving…' : 'Save'),
@@ -271,6 +211,121 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
           ),
         ),
       ),
+    );
+  }
+
+  /// Fullscreen form page for phones: the Scaffold shrinks for the keyboard
+  /// natively, so every field stays reachable while typing.
+  Widget _page() {
+    final editing = widget.accountId != null;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(editing ? 'Edit account' : 'Add account'),
+        actions: [
+          TextButton(
+            onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: _saving ? null : _save,
+            child: Text(_saving ? 'Saving…' : 'Save'),
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
+      body: SafeArea(
+        // Dismiss the keyboard on drag so the Save button is always one tap
+        // away, even mid-form on a short screen.
+        child: GestureDetector(
+          onTap: () => FocusScope.of(context).unfocus(),
+          child: Form(
+            key: _form,
+            child: SingleChildScrollView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              padding: const EdgeInsets.all(16),
+              child: _fieldsColumn(),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The fields, shared by the dialog and the fullscreen page.
+  Widget _fieldsColumn() {
+    final editing = widget.accountId != null;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _text(
+          'email',
+          'Email address',
+          required: true,
+          email: true,
+          keyboard: TextInputType.emailAddress,
+        ),
+        _text('name', 'Account name (optional)', keyboard: TextInputType.text),
+        _text(
+          'from_name',
+          'Sender display name (optional)',
+          keyboard: TextInputType.text,
+        ),
+        const SizedBox(height: 12),
+        _section('Incoming (IMAP)'),
+        _text('imap_host', 'Host', required: true),
+        _portSecurity('imap_port', _imapSec, _onImapSec),
+        _text('imap_user', 'Username'),
+        _text(
+          'password',
+          editing ? 'Password (blank keeps the stored one)' : 'Password',
+          obscure: true,
+          required: !editing,
+        ),
+        const SizedBox(height: 12),
+        _section('Outgoing (SMTP)'),
+        _text('smtp_host', 'Host', required: true),
+        _portSecurity('smtp_port', _smtpSec, _onSmtpSec),
+        _text('smtp_user', 'Username (blank = same as IMAP)'),
+        _text(
+          'smtp_password',
+          editing
+              ? 'SMTP password (blank keeps the stored one)'
+              : 'SMTP password (blank = same as IMAP)',
+          obscure: true,
+        ),
+        if (_error != null) ...[
+          const SizedBox(height: 12),
+          Text(
+            _error!,
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// Port beside encryption on wide screens, stacked full-width on
+  /// narrow/zoomed layouts where the Row squeezes both unreadably thin.
+  Widget _portSecurity(String portKey, String sec, ValueChanged<String> onSec) {
+    final port = _text(
+      portKey,
+      'Port',
+      port: true,
+      keyboard: TextInputType.number,
+    );
+    final security = _security(sec, onSec);
+    if (MailDialog.isNarrow(context)) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [port, security],
+      );
+    }
+    return Row(
+      children: [
+        Expanded(child: port),
+        const SizedBox(width: 12),
+        Expanded(child: security),
+      ],
     );
   }
 

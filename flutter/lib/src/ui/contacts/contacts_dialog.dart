@@ -11,10 +11,18 @@ import '../dialogs/mail_dialog.dart';
 /// Contacts grow out of transferred mail, so the explanatory line stays —
 /// otherwise an address book that fills itself looks like a bug.
 class ContactsDialog extends StatefulWidget {
-  const ContactsDialog({super.key});
+  const ContactsDialog({super.key, this.fullscreen = false});
+
+  /// Fullscreen page instead of a floating dialog — used on phones, where a
+  /// dialog plus the on-screen keyboard leaves no usable room.
+  final bool fullscreen;
 
   static Future<void> show(BuildContext context) async {
-    await MailDialog.show(context, builder: (_) => const ContactsDialog());
+    await MailDialog.showForm(
+      context,
+      dialog: (_) => const ContactsDialog(),
+      page: (_) => const ContactsDialog(fullscreen: true),
+    );
   }
 
   @override
@@ -67,6 +75,7 @@ class _ContactsDialogState extends State<ContactsDialog> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.fullscreen) return _page();
     final narrow = MailDialog.isNarrow(context);
     return Dialog(
       insetPadding: MailDialog.insets(context, wideH: 16),
@@ -82,46 +91,11 @@ class _ContactsDialogState extends State<ContactsDialog> {
             children: [
               Text('Contacts', style: Theme.of(context).textTheme.titleLarge),
               const SizedBox(height: 4),
-              Text(
-                'Auto-collected from transferred mail. Set an alias to rename someone just for you.',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
+              _explainer(),
               const SizedBox(height: 12),
-              TextField(
-                controller: _search,
-                onChanged: (_) => _reload(),
-                textInputAction: TextInputAction.search,
-                decoration: InputDecoration(
-                  labelText: 'Search by alias, name or address',
-                  prefixIcon: const Icon(Icons.search),
-                  suffixIcon: _search.text.isEmpty
-                      ? null
-                      : IconButton(
-                          icon: const Icon(Icons.clear),
-                          onPressed: () {
-                            _search.clear();
-                            _reload();
-                          },
-                        ),
-                ),
-              ),
+              _searchField(),
               const SizedBox(height: 8),
-              Expanded(
-                child: _loading
-                    ? const Center(child: CircularProgressIndicator())
-                    : _contacts.isEmpty
-                    ? Center(child: Text(_emptyText, style: _emptyStyle))
-                    : ListView.separated(
-                        // Keyboard covers bottom rows while editing an
-                        // alias; pad the list by the keyboard height.
-                        padding: EdgeInsets.only(
-                          bottom: MediaQuery.viewInsetsOf(context).bottom,
-                        ),
-                        itemCount: _contacts.length,
-                        separatorBuilder: (_, _) => const Divider(height: 1),
-                        itemBuilder: (context, i) => _row(_contacts[i]),
-                      ),
-              ),
+              Expanded(child: _listBody()),
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton(
@@ -131,6 +105,76 @@ class _ContactsDialogState extends State<ContactsDialog> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  /// Search field, shared by the dialog and the fullscreen page.
+  Widget _searchField() {
+    return TextField(
+      controller: _search,
+      onChanged: (_) => _reload(),
+      textInputAction: TextInputAction.search,
+      decoration: InputDecoration(
+        labelText: 'Search by alias, name or address',
+        prefixIcon: const Icon(Icons.search),
+        suffixIcon: _search.text.isEmpty
+            ? null
+            : IconButton(
+                icon: const Icon(Icons.clear),
+                onPressed: () {
+                  _search.clear();
+                  _reload();
+                },
+              ),
+      ),
+    );
+  }
+
+  /// Loading / empty / list states, shared by the dialog and the page.
+  Widget _listBody() {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_contacts.isEmpty) {
+      return Center(child: Text(_emptyText, style: _emptyStyle));
+    }
+    return ListView.separated(
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      itemCount: _contacts.length,
+      separatorBuilder: (_, _) => const Divider(height: 1),
+      itemBuilder: (context, i) => _row(_contacts[i]),
+    );
+  }
+
+  /// Explanation line, shared by the dialog and the page.
+  Widget _explainer() {
+    return Text(
+      'Auto-collected from transferred mail. Set an alias to rename someone just for you.',
+      style: Theme.of(context).textTheme.bodySmall,
+    );
+  }
+
+  /// Fullscreen contacts page for phones (see [ContactsDialog.fullscreen]):
+  /// the list stays lazy inside Expanded while the Scaffold shrinks for the
+  /// keyboard natively.
+  Widget _page() {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Contacts')),
+      body: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: _explainer(),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: _searchField(),
+            ),
+            const SizedBox(height: 8),
+            Expanded(child: _listBody()),
+          ],
         ),
       ),
     );

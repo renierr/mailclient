@@ -21,53 +21,30 @@ class AccountsDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<MailState>();
-    final narrow = MailDialog.isNarrow(context);
-    return Dialog(
-      insetPadding: MailDialog.insets(context, wideH: 16),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: MailDialog.maxWidth(context, 520),
-          maxHeight: MailDialog.maxHeight(context, 520),
+    return MailDialogShell(
+      title: 'Accounts',
+      maxWidth: 520,
+      maxHeight: 520,
+      scrollBody: false,
+      body: state.accounts.isEmpty
+          ? const Center(child: Text('No accounts yet.'))
+          : ListView.separated(
+              itemCount: state.accounts.length,
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (context, i) =>
+                  _row(context, state, state.accounts[i]),
+            ),
+      actions: [
+        OutlinedButton.icon(
+          icon: const Icon(Icons.add, size: 16),
+          label: const Text('Add account…'),
+          onPressed: () => AccountSetupDialog.show(context),
         ),
-        child: Padding(
-          padding: EdgeInsets.all(narrow ? 12 : 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text('Accounts', style: Theme.of(context).textTheme.titleLarge),
-              const SizedBox(height: 12),
-              Expanded(
-                child: state.accounts.isEmpty
-                    ? const Center(child: Text('No accounts yet.'))
-                    : ListView.separated(
-                        itemCount: state.accounts.length,
-                        separatorBuilder: (_, _) => const Divider(height: 1),
-                        itemBuilder: (context, i) =>
-                            _row(context, state, state.accounts[i]),
-                      ),
-              ),
-              const SizedBox(height: 8),
-              // Wrap, not Row: the buttons stack instead of overflowing on a
-              // very narrow dialog.
-              Wrap(
-                alignment: WrapAlignment.end,
-                spacing: 8,
-                children: [
-                  OutlinedButton.icon(
-                    icon: const Icon(Icons.add, size: 16),
-                    label: const Text('Add account…'),
-                    onPressed: () => AccountSetupDialog.show(context),
-                  ),
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Close'),
-                  ),
-                ],
-              ),
-            ],
-          ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
         ),
-      ),
+      ],
     );
   }
 
