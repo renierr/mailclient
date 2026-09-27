@@ -96,8 +96,6 @@ void backgroundSyncDispatcher() {
     if (task != backgroundSyncTask) return true;
     try {
       await runBackgroundCheck();
-      final minutes = (await (await MailCore.load()).settings()).syncIntervalMinutes;
-      await scheduleBackgroundSync(intervalMinutes: minutes);
       return true;
     } catch (_) {
       return false;
