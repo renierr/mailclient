@@ -11,6 +11,8 @@
 /// sync-interval setting loads or changes) registers or cancels the worker;
 /// the OS wakes `backgroundSyncDispatcher` in a headless Dart isolate, which
 /// runs `runBackgroundCheck`, shows the notification, and returns.
+/// Each mail notifies once: SharedPreferences stores the highest notified
+/// inbox UID per account and folder, independent of the Rust sync watermark.
 library;
 
 import 'dart:async';
@@ -20,7 +22,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
+import 'package:workmanager/workmanager.dart';
 
 import '../ffi/mail_core.dart';
 
@@ -70,35 +72,36 @@ String encodeOpenPayload({
   return (accountId: ids[0], folderId: ids[1], uid: ids[2]);
 }
 
-const _expeditedChannel = MethodChannel('mailclient/expedited_work');
-
 Future<void> scheduleBackgroundSync({required int intervalMinutes}) async {
   if (!Platform.isAndroid) return;
   final effective = effectiveBackgroundMinutes(intervalMinutes);
   if (effective <= 0) {
-    await _expeditedChannel.invokeMethod('cancelExpedited');
+    await Workmanager().cancelByUniqueName(backgroundSyncTask);
     return;
   }
-  await _expeditedChannel.invokeMethod('enqueueExpedited', {
-    'intervalMinutes': effective,
-  });
+  await Workmanager().registerPeriodicTask(
+    backgroundSyncTask,
+    backgroundSyncTask,
+    frequency: Duration(minutes: effective),
+    initialDelay: Duration(minutes: effective),
+    constraints: Constraints(networkType: NetworkType.connected),
+    existingWorkPolicy: ExistingPeriodicWorkPolicy.update,
+    backoffPolicy: BackoffPolicy.exponential,
+  );
 }
 
-
-
-const _backgroundSyncChannel = MethodChannel('mailclient/background_sync');
-
-void registerBackgroundSyncHandler() {
-  _backgroundSyncChannel.setMethodCallHandler((call) async {
-    if (call.method == 'runBackgroundCheck') {
-      try {
-        await runBackgroundCheck();
-        return true;
-      } catch (_) {
-        return false;
-      }
+@pragma('vm:entry-point')
+void backgroundSyncDispatcher() {
+  Workmanager().executeTask((task, _) async {
+    if (task != backgroundSyncTask) return true;
+    try {
+      await runBackgroundCheck();
+      final minutes = (await (await MailCore.load()).settings()).syncIntervalMinutes;
+      await scheduleBackgroundSync(intervalMinutes: minutes);
+      return true;
+    } catch (_) {
+      return false;
     }
-    return null;
   });
 }
 
