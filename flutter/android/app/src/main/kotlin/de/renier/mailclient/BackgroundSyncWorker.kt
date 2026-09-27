@@ -24,7 +24,8 @@ class BackgroundSyncWorker(context: Context, params: WorkerParameters) : Corouti
                 MethodChannel(engine.dartExecutor.binaryMessenger, "mailclient/background_sync")
                     .setMethodCallHandler { call, result ->
                         if (call.method == "runBackgroundCheck") {
-                            success = result.success(true)
+                            result.success(true)
+                            success = true
                         } else {
                             result.notImplemented()
                         }
