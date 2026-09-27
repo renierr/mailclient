@@ -1,6 +1,7 @@
 //! Typed CRUD over the SQLite schema. Every submodule owns one table;
 //! cross-table flows compose them via [`crate::db::Db`].
 
+pub mod account_form;
 pub mod accounts;
 pub mod contacts;
 pub mod folders;

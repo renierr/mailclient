@@ -1,14 +1,12 @@
 use std::pin::Pin;
 
 use cxx_qt_lib::QString;
-use mailcore::auth;
-use mailcore::models::NewAccount;
+use mailcore::store::account_form::{self, KeyringStore};
 use mailcore::store::{accounts, folders, settings};
 
 use crate::bridge::qobject;
 use crate::bridge::worker::BUSY_MESSAGE;
 use crate::bridge::{push_feeds, qstring, shared_db, DEFAULT_MESSAGE_LIMIT};
-use mailcore::sync::pool::evict_session;
 
 impl qobject::Bridge {
     pub fn refresh_accounts(mut self: Pin<&mut Self>) -> QString {
@@ -48,119 +46,16 @@ impl qobject::Bridge {
     }
 
     pub fn add_account(mut self: Pin<&mut Self>, form: &QString) -> QString {
-        let v: serde_json::Value = match serde_json::from_str(&form.to_string()) {
-            Ok(v) => v,
-            Err(_) => return qstring("invalid account form"),
-        };
-        let str_field = |k: &str| {
-            v.get(k)
-                .and_then(|x| x.as_str())
-                .unwrap_or("")
-                .trim()
-                .to_string()
-        };
-        let u16_field = |k: &str, dflt: u16| {
-            v.get(k)
-                .and_then(|x| x.as_str())
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(dflt)
-        };
-        let name = str_field("name");
-        let email = str_field("email");
-        let imap_host = str_field("imap_host");
-        let imap_user = str_field("imap_user");
-        let password = str_field("password");
-        let smtp_host = str_field("smtp_host");
-        let mut smtp_user = str_field("smtp_user");
-        if email.is_empty() || imap_host.is_empty() {
-            return qstring("fill email and IMAP host");
-        }
-        if smtp_host.is_empty() {
-            return qstring("fill the SMTP host");
-        }
-        if smtp_user.is_empty() {
-            smtp_user.clone_from(&imap_user);
-        }
         let db = match shared_db() {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        let account_name = if name.is_empty() { email.clone() } else { name };
-        let form_account = NewAccount {
-            name: account_name,
-            email_address: email.clone(),
-            from_name: str_field("from_name"),
-            imap_host,
-            imap_port: u16_field("imap_port", 993),
-            imap_security: str_field("imap_sec"),
-            imap_username: imap_user,
-            smtp_host,
-            smtp_port: u16_field("smtp_port", 465),
-            smtp_security: str_field("smtp_sec"),
-            smtp_username: smtp_user,
-            auth_vault_key: String::new(), // replaced below
-            check_interval_secs: 300,
-        };
-        // An edit names its account by id, so changing the address renames
-        // that account instead of creating a second one. Without an id,
-        // re-saving an existing email updates it (also migrates its secrets
-        // into the current keyring backend); otherwise a fresh row is created.
-        let edit_id = v.get("id").and_then(|x| x.as_i64()).filter(|id| *id >= 0);
-        let all = accounts::list(db).unwrap_or_default();
-        if let Some(other) = all
-            .iter()
-            .find(|a| a.email_address == email && edit_id.is_some_and(|id| a.id != id))
-        {
-            return qstring(&format!(
-                "another account already uses {}",
-                other.email_address
-            ));
-        }
-        let target = match edit_id {
-            Some(id) => match all.into_iter().find(|a| a.id == id) {
-                Some(a) => Some(a),
-                None => return qstring("this account no longer exists"),
-            },
-            None => all.into_iter().find(|a| a.email_address == email),
-        };
-        let id = match target {
-            Some(existing) => {
-                if let Err(e) = accounts::update_connection(db, existing.id, &form_account) {
-                    return qstring(&e.to_string());
-                }
-                // Host/user/password may have changed: drop the pooled
-                // session so the next action connects with the new values.
-                evict_session(existing.id);
-                // Blank password on an edit = keep the stored secret; the
-                // dialog never shows it, so re-typing must not be required.
-                if !password.is_empty() {
-                    if let Err(e) = auth::save_account_secrets(
-                        &existing.auth_vault_key,
-                        &password,
-                        &str_field("smtp_password"),
-                    ) {
-                        return qstring(&format!("{e}"));
-                    }
-                }
-                existing.id
-            }
-            None => {
-                if password.is_empty() {
-                    return qstring("a password is required for a new account");
-                }
-                let vault = auth::new_vault_key();
-                if let Err(e) =
-                    auth::save_account_secrets(&vault, &password, &str_field("smtp_password"))
-                {
-                    return qstring(&format!("{e}"));
-                }
-                let mut with_vault = form_account;
-                with_vault.auth_vault_key = vault;
-                match accounts::create(db, &with_vault) {
-                    Ok(id) => id,
-                    Err(e) => return qstring(&e.to_string()),
-                }
-            }
+        // Validation, the edit-or-create decision and the keyring write live
+        // in mailcore, shared with the Flutter frontend. This only refreshes
+        // the window afterwards.
+        let id = match account_form::save(db, &form.to_string(), &mut KeyringStore) {
+            Ok(id) => id,
+            Err(e) => return qstring(&e.to_string()),
         };
         push_feeds(&mut self, db, id, -1);
         if let Err(e) = settings::set_last_active_account_id(db, id) {
@@ -224,14 +119,14 @@ impl qobject::Bridge {
         };
         // Drop the keyring entry first: if the row went away and this failed,
         // the secret would be orphaned with nothing left pointing at it.
-        if let Err(e) = auth::delete_account_secrets(&acc.auth_vault_key) {
+        if let Err(e) = mailcore::auth::delete_account_secrets(&acc.auth_vault_key) {
             log::warn!("keyring entry for {} not removed: {e}", acc.email_address);
         }
         if let Err(e) = accounts::delete(db, id) {
             return qstring(&e.to_string());
         }
         // The account is gone: don't keep a live session for it.
-        evict_session(id);
+        mailcore::sync::pool::evict_session(id);
         // Fall back to whichever account remains, if any.
         match accounts::list(db).unwrap_or_default().first() {
             Some(next) => {

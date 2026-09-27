@@ -181,10 +181,10 @@ the same SQLite file in that directory.
 
 ## Shared code still to promote
 
-The account-form handling (`api/accounts.rs::save_account` mirrors
-`mailapp`'s `add_account`) and the composer form are near-copies. They belong
-in `mailcore`; those are the two places where a fix will otherwise have to be
-made twice.
+The composer form (`api/composer.rs` mirrors `mailapp`'s composer) is a
+near-copy. It belongs in `mailcore`; that is the one place where a fix will
+otherwise have to be made twice. Account saving already lives once, in
+`mailcore::store::account_form`.
 
 Done before: the IMAP session pool, the lease, and the panic guard lived in
 both bridges and now live once in `mailcore::sync::pool`.

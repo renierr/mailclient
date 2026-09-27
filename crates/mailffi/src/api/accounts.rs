@@ -1,7 +1,7 @@
 //! Accounts. Passwords go to the OS keyring and never come back out.
 
 use mailcore::auth;
-use mailcore::models::NewAccount;
+use mailcore::store::account_form::{self, KeyringStore};
 use mailcore::store::{accounts, folders, settings};
 
 use crate::db::shared_db;
@@ -35,109 +35,13 @@ pub fn account_form(id: i64) -> anyhow::Result<String> {
     .to_string())
 }
 
-/// Create or update an account from the setup dialog's JSON form
-/// (`{name, email, from_name?, imap_host, imap_port, imap_sec, imap_user,
-/// password, smtp_host, smtp_port, smtp_sec, smtp_user, smtp_password?}`).
+/// Create or update an account from the setup dialog's JSON form.
 ///
-/// Keyed by email address, like the Qt frontend: re-saving a known address
-/// edits that account (and migrates its secrets into the current keyring
-/// backend) instead of creating a duplicate. Returns the account id.
+/// The decision — edit by id, update a known address, reject a duplicate,
+/// keep a blank password — lives in `mailcore::store::account_form`, shared
+/// with the Qt frontend. Returns the account id.
 pub fn save_account(form: String) -> anyhow::Result<i64> {
-    let v: serde_json::Value =
-        serde_json::from_str(&form).map_err(|_| anyhow::anyhow!("invalid account form"))?;
-    let text = |k: &str| {
-        v.get(k)
-            .and_then(|x| x.as_str())
-            .unwrap_or_default()
-            .trim()
-            .to_string()
-    };
-    // Ports arrive as strings from a text field, but a Dart int is just as
-    // plausible from a preset — accept either rather than silently defaulting.
-    let port = |k: &str, dflt: u16| -> u16 {
-        v.get(k)
-            .and_then(|x| {
-                x.as_str()
-                    .and_then(|s| s.parse().ok())
-                    .or_else(|| x.as_u64().and_then(|n| u16::try_from(n).ok()))
-            })
-            .unwrap_or(dflt)
-    };
-
-    let email = text("email");
-    let imap_host = text("imap_host");
-    let smtp_host = text("smtp_host");
-    let password = text("password");
-    let imap_user = text("imap_user");
-    if email.is_empty() || imap_host.is_empty() {
-        anyhow::bail!("fill email and IMAP host");
-    }
-    if smtp_host.is_empty() {
-        anyhow::bail!("fill the SMTP host");
-    }
-    let smtp_user = match text("smtp_user") {
-        s if s.is_empty() => imap_user.clone(),
-        s => s,
-    };
-    let name = match text("name") {
-        s if s.is_empty() => email.clone(),
-        s => s,
-    };
-
-    let db = shared_db()?;
-    let draft = NewAccount {
-        name,
-        email_address: email.clone(),
-        from_name: text("from_name"),
-        imap_host,
-        imap_port: port("imap_port", 993),
-        imap_security: text("imap_sec"),
-        imap_username: imap_user,
-        smtp_host,
-        smtp_port: port("smtp_port", 465),
-        smtp_security: text("smtp_sec"),
-        smtp_username: smtp_user,
-        auth_vault_key: String::new(), // filled in below
-        check_interval_secs: 300,
-    };
-
-    let existing = accounts::list(db)?
-        .into_iter()
-        .find(|a| a.email_address == email);
-    let id = match existing {
-        Some(existing) => {
-            accounts::update_connection(db, existing.id, &draft)?;
-            // Host, user or password may have changed: drop the pooled
-            // session so the next action connects with the new values.
-            mailcore::sync::pool::evict_session(existing.id);
-            // A blank password on an edit keeps the stored secret — the
-            // dialog never shows it, so re-typing must not be required.
-            if !password.is_empty() {
-                auth::save_account_secrets(
-                    &existing.auth_vault_key,
-                    &password,
-                    &text("smtp_password"),
-                )
-                .map_err(|e| anyhow::anyhow!("keyring unavailable: {e}"))?;
-            }
-            existing.id
-        }
-        None => {
-            if password.is_empty() {
-                anyhow::bail!("a password is required for a new account");
-            }
-            let vault = auth::new_vault_key();
-            auth::save_account_secrets(&vault, &password, &text("smtp_password"))
-                .map_err(|e| anyhow::anyhow!("keyring unavailable: {e}"))?;
-            let with_vault = NewAccount {
-                auth_vault_key: vault,
-                ..draft
-            };
-            accounts::create(db, &with_vault)?
-        }
-    };
-    settings::set_last_active_account_id(db, id)?;
-    Ok(id)
+    Ok(account_form::save(shared_db()?, &form, &mut KeyringStore)?)
 }
 
 /// Delete an account with its folders, messages and keyring secrets.

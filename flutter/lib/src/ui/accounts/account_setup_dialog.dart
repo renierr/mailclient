@@ -411,6 +411,9 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
         for (final e in _fields.entries) e.key: e.value.text.trim(),
         'imap_sec': _imapSec,
         'smtp_sec': _smtpSec,
+        // Without the id, changing the address creates a second account
+        // instead of renaming this one.
+        if (widget.accountId != null) 'id': widget.accountId,
       });
       if (!mounted) return;
       await context.read<MailState>().accountsChanged(select: id);
