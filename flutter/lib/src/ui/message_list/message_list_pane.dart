@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../models/models.dart';
 import '../../state/mail_state.dart';
 import '../composer/composer_dialog.dart';
+import '../dialogs/mail_dialog.dart';
 import '../menu_row.dart';
 import '../move_to/move_to_dialog.dart';
 
@@ -36,7 +37,22 @@ class _MessageListPaneState extends State<MessageListPane> {
   // --- folder feed -------------------------------------------------------
 
   Widget _folderList(MailState state) {
-    final messages = state.messages;
+    var messages = state.messages;
+    // Qt parity: 1–2 letter input filters the folder instantly (substring);
+    // 3+ letters run the FTS index via `searching`. Without this, short input
+    // shows the whole unfiltered folder.
+    final q = state.searchQuery.trim().toLowerCase();
+    final instantFilter = q.isNotEmpty && !state.searching;
+    if (instantFilter) {
+      messages = messages
+          .where(
+            (m) =>
+                m.subject.toLowerCase().contains(q) ||
+                m.from.toLowerCase().contains(q) ||
+                m.snippet.toLowerCase().contains(q),
+          )
+          .toList(growable: false);
+    }
     if (state.folderId < 0) {
       return const _Empty(
         icon: Icons.folder_open_outlined,
@@ -46,6 +62,15 @@ class _MessageListPaneState extends State<MessageListPane> {
     return Column(
       children: [
         _ListHeader(anchorUid: _anchorUid),
+        if (instantFilter)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: Text(
+              '${messages.length} match(es) for “${state.searchQuery.trim()}”',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
         if (state.selectionMode && state.selectedCount > 0)
           _BulkBar(onAction: () => setState(() => _anchorUid = null)),
         Expanded(
@@ -66,8 +91,7 @@ class _MessageListPaneState extends State<MessageListPane> {
                     return _MessageTile(
                       message: m,
                       selected: m.uid == state.openUid,
-                      checked:
-                          state.selectedUids.contains(m.uid),
+                      checked: state.selectedUids.contains(m.uid),
                       selectionMode: state.selectionMode,
                       compact: state.settings.isCompact,
                       onTap: () => _onRowTap(state, m),
@@ -118,8 +142,7 @@ class _MessageListPaneState extends State<MessageListPane> {
       children: [
         Container(
           width: double.infinity,
-          padding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           child: Text(
             '${hits.length} result(s) across ${state.searchFolderOnly ? 'this folder' : 'this account'}',
             style: Theme.of(context).textTheme.bodySmall,
@@ -145,13 +168,18 @@ class _MessageListPaneState extends State<MessageListPane> {
                       title: Row(
                         children: [
                           Expanded(
-                            child: Text(h.subject,
-                                overflow: TextOverflow.ellipsis),
+                            child: Text(
+                              h.subject,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
                           if (h.starred) ...[
                             const SizedBox(width: 4),
-                            Icon(Icons.star,
-                                size: 14, color: Colors.amber.shade700),
+                            Icon(
+                              Icons.star,
+                              size: 14,
+                              color: Colors.amber.shade700,
+                            ),
                           ],
                         ],
                       ),
@@ -171,9 +199,7 @@ class _MessageListPaneState extends State<MessageListPane> {
                               margin: const EdgeInsets.only(right: 8),
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .primary,
+                                color: Theme.of(context).colorScheme.primary,
                               ),
                             ),
                           PopupMenuButton<String>(
@@ -228,17 +254,21 @@ class _ListHeader extends StatelessWidget {
             tooltip: state.selectionMode
                 ? 'Leave selection'
                 : 'Select messages',
-            icon: Icon(state.selectionMode
-                ? Icons.check_box_outlined
-                : Icons.check_box_outline_blank),
+            icon: Icon(
+              state.selectionMode
+                  ? Icons.check_box_outlined
+                  : Icons.check_box_outline_blank,
+            ),
             onPressed: () => state.selectionMode
                 ? state.exitSelectionMode()
                 : state.enterSelectionMode(),
           ),
           Expanded(
-            child: Text('$title · ${state.messages.length}',
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.titleSmall),
+            child: Text(
+              '$title · ${state.messages.length}',
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
           ),
           if (state.selectionMode)
             PopupMenuButton<String>(
@@ -256,28 +286,34 @@ class _ListHeader extends StatelessWidget {
                 PopupMenuItem(
                   value: 'all',
                   child: MenuRow(
-                      icon: Icons.select_all, text: 'Select all visible'),
+                    icon: Icons.select_all,
+                    text: 'Select all visible',
+                  ),
                 ),
                 PopupMenuItem(
                   value: 'unread',
                   child: MenuRow(
-                      icon: Icons.mark_email_unread_outlined,
-                      text: 'Select unread'),
+                    icon: Icons.mark_email_unread_outlined,
+                    text: 'Select unread',
+                  ),
                 ),
                 PopupMenuItem(
                   value: 'starred',
                   child: MenuRow(
-                      icon: Icons.star_border, text: 'Select starred'),
+                    icon: Icons.star_border,
+                    text: 'Select starred',
+                  ),
                 ),
                 PopupMenuItem(
                   value: 'invert',
                   child: MenuRow(
-                      icon: Icons.swap_horiz, text: 'Invert selection'),
+                    icon: Icons.swap_horiz,
+                    text: 'Invert selection',
+                  ),
                 ),
                 PopupMenuItem(
                   value: 'none',
-                  child: MenuRow(
-                      icon: Icons.clear, text: 'Clear'),
+                  child: MenuRow(icon: Icons.clear, text: 'Clear'),
                 ),
               ],
             ),
@@ -291,17 +327,20 @@ class _ListHeader extends StatelessWidget {
             itemBuilder: (context) {
               final s = state.settings;
               PopupMenuItem<String> item(
-                      String value, IconData icon, String text) =>
-                  PopupMenuItem(
-                    value: value,
-                    child: MenuRow(
-                      icon: icon,
-                      text: (s.sortField == value.split(':')[0] &&
-                              s.sortDescending == (value.endsWith(':desc')))
-                          ? '✓ $text'
-                          : text,
-                    ),
-                  );
+                String value,
+                IconData icon,
+                String text,
+              ) => PopupMenuItem(
+                value: value,
+                child: MenuRow(
+                  icon: icon,
+                  text:
+                      (s.sortField == value.split(':')[0] &&
+                          s.sortDescending == (value.endsWith(':desc')))
+                      ? '✓ $text'
+                      : text,
+                ),
+              );
               return [
                 item('date:desc', Icons.schedule, 'Date, newest first'),
                 item('date:asc', Icons.schedule, 'Date, oldest first'),
@@ -328,8 +367,7 @@ class _BulkBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.watch<MailState>();
     final uids = state.selectedUids.toList(growable: false);
-    final starred =
-        uids.isNotEmpty && uids.every((u) => _isStarred(state, u));
+    final starred = uids.isNotEmpty && uids.every((u) => _isStarred(state, u));
     return Container(
       color: Theme.of(context).colorScheme.secondaryContainer,
       padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -344,8 +382,10 @@ class _BulkBar extends StatelessWidget {
               icon: const Icon(Icons.close, size: 18),
               onPressed: state.exitSelectionMode,
             ),
-            Text('${uids.length} selected',
-                style: Theme.of(context).textTheme.bodySmall),
+            Text(
+              '${uids.length} selected',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
             const SizedBox(width: 8),
             IconButton(
               tooltip: 'Mark read',
@@ -359,8 +399,7 @@ class _BulkBar extends StatelessWidget {
             ),
             IconButton(
               tooltip: starred ? 'Unstar' : 'Star',
-              icon: Icon(starred ? Icons.star : Icons.star_border,
-                  size: 18),
+              icon: Icon(starred ? Icons.star : Icons.star_border, size: 18),
               onPressed: () => state.setStarMany(uids, !starred),
             ),
             IconButton(
@@ -373,23 +412,31 @@ class _BulkBar extends StatelessWidget {
             ),
             IconButton(
               tooltip: 'Move to…',
-              icon:
-                  const Icon(Icons.drive_file_move_outlined, size: 18),
+              icon: const Icon(Icons.drive_file_move_outlined, size: 18),
               onPressed: () => MoveToDialog.show(context, uids: uids),
             ),
             IconButton(
               tooltip: 'Move to Trash',
               icon: const Icon(Icons.delete_outline, size: 18),
-              onPressed: () => confirmDelete(context, state,
-                  uids: uids, permanent: state.deleteIsPermanent),
+              onPressed: () => confirmDelete(
+                context,
+                state,
+                uids: uids,
+                permanent: state.deleteIsPermanent,
+              ),
             ),
             PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert, size: 18),
               onSelected: (v) {
                 switch (v) {
                   case 'purge':
-                    confirmDelete(context, state,
-                        uids: uids, permanent: true, purge: true);
+                    confirmDelete(
+                      context,
+                      state,
+                      uids: uids,
+                      permanent: true,
+                      purge: true,
+                    );
                   case 'unread':
                     state.selectUnread();
                   case 'starred':
@@ -400,19 +447,23 @@ class _BulkBar extends StatelessWidget {
                 PopupMenuItem(
                   value: 'purge',
                   child: MenuRow(
-                      icon: Icons.delete_forever_outlined,
-                      text: 'Delete permanently…'),
+                    icon: Icons.delete_forever_outlined,
+                    text: 'Delete permanently…',
+                  ),
                 ),
                 PopupMenuItem(
                   value: 'unread',
                   child: MenuRow(
-                      icon: Icons.mark_email_unread_outlined,
-                      text: 'Select unread'),
+                    icon: Icons.mark_email_unread_outlined,
+                    text: 'Select unread',
+                  ),
                 ),
                 PopupMenuItem(
                   value: 'starred',
                   child: MenuRow(
-                      icon: Icons.star_border, text: 'Select starred'),
+                    icon: Icons.star_border,
+                    text: 'Select starred',
+                  ),
                 ),
               ],
             ),
@@ -423,11 +474,7 @@ class _BulkBar extends StatelessWidget {
   }
 
   static bool _isStarred(MailState state, int uid) =>
-      state.messages
-          .where((m) => m.uid == uid)
-          .firstOrNull
-          ?.starred ??
-      false;
+      state.messages.where((m) => m.uid == uid).firstOrNull?.starred ?? false;
 }
 
 /// Delete confirm shared by the list, the bulk bar and the reader.
@@ -445,16 +492,16 @@ Future<void> confirmDelete(
     await state.deleteMessages(uids);
     return;
   }
-  final title =
-      purge || permanent ? 'Delete permanently?' : 'Move to Trash?';
+  final title = purge || permanent ? 'Delete permanently?' : 'Move to Trash?';
   final what = uids.length > 1
       ? '${uids.length} messages'
       : '“${_subjectOf(state, uids.first)}”';
   final how = purge || permanent
       ? 'will be destroyed on the server. This cannot be undone.'
       : 'will be moved to Trash.';
-  final confirmed = await showDialog<bool>(
-        context: context,
+  final confirmed =
+      await MailDialog.show<bool>(
+        context,
         builder: (context) => AlertDialog(
           title: Text(title),
           content: Text('$what $how'),
@@ -463,12 +510,23 @@ Future<void> confirmDelete(
               onPressed: () => Navigator.of(context).pop(false),
               child: const Text('Cancel'),
             ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: Text(purge || permanent
-                  ? 'Delete permanently'
-                  : 'Move to Trash'),
-            ),
+            // Permanent destruction is danger-red; reversible Trash moves
+            // stay the plain filled style, like Qt's intent split.
+            if (purge || permanent)
+              FilledButton(
+                style: MailDialog.dangerStyle(context),
+                onPressed: () => Navigator.of(context).pop(true),
+                child: Text(
+                  purge || permanent ? 'Delete permanently' : 'Move to Trash',
+                ),
+              )
+            else
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: Text(
+                  purge || permanent ? 'Delete permanently' : 'Move to Trash',
+                ),
+              ),
           ],
         ),
       ) ??
@@ -481,11 +539,8 @@ Future<void> confirmDelete(
   }
 }
 
-String _subjectOf(MailState state, int uid) => state.messages
-        .where((m) => m.uid == uid)
-        .firstOrNull
-        ?.subject ??
-    '';
+String _subjectOf(MailState state, int uid) =>
+    state.messages.where((m) => m.uid == uid).firstOrNull?.subject ?? '';
 
 /// First letter of the sender for the row avatar, like the Qt Avatar seed.
 String _initial(String from) {
@@ -517,161 +572,226 @@ class _MessageTile extends StatelessWidget {
     final theme = Theme.of(context);
     final state = context.read<MailState>();
     final weight = message.unread ? FontWeight.w700 : FontWeight.normal;
-    return ListTile(
-      selected: selected,
-      selectedTileColor: theme.colorScheme.secondaryContainer,
-      leading: selectionMode
-          ? Checkbox(value: checked, onChanged: (_) => onToggle())
-          : SizedBox(
-              width: 60,
-              child: Row(
-                children: [
-                  // Unread marker beside the avatar, like the Qt row's dot
-                  // column — bold text alone is too easy to miss.
-                  if (message.unread)
-                    Container(
-                      width: 8,
-                      height: 8,
-                      margin: const EdgeInsets.only(right: 6),
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: theme.colorScheme.primary,
+    final avatarBg = avatarColor(context, message.from);
+    return GestureDetector(
+      // Desktop parity: right-click opens the same row menu as ⋮.
+      onSecondaryTapDown: (d) =>
+          _showContextMenu(context, state, d.globalPosition),
+      child: ListTile(
+        selected: selected,
+        selectedTileColor: theme.colorScheme.secondaryContainer,
+        leading: selectionMode
+            ? Checkbox(value: checked, onChanged: (_) => onToggle())
+            : SizedBox(
+                width: 60,
+                child: Row(
+                  children: [
+                    // Unread marker beside the avatar, like the Qt row's dot
+                    // column — bold text alone is too easy to miss.
+                    if (message.unread)
+                      Container(
+                        width: 8,
+                        height: 8,
+                        margin: const EdgeInsets.only(right: 6),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: theme.colorScheme.primary,
+                        ),
+                      )
+                    else
+                      const SizedBox(width: 14),
+                    CircleAvatar(
+                      radius: 16,
+                      backgroundColor: avatarBg,
+                      foregroundColor: theme.colorScheme.onPrimary,
+                      child: Text(
+                        _initial(message.from),
+                        style: const TextStyle(fontSize: 14),
                       ),
-                    )
-                  else
-                    const SizedBox(width: 14),
-                  CircleAvatar(
-                    radius: 16,
-                    backgroundColor:
-                        theme.colorScheme.secondaryContainer,
+                    ),
+                  ],
+                ),
+              ),
+        onTap: onTap,
+        title: Row(
+          children: [
+            Expanded(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
                     child: Text(
-                      _initial(message.from),
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: theme.colorScheme.onSecondaryContainer,
+                      message.from,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: weight,
                       ),
                     ),
                   ),
+                  if (message.starred) ...[
+                    const SizedBox(width: 4),
+                    Icon(Icons.star, size: 14, color: Colors.amber.shade700),
+                  ],
                 ],
               ),
             ),
-      onTap: onTap,
-      title: Row(
-        children: [
-          Expanded(
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Flexible(
-                  child: Text(
-                    message.from,
-                    overflow: TextOverflow.ellipsis,
-                    style:
-                        theme.textTheme.bodyMedium?.copyWith(fontWeight: weight),
-                  ),
-                ),
-                if (message.starred) ...[
-                  const SizedBox(width: 4),
-                  Icon(
-                    Icons.star,
-                    size: 14,
-                    color: Colors.amber.shade700,
-                  ),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            message.date,
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.outline),
-          ),
-        ],
-      ),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              if (message.hasAttachments) ...[
-                Icon(Icons.attach_file,
-                    size: 14, color: theme.colorScheme.outline),
-                const SizedBox(width: 4),
-              ],
-              Expanded(
-                child: Text(
-                  message.subject,
-                  overflow: TextOverflow.ellipsis,
-                  style:
-                      theme.textTheme.bodyMedium?.copyWith(fontWeight: weight),
-                ),
-              ),
-            ],
-          ),
-          if (!compact && message.snippet.isNotEmpty)
+            const SizedBox(width: 8),
             Text(
-              message.snippet,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.outline),
+              message.date,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
-        ],
+          ],
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                if (message.hasAttachments) ...[
+                  Icon(
+                    Icons.attach_file,
+                    size: 14,
+                    color: theme.colorScheme.outline,
+                  ),
+                  const SizedBox(width: 4),
+                ],
+                Expanded(
+                  child: Text(
+                    message.subject,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: weight,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (!compact && message.snippet.isNotEmpty)
+              Text(
+                message.snippet,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
+              ),
+          ],
+        ),
+        trailing: PopupMenuButton<String>(
+          tooltip: 'Message actions',
+          icon: const Icon(Icons.more_vert, size: 18),
+          onSelected: (v) => _rowAction(context, state, v),
+          itemBuilder: (context) => [
+            PopupMenuItem(
+              value: 'read',
+              child: MenuRow(
+                icon: message.unread
+                    ? Icons.mark_email_read_outlined
+                    : Icons.mark_email_unread_outlined,
+                text: message.unread ? 'Mark as read' : 'Mark as unread',
+              ),
+            ),
+            PopupMenuItem(
+              value: 'star',
+              child: MenuRow(
+                icon: message.starred ? Icons.star : Icons.star_border,
+                text: message.starred ? 'Remove star' : 'Star',
+              ),
+            ),
+            const PopupMenuItem(
+              value: 'archive',
+              child: MenuRow(icon: Icons.archive_outlined, text: 'Archive'),
+            ),
+            const PopupMenuItem(
+              value: 'move',
+              child: MenuRow(
+                icon: Icons.drive_file_move_outlined,
+                text: 'Move to…',
+              ),
+            ),
+            const PopupMenuItem(
+              value: 'delete',
+              child: MenuRow(icon: Icons.delete_outline, text: 'Move to Trash'),
+            ),
+            const PopupMenuItem(
+              value: 'purge',
+              child: MenuRow(
+                icon: Icons.delete_forever_outlined,
+                text: 'Delete permanently…',
+              ),
+            ),
+          ],
+        ),
       ),
-      trailing: PopupMenuButton<String>(
-        tooltip: 'Message actions',
-        icon: const Icon(Icons.more_vert, size: 18),
-        onSelected: (v) => _rowAction(context, state, v),
-        itemBuilder: (context) => [
-              PopupMenuItem(
-                value: 'read',
-                child: MenuRow(
-                    icon: message.unread
-                        ? Icons.mark_email_read_outlined
-                        : Icons.mark_email_unread_outlined,
-                    text: message.unread
-                        ? 'Mark as read'
-                        : 'Mark as unread'),
-              ),
-              PopupMenuItem(
-                value: 'star',
-                child: MenuRow(
-                    icon: message.starred
-                        ? Icons.star
-                        : Icons.star_border,
-                    text: message.starred ? 'Remove star' : 'Star'),
-              ),
-              const PopupMenuItem(
-                value: 'archive',
-                child: MenuRow(
-                    icon: Icons.archive_outlined, text: 'Archive'),
-              ),
-              const PopupMenuItem(
-                value: 'move',
-                child: MenuRow(
-                    icon: Icons.drive_file_move_outlined,
-                    text: 'Move to…'),
-              ),
-              const PopupMenuItem(
-                value: 'delete',
-                child: MenuRow(
-                    icon: Icons.delete_outline,
-                    text: 'Move to Trash'),
-              ),
-              const PopupMenuItem(
-                value: 'purge',
-                child: MenuRow(
-                    icon: Icons.delete_forever_outlined,
-                    text: 'Delete permanently…'),
-              ),
-            ],
-          ),
     );
   }
 
+  Future<void> _showContextMenu(
+    BuildContext context,
+    MailState state,
+    Offset at,
+  ) async {
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final choice = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromPoints(at, at),
+        Offset.zero & overlay.size,
+      ),
+      items: [
+        PopupMenuItem(
+          value: 'read',
+          child: MenuRow(
+            icon: message.unread
+                ? Icons.mark_email_read_outlined
+                : Icons.mark_email_unread_outlined,
+            text: message.unread ? 'Mark as read' : 'Mark as unread',
+          ),
+        ),
+        PopupMenuItem(
+          value: 'star',
+          child: MenuRow(
+            icon: message.starred ? Icons.star : Icons.star_border,
+            text: message.starred ? 'Remove star' : 'Star',
+          ),
+        ),
+        const PopupMenuItem(
+          value: 'archive',
+          child: MenuRow(icon: Icons.archive_outlined, text: 'Archive'),
+        ),
+        const PopupMenuItem(
+          value: 'move',
+          child: MenuRow(
+            icon: Icons.drive_file_move_outlined,
+            text: 'Move to…',
+          ),
+        ),
+        const PopupMenuItem(
+          value: 'delete',
+          child: MenuRow(icon: Icons.delete_outline, text: 'Move to Trash'),
+        ),
+        const PopupMenuItem(
+          value: 'purge',
+          child: MenuRow(
+            icon: Icons.delete_forever_outlined,
+            text: 'Delete permanently…',
+          ),
+        ),
+      ],
+    );
+    if (choice != null && context.mounted) {
+      await _rowAction(context, state, choice);
+    }
+  }
+
   Future<void> _rowAction(
-      BuildContext context, MailState state, String v) async {    final uid = message.uid;
+    BuildContext context,
+    MailState state,
+    String v,
+  ) async {
+    final uid = message.uid;
     switch (v) {
       case 'read':
         await state.setRead(uid, message.unread);
@@ -681,18 +801,30 @@ class _MessageTile extends StatelessWidget {
         await state.archiveMessages([uid]);
       case 'move':
         if (context.mounted) {
-          await MoveToDialog.show(context,
-              uids: [uid], subject: message.subject);
+          await MoveToDialog.show(
+            context,
+            uids: [uid],
+            subject: message.subject,
+          );
         }
       case 'delete':
         if (context.mounted) {
-          await confirmDelete(context, state,
-              uids: [uid], permanent: state.deleteIsPermanent);
+          await confirmDelete(
+            context,
+            state,
+            uids: [uid],
+            permanent: state.deleteIsPermanent,
+          );
         }
       case 'purge':
         if (context.mounted) {
-          await confirmDelete(context, state,
-              uids: [uid], permanent: true, purge: true);
+          await confirmDelete(
+            context,
+            state,
+            uids: [uid],
+            permanent: true,
+            purge: true,
+          );
         }
     }
   }
@@ -709,8 +841,8 @@ class _LoadOlderTile extends StatelessWidget {
     final label = server < 0
         ? 'Cached $cached (server not checked)'
         : cached >= server
-            ? 'All $cached loaded'
-            : 'Cached $cached of $server';
+        ? 'All $cached loaded'
+        : 'Cached $cached of $server';
     final canLoad = state.folderId >= 0 && (server < 0 || server > cached);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
@@ -721,8 +853,9 @@ class _LoadOlderTile extends StatelessWidget {
           TextButton.icon(
             icon: const Icon(Icons.history, size: 18),
             label: const Text('Show older messages'),
-            onPressed:
-                state.isSyncing || !canLoad ? null : state.loadOlderMessages,
+            onPressed: state.isSyncing || !canLoad
+                ? null
+                : state.loadOlderMessages,
           ),
         ],
       ),

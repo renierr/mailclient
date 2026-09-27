@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../ffi/mail_core.dart';
 import '../../models/models.dart';
 import '../../state/mail_state.dart';
+import '../dialogs/mail_dialog.dart';
 
 /// The auto-collected contact list: search, rename via alias, remove.
 ///
@@ -13,10 +14,7 @@ class ContactsDialog extends StatefulWidget {
   const ContactsDialog({super.key});
 
   static Future<void> show(BuildContext context) async {
-    await showDialog(
-      context: context,
-      builder: (_) => const ContactsDialog(),
-    );
+    await MailDialog.show(context, builder: (_) => const ContactsDialog());
   }
 
   @override
@@ -43,9 +41,8 @@ class _ContactsDialogState extends State<ContactsDialog> {
     super.dispose();
   }
 
-  String get _emptyText => _search.text.isEmpty
-      ? 'No contacts yet'
-      : 'No matching contacts found';
+  String get _emptyText =>
+      _search.text.isEmpty ? 'No contacts yet' : 'No matching contacts found';
 
   TextStyle get _emptyStyle =>
       TextStyle(color: Theme.of(context).colorScheme.outline);
@@ -53,8 +50,9 @@ class _ContactsDialogState extends State<ContactsDialog> {
   Future<void> _reload() async {
     setState(() => _loading = true);
     try {
-      final list =
-          await MailCore.instance.contacts(prefix: _search.text.trim());
+      final list = await MailCore.instance.contacts(
+        prefix: _search.text.trim(),
+      );
       if (!mounted) return;
       setState(() {
         _contacts = list;
@@ -69,18 +67,20 @@ class _ContactsDialogState extends State<ContactsDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final narrow = MailDialog.isNarrow(context);
     return Dialog(
-      insetPadding:
-          const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      insetPadding: MailDialog.insets(context, wideH: 16),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 560, maxHeight: 560),
+        constraints: BoxConstraints(
+          maxWidth: MailDialog.maxWidth(context, 560),
+          maxHeight: MailDialog.maxHeight(context, 560),
+        ),
         child: Padding(
-          padding: const EdgeInsets.all(20),
+          padding: EdgeInsets.all(narrow ? 12 : 20),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('Contacts',
-                  style: Theme.of(context).textTheme.titleLarge),
+              Text('Contacts', style: Theme.of(context).textTheme.titleLarge),
               const SizedBox(height: 4),
               Text(
                 'Auto-collected from transferred mail. Set an alias to rename someone just for you.',
@@ -90,6 +90,7 @@ class _ContactsDialogState extends State<ContactsDialog> {
               TextField(
                 controller: _search,
                 onChanged: (_) => _reload(),
+                textInputAction: TextInputAction.search,
                 decoration: InputDecoration(
                   labelText: 'Search by alias, name or address',
                   prefixIcon: const Icon(Icons.search),
@@ -109,14 +110,17 @@ class _ContactsDialogState extends State<ContactsDialog> {
                 child: _loading
                     ? const Center(child: CircularProgressIndicator())
                     : _contacts.isEmpty
-                        ? Center(child: Text(_emptyText, style: _emptyStyle))
-                        : ListView.separated(
-                            itemCount: _contacts.length,
-                            separatorBuilder: (_, _) =>
-                                const Divider(height: 1),
-                            itemBuilder: (context, i) =>
-                                _row(_contacts[i]),
-                          ),
+                    ? Center(child: Text(_emptyText, style: _emptyStyle))
+                    : ListView.separated(
+                        // Keyboard covers bottom rows while editing an
+                        // alias; pad the list by the keyboard height.
+                        padding: EdgeInsets.only(
+                          bottom: MediaQuery.viewInsetsOf(context).bottom,
+                        ),
+                        itemCount: _contacts.length,
+                        separatorBuilder: (_, _) => const Divider(height: 1),
+                        itemBuilder: (context, i) => _row(_contacts[i]),
+                      ),
               ),
               Align(
                 alignment: Alignment.centerRight,
@@ -138,10 +142,12 @@ class _ContactsDialogState extends State<ContactsDialog> {
         ? c.alias
         : (c.name.isNotEmpty ? c.name : '(no alias)');
     return ListTile(
-      title: Text(name,
-          style: c.alias.isEmpty && c.name.isEmpty
-              ? const TextStyle(fontStyle: FontStyle.italic)
-              : null),
+      title: Text(
+        name,
+        style: c.alias.isEmpty && c.name.isEmpty
+            ? const TextStyle(fontStyle: FontStyle.italic)
+            : null,
+      ),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -152,9 +158,11 @@ class _ContactsDialogState extends State<ContactsDialog> {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Chip(
-            label: Text('seen ${c.timesSeen}'),
-            visualDensity: VisualDensity.compact,
+          Flexible(
+            child: Chip(
+              label: Text('seen ${c.timesSeen}'),
+              visualDensity: VisualDensity.compact,
+            ),
           ),
           IconButton(
             tooltip: 'Edit alias',
@@ -171,10 +179,9 @@ class _ContactsDialogState extends State<ContactsDialog> {
           ),
         ],
       ),
-      onTap: () => setState(() {
-        _alias.text = c.alias;
-        _editing = c.address;
-      }),
+      // Qt needs double-click/Enter to edit; single tap must not hijack the
+      // row into an editor on touch screens.
+      onTap: null,
     );
   }
 
@@ -184,8 +191,10 @@ class _ContactsDialogState extends State<ContactsDialog> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Alias for ${c.address}',
-              style: Theme.of(context).textTheme.bodySmall),
+          Text(
+            'Alias for ${c.address}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
           Row(
             children: [
               Expanded(
@@ -228,18 +237,21 @@ class _ContactsDialogState extends State<ContactsDialog> {
   }
 
   Future<void> _remove(Contact c) async {
-    final confirmed = await showDialog<bool>(
-          context: context,
+    final confirmed =
+        await MailDialog.show<bool>(
+          context,
           builder: (context) => AlertDialog(
             title: const Text('Remove contact?'),
             content: Text(
-                'Forget ${c.address}? It reappears the next time mail arrives from it.'),
+              'Forget ${c.address}? It reappears the next time mail arrives from it.',
+            ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(context).pop(false),
                 child: const Text('Cancel'),
               ),
               FilledButton(
+                style: MailDialog.dangerStyle(context),
                 onPressed: () => Navigator.of(context).pop(true),
                 child: const Text('Remove'),
               ),

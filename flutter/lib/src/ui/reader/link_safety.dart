@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../dialogs/mail_dialog.dart';
+
 /// Pure link-safety helpers for the reader: which URLs may ever leave the
 /// app, what a click does with one, and how the examine dialog displays it.
 ///
@@ -78,8 +80,8 @@ class ExamineLinkDialog extends StatelessWidget {
   final String url;
 
   static Future<void> show(BuildContext context, String url) {
-    return showDialog(
-      context: context,
+    return MailDialog.show(
+      context,
       builder: (_) => ExamineLinkDialog(url: url),
     );
   }
@@ -94,7 +96,8 @@ class ExamineLinkDialog extends StatelessWidget {
     return AlertDialog(
       title: const Text('Examine link'),
       content: SizedBox(
-        width: 480,
+        // Never a fixed 480px: clamps to phones instead of overflowing.
+        width: MailDialog.maxWidth(context, 480),
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,

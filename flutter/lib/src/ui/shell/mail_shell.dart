@@ -39,6 +39,9 @@ class _MailShellState extends State<MailShell> {
   double _sidebarWidth = 260;
   double _listWidth = 380;
 
+  /// Wide-layout sidebar visibility, like the Qt hamburger toggle.
+  bool _sidebarVisible = true;
+
   @override
   void dispose() {
     _searchFocus.dispose();
@@ -65,30 +68,54 @@ class _MailShellState extends State<MailShell> {
             state.syncAccount(),
         const SingleActivator(LogicalKeyboardKey.keyF, control: true): () =>
             _searchFocus.requestFocus(),
+        // Qt parity: Delete trashes, Shift+Delete purges, Esc leaves the
+        // reader/fullscreen, F11 toggles reader fullscreen.
+        const SingleActivator(LogicalKeyboardKey.delete): () =>
+            _deleteOpen(state, permanent: false),
+        const SingleActivator(LogicalKeyboardKey.delete, shift: true): () =>
+            _deleteOpen(state, permanent: true),
+        const SingleActivator(LogicalKeyboardKey.escape): () => _escape(state),
+        const SingleActivator(LogicalKeyboardKey.f11): () =>
+            state.toggleReaderFullscreen(),
       },
       child: Focus(
         autofocus: true,
         child: LayoutBuilder(
           builder: (context, constraints) {
+            // Scale-aware breakpoints like Qt (`<720·uiScale` etc.): at 150%
+            // text scale a 800px window behaves like a narrow one, otherwise
+            // fixed-height rows overflow.
+            final scale = state.settings.uiScale;
             final width = constraints.maxWidth;
+            final effective = width / scale;
             // Read here, in build, and pass down: provider's watch/select
             // may only run in a build method, not in these helpers called
             // from the layout callback.
             final fullscreen = state.readerFullscreen;
             final openUid = state.openUid;
-            final body = width >= Breakpoints.medium
+            final body = effective >= Breakpoints.medium
                 ? _threePane(fullscreen)
-                : width >= Breakpoints.compact
-                    ? _twoPane(fullscreen, openUid)
-                    : _onePane();
+                : effective >= Breakpoints.compact
+                ? _twoPane(fullscreen, openUid)
+                : _onePane();
             return Scaffold(
               appBar: _TopBar(
                 showBack:
-                    width < Breakpoints.compact && _pane != _Pane.folders,
+                    effective < Breakpoints.compact && _pane != _Pane.folders,
                 onBack: () => setState(() => _pane = _pane.previous),
                 searchFocus: _searchFocus,
                 searchController: _searchController,
-                narrow: width < Breakpoints.compact,
+                narrow: effective < Breakpoints.compact,
+                sidebarToggle: effective >= Breakpoints.medium
+                    ? IconButton(
+                        tooltip: _sidebarVisible
+                            ? 'Hide folders'
+                            : 'Show folders',
+                        icon: const Icon(Icons.menu),
+                        onPressed: () =>
+                            setState(() => _sidebarVisible = !_sidebarVisible),
+                      )
+                    : null,
               ),
               body: Column(
                 children: [
@@ -103,23 +130,62 @@ class _MailShellState extends State<MailShell> {
     );
   }
 
+  void _deleteOpen(MailState state, {required bool permanent}) {
+    final uid = state.openUid;
+    if (uid < 0) return;
+    if (permanent) {
+      state.purgeMessages([uid]);
+    } else {
+      state.deleteMessages([uid]);
+    }
+  }
+
+  void _escape(MailState state) {
+    if (state.readerFullscreen) {
+      state.toggleReaderFullscreen();
+      return;
+    }
+    if (state.openUid >= 0) state.closeMessage();
+  }
+
   Widget _threePane(bool fullscreen) {
     if (fullscreen) {
       // The exit lives in the reader header, next to where fullscreen was
-      // entered — no extra chrome needed here.
+      // entered — no extra chrome needed here. If the open message vanishes
+      // (deleted elsewhere), fall back to the list instead of an empty pane.
+      if (context.read<MailState>().openUid < 0) {
+        return Row(
+          children: [
+            if (_sidebarVisible)
+              SizedBox(width: _sidebarWidth, child: const FolderSidebar()),
+            if (_sidebarVisible)
+              _PaneDivider(
+                onDelta: (dx) => setState(
+                  () =>
+                      _sidebarWidth = (_sidebarWidth + dx).clamp(160.0, 480.0),
+                ),
+              ),
+            const Expanded(child: MessageListPane()),
+          ],
+        );
+      }
       return const ReaderPane();
     }
     return Row(
       children: [
-        SizedBox(width: _sidebarWidth, child: const FolderSidebar()),
-        _PaneDivider(
-          onDelta: (dx) => setState(() => _sidebarWidth =
-              (_sidebarWidth + dx).clamp(160.0, 480.0)),
-        ),
+        if (_sidebarVisible)
+          SizedBox(width: _sidebarWidth, child: const FolderSidebar()),
+        if (_sidebarVisible)
+          _PaneDivider(
+            onDelta: (dx) => setState(
+              () => _sidebarWidth = (_sidebarWidth + dx).clamp(160.0, 480.0),
+            ),
+          ),
         SizedBox(width: _listWidth, child: const MessageListPane()),
         _PaneDivider(
-          onDelta: (dx) => setState(() =>
-              _listWidth = (_listWidth + dx).clamp(240.0, 700.0)),
+          onDelta: (dx) => setState(
+            () => _listWidth = (_listWidth + dx).clamp(240.0, 700.0),
+          ),
         ),
         const Expanded(child: ReaderPane()),
       ],
@@ -143,12 +209,10 @@ class _MailShellState extends State<MailShell> {
   }
 
   Widget _onePane() => switch (_pane) {
-        _Pane.folders =>
-          FolderSidebar(onFolderSelected: () => _go(_Pane.list)),
-        _Pane.list =>
-          MessageListPane(onMessageOpened: () => _go(_Pane.reader)),
-        _Pane.reader => ReaderPane(onClose: () => _go(_Pane.list)),
-      };
+    _Pane.folders => FolderSidebar(onFolderSelected: () => _go(_Pane.list)),
+    _Pane.list => MessageListPane(onMessageOpened: () => _go(_Pane.reader)),
+    _Pane.reader => ReaderPane(onClose: () => _go(_Pane.list)),
+  };
 
   void _go(_Pane pane) => setState(() => _pane = pane);
 }
@@ -159,10 +223,10 @@ enum _Pane {
   reader;
 
   _Pane get previous => switch (this) {
-        _Pane.folders => _Pane.folders,
-        _Pane.list => _Pane.folders,
-        _Pane.reader => _Pane.list,
-      };
+    _Pane.folders => _Pane.folders,
+    _Pane.list => _Pane.folders,
+    _Pane.reader => _Pane.list,
+  };
 }
 
 /// The draggable split between panes: a visible divider that resizes on
@@ -182,10 +246,7 @@ class _PaneDivider extends StatelessWidget {
         child: Container(
           width: 9,
           alignment: Alignment.center,
-          child: Container(
-            width: 1,
-            color: Theme.of(context).dividerColor,
-          ),
+          child: Container(width: 1, color: Theme.of(context).dividerColor),
         ),
       ),
     );
@@ -199,6 +260,7 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
     required this.searchFocus,
     required this.searchController,
     required this.narrow,
+    this.sidebarToggle,
   });
 
   final bool showBack;
@@ -206,6 +268,7 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
   final FocusNode searchFocus;
   final TextEditingController searchController;
   final bool narrow;
+  final Widget? sidebarToggle;
 
   @override
   Size get preferredSize => const Size.fromHeight(kToolbarHeight);
@@ -216,15 +279,14 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
     return AppBar(
       leading: showBack
           ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: onBack)
-          : null,
+          : sidebarToggle,
       titleSpacing: 0,
       title: narrow
-          ? Text(state.folder?.leafName ?? 'Mail',
-              overflow: TextOverflow.ellipsis)
-          : _SearchField(
-              focus: searchFocus,
-              controller: searchController,
-            ),
+          ? Text(
+              state.folder?.leafName ?? 'Mail',
+              overflow: TextOverflow.ellipsis,
+            )
+          : _SearchField(focus: searchFocus, controller: searchController),
       actions: [
         if (narrow)
           IconButton(
@@ -259,35 +321,38 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
             PopupMenuItem(
               value: 'add-account',
               child: MenuRow(
-                  icon: Icons.person_add_outlined, text: 'Add account…'),
+                icon: Icons.person_add_outlined,
+                text: 'Add account…',
+              ),
             ),
             PopupMenuItem(
               value: 'accounts',
               child: MenuRow(
-                  icon: Icons.manage_accounts_outlined,
-                  text: 'Manage accounts…'),
+                icon: Icons.manage_accounts_outlined,
+                text: 'Manage accounts…',
+              ),
             ),
             PopupMenuItem(
               value: 'folders',
               child: MenuRow(
-                  icon: Icons.create_new_folder_outlined,
-                  text: 'Manage IMAP folders…'),
+                icon: Icons.create_new_folder_outlined,
+                text: 'Manage IMAP folders…',
+              ),
             ),
             PopupMenuItem(
               value: 'refresh-folders',
               child: MenuRow(
-                  icon: Icons.refresh_outlined,
-                  text: 'Refresh folder list'),
+                icon: Icons.refresh_outlined,
+                text: 'Refresh folder list',
+              ),
             ),
             PopupMenuItem(
               value: 'contacts',
-              child:
-                  MenuRow(icon: Icons.contacts_outlined, text: 'Contacts'),
+              child: MenuRow(icon: Icons.contacts_outlined, text: 'Contacts'),
             ),
             PopupMenuItem(
               value: 'settings',
-              child:
-                  MenuRow(icon: Icons.settings_outlined, text: 'Settings…'),
+              child: MenuRow(icon: Icons.settings_outlined, text: 'Settings…'),
             ),
           ],
         ),
@@ -313,35 +378,48 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
   }
 
   /// The narrow layout has no room for an inline field; search gets a dialog.
+  /// Keyboard-safe: SafeArea + viewInsets padding so the on-screen keyboard
+  /// never covers the field, and a scroll wrapper for short screens.
   Future<void> _searchDialog(BuildContext context, MailState state) async {
-    final controller =
-        TextEditingController(text: state.searchQuery);
+    final controller = TextEditingController(text: state.searchQuery);
     await showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Search'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: '3 or more letters',
-            prefixIcon: Icon(Icons.search),
+      useSafeArea: true,
+      builder: (context) => SafeArea(
+        child: AnimatedPadding(
+          padding: MediaQuery.viewInsetsOf(context),
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeOut,
+          child: AlertDialog(
+            title: const Text('Search'),
+            content: SingleChildScrollView(
+              child: TextField(
+                controller: controller,
+                autofocus: true,
+                keyboardType: TextInputType.text,
+                textInputAction: TextInputAction.search,
+                decoration: const InputDecoration(
+                  hintText: '3 or more letters',
+                  prefixIcon: Icon(Icons.search),
+                ),
+                onChanged: (v) => state.runSearch(v),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  state.exitSearch();
+                  Navigator.of(context).pop();
+                },
+                child: const Text('Clear'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Done'),
+              ),
+            ],
           ),
-          onChanged: (v) => state.runSearch(v),
         ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              state.exitSearch();
-              Navigator.of(context).pop();
-            },
-            child: const Text('Clear'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Done'),
-          ),
-        ],
       ),
     );
     controller.dispose();
@@ -360,8 +438,7 @@ class _SearchField extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<MailState>();
-    if (controller.text != state.searchQuery &&
-        state.searchQuery.isEmpty) {
+    if (controller.text != state.searchQuery && state.searchQuery.isEmpty) {
       controller.clear();
     }
     return Row(
@@ -385,7 +462,9 @@ class _SearchField extends StatelessWidget {
               border: const OutlineInputBorder(),
               isDense: true,
               contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 8, vertical: 8),
+                horizontal: 8,
+                vertical: 8,
+              ),
             ),
             onChanged: (v) => state.runSearch(v),
             onSubmitted: (v) => state.runSearch(v),
@@ -396,8 +475,10 @@ class _SearchField extends StatelessWidget {
               ? 'Searching this folder — click for the whole account'
               : 'Searching the whole account — click for this folder only',
           child: TextButton(
-            onPressed: () => state.runSearch(state.searchQuery,
-                folderOnly: !state.searchFolderOnly),
+            onPressed: () => state.runSearch(
+              state.searchQuery,
+              folderOnly: !state.searchFolderOnly,
+            ),
             child: Text(state.searchFolderOnly ? 'Folder' : 'Account'),
           ),
         ),
@@ -415,50 +496,61 @@ class _StatusBar extends StatelessWidget {
   void _showStatusDialog(BuildContext context, String status, bool isError) {
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Row(
-          children: [
-            Icon(
-              isError ? Icons.error_outline : Icons.info_outline,
-              color: isError ? Theme.of(ctx).colorScheme.error : null,
+      useSafeArea: true,
+      builder: (ctx) => SafeArea(
+        child: AnimatedPadding(
+          padding: MediaQuery.viewInsetsOf(ctx),
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeOut,
+          child: AlertDialog(
+            title: Row(
+              children: [
+                Icon(
+                  isError ? Icons.error_outline : Icons.info_outline,
+                  color: isError ? Theme.of(ctx).colorScheme.error : null,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(isError ? 'Error Details' : 'Status Details'),
+                ),
+              ],
             ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(isError ? 'Error Details' : 'Status Details'),
-            ),
-          ],
-        ),
-        content: ConstrainedBox(
-          constraints: const BoxConstraints(maxHeight: 320),
-          child: SingleChildScrollView(
-            child: SelectableText(
-              status,
-              style: TextStyle(
-                fontSize: 13,
-                fontFamily: isError ? 'monospace' : null,
+            content: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: 320,
+                maxWidth: MediaQuery.sizeOf(ctx).width - 64,
+              ),
+              child: SingleChildScrollView(
+                child: SelectableText(
+                  status,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontFamily: isError ? 'monospace' : null,
+                  ),
+                ),
               ),
             ),
+            actions: [
+              TextButton.icon(
+                icon: const Icon(Icons.copy, size: 18),
+                label: const Text('Copy to Clipboard'),
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: status));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Copied to clipboard'),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                },
+              ),
+              TextButton(
+                child: const Text('Close'),
+                onPressed: () => Navigator.of(ctx).pop(),
+              ),
+            ],
           ),
         ),
-        actions: [
-          TextButton.icon(
-            icon: const Icon(Icons.copy, size: 18),
-            label: const Text('Copy to Clipboard'),
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: status));
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Copied to clipboard'),
-                  duration: Duration(seconds: 2),
-                ),
-              );
-            },
-          ),
-          TextButton(
-            child: const Text('Close'),
-            onPressed: () => Navigator.of(ctx).pop(),
-          ),
-        ],
       ),
     );
   }
@@ -466,41 +558,68 @@ class _StatusBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<MailState>();
-    if (state.status.isEmpty) return const SizedBox.shrink();
     final scheme = Theme.of(context).colorScheme;
-    return Material(
-      color: scheme.surfaceContainerHighest,
-      child: InkWell(
-        onTap: () => _showStatusDialog(context, state.status, state.statusIsError),
-        child: Tooltip(
-          message: 'Tap to view full status and copy',
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            child: Row(
-              children: [
-                if (state.statusIsError)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: Icon(Icons.error_outline, size: 14, color: scheme.error),
-                  ),
-                Expanded(
-                  child: Text(
-                    state.status,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: state.statusIsError ? scheme.error : scheme.onSurfaceVariant,
+    // Always visible like the Qt footer: an empty status shows the account,
+    // so the bar never pops the layout in and out, and the account is always
+    // one glance away. SafeArea keeps it above the gesture bar — the reported
+    // "slightly cut off" bottom line.
+    final text = state.status.isEmpty
+        ? (state.account?.email ?? 'Ready')
+        : state.status;
+    final isError = state.status.isNotEmpty && state.statusIsError;
+    return SafeArea(
+      top: false,
+      left: false,
+      right: false,
+      child: Material(
+        color: scheme.surfaceContainerHighest,
+        child: InkWell(
+          onTap: state.status.isEmpty
+              ? null
+              : () => _showStatusDialog(context, state.status, isError),
+          child: Tooltip(
+            message: state.status.isEmpty
+                ? (state.account?.email ?? '')
+                : 'Tap to view full status and copy',
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              child: Row(
+                children: [
+                  if (isError)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: Icon(
+                        Icons.error_outline,
+                        size: 14,
+                        color: scheme.error,
+                      ),
+                    ),
+                  Expanded(
+                    child: Text(
+                      text,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isError ? scheme.error : scheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 6),
-                Icon(
-                  Icons.open_in_full,
-                  size: 13,
-                  color: state.statusIsError ? scheme.error : scheme.onSurfaceVariant,
-                ),
-              ],
+                  if (state.status.isNotEmpty) ...[
+                    const SizedBox(width: 6),
+                    Icon(
+                      Icons.open_in_full,
+                      size: 13,
+                      color: isError ? scheme.error : scheme.onSurfaceVariant,
+                    ),
+                  ] else if (state.isSyncing)
+                    const SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                ],
+              ),
             ),
           ),
         ),
@@ -514,23 +633,30 @@ class _NoAccountsView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.mark_email_unread_outlined, size: 56),
-          const SizedBox(height: 16),
-          Text('No account yet',
-              style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 8),
-          const Text('Add an IMAP account to get started.'),
-          const SizedBox(height: 20),
-          FilledButton.icon(
-            icon: const Icon(Icons.add),
-            label: const Text('Add account'),
-            onPressed: () => AccountSetupDialog.show(context),
+    return SafeArea(
+      child: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.mark_email_unread_outlined, size: 56),
+              const SizedBox(height: 16),
+              Text(
+                'No account yet',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 8),
+              const Text('Add an IMAP account to get started.'),
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                icon: const Icon(Icons.add),
+                label: const Text('Add account'),
+                onPressed: () => AccountSetupDialog.show(context),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

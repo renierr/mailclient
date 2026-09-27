@@ -1,8 +1,8 @@
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
@@ -12,6 +12,7 @@ import '../../models/models.dart';
 import '../../models/settings.dart';
 import '../../state/mail_state.dart';
 import '../composer/composer_dialog.dart';
+import '../dialogs/mail_dialog.dart';
 import '../menu_row.dart';
 import '../message_list/message_list_pane.dart' show confirmDelete;
 import '../move_to/move_to_dialog.dart';
@@ -85,8 +86,7 @@ class _ReaderPaneState extends State<ReaderPane> {
                 message: message,
                 headersFuture: _headersFuture,
                 details: _details,
-                onToggleDetails: () =>
-                    setState(() => _details = !_details),
+                onToggleDetails: () => setState(() => _details = !_details),
                 onClose: widget.onClose,
               ),
               const Divider(height: 1),
@@ -94,7 +94,8 @@ class _ReaderPaneState extends State<ReaderPane> {
                   _htmlWithRemoteImages == null &&
                   !state.settings.loadRemoteImages)
                 _RemoteImagesBanner(
-                    onShowOnce: () => _showRemoteImages(message)),
+                  onShowOnce: () => _showRemoteImages(message),
+                ),
               Expanded(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.all(16),
@@ -110,9 +111,8 @@ class _ReaderPaneState extends State<ReaderPane> {
                           onTapUrl: (url) => _handleLinkUrl(context, url),
                         )
                       : MediaQuery(
-                          data: MediaQuery.of(context).copyWith(
-                            textScaler: TextScaler.linear(scale),
-                          ),
+                          data: MediaQuery.of(context)
+                              .copyWith(textScaler: TextScaler.linear(scale)),
                           child: SelectableText(message.bodyText),
                         ),
                 ),
@@ -126,19 +126,31 @@ class _ReaderPaneState extends State<ReaderPane> {
           Positioned(
             left: 16,
             bottom: 16,
-            child: IgnorePointer(
+            child: GestureDetector(
+              // Desktop hover bubble doubles as a touch affordance: tap
+              // copies the URL, so long-press is not the only way.
+              onTap: () {
+                final url = _hoveredLinkUrl;
+                if (url != null && url.isNotEmpty) {
+                  Clipboard.setData(ClipboardData(text: url));
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('Link copied')));
+                }
+              },
               child: ConstrainedBox(
                 constraints: BoxConstraints(
                   maxWidth: MediaQuery.sizeOf(context).width - 32,
                 ),
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: theme.colorScheme.surfaceContainerHighest,
                     borderRadius: BorderRadius.circular(6),
-                    border:
-                        Border.all(color: theme.colorScheme.outlineVariant),
+                    border: Border.all(color: theme.colorScheme.outlineVariant),
                     boxShadow: [
                       BoxShadow(
                         color: Colors.black.withValues(alpha: 0.12),
@@ -171,9 +183,8 @@ class _ReaderPaneState extends State<ReaderPane> {
     if (action == 'browser') {
       await LinkSafety.openUrl(url);
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Opened in browser')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Opened in browser')));
       }
     } else {
       if (context.mounted) {
@@ -186,8 +197,10 @@ class _ReaderPaneState extends State<ReaderPane> {
     final state = context.read<MailState>();
     // Re-sanitized by the core rather than patched here: the list feed stripped
     // the remote references entirely, so there is nothing local to un-strip.
-    final html = await MailCore.instance
-        .messageHtmlWithRemoteImages(state.folderId, message.uid);
+    final html = await MailCore.instance.messageHtmlWithRemoteImages(
+      state.folderId,
+      message.uid,
+    );
     if (!mounted) return;
     setState(() => _htmlWithRemoteImages = html);
   }
@@ -212,13 +225,14 @@ class _Header extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final state = context.read<MailState>();
-    final fullscreen =
-        context.select<MailState, bool>((s) => s.readerFullscreen);
-    final starred = context.select<MailState, bool>((s) => s.messages
-        .where((m) => m.uid == message.uid)
-        .firstOrNull
-        ?.starred ??
-        false);
+    final fullscreen = context.select<MailState, bool>(
+      (s) => s.readerFullscreen,
+    );
+    final starred = context.select<MailState, bool>(
+      (s) =>
+          s.messages.where((m) => m.uid == message.uid).firstOrNull?.starred ??
+          false,
+    );
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
       child: Column(
@@ -232,16 +246,17 @@ class _Header extends StatelessWidget {
                   onPressed: onClose,
                 ),
               Expanded(
-                child: Text(message.subject,
-                    style: theme.textTheme.titleMedium,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis),
+                child: Text(
+                  message.subject,
+                  style: theme.textTheme.titleMedium,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
               IconButton(
                 tooltip: 'Reply',
                 icon: const Icon(Icons.reply_outlined),
-                onPressed: () =>
-                    ComposerDialog.showReply(context, message),
+                onPressed: () => ComposerDialog.showReply(context, message),
               ),
               IconButton(
                 tooltip: starred ? 'Unstar' : 'Star',
@@ -254,19 +269,21 @@ class _Header extends StatelessWidget {
               IconButton(
                 tooltip: 'Delete',
                 icon: const Icon(Icons.delete_outline),
-                onPressed: () => confirmDelete(context, state,
-                    uids: [message.uid],
-                    permanent: state.deleteIsPermanent),
+                onPressed: () => confirmDelete(
+                  context,
+                  state,
+                  uids: [message.uid],
+                  permanent: state.deleteIsPermanent,
+                ),
               ),
               // Wide layouts only: narrower ones already give the reader
               // every pixel they have.
               if (onClose == null)
                 IconButton(
-                  tooltip:
-                      fullscreen ? 'Exit fullscreen' : 'Fullscreen',
-                  icon: Icon(fullscreen
-                      ? Icons.close_fullscreen
-                      : Icons.open_in_full),
+                  tooltip: fullscreen ? 'Exit fullscreen' : 'Fullscreen',
+                  icon: Icon(
+                    fullscreen ? Icons.close_fullscreen : Icons.open_in_full,
+                  ),
                   onPressed: state.toggleReaderFullscreen,
                 ),
               PopupMenuButton<String>(
@@ -276,38 +293,44 @@ class _Header extends StatelessWidget {
                   PopupMenuItem(
                     value: 'forward',
                     child: MenuRow(
-                        icon: Icons.forward_outlined,
-                        text: 'Forward'),
+                      icon: Icons.forward_outlined,
+                      text: 'Forward',
+                    ),
                   ),
                   PopupMenuItem(
                     value: 'reply-all',
                     child: MenuRow(
-                        icon: Icons.reply_all_outlined,
-                        text: 'Reply all'),
+                      icon: Icons.reply_all_outlined,
+                      text: 'Reply all',
+                    ),
                   ),
                   PopupMenuItem(
                     value: 'archive',
                     child: MenuRow(
-                        icon: Icons.archive_outlined,
-                        text: 'Archive'),
+                      icon: Icons.archive_outlined,
+                      text: 'Archive',
+                    ),
                   ),
                   PopupMenuItem(
                     value: 'move',
                     child: MenuRow(
-                        icon: Icons.drive_file_move_outlined,
-                        text: 'Move to…'),
+                      icon: Icons.drive_file_move_outlined,
+                      text: 'Move to…',
+                    ),
                   ),
                   PopupMenuItem(
                     value: 'purge',
                     child: MenuRow(
-                        icon: Icons.delete_forever_outlined,
-                        text: 'Delete permanently…'),
+                      icon: Icons.delete_forever_outlined,
+                      text: 'Delete permanently…',
+                    ),
                   ),
                   PopupMenuItem(
                     value: 'headers',
                     child: MenuRow(
-                        icon: Icons.info_outline,
-                        text: 'Show headers…'),
+                      icon: Icons.info_outline,
+                      text: 'Show headers…',
+                    ),
                   ),
                 ],
               ),
@@ -318,6 +341,8 @@ class _Header extends StatelessWidget {
             onTap: onToggleDetails,
             child: Row(
               children: [
+                _SenderAvatar(from: message.from),
+                const SizedBox(width: 10),
                 Expanded(
                   child: FutureBuilder<MessageHeaders?>(
                     future: headersFuture,
@@ -332,19 +357,20 @@ class _Header extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            shown.name.isNotEmpty
-                                ? shown.name
-                                : shown.addr,
+                            shown.name.isNotEmpty ? shown.name : shown.addr,
                             style: theme.textTheme.bodyMedium?.copyWith(
-                                fontWeight: FontWeight.w600),
+                              fontWeight: FontWeight.w600,
+                            ),
                             overflow: TextOverflow.ellipsis,
                           ),
-                          if (shown.name.isNotEmpty &&
-                              shown.addr != shown.name)
-                            Text(shown.addr,
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.colorScheme.outline),
-                                overflow: TextOverflow.ellipsis),
+                          if (shown.name.isNotEmpty && shown.addr != shown.name)
+                            Text(
+                              shown.addr,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.outline,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
                         ],
                       );
                     },
@@ -353,37 +379,41 @@ class _Header extends StatelessWidget {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    Text(message.date,
-                        style: theme.textTheme.bodySmall),
-                    Icon(details
-                        ? Icons.expand_less
-                        : Icons.expand_more),
+                    Text(message.date, style: theme.textTheme.bodySmall),
+                    Icon(details ? Icons.expand_less : Icons.expand_more),
                   ],
                 ),
               ],
             ),
           ),
           if (message.to.isNotEmpty)
-            Text('To: ${message.to}',
-                style: theme.textTheme.bodySmall),
+            Text('To: ${message.to}', style: theme.textTheme.bodySmall),
           if (details && message.cc.isNotEmpty)
-            Text('Cc: ${message.cc}',
-                style: theme.textTheme.bodySmall),
+            Text('Cc: ${message.cc}', style: theme.textTheme.bodySmall),
           // Shown inline, not hidden in a details view: replying to the wrong
-          // address is not something the user can take back.
+          // address is not something the user can take back. Red like Qt —
+          // this is a warning, not information.
           if (message.replyTo.isNotEmpty)
-            Text(
-              'Replies go to: ${message.replyTo}',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.primary),
+            Container(
+              margin: const EdgeInsets.only(top: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.errorContainer,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                'Replies go to: ${message.replyTo}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onErrorContainer,
+                ),
+              ),
             ),
         ],
       ),
     );
   }
 
-  Future<void> _more(
-      BuildContext context, MailState state, String v) async {
+  Future<void> _more(BuildContext context, MailState state, String v) async {
     switch (v) {
       case 'forward':
         if (context.mounted) {
@@ -391,20 +421,27 @@ class _Header extends StatelessWidget {
         }
       case 'reply-all':
         if (context.mounted) {
-          await ComposerDialog.showReply(context, message,
-              replyAll: true);
+          await ComposerDialog.showReply(context, message, replyAll: true);
         }
       case 'archive':
         await state.archiveMessages([message.uid]);
       case 'move':
         if (context.mounted) {
-          await MoveToDialog.show(context,
-              uids: [message.uid], subject: message.subject);
+          await MoveToDialog.show(
+            context,
+            uids: [message.uid],
+            subject: message.subject,
+          );
         }
       case 'purge':
         if (context.mounted) {
-          await confirmDelete(context, state,
-              uids: [message.uid], permanent: true, purge: true);
+          await confirmDelete(
+            context,
+            state,
+            uids: [message.uid],
+            permanent: true,
+            purge: true,
+          );
         }
       case 'headers':
         if (context.mounted) _showHeaders(context, state);
@@ -414,20 +451,22 @@ class _Header extends StatelessWidget {
   Future<void> _showHeaders(BuildContext context, MailState state) async {
     late MessageHeaders headers;
     try {
-      headers = await MailCore.instance
-          .messageHeaders(state.folderId, message.uid);
+      headers = await MailCore.instance.messageHeaders(
+        state.folderId,
+        message.uid,
+      );
     } catch (e) {
       if (!context.mounted) return;
       state.showStatus('$e', isError: true);
       return;
     }
     if (!context.mounted) return;
-    await showDialog(
-      context: context,
+    await MailDialog.show(
+      context,
       builder: (context) => AlertDialog(
         title: const Text('Headers'),
         content: SizedBox(
-          width: 480,
+          width: MailDialog.maxWidth(context, 480),
           child: SingleChildScrollView(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -445,8 +484,7 @@ class _Header extends StatelessWidget {
                   if (row.value.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 6),
-                      child: SelectableText(
-                          '${row.key}: ${row.value}'),
+                      child: SelectableText('${row.key}: ${row.value}'),
                     ),
                 if (headers.raw.isNotEmpty)
                   ExpansionTile(
@@ -456,13 +494,16 @@ class _Header extends StatelessWidget {
                       SelectableText(
                         headers.raw,
                         style: const TextStyle(
-                            fontFamily: 'monospace', fontSize: 12),
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                        ),
                       ),
                     ],
                   )
                 else
                   const Text(
-                      'Complete headers are unavailable until this message is downloaded again.'),
+                    'Complete headers are unavailable until this message is downloaded again.',
+                  ),
               ],
             ),
           ),
@@ -491,8 +532,11 @@ class _RemoteImagesBanner extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         children: [
-          Icon(Icons.image_not_supported_outlined,
-              size: 18, color: scheme.outline),
+          Icon(
+            Icons.image_not_supported_outlined,
+            size: 18,
+            color: scheme.outline,
+          ),
           const SizedBox(width: 8),
           const Expanded(
             child: Text(
@@ -513,10 +557,10 @@ class _RemoteImagesBanner extends StatelessWidget {
   final lt = s.indexOf('<');
   final gt = s.lastIndexOf('>');
   if (lt >= 0 && gt > lt) {
-    var name = s.substring(0, lt).trim().replaceAll(
-          RegExp('^["\']|["\']\$'),
-          '',
-        );
+    var name = s
+        .substring(0, lt)
+        .trim()
+        .replaceAll(RegExp('^["\']|["\']\$'), '');
     final addr = s.substring(lt + 1, gt).trim();
     if (name.isEmpty) name = addr;
     return (name: name, addr: addr);
@@ -549,8 +593,10 @@ class _AttachmentBar extends StatelessWidget {
         children: [
           Row(
             children: [
-              Text('${files.length} attachment(s)',
-                  style: Theme.of(context).textTheme.bodySmall),
+              Text(
+                '${files.length} attachment(s)',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
               const Spacer(),
               if (files.length > 1)
                 TextButton.icon(
@@ -585,18 +631,23 @@ class _AttachmentBar extends StatelessWidget {
     var bytes = await MailCore.instance.attachmentBytes(attachmentId);
     if (bytes != null) return bytes;
     await MailCore.instance.downloadAttachments(
-        state.accountId, state.folderId, message.uid);
+      state.accountId,
+      state.folderId,
+      message.uid,
+    );
     return MailCore.instance.attachmentBytes(attachmentId);
   }
 
   Future<void> _open(
-      BuildContext context, MailState state, AttachmentInfo a) async {
+    BuildContext context,
+    MailState state,
+    AttachmentInfo a,
+  ) async {
     try {
       state.showStatus('Opening ${a.filename}…');
       final bytes = await _bytes(state, a.id);
       if (bytes == null) {
-        state.showStatus('${a.filename} is not downloaded yet',
-            isError: true);
+        state.showStatus('${a.filename} is not downloaded yet', isError: true);
         return;
       }
       final dir = await getTemporaryDirectory();
@@ -604,8 +655,10 @@ class _AttachmentBar extends StatelessWidget {
       await file.writeAsBytes(bytes, flush: true);
       final result = await OpenFilex.open(file.path);
       if (result.type != ResultType.done) {
-        state.showStatus('Could not open ${a.filename}: ${result.message}',
-            isError: true);
+        state.showStatus(
+          'Could not open ${a.filename}: ${result.message}',
+          isError: true,
+        );
       } else {
         state.showStatus('Opened ${a.filename}');
       }
@@ -615,13 +668,15 @@ class _AttachmentBar extends StatelessWidget {
   }
 
   Future<void> _saveOne(
-      BuildContext context, MailState state, AttachmentInfo a) async {
+    BuildContext context,
+    MailState state,
+    AttachmentInfo a,
+  ) async {
     try {
       // The picker writes the bytes itself and hands back where they went.
       final bytes = await _bytes(state, a.id);
       if (bytes == null) {
-        state.showStatus('${a.filename} is not downloaded yet',
-            isError: true);
+        state.showStatus('${a.filename} is not downloaded yet', isError: true);
         return;
       }
       final uri = await FilePicker.saveFile(
@@ -646,8 +701,11 @@ class _AttachmentBar extends StatelessWidget {
       for (final a in message.attachments.where((a) => !a.isInline)) {
         await _bytes(state, a.id);
       }
-      final n = await MailCore.instance
-          .saveAllAttachmentsTo(state.folderId, message.uid, dir);
+      final n = await MailCore.instance.saveAllAttachmentsTo(
+        state.folderId,
+        message.uid,
+        dir,
+      );
       state.showStatus('Saved $n file(s)');
     } catch (e) {
       state.showStatus('Could not save attachments: $e', isError: true);
@@ -663,7 +721,6 @@ class _AttachmentBar extends StatelessWidget {
 
 class _Placeholder extends StatelessWidget {
   const _Placeholder({required this.text});
-
   final String text;
 
   @override
@@ -671,6 +728,26 @@ class _Placeholder extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Center(
       child: Text(text, style: TextStyle(color: scheme.outline)),
+    );
+  }
+}
+
+/// Deterministic sender avatar, like the Qt Avatar seed.
+class _SenderAvatar extends StatelessWidget {
+  const _SenderAvatar({required this.from});
+
+  final String from;
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = avatarColor(context, from);
+    final m = RegExp(r'[a-zA-Z0-9]').firstMatch(from);
+    final initial = m == null ? '?' : m.group(0)!.toUpperCase();
+    return CircleAvatar(
+      radius: 18,
+      backgroundColor: bg,
+      foregroundColor: Theme.of(context).colorScheme.onPrimary,
+      child: Text(initial, style: const TextStyle(fontSize: 15)),
     );
   }
 }

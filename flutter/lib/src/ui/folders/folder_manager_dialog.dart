@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/models.dart';
 import '../../state/mail_state.dart';
+import '../dialogs/mail_dialog.dart';
 
 /// The IMAP folder manager: create folders, hide them from the sidebar,
 /// refresh the server-side list, and jump to one.
@@ -13,10 +14,7 @@ class FolderManagerDialog extends StatefulWidget {
   const FolderManagerDialog({super.key});
 
   static Future<void> show(BuildContext context) async {
-    await showDialog(
-      context: context,
-      builder: (_) => const FolderManagerDialog(),
-    );
+    await MailDialog.show(context, builder: (_) => const FolderManagerDialog());
   }
 
   @override
@@ -25,9 +23,22 @@ class FolderManagerDialog extends StatefulWidget {
 
 class _FolderManagerDialogState extends State<FolderManagerDialog> {
   final _newFolder = TextEditingController();
+  bool _canCreate = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _newFolder.addListener(_onNameChanged);
+  }
+
+  void _onNameChanged() {
+    final can = _newFolder.text.trim().isNotEmpty;
+    if (can != _canCreate) setState(() => _canCreate = can);
+  }
 
   @override
   void dispose() {
+    _newFolder.removeListener(_onNameChanged);
     _newFolder.dispose();
     super.dispose();
   }
@@ -35,24 +46,30 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<MailState>();
+    final narrow = MailDialog.isNarrow(context);
     return Dialog(
-      insetPadding:
-          const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      insetPadding: MailDialog.insets(context, wideH: 16),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520, maxHeight: 560),
+        constraints: BoxConstraints(
+          maxWidth: MailDialog.maxWidth(context, 520),
+          maxHeight: MailDialog.maxHeight(context, 560),
+        ),
         child: Padding(
-          padding: const EdgeInsets.all(20),
+          padding: EdgeInsets.all(narrow ? 12 : 20),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('IMAP folders',
-                  style: Theme.of(context).textTheme.titleLarge),
+              Text(
+                'IMAP folders',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
               const SizedBox(height: 12),
               Row(
                 children: [
                   Expanded(
                     child: TextField(
                       controller: _newFolder,
+                      textInputAction: TextInputAction.done,
                       onSubmitted: (_) => _create(state),
                       decoration: const InputDecoration(
                         labelText: 'New folder name (/ for subfolders)',
@@ -61,9 +78,7 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
                   ),
                   const SizedBox(width: 8),
                   FilledButton(
-                    onPressed: _newFolder.text.trim().isEmpty
-                        ? null
-                        : () => _create(state),
+                    onPressed: _canCreate ? () => _create(state) : null,
                     child: const Text('Create'),
                   ),
                 ],
@@ -78,14 +93,18 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
                 child: state.allFolders.isEmpty
                     ? const Center(
                         child: Text(
-                            'No folders yet — press Refresh from server.'),
+                          'No folders yet — press Refresh from server.',
+                        ),
                       )
                     : ListView.separated(
+                        // Keep rows above the keyboard while creating.
+                        padding: EdgeInsets.only(
+                          bottom: MediaQuery.viewInsetsOf(context).bottom,
+                        ),
                         itemCount: state.allFolders.length,
-                        separatorBuilder: (_, _) =>
-                            const Divider(height: 1),
+                        separatorBuilder: (_, _) => const Divider(height: 1),
                         itemBuilder: (context, i) =>
-                            _row(state, state.allFolders[i]),
+                            _row(context, state, state.allFolders[i]),
                       ),
               ),
               const SizedBox(height: 8),
@@ -97,8 +116,7 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
                         ? const SizedBox(
                             width: 16,
                             height: 16,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2),
+                            child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.sync, size: 16),
                     label: const Text('Refresh from server'),
@@ -120,17 +138,41 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
     );
   }
 
-  Widget _row(MailState state, Folder f) {
-    return CheckboxListTile(
-      value: f.subscribed,
-      onChanged: (v) =>
-          state.setFolderSubscribed(f.id, v ?? true),
-      secondary: Icon(_iconFor(f.role), size: 20),
-      title: Text(f.path, overflow: TextOverflow.ellipsis),
-      subtitle: Text('${f.total} · ${f.unread} unread'),
-      controlAffinity: ListTileControlAffinity.leading,
+  Widget _row(BuildContext context, MailState state, Folder f) {
+    final current = f.id == state.folderId;
+    return ListTile(
+      selected: current,
       contentPadding: EdgeInsets.zero,
       dense: true,
+      leading: Checkbox(
+        value: f.subscribed,
+        onChanged: (v) => state.setFolderSubscribed(f.id, v ?? true),
+      ),
+      title: Row(
+        children: [
+          Icon(_iconFor(f.role), size: 20),
+          const SizedBox(width: 8),
+          Expanded(child: Text(f.path, overflow: TextOverflow.ellipsis)),
+        ],
+      ),
+      subtitle: Text('${f.total} · ${f.unread} unread'),
+      // Qt parity: chevron jumps to the folder (and closes the manager).
+      trailing: IconButton(
+        tooltip: current ? 'Currently open' : 'Open folder',
+        icon: const Icon(Icons.chevron_right, size: 20),
+        onPressed: current
+            ? null
+            : () {
+                Navigator.of(context).pop();
+                state.selectFolder(f.id);
+              },
+      ),
+      onTap: current
+          ? null
+          : () {
+              Navigator.of(context).pop();
+              state.selectFolder(f.id);
+            },
     );
   }
 
@@ -144,12 +186,12 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
   }
 
   static IconData _iconFor(FolderRole role) => switch (role) {
-        FolderRole.inbox => Icons.inbox_outlined,
-        FolderRole.sent => Icons.send_outlined,
-        FolderRole.drafts => Icons.edit_note_outlined,
-        FolderRole.trash => Icons.delete_outline,
-        FolderRole.junk => Icons.report_gmailerrorred_outlined,
-        FolderRole.archive => Icons.archive_outlined,
-        FolderRole.custom => Icons.folder_outlined,
-      };
+    FolderRole.inbox => Icons.inbox_outlined,
+    FolderRole.sent => Icons.send_outlined,
+    FolderRole.drafts => Icons.edit_note_outlined,
+    FolderRole.trash => Icons.delete_outline,
+    FolderRole.junk => Icons.report_gmailerrorred_outlined,
+    FolderRole.archive => Icons.archive_outlined,
+    FolderRole.custom => Icons.folder_outlined,
+  };
 }
