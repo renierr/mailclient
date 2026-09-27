@@ -19,6 +19,7 @@ abstract final class SettingKeys {
   static const readerFontSize = 'reader_font_size';
   static const linkClickAction = 'link_click_action';
   static const syncInterval = 'sync_interval_minutes';
+  static const notificationsEnabled = 'notifications_enabled';
   static const signatureEnabled = 'signature_enabled';
   static const signatureText = 'signature_text';
   static const replyBelowQuote = 'reply_below_quote';
@@ -43,6 +44,7 @@ class AppSettings {
     required this.readerFontSize,
     required this.linkClickAction,
     required this.syncIntervalMinutes,
+    required this.notificationsEnabled,
     required this.signatureEnabled,
     required this.signatureText,
     required this.replyBelowQuote,
@@ -64,6 +66,7 @@ class AppSettings {
   final String readerFontSize;
   final String linkClickAction;
   final int syncIntervalMinutes;
+  final bool notificationsEnabled;
   final bool signatureEnabled;
   final String signatureText;
   final bool replyBelowQuote;
@@ -87,6 +90,7 @@ class AppSettings {
     readerFontSize: 'normal',
     linkClickAction: 'examine',
     syncIntervalMinutes: 0,
+    notificationsEnabled: true,
     signatureEnabled: false,
     signatureText: '',
     replyBelowQuote: false,
@@ -110,6 +114,7 @@ class AppSettings {
         linkClickAction:
             _str(j[SettingKeys.linkClickAction], orElse: 'examine'),
         syncIntervalMinutes: _int(j[SettingKeys.syncInterval]),
+        notificationsEnabled: _flag(j[SettingKeys.notificationsEnabled], orElse: true),
         signatureEnabled: _flag(j[SettingKeys.signatureEnabled]),
         signatureText: _str(j[SettingKeys.signatureText]),
         replyBelowQuote: _flag(j[SettingKeys.replyBelowQuote]),
@@ -132,6 +137,7 @@ class AppSettings {
     String? readerFontSize,
     String? linkClickAction,
     int? syncIntervalMinutes,
+    bool? notificationsEnabled,
     bool? signatureEnabled,
     String? signatureText,
     bool? replyBelowQuote,
@@ -153,6 +159,7 @@ class AppSettings {
         readerFontSize: readerFontSize ?? this.readerFontSize,
         linkClickAction: linkClickAction ?? this.linkClickAction,
         syncIntervalMinutes: syncIntervalMinutes ?? this.syncIntervalMinutes,
+        notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
         signatureEnabled: signatureEnabled ?? this.signatureEnabled,
         signatureText: signatureText ?? this.signatureText,
         replyBelowQuote: replyBelowQuote ?? this.replyBelowQuote,

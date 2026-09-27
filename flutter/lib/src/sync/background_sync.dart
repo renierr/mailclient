@@ -111,18 +111,38 @@ void backgroundSyncDispatcher() {
 
 /// One headless tick: sync every account via the Rust headless check and
 /// notify about mail first seen by this run. Skipped runs (sync lock held
-/// elsewhere) and empty runs stay silent.
+/// elsewhere) and empty runs stay silent. Notifications can be disabled
+/// independently — the sync still runs, only the alert is suppressed.
 Future<void> runBackgroundCheck() async {
   // Per-isolate singleton: this re-opens the same database file and vault
   // the UI uses. `init_app` is idempotent for the same directory.
   final core = await MailCore.load();
   final report = await core.backgroundCheckNow();
   if (report['skipped'] == true) return;
+  final settings = await core.settings();
+  if (!settings.notificationsEnabled) return;
   final items = (report['new'] as List<dynamic>? ?? const [])
       .whereType<Map<String, dynamic>>()
       .toList(growable: false);
   if (items.isEmpty) return;
   await showNewMailNotification(items);
+}
+
+/// Post a mock notification with all display options, for testing from
+/// settings. Uses a fixed payload that opens the app's default view.
+Future<void> showTestNotification() async {
+  await showNewMailNotification([
+    {
+      'account_id': -1,
+      'account_email': 'test@mailclient',
+      'folder_id': -1,
+      'folder': 'INBOX',
+      'uid': 0,
+      'from': 'Mailclient Test',
+      'subject': 'Test notification — tap to open the app',
+      'date': DateTime.now().toIso8601String(),
+    },
+  ]);
 }
 
 /// Post the system notification for [items] (never empty when called).

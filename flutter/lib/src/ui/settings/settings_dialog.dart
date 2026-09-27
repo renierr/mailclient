@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../ffi/mail_core.dart';
 import '../../models/settings.dart';
 import '../../state/mail_state.dart';
+import '../../sync/background_sync.dart';
 import '../dialogs/mail_dialog.dart';
 
 /// All preferences, Roundcube-style: sections on the left, the form on the
@@ -335,6 +336,18 @@ class _SettingsDialogState extends State<SettingsDialog> {
             'Also checks in the background while the app is closed. '
             'Android runs background checks at most every 15 minutes.',
       ),
+      _switch(
+        'Show notifications for new mail',
+        _draft.notificationsEnabled,
+        (v) => setState(() => _draft = _draft.copyWith(notificationsEnabled: v)),
+        help: 'Sync continues in the background; only the notification is suppressed.',
+      ),
+      const SizedBox(height: 8),
+      OutlinedButton.icon(
+        onPressed: _saving ? null : _sendTestNotification,
+        icon: const Icon(Icons.notifications_outlined),
+        label: const Text('Send test notification'),
+      ),
     ],
   );
 
@@ -426,6 +439,14 @@ class _SettingsDialogState extends State<SettingsDialog> {
     );
   }
 
+  Future<void> _sendTestNotification() async {
+    await showTestNotification();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Test notification sent')),
+    );
+  }
+
   Future<void> _save() async {
     final state = context.read<MailState>();
     setState(() {
@@ -447,6 +468,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
         SettingKeys.readerFontSize: d.readerFontSize,
         SettingKeys.linkClickAction: d.linkClickAction,
         SettingKeys.syncInterval: '${d.syncIntervalMinutes}',
+        SettingKeys.notificationsEnabled: _yn(d.notificationsEnabled),
         SettingKeys.signatureEnabled: _yn(d.signatureEnabled),
         SettingKeys.signatureText: d.signatureText,
         SettingKeys.replyBelowQuote: _yn(d.replyBelowQuote),
