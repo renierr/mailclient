@@ -77,10 +77,59 @@ pub struct RecentUnread {
     pub date: String,
 }
 
+/// One mail the background check has never reported before. Carries the ids
+/// the UI needs to open it (`account_id`/`folder_id`/`uid`), plus the
+/// metadata a notification shows. Bodies never cross here.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct NewMail {
+    pub account_id: i64,
+    pub account_email: String,
+    pub folder_id: i64,
+    pub folder: String,
+    pub uid: u32,
+    pub from: String,
+    pub subject: String,
+    pub date: String,
+}
+
+/// Outcome of [`background_check`]: what arrived since the previous check.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct BackgroundReport {
+    /// Another sync held the lock, so this run did nothing. Not an error —
+    /// the next scheduled run picks it up.
+    pub skipped: bool,
+    /// Unread mail first seen by this check. Empty on the very first run:
+    /// that run only records the baseline so pre-existing unread mail does
+    /// not notify all at once.
+    pub new: Vec<NewMail>,
+    /// Cached inbox-unread total across accounts, for the launcher badge.
+    pub total_unread: u64,
+    pub errors: Vec<String>,
+}
+
+/// Prefix for background-check high-water marks (internal bookkeeping, not
+/// a user preference, so deliberately outside the settings allowlist):
+/// `bg_seen_uid_{account_id}_{folder_id}` stores `{uidvalidity}:{max_uid}`.
+pub const BG_SEEN_PREFIX: &str = "bg_seen_uid_";
+
 /// Per-folder sync progress, called as `report(done, total, path)` before
 /// each folder sync so the GUI can show "3/15: …" instead of a bare
 /// spinner; the headless CLI passes `None`.
 pub type SyncProgress<'a> = &'a dyn Fn(usize, usize, &str);
+
+/// One unread inbox row feeding [`collect_new_mail`]: identity (account,
+/// folder, uid, validity) plus notification metadata.
+struct UnreadRow {
+    account_id: i64,
+    account_email: String,
+    folder_id: i64,
+    folder: String,
+    uid: i64,
+    validity: i64,
+    from: String,
+    subject: String,
+    date: String,
+}
 
 /// Sync one account over an already-connected session.
 ///
@@ -275,6 +324,138 @@ pub fn sync_all_accounts_blocking(db: &Db) -> SyncAllReport {
         .build()
         .expect("tokio runtime for headless sync");
     rt.block_on(sync_all_accounts(db))
+}
+
+/// One background tick: lock, sync every account over fresh connections,
+/// and report mail that arrived since the previous tick.
+///
+/// The lock turns overlap with a foreground sync (or a second worker) into
+/// a quiet skip rather than a `database is locked` error. Fresh connections
+/// keep this off the GUI's pooled sessions, so a worker run can never steal
+/// or stall the session the user is reading through.
+pub async fn background_check(db: &Db, db_path: &Path) -> BackgroundReport {
+    let _lock = match acquire_sync_lock(db_path) {
+        Ok(Some(guard)) => guard,
+        Ok(None) => {
+            return BackgroundReport {
+                skipped: true,
+                total_unread: cached_total_unread(db),
+                ..Default::default()
+            };
+        }
+        Err(e) => {
+            return BackgroundReport {
+                skipped: true,
+                total_unread: cached_total_unread(db),
+                errors: vec![format!("sync lock: {e}")],
+                ..Default::default()
+            };
+        }
+    };
+    // NB: `skipped` stays false here — losing the lock returns above.
+    let report = sync_all_accounts(db).await;
+    BackgroundReport {
+        skipped: false,
+        new: collect_new_mail(db),
+        total_unread: report.total_unread,
+        errors: report.errors,
+    }
+}
+
+/// Synchronous wrapper around [`background_check`] for FFI callers, which
+/// cannot await. Same current-thread runtime shape as
+/// [`sync_all_accounts_blocking`].
+pub fn background_check_blocking(db: &Db, db_path: &Path) -> BackgroundReport {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime for background check");
+    rt.block_on(background_check(db, db_path))
+}
+
+/// Unread inbox mail first seen since the previous call, per folder.
+///
+/// Each inbox folder keeps a `{uidvalidity}:{max_uid}` mark under
+/// [`BG_SEEN_PREFIX`]. A missing mark or a changed validity means "never
+/// reliably seen": record the current top as the baseline and report
+/// nothing, so enabling the feature (or a server-side UID reset) does not
+/// ding for every old message at once. Otherwise only unread mail above the
+/// mark is new; the mark always advances to the current top, read or not.
+pub fn collect_new_mail(db: &Db) -> Vec<NewMail> {
+    let rows: Vec<UnreadRow> = db
+        .conn()
+        .prepare(
+            "select m.account_id, a.email_address, m.folder_id, f.path,
+                        m.uid, coalesce(f.uid_validity, 0),
+                        coalesce(m.from_addr, ''), coalesce(m.subject, ''),
+                        coalesce(m.date, '')
+                 from messages m
+                 join accounts a on a.id = m.account_id
+                 join folders f on f.id = m.folder_id
+                 where m.is_read = 0
+                   and f.role = 'inbox'
+                 order by m.account_id, m.folder_id, m.uid",
+        )
+        .and_then(|mut stmt| {
+            stmt.query_map([], |row| {
+                Ok(UnreadRow {
+                    account_id: row.get(0)?,
+                    account_email: row.get(1)?,
+                    folder_id: row.get(2)?,
+                    folder: row.get(3)?,
+                    uid: row.get(4)?,
+                    validity: row.get(5)?,
+                    from: row.get(6)?,
+                    subject: row.get(7)?,
+                    date: row.get(8)?,
+                })
+            })
+            .and_then(|mapped| mapped.collect::<rusqlite::Result<Vec<_>>>())
+        })
+        .unwrap_or_default();
+
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < rows.len() {
+        let (account_id, folder_id) = (rows[i].account_id, rows[i].folder_id);
+        let mut j = i;
+        while j < rows.len() && rows[j].account_id == account_id && rows[j].folder_id == folder_id {
+            j += 1;
+        }
+        let group = &rows[i..j];
+        let validity = group[0].validity;
+        let top_uid = group.last().map(|r| r.uid).unwrap_or(0);
+        let key = format!("{BG_SEEN_PREFIX}{account_id}_{folder_id}");
+        let seen: Option<(i64, i64)> = settings::get(db, &key).ok().flatten().and_then(|s| {
+            s.split_once(':')
+                .and_then(|(v, u)| Some((v.parse().ok()?, u.parse().ok()?)))
+        });
+        let fresh_baseline = seen.is_none_or(|(v, _)| v != validity);
+        if fresh_baseline {
+            // First sighting (or UIDVALIDITY reset): baseline, report nothing.
+        } else {
+            let mark = seen.map(|(_, u)| u).unwrap_or(0);
+            out.extend(group.iter().filter(|r| r.uid > mark).map(|r| NewMail {
+                account_id,
+                account_email: r.account_email.clone(),
+                folder_id,
+                folder: r.folder.clone(),
+                uid: r.uid as u32,
+                from: r.from.clone(),
+                subject: r.subject.clone(),
+                date: r.date.clone(),
+            }));
+        }
+        let _ = settings::set(db, &key, &format!("{validity}:{top_uid}"));
+        i = j;
+    }
+    out
+}
+
+/// Cached inbox-unread total across accounts (no network), for the badge
+/// when a check cannot run.
+fn cached_total_unread(db: &Db) -> u64 {
+    unread_summary(db).iter().map(|a| a.unread).sum()
 }
 
 /// Cached unread total for one account (no network).
@@ -483,5 +664,55 @@ mod tests {
         let recent = recent_unread(&db, 10, None);
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].subject, "inbox mail");
+    }
+
+    #[test]
+    fn collect_new_mail_baselines_first_then_reports_once() {
+        let (db, acc, inbox, _) = setup_db();
+        let mut m1 = messages::sample_new(acc, inbox, 1);
+        m1.is_read = false;
+        m1.subject = Some("old unread".to_string());
+        messages::upsert(&db, &m1).unwrap();
+
+        // First run only records the baseline: pre-existing unread mail
+        // must not notify.
+        assert!(collect_new_mail(&db).is_empty());
+
+        // A genuinely new arrival reports exactly once…
+        let mut m2 = messages::sample_new(acc, inbox, 2);
+        m2.is_read = false;
+        m2.subject = Some("fresh arrival".to_string());
+        messages::upsert(&db, &m2).unwrap();
+        let new = collect_new_mail(&db);
+        assert_eq!(new.len(), 1);
+        assert_eq!(new[0].subject, "fresh arrival");
+        assert_eq!(new[0].uid, 2);
+        assert_eq!(new[0].folder_id, inbox);
+        // …and the next run stays quiet while it sits unread.
+        assert!(collect_new_mail(&db).is_empty());
+    }
+
+    #[test]
+    fn collect_new_mail_rebaselines_on_uidvalidity_change() {
+        let (db, acc, inbox, _) = setup_db();
+        let mut m1 = messages::sample_new(acc, inbox, 7);
+        m1.is_read = false;
+        messages::upsert(&db, &m1).unwrap();
+        assert!(collect_new_mail(&db).is_empty());
+
+        // Server-side UID reset: UIDs restart low, so without the validity
+        // in the mark every old message would look new.
+        db.conn()
+            .execute(
+                "update folders set uid_validity = 99 where id = ?1",
+                [inbox],
+            )
+            .unwrap();
+        assert!(collect_new_mail(&db).is_empty());
+        // …and mail arriving under the new validity reports normally.
+        let mut m2 = messages::sample_new(acc, inbox, 8);
+        m2.is_read = false;
+        messages::upsert(&db, &m2).unwrap();
+        assert_eq!(collect_new_mail(&db).len(), 1);
     }
 }

@@ -331,6 +331,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
         const [0, 5, 10, 15, 30, 60],
         (v) => v == 0 ? 'Manually' : 'Every ${v}m',
         (v) => setState(() => _draft = _draft.copyWith(syncIntervalMinutes: v)),
+        help:
+            'Also checks in the background while the app is closed. '
+            'Android runs background checks at most every 15 minutes.',
       ),
     ],
   );

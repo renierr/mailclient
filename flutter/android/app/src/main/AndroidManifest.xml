@@ -1,6 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <!-- Runtime-prompted on API 33+ when background mail checks are enabled;
+         install-time granted below that. No exact alarms, no foreground
+         service: the checker is a plain WorkManager periodic task. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <!-- Cleartext is opt-in per account (plaintext IMAP/SMTP), not the
          default: every account uses TLS unless explicitly configured

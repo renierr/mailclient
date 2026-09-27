@@ -53,3 +53,17 @@ Future<void> refreshServerCapabilities({required PlatformInt64 accountId}) =>
     MailCoreApi.instance.api.crateApiSyncRefreshServerCapabilities(
       accountId: accountId,
     );
+
+/// Headless new-mail check for the Android background worker.
+///
+/// Takes the cross-process sync lock, syncs every account over fresh
+/// connections (never the GUI's pooled sessions), and returns the
+/// [`headless::BackgroundReport`] as JSON: skipped flag, mail that arrived
+/// since the previous check, cached unread total, errors.
+///
+/// Background-isolate only: it blocks the calling worker thread for the
+/// whole network run, which is fine with nothing else to serve but would
+/// stall the UI's pool. The lock collision path returns `skipped: true`
+/// rather than failing, so the worker just waits for the next run.
+Future<String> backgroundCheckNow() =>
+    MailCoreApi.instance.api.crateApiSyncBackgroundCheckNow();

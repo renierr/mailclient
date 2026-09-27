@@ -114,9 +114,10 @@ class MailCore {
 
   // --- folders -------------------------------------------------------------
 
-  Future<List<Folder>> folders(int accountId) async =>
-      _decodeList(await rust_folders.foldersJson(accountId: accountId),
-          Folder.fromJson);
+  Future<List<Folder>> folders(int accountId) async => _decodeList(
+    await rust_folders.foldersJson(accountId: accountId),
+    Folder.fromJson,
+  );
 
   Future<String> folderPath(int folderId) =>
       rust_folders.folderPath(folderId: folderId);
@@ -127,12 +128,16 @@ class MailCore {
   /// Resolve a folder path to its local id, for a UI that navigated by path
   /// (search results carry paths, reads take ids).
   Future<int> folderIdForPath(int accountId, String path) async =>
-      (await rust_folders.folderIdForPath(accountId: accountId, path: path))
-          .toInt();
+      (await rust_folders.folderIdForPath(
+        accountId: accountId,
+        path: path,
+      )).toInt();
 
   Future<void> setFolderSubscribed(int folderId, bool subscribed) =>
       rust_folders.setFolderSubscribed(
-          folderId: folderId, subscribed: subscribed);
+        folderId: folderId,
+        subscribed: subscribed,
+      );
 
   // --- messages ------------------------------------------------------------
 
@@ -140,76 +145,109 @@ class MailCore {
     int folderId, {
     int limit = 200,
     int offset = 0,
-  }) async =>
-      _decodeList(
-        await rust_messages.messagesJson(
-            folderId: folderId, limit: limit, offset: offset),
-        MessageSummary.fromJson,
-      );
+  }) async => _decodeList(
+    await rust_messages.messagesJson(
+      folderId: folderId,
+      limit: limit,
+      offset: offset,
+    ),
+    MessageSummary.fromJson,
+  );
 
-  Future<MessageBody> message(int folderId, int uid) async => MessageBody
-      .fromJson(await _decodeMap(
-          await rust_messages.messageJson(folderId: folderId, uid: uid)));
+  Future<MessageBody> message(int folderId, int uid) async =>
+      MessageBody.fromJson(
+        await _decodeMap(
+          await rust_messages.messageJson(folderId: folderId, uid: uid),
+        ),
+      );
 
   /// Re-sanitized HTML with remote images kept — the "show once" path.
   Future<String> messageHtmlWithRemoteImages(int folderId, int uid) =>
       rust_messages.messageHtml(
-          folderId: folderId, uid: uid, allowRemote: true);
+        folderId: folderId,
+        uid: uid,
+        allowRemote: true,
+      );
 
   Future<MessageHeaders> messageHeaders(int folderId, int uid) async =>
-      MessageHeaders.fromJson(await _decodeMap(
-          await rust_messages.headersJson(folderId: folderId, uid: uid)));
+      MessageHeaders.fromJson(
+        await _decodeMap(
+          await rust_messages.headersJson(folderId: folderId, uid: uid),
+        ),
+      );
 
   Future<void> markRead(int accountId, int folderId, int uid, bool read) =>
       rust_messages.markRead(
-          accountId: accountId, folderId: folderId, uid: uid, read: read);
+        accountId: accountId,
+        folderId: folderId,
+        uid: uid,
+        read: read,
+      );
 
   /// Returns how many rows actually changed. Rust counts these as `u64`,
   /// which crosses as a `BigInt`; a folder never holds enough messages for
   /// that to matter, so the UI gets a plain int.
   Future<int> markReadMany(
-          int accountId, int folderId, List<int> uids, bool read) async =>
-      (await rust_messages.markReadMany(
-              accountId: accountId,
-              folderId: folderId,
-              uids: uids,
-              read: read))
-          .toInt();
+    int accountId,
+    int folderId,
+    List<int> uids,
+    bool read,
+  ) async => (await rust_messages.markReadMany(
+    accountId: accountId,
+    folderId: folderId,
+    uids: uids,
+    read: read,
+  )).toInt();
 
-  Future<bool> toggleStar(int accountId, int folderId, int uid) =>
-      rust_messages.toggleStar(
-          accountId: accountId, folderId: folderId, uid: uid);
+  Future<bool> toggleStar(int accountId, int folderId, int uid) => rust_messages
+      .toggleStar(accountId: accountId, folderId: folderId, uid: uid);
 
   Future<int> setStarMany(
-          int accountId, int folderId, List<int> uids, bool starred) async =>
-      (await rust_messages.setStarMany(
-              accountId: accountId,
-              folderId: folderId,
-              uids: uids,
-              starred: starred))
-          .toInt();
+    int accountId,
+    int folderId,
+    List<int> uids,
+    bool starred,
+  ) async => (await rust_messages.setStarMany(
+    accountId: accountId,
+    folderId: folderId,
+    uids: uids,
+    starred: starred,
+  )).toInt();
 
   // --- moving and deleting (queued) ---------------------------------------
 
   Future<void> deleteMessages(int accountId, int folderId, List<int> uids) =>
       rust_mutate.deleteMessages(
-          accountId: accountId, folderId: folderId, uids: uids);
+        accountId: accountId,
+        folderId: folderId,
+        uids: uids,
+      );
 
   Future<void> purgeMessages(int accountId, int folderId, List<int> uids) =>
       rust_mutate.purgeMessages(
-          accountId: accountId, folderId: folderId, uids: uids);
+        accountId: accountId,
+        folderId: folderId,
+        uids: uids,
+      );
 
   Future<void> archiveMessages(int accountId, int folderId, List<int> uids) =>
       rust_mutate.archiveMessages(
-          accountId: accountId, folderId: folderId, uids: uids);
+        accountId: accountId,
+        folderId: folderId,
+        uids: uids,
+      );
 
   Future<void> moveMessages(
-          int accountId, int folderId, List<int> uids, String destPath) =>
-      rust_mutate.moveMessages(
-          accountId: accountId,
-          folderId: folderId,
-          uids: uids,
-          destPath: destPath);
+    int accountId,
+    int folderId,
+    List<int> uids,
+    String destPath,
+  ) => rust_mutate.moveMessages(
+    accountId: accountId,
+    folderId: folderId,
+    uids: uids,
+    destPath: destPath,
+  );
 
   Future<void> createFolder(int accountId, String path) =>
       rust_mutate.createFolder(accountId: accountId, path: path);
@@ -231,6 +269,15 @@ class MailCore {
   Future<void> refreshServerCapabilities(int accountId) =>
       rust_sync.refreshServerCapabilities(accountId: accountId);
 
+  /// Headless new-mail check for the Android background worker: syncs every
+  /// account over fresh connections and returns the `BackgroundReport`
+  /// (`skipped`, `new`, `total_unread`, `errors`).
+  ///
+  /// Background-isolate only — it blocks the calling FRB worker thread for
+  /// the whole network run. The UI keeps using the queued `syncAccount`.
+  Future<Map<String, dynamic>> backgroundCheckNow() async =>
+      _decodeMap(await rust_sync.backgroundCheckNow());
+
   // --- search --------------------------------------------------------------
 
   /// Local FTS only, in rank order. Cheap enough to run on every keystroke.
@@ -239,28 +286,41 @@ class MailCore {
     String query, {
     String folder = '',
     int limit = 100,
-  }) async =>
-      _decodeList(
-        await rust_search.searchJson(
-            accountId: accountId, query: query, folder: folder, limit: limit),
-        SearchHit.fromJson,
-      );
+  }) async => _decodeList(
+    await rust_search.searchJson(
+      accountId: accountId,
+      query: query,
+      folder: folder,
+      limit: limit,
+    ),
+    SearchHit.fromJson,
+  );
 
   /// Top up thin local results from the server. Queued; re-run [search] when
   /// the `"Search"` job finishes.
-  Future<void> searchServer(int accountId, String query,
-          {String folder = ''}) =>
-      rust_search.searchServer(
-          accountId: accountId, query: query, folder: folder);
+  Future<void> searchServer(
+    int accountId,
+    String query, {
+    String folder = '',
+  }) => rust_search.searchServer(
+    accountId: accountId,
+    query: query,
+    folder: folder,
+  );
 
   // --- composer ------------------------------------------------------------
 
   /// Validate, build and queue a message. Throws on anything the user can
   /// still fix, with the composer still open.
   Future<void> sendMail(
-          int accountId, int folderId, Map<String, dynamic> form) =>
-      rust_composer.sendMail(
-          accountId: accountId, folderId: folderId, form: jsonEncode(form));
+    int accountId,
+    int folderId,
+    Map<String, dynamic> form,
+  ) => rust_composer.sendMail(
+    accountId: accountId,
+    folderId: folderId,
+    form: jsonEncode(form),
+  );
 
   Future<void> saveDraft(int accountId, Map<String, dynamic> form) =>
       rust_composer.saveDraft(accountId: accountId, form: jsonEncode(form));
@@ -279,7 +339,10 @@ class MailCore {
 
   Future<void> downloadAttachments(int accountId, int folderId, int uid) =>
       rust_attachments.downloadAttachments(
-          accountId: accountId, folderId: folderId, uid: uid);
+        accountId: accountId,
+        folderId: folderId,
+        uid: uid,
+      );
 
   Future<String> saveAttachmentTo(int attachmentId, String path) =>
       rust_attachments.saveAttachmentTo(attachmentId: attachmentId, path: path);
@@ -288,13 +351,17 @@ class MailCore {
   /// Returns how many files were written.
   Future<int> saveAllAttachmentsTo(int folderId, int uid, String dir) async =>
       (await rust_attachments.saveAllAttachmentsTo(
-              folderId: folderId, uid: uid, dir: dir))
-          .toInt();
+        folderId: folderId,
+        uid: uid,
+        dir: dir,
+      )).toInt();
 
   // --- contacts ------------------------------------------------------------
 
   Future<List<Contact>> contacts({String prefix = ''}) async => _decodeList(
-      await rust_contacts.contactsJson(prefix: prefix), Contact.fromJson);
+    await rust_contacts.contactsJson(prefix: prefix),
+    Contact.fromJson,
+  );
 
   Future<void> setContactAlias(String address, String alias) =>
       rust_contacts.setContactAlias(address: address, alias: alias);
@@ -304,8 +371,9 @@ class MailCore {
 
   // --- settings ------------------------------------------------------------
 
-  Future<AppSettings> settings() async =>
-      AppSettings.fromJson(await _decodeMap(await rust_settings.settingsJson()));
+  Future<AppSettings> settings() async => AppSettings.fromJson(
+    await _decodeMap(await rust_settings.settingsJson()),
+  );
 
   Future<void> setSetting(String key, String value) =>
       rust_settings.setSetting(key: key, value: value);

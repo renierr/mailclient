@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../ffi/mail_core.dart';
 import '../models/models.dart';
 import '../models/settings.dart';
+import '../sync/background_sync.dart';
 
 /// What the app is showing, and how it reacts to the core changing underneath.
 ///
@@ -144,8 +145,7 @@ class MailState extends ChangeNotifier {
     return !_folders.any((o) => o.role == FolderRole.trash);
   }
 
-  bool get hasTrashFolder =>
-      _folders.any((f) => f.role == FolderRole.trash);
+  bool get hasTrashFolder => _folders.any((f) => f.role == FolderRole.trash);
 
   Map<String, dynamic>? capabilitiesFor(int accountId) =>
       _capabilities[accountId];
@@ -165,6 +165,7 @@ class MailState extends ChangeNotifier {
     }
     _loading = false;
     _rescheduleAutoSync();
+    unawaited(rescheduleBackgroundSync());
     notifyListeners();
   }
 
@@ -207,10 +208,7 @@ class MailState extends ChangeNotifier {
     _openMessage = body;
 
     final row = _messages.where((m) => m.uid == uid).firstOrNull;
-    if (row != null &&
-        row.unread &&
-        _settings.autoMarkRead &&
-        _folderId >= 0) {
+    if (row != null && row.unread && _settings.autoMarkRead && _folderId >= 0) {
       final delay = _settings.markReadDelaySecs;
       if (delay <= 0) {
         await _applyRead(uid, true);
@@ -251,22 +249,30 @@ class MailState extends ChangeNotifier {
 
   /// Delete a selection — Trash, or destroyed where Trash does not apply.
   /// Queued; the list refreshes when the job reports back.
-  Future<void> deleteMessages(List<int> uids) =>
-      _queue('Delete', () => _core.deleteMessages(_accountId, _folderId, uids),
-          clearSelection: true);
+  Future<void> deleteMessages(List<int> uids) => _queue(
+    'Delete',
+    () => _core.deleteMessages(_accountId, _folderId, uids),
+    clearSelection: true,
+  );
 
   /// Destroy a selection server-side. No undo; the UI always confirms first.
-  Future<void> purgeMessages(List<int> uids) =>
-      _queue('Purge', () => _core.purgeMessages(_accountId, _folderId, uids),
-          clearSelection: true);
+  Future<void> purgeMessages(List<int> uids) => _queue(
+    'Purge',
+    () => _core.purgeMessages(_accountId, _folderId, uids),
+    clearSelection: true,
+  );
 
-  Future<void> archiveMessages(List<int> uids) => _queue('Archive',
-      () => _core.archiveMessages(_accountId, _folderId, uids),
-      clearSelection: true);
+  Future<void> archiveMessages(List<int> uids) => _queue(
+    'Archive',
+    () => _core.archiveMessages(_accountId, _folderId, uids),
+    clearSelection: true,
+  );
 
-  Future<void> moveMessages(List<int> uids, String destPath) => _queue('Move',
-      () => _core.moveMessages(_accountId, _folderId, uids, destPath),
-      clearSelection: true);
+  Future<void> moveMessages(List<int> uids, String destPath) => _queue(
+    'Move',
+    () => _core.moveMessages(_accountId, _folderId, uids, destPath),
+    clearSelection: true,
+  );
 
   Future<void> markReadMany(List<int> uids, bool read) async {
     await _core.markReadMany(_accountId, _folderId, uids, read);
@@ -327,16 +333,17 @@ class MailState extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    final scope =
-        _searchFolderOnly ? (folder?.path ?? '') : '';
+    final scope = _searchFolderOnly ? (folder?.path ?? '') : '';
     _searchHits = await _core.search(_accountId, query, folder: scope);
     notifyListeners();
     if (_searchHits.length < 50 && !_serverSearchPending) {
       _searchBackfillTimer = Timer(const Duration(milliseconds: 800), () {
         _serverSearchPending = true;
-        unawaited(_core
-            .searchServer(_accountId, _searchQuery, folder: scope)
-            .catchError(_ignoreBusy));
+        unawaited(
+          _core
+              .searchServer(_accountId, _searchQuery, folder: scope)
+              .catchError(_ignoreBusy),
+        );
       });
     }
   }
@@ -411,15 +418,13 @@ class MailState extends ChangeNotifier {
   }
 
   void selectUnread() {
-    _selectedUids
-        .addAll(_messages.where((m) => m.unread).map((m) => m.uid));
+    _selectedUids.addAll(_messages.where((m) => m.unread).map((m) => m.uid));
     _selectionMode = _selectedUids.isNotEmpty;
     notifyListeners();
   }
 
   void selectStarred() {
-    _selectedUids
-        .addAll(_messages.where((m) => m.starred).map((m) => m.uid));
+    _selectedUids.addAll(_messages.where((m) => m.starred).map((m) => m.uid));
     _selectionMode = _selectedUids.isNotEmpty;
     notifyListeners();
   }
@@ -472,7 +477,10 @@ class MailState extends ChangeNotifier {
   Future<void> setSetting(String key, String value) async {
     await _core.setSetting(key, value);
     await _reloadSettings();
-    if (key == SettingKeys.syncInterval) _rescheduleAutoSync();
+    if (key == SettingKeys.syncInterval) {
+      _rescheduleAutoSync();
+      unawaited(rescheduleBackgroundSync());
+    }
   }
 
   Future<void> refreshCapabilities(int accountId) =>
@@ -524,14 +532,13 @@ class MailState extends ChangeNotifier {
       // SMTP accepted it and the Sent copy is filed server-side, but the
       // local cache only learns about it from a sync. The generic reload
       // below is not enough — pull the Sent folder so it appears.
-      final sent = _folders
-          .where((f) => f.role == FolderRole.sent)
-          .firstOrNull;
+      final sent = _folders.where((f) => f.role == FolderRole.sent).firstOrNull;
       // A refusal just means a sync is already running; its own event will
       // refresh the list when it lands.
       if (sent != null) {
         unawaited(
-            _core.syncFolder(_accountId, sent.id).catchError(_ignoreBusy));
+          _core.syncFolder(_accountId, sent.id).catchError(_ignoreBusy),
+        );
       }
     }
     // `-1` for the account means the job changed nothing worth re-reading.
@@ -559,8 +566,7 @@ class MailState extends ChangeNotifier {
   }
 
   Future<void> _rerunSearch() async {
-    final scope =
-        _searchFolderOnly ? (folder?.path ?? '') : '';
+    final scope = _searchFolderOnly ? (folder?.path ?? '') : '';
     _searchHits = await _core.search(_accountId, _searchQuery, folder: scope);
     notifyListeners();
   }
@@ -584,10 +590,37 @@ class MailState extends ChangeNotifier {
     _autoSyncTimer?.cancel();
     final minutes = _settings.syncIntervalMinutes;
     if (minutes <= 0 || _accountId < 0) return;
-    _autoSyncTimer =
-        Timer.periodic(Duration(minutes: minutes), (_) {
+    _autoSyncTimer = Timer.periodic(Duration(minutes: minutes), (_) {
       if (!isSyncing && hasAccounts) unawaited(syncAccount());
     });
+  }
+
+  /// Re-register the Android background worker from the current setting.
+  /// Called after startup and on every interval change; disabling (0)
+  /// cancels the worker. Off Android this is a no-op.
+  Future<void> rescheduleBackgroundSync() =>
+      scheduleBackgroundSync(intervalMinutes: _settings.syncIntervalMinutes);
+
+  /// Open a specific message from a notification tap, switching account
+  /// and/or folder as needed. A folder that vanished meanwhile leaves the
+  /// user on the account's default instead of stranding them.
+  Future<void> openMail({
+    required int accountId,
+    required int folderId,
+    required int uid,
+  }) async {
+    if (accountId != _accountId) {
+      exitSearch();
+      final sel = await _core.selectAccount(accountId);
+      await _openAccount(sel.accountId, folderId: sel.folderId);
+      // Land on the notified folder when it still exists.
+      if (folderId != _folderId && _folders.any((f) => f.id == folderId)) {
+        await selectFolder(folderId);
+      }
+    } else if (folderId != _folderId) {
+      await selectFolder(folderId);
+    }
+    await openMessage(uid);
   }
 
   Future<void> _openAccount(int accountId, {required int folderId}) async {
@@ -620,8 +653,7 @@ class MailState extends ChangeNotifier {
       _cachedCount = 0;
       _serverTotal = -1;
     } else {
-      _messages =
-          await _core.messages(_folderId, limit: _messageLimit);
+      _messages = await _core.messages(_folderId, limit: _messageLimit);
       try {
         final counts = await _core.folderCounts(_folderId);
         _cachedCount = counts.cached.toInt();
@@ -646,7 +678,8 @@ class MailState extends ChangeNotifier {
 
   void _patchRow(int uid, MessageSummary Function(MessageSummary) f) {
     _messages = [
-      for (final m in _messages) if (m.uid == uid) f(m) else m,
+      for (final m in _messages)
+        if (m.uid == uid) f(m) else m,
     ];
   }
 
@@ -656,8 +689,11 @@ class MailState extends ChangeNotifier {
   /// finishing event clears the spinner again. A refusal is normal (the same
   /// job is already in flight) and does not deserve a dialog — the core
   /// dedupes, so the status line is the whole story.
-  Future<void> _queue(String kind, Future<void> Function() start,
-      {bool clearSelection = false}) async {
+  Future<void> _queue(
+    String kind,
+    Future<void> Function() start, {
+    bool clearSelection = false,
+  }) async {
     try {
       await start();
       _busyKinds.add(kind);

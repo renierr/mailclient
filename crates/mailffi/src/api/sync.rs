@@ -164,3 +164,20 @@ pub fn refresh_server_capabilities(account_id: i64) -> anyhow::Result<()> {
         },
     )
 }
+
+/// Headless new-mail check for the Android background worker.
+///
+/// Takes the cross-process sync lock, syncs every account over fresh
+/// connections (never the GUI's pooled sessions), and returns the
+/// [`headless::BackgroundReport`] as JSON: skipped flag, mail that arrived
+/// since the previous check, cached unread total, errors.
+///
+/// Background-isolate only: it blocks the calling worker thread for the
+/// whole network run, which is fine with nothing else to serve but would
+/// stall the UI's pool. The lock collision path returns `skipped: true`
+/// rather than failing, so the worker just waits for the next run.
+pub fn background_check_now() -> anyhow::Result<String> {
+    let db = crate::db::shared_db()?;
+    let report = headless::background_check_blocking(db, &crate::db::db_path());
+    Ok(serde_json::to_string(&report)?)
+}
