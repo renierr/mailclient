@@ -3,11 +3,12 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/models.dart';
+import '../../models/settings.dart';
 import '../../state/mail_state.dart';
 import '../composer/composer_dialog.dart';
-import '../dialogs/mail_dialog.dart';
-import '../menu_row.dart';
-import '../move_to/move_to_dialog.dart';
+import 'message_list_widgets.dart';
+
+export 'message_list_widgets.dart' show confirmDelete;
 
 /// The message list for the selected folder — or account-wide search hits.
 ///
@@ -21,81 +22,94 @@ class MessageListPane extends StatefulWidget {
   final VoidCallback? onMessageOpened;
 
   @override
-  State<MessageListPane> createState() => _MessageListPaneState();
+  State<MessageListPane> createState() => MessageListPaneState();
 }
 
-class _MessageListPaneState extends State<MessageListPane> {
+class MessageListPaneState extends State<MessageListPane> {
   int? _anchorUid;
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<MailState>();
-    if (state.searching) return _searchResults(state);
-    return _folderList(state);
+    final searching = context.select<MailState, bool>((s) => s.searching);
+    if (searching) return _searchResults();
+    return _folderList();
   }
 
-  // --- folder feed -------------------------------------------------------
-
-  Widget _folderList(MailState state) {
-    var messages = state.messages;
+  Widget _folderList() {
+    final folderId = context.select<MailState, int>((s) => s.folderId);
+    final messages = context.select<MailState, List<MessageSummary>>(
+      (s) => s.messages,
+    );
+    final query = context.select<MailState, String>((s) => s.searchQuery);
+    final openUid = context.select<MailState, int>((s) => s.openUid);
+    final selected = context.select<MailState, Set<int>>(
+      (s) => Set<int>.of(s.selectedUids),
+    );
+    final selectionMode = context.select<MailState, bool>(
+      (s) => s.selectionMode,
+    );
+    final compact = context.select<MailState, bool>(
+      (s) => s.settings.isCompact,
+    );
+    final syncing = context.select<MailState, bool>((s) => s.isSyncing);
+    final drafts = context.select<MailState, bool>((s) => s.isDraftsFolder);
     // Qt parity: 1–2 letter input filters the folder instantly (substring);
     // 3+ letters run the FTS index via `searching`. Without this, short input
     // shows the whole unfiltered folder.
-    final q = state.searchQuery.trim().toLowerCase();
-    final instantFilter = q.isNotEmpty && !state.searching;
-    if (instantFilter) {
-      messages = messages
-          .where(
-            (m) =>
-                m.subject.toLowerCase().contains(q) ||
-                m.from.toLowerCase().contains(q) ||
-                m.snippet.toLowerCase().contains(q),
-          )
-          .toList(growable: false);
-    }
-    if (state.folderId < 0) {
-      return const _Empty(
+    final q = query.trim().toLowerCase();
+    final shown = q.isEmpty
+        ? messages
+        : messages
+              .where(
+                (m) =>
+                    m.subject.toLowerCase().contains(q) ||
+                    m.from.toLowerCase().contains(q) ||
+                    m.snippet.toLowerCase().contains(q),
+              )
+              .toList(growable: false);
+    if (folderId < 0) {
+      return const EmptyPane(
         icon: Icons.folder_open_outlined,
         text: 'Pick a folder',
       );
     }
     return Column(
       children: [
-        _ListHeader(anchorUid: _anchorUid),
-        if (instantFilter)
+        const MessageListHeader(),
+        if (q.isNotEmpty)
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             child: Text(
-              '${messages.length} match(es) for “${state.searchQuery.trim()}”',
+              '${shown.length} match(es) for “${query.trim()}”',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
-        if (state.selectionMode && state.selectedCount > 0)
-          _BulkBar(onAction: () => setState(() => _anchorUid = null)),
+        if (selectionMode && selected.isNotEmpty)
+          BulkActionBar(onAction: () => setState(() => _anchorUid = null)),
         Expanded(
-          child: messages.isEmpty
-              ? _Empty(
+          child: shown.isEmpty
+              ? EmptyPane(
                   icon: Icons.mail_outline,
-                  text: state.isSyncing ? 'Syncing…' : 'Nothing here',
+                  text: syncing ? 'Syncing…' : 'Nothing here',
                 )
               : ListView.separated(
-                  itemCount: messages.length + 1,
+                  itemCount: shown.length + 1,
                   separatorBuilder: (_, _) => const Divider(height: 1),
                   itemBuilder: (context, i) {
                     // The tail row asks the server for the next older batch.
                     // It is a button rather than an infinite scroll on
                     // purpose: each press is a deliberate, sizeable download.
-                    if (i == messages.length) return const _LoadOlderTile();
-                    final m = messages[i];
-                    return _MessageTile(
+                    if (i == shown.length) return const LoadOlderTile();
+                    final m = shown[i];
+                    return MessageTile(
                       message: m,
-                      selected: m.uid == state.openUid,
-                      checked: state.selectedUids.contains(m.uid),
-                      selectionMode: state.selectionMode,
-                      compact: state.settings.isCompact,
-                      onTap: () => _onRowTap(state, m),
-                      onToggle: () => _onRowToggle(state, m),
+                      selected: m.uid == openUid,
+                      checked: selected.contains(m.uid),
+                      selectionMode: selectionMode,
+                      compact: compact,
+                      onTap: () => _onRowTap(m, drafts),
+                      onToggle: () => _onRowToggle(m),
                     );
                   },
                 ),
@@ -104,13 +118,14 @@ class _MessageListPaneState extends State<MessageListPane> {
     );
   }
 
-  void _onRowTap(MailState state, MessageSummary m) {
+  void _onRowTap(MessageSummary m, bool drafts) {
+    final state = context.read<MailState>();
     if (state.selectionMode) {
-      _onRowToggle(state, m);
+      _onRowToggle(m);
       return;
     }
     setState(() => _anchorUid = m.uid);
-    if (state.isDraftsFolder) {
+    if (drafts) {
       // Drafts open in the composer, never in the reader.
       ComposerDialog.showDraft(context, state.accountId, m.uid);
       return;
@@ -119,7 +134,8 @@ class _MessageListPaneState extends State<MessageListPane> {
     widget.onMessageOpened?.call();
   }
 
-  void _onRowToggle(MailState state, MessageSummary m) {
+  void _onRowToggle(MessageSummary m) {
+    final state = context.read<MailState>();
     if (_shiftHeld && _anchorUid != null && _anchorUid != m.uid) {
       state.selectRange(_anchorUid!, m.uid);
     } else {
@@ -134,753 +150,44 @@ class _MessageListPaneState extends State<MessageListPane> {
         keys.contains(LogicalKeyboardKey.shiftRight);
   }
 
-  // --- search results ----------------------------------------------------
-
-  Widget _searchResults(MailState state) {
-    final hits = state.searchHits;
+  Widget _searchResults() {
+    final hits = context.select<MailState, List<SearchHit>>(
+      (s) => s.searchHits,
+    );
+    final folderOnly = context.select<MailState, bool>(
+      (s) => s.searchFolderOnly,
+    );
+    final query = context.select<MailState, String>((s) => s.searchQuery);
+    final busy = context.select<MailState, bool>((s) => s.isBusy);
     return Column(
       children: [
         Container(
           width: double.infinity,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           child: Text(
-            '${hits.length} result(s) across ${state.searchFolderOnly ? 'this folder' : 'this account'}',
+            '${hits.length} result(s) across ${folderOnly ? 'this folder' : 'this account'}',
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ),
         const Divider(height: 1),
         Expanded(
           child: hits.isEmpty
-              ? _Empty(
+              ? EmptyPane(
                   icon: Icons.search_off_outlined,
-                  text: state.isBusy
+                  text: busy
                       ? 'Searching the server…'
-                      : 'No matches for “${state.searchQuery}”',
+                      : 'No matches for “$query”',
                 )
               : ListView.separated(
                   itemCount: hits.length,
                   separatorBuilder: (_, _) => const Divider(height: 1),
-                  itemBuilder: (context, i) {
-                    final h = hits[i];
-                    // Search rows navigate only: mutating a row that lives in
-                    // another folder from here would act on the wrong mailbox.
-                    return ListTile(
-                      title: Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              h.subject,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          if (h.starred) ...[
-                            const SizedBox(width: 4),
-                            Icon(
-                              Icons.star,
-                              size: 14,
-                              color: Colors.amber.shade700,
-                            ),
-                          ],
-                        ],
-                      ),
-                      subtitle: Text(
-                        '${h.from} · ${h.folder}\n${h.snippet}',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      isThreeLine: true,
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (h.unread)
-                            Container(
-                              width: 8,
-                              height: 8,
-                              margin: const EdgeInsets.only(right: 8),
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: Theme.of(context).colorScheme.primary,
-                              ),
-                            ),
-                          PopupMenuButton<String>(
-                            tooltip: 'Actions',
-                            icon: const Icon(Icons.more_vert, size: 18),
-                            onSelected: (v) {
-                              if (v == 'open') {
-                                state.jumpToHit(h);
-                                widget.onMessageOpened?.call();
-                              }
-                            },
-                            itemBuilder: (context) => const [
-                              PopupMenuItem(
-                                value: 'open',
-                                child: MenuRow(
-                                  icon: Icons.open_in_new,
-                                  text: 'Jump to message',
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      onTap: () {
-                        state.jumpToHit(h);
-                        widget.onMessageOpened?.call();
-                      },
-                    );
-                  },
+                  itemBuilder: (context, i) => SearchHitTile(
+                    hit: hits[i],
+                    onOpened: widget.onMessageOpened,
+                  ),
                 ),
         ),
       ],
-    );
-  }
-}
-
-/// Title, count, sort and select menus above the list.
-class _ListHeader extends StatelessWidget {
-  const _ListHeader({required this.anchorUid});
-
-  final int? anchorUid;
-
-  @override
-  Widget build(BuildContext context) {
-    final state = context.watch<MailState>();
-    final title = state.folder?.leafName ?? 'Messages';
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      child: Row(
-        children: [
-          IconButton(
-            tooltip: state.selectionMode
-                ? 'Leave selection'
-                : 'Select messages',
-            icon: Icon(
-              state.selectionMode
-                  ? Icons.check_box_outlined
-                  : Icons.check_box_outline_blank,
-            ),
-            onPressed: () => state.selectionMode
-                ? state.exitSelectionMode()
-                : state.enterSelectionMode(),
-          ),
-          Expanded(
-            child: Text(
-              '$title · ${state.messages.length}',
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.titleSmall,
-            ),
-          ),
-          if (state.selectionMode)
-            PopupMenuButton<String>(
-              tooltip: 'Select',
-              icon: const Icon(Icons.arrow_drop_down),
-              onSelected: (v) => switch (v) {
-                'all' => state.selectAllVisible(),
-                'none' => state.exitSelectionMode(),
-                'unread' => state.selectUnread(),
-                'starred' => state.selectStarred(),
-                'invert' => state.invertSelection(),
-                _ => null,
-              },
-              itemBuilder: (context) => const [
-                PopupMenuItem(
-                  value: 'all',
-                  child: MenuRow(
-                    icon: Icons.select_all,
-                    text: 'Select all visible',
-                  ),
-                ),
-                PopupMenuItem(
-                  value: 'unread',
-                  child: MenuRow(
-                    icon: Icons.mark_email_unread_outlined,
-                    text: 'Select unread',
-                  ),
-                ),
-                PopupMenuItem(
-                  value: 'starred',
-                  child: MenuRow(
-                    icon: Icons.star_border,
-                    text: 'Select starred',
-                  ),
-                ),
-                PopupMenuItem(
-                  value: 'invert',
-                  child: MenuRow(
-                    icon: Icons.swap_horiz,
-                    text: 'Invert selection',
-                  ),
-                ),
-                PopupMenuItem(
-                  value: 'none',
-                  child: MenuRow(icon: Icons.clear, text: 'Clear'),
-                ),
-              ],
-            ),
-          PopupMenuButton<String>(
-            tooltip: 'Sort',
-            icon: const Icon(Icons.sort),
-            onSelected: (v) {
-              final parts = v.split(':');
-              state.setSort(parts[0], parts[1] == 'desc');
-            },
-            itemBuilder: (context) {
-              final s = state.settings;
-              PopupMenuItem<String> item(
-                String value,
-                IconData icon,
-                String text,
-              ) => PopupMenuItem(
-                value: value,
-                child: MenuRow(
-                  icon: icon,
-                  text:
-                      (s.sortField == value.split(':')[0] &&
-                          s.sortDescending == (value.endsWith(':desc')))
-                      ? '✓ $text'
-                      : text,
-                ),
-              );
-              return [
-                item('date:desc', Icons.schedule, 'Date, newest first'),
-                item('date:asc', Icons.schedule, 'Date, oldest first'),
-                item('from:asc', Icons.person_outline, 'From A–Z'),
-                item('from:desc', Icons.person_outline, 'From Z–A'),
-                item('subject:asc', Icons.subject, 'Subject A–Z'),
-                item('subject:desc', Icons.subject, 'Subject Z–A'),
-              ];
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// The selected message(s), and what to do with them.
-class _BulkBar extends StatelessWidget {
-  const _BulkBar({required this.onAction});
-
-  final VoidCallback onAction;
-
-  @override
-  Widget build(BuildContext context) {
-    final state = context.watch<MailState>();
-    final uids = state.selectedUids.toList(growable: false);
-    final starred = uids.isNotEmpty && uids.every((u) => _isStarred(state, u));
-    return Container(
-      color: Theme.of(context).colorScheme.secondaryContainer,
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      // A narrow window still has to fit every action: scroll instead of
-      // clipping, the way the Qt bulk bar collapses.
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            IconButton(
-              tooltip: 'Clear selection',
-              icon: const Icon(Icons.close, size: 18),
-              onPressed: state.exitSelectionMode,
-            ),
-            Text(
-              '${uids.length} selected',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(width: 8),
-            IconButton(
-              tooltip: 'Mark read',
-              icon: const Icon(Icons.mark_email_read_outlined, size: 18),
-              onPressed: () => state.markReadMany(uids, true),
-            ),
-            IconButton(
-              tooltip: 'Mark unread',
-              icon: const Icon(Icons.mark_email_unread_outlined, size: 18),
-              onPressed: () => state.markReadMany(uids, false),
-            ),
-            IconButton(
-              tooltip: starred ? 'Unstar' : 'Star',
-              icon: Icon(starred ? Icons.star : Icons.star_border, size: 18),
-              onPressed: () => state.setStarMany(uids, !starred),
-            ),
-            IconButton(
-              tooltip: 'Archive',
-              icon: const Icon(Icons.archive_outlined, size: 18),
-              onPressed: () {
-                state.archiveMessages(uids);
-                onAction();
-              },
-            ),
-            IconButton(
-              tooltip: 'Move to…',
-              icon: const Icon(Icons.drive_file_move_outlined, size: 18),
-              onPressed: () => MoveToDialog.show(context, uids: uids),
-            ),
-            IconButton(
-              tooltip: 'Move to Trash',
-              icon: const Icon(Icons.delete_outline, size: 18),
-              onPressed: () => confirmDelete(
-                context,
-                state,
-                uids: uids,
-                permanent: state.deleteIsPermanent,
-              ),
-            ),
-            PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert, size: 18),
-              onSelected: (v) {
-                switch (v) {
-                  case 'purge':
-                    confirmDelete(
-                      context,
-                      state,
-                      uids: uids,
-                      permanent: true,
-                      purge: true,
-                    );
-                  case 'unread':
-                    state.selectUnread();
-                  case 'starred':
-                    state.selectStarred();
-                }
-              },
-              itemBuilder: (context) => const [
-                PopupMenuItem(
-                  value: 'purge',
-                  child: MenuRow(
-                    icon: Icons.delete_forever_outlined,
-                    text: 'Delete permanently…',
-                  ),
-                ),
-                PopupMenuItem(
-                  value: 'unread',
-                  child: MenuRow(
-                    icon: Icons.mark_email_unread_outlined,
-                    text: 'Select unread',
-                  ),
-                ),
-                PopupMenuItem(
-                  value: 'starred',
-                  child: MenuRow(
-                    icon: Icons.star_border,
-                    text: 'Select starred',
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  static bool _isStarred(MailState state, int uid) =>
-      state.messages.where((m) => m.uid == uid).firstOrNull?.starred ?? false;
-}
-
-/// Delete confirm shared by the list, the bulk bar and the reader.
-///
-/// Trash moves are reversible, so the setting gates them; permanent destroys
-/// always ask, whatever the setting says.
-Future<void> confirmDelete(
-  BuildContext context,
-  MailState state, {
-  required List<int> uids,
-  required bool permanent,
-  bool purge = false,
-}) async {
-  if (!purge && !permanent && !state.settings.confirmDelete) {
-    await state.deleteMessages(uids);
-    return;
-  }
-  final title = purge || permanent ? 'Delete permanently?' : 'Move to Trash?';
-  final what = uids.length > 1
-      ? '${uids.length} messages'
-      : '“${_subjectOf(state, uids.first)}”';
-  final how = purge || permanent
-      ? 'will be destroyed on the server. This cannot be undone.'
-      : 'will be moved to Trash.';
-  final confirmed =
-      await MailDialog.show<bool>(
-        context,
-        builder: (context) => AlertDialog(
-          title: Text(title),
-          content: Text('$what $how'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Cancel'),
-            ),
-            // Permanent destruction is danger-red; reversible Trash moves
-            // stay the plain filled style, like Qt's intent split.
-            if (purge || permanent)
-              FilledButton(
-                style: MailDialog.dangerStyle(context),
-                onPressed: () => Navigator.of(context).pop(true),
-                child: Text(
-                  purge || permanent ? 'Delete permanently' : 'Move to Trash',
-                ),
-              )
-            else
-              FilledButton(
-                onPressed: () => Navigator.of(context).pop(true),
-                child: Text(
-                  purge || permanent ? 'Delete permanently' : 'Move to Trash',
-                ),
-              ),
-          ],
-        ),
-      ) ??
-      false;
-  if (!confirmed || !context.mounted) return;
-  if (purge) {
-    await state.purgeMessages(uids);
-  } else {
-    await state.deleteMessages(uids);
-  }
-}
-
-String _subjectOf(MailState state, int uid) =>
-    state.messages.where((m) => m.uid == uid).firstOrNull?.subject ?? '';
-
-/// First letter of the sender for the row avatar, like the Qt Avatar seed.
-String _initial(String from) {
-  final m = RegExp(r'[a-zA-Z0-9]').firstMatch(from);
-  return m == null ? '?' : m.group(0)!.toUpperCase();
-}
-
-class _MessageTile extends StatelessWidget {
-  const _MessageTile({
-    required this.message,
-    required this.selected,
-    required this.checked,
-    required this.selectionMode,
-    required this.compact,
-    required this.onTap,
-    required this.onToggle,
-  });
-
-  final MessageSummary message;
-  final bool selected;
-  final bool checked;
-  final bool selectionMode;
-  final bool compact;
-  final VoidCallback onTap;
-  final VoidCallback onToggle;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final state = context.read<MailState>();
-    final weight = message.unread ? FontWeight.w700 : FontWeight.normal;
-    final avatarBg = avatarColor(context, message.from);
-    return GestureDetector(
-      // Desktop parity: right-click opens the same row menu as ⋮.
-      onSecondaryTapDown: (d) =>
-          _showContextMenu(context, state, d.globalPosition),
-      child: ListTile(
-        selected: selected,
-        selectedTileColor: theme.colorScheme.secondaryContainer,
-        leading: selectionMode
-            ? Checkbox(value: checked, onChanged: (_) => onToggle())
-            : SizedBox(
-                width: 60,
-                child: Row(
-                  children: [
-                    // Unread marker beside the avatar, like the Qt row's dot
-                    // column — bold text alone is too easy to miss.
-                    if (message.unread)
-                      Container(
-                        width: 8,
-                        height: 8,
-                        margin: const EdgeInsets.only(right: 6),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: theme.colorScheme.primary,
-                        ),
-                      )
-                    else
-                      const SizedBox(width: 14),
-                    CircleAvatar(
-                      radius: 16,
-                      backgroundColor: avatarBg,
-                      foregroundColor: theme.colorScheme.onPrimary,
-                      child: Text(
-                        _initial(message.from),
-                        style: const TextStyle(fontSize: 14),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-        onTap: onTap,
-        title: Row(
-          children: [
-            Expanded(
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                    child: Text(
-                      message.from,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        fontWeight: weight,
-                      ),
-                    ),
-                  ),
-                  if (message.starred) ...[
-                    const SizedBox(width: 4),
-                    Icon(Icons.star, size: 14, color: Colors.amber.shade700),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              message.date,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.outline,
-              ),
-            ),
-          ],
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                if (message.hasAttachments) ...[
-                  Icon(
-                    Icons.attach_file,
-                    size: 14,
-                    color: theme.colorScheme.outline,
-                  ),
-                  const SizedBox(width: 4),
-                ],
-                Expanded(
-                  child: Text(
-                    message.subject,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      fontWeight: weight,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            if (!compact && message.snippet.isNotEmpty)
-              Text(
-                message.snippet,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.outline,
-                ),
-              ),
-          ],
-        ),
-        trailing: PopupMenuButton<String>(
-          tooltip: 'Message actions',
-          icon: const Icon(Icons.more_vert, size: 18),
-          onSelected: (v) => _rowAction(context, state, v),
-          itemBuilder: (context) => [
-            PopupMenuItem(
-              value: 'read',
-              child: MenuRow(
-                icon: message.unread
-                    ? Icons.mark_email_read_outlined
-                    : Icons.mark_email_unread_outlined,
-                text: message.unread ? 'Mark as read' : 'Mark as unread',
-              ),
-            ),
-            PopupMenuItem(
-              value: 'star',
-              child: MenuRow(
-                icon: message.starred ? Icons.star : Icons.star_border,
-                text: message.starred ? 'Remove star' : 'Star',
-              ),
-            ),
-            const PopupMenuItem(
-              value: 'archive',
-              child: MenuRow(icon: Icons.archive_outlined, text: 'Archive'),
-            ),
-            const PopupMenuItem(
-              value: 'move',
-              child: MenuRow(
-                icon: Icons.drive_file_move_outlined,
-                text: 'Move to…',
-              ),
-            ),
-            const PopupMenuItem(
-              value: 'delete',
-              child: MenuRow(icon: Icons.delete_outline, text: 'Move to Trash'),
-            ),
-            const PopupMenuItem(
-              value: 'purge',
-              child: MenuRow(
-                icon: Icons.delete_forever_outlined,
-                text: 'Delete permanently…',
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _showContextMenu(
-    BuildContext context,
-    MailState state,
-    Offset at,
-  ) async {
-    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-    final choice = await showMenu<String>(
-      context: context,
-      position: RelativeRect.fromRect(
-        Rect.fromPoints(at, at),
-        Offset.zero & overlay.size,
-      ),
-      items: [
-        PopupMenuItem(
-          value: 'read',
-          child: MenuRow(
-            icon: message.unread
-                ? Icons.mark_email_read_outlined
-                : Icons.mark_email_unread_outlined,
-            text: message.unread ? 'Mark as read' : 'Mark as unread',
-          ),
-        ),
-        PopupMenuItem(
-          value: 'star',
-          child: MenuRow(
-            icon: message.starred ? Icons.star : Icons.star_border,
-            text: message.starred ? 'Remove star' : 'Star',
-          ),
-        ),
-        const PopupMenuItem(
-          value: 'archive',
-          child: MenuRow(icon: Icons.archive_outlined, text: 'Archive'),
-        ),
-        const PopupMenuItem(
-          value: 'move',
-          child: MenuRow(
-            icon: Icons.drive_file_move_outlined,
-            text: 'Move to…',
-          ),
-        ),
-        const PopupMenuItem(
-          value: 'delete',
-          child: MenuRow(icon: Icons.delete_outline, text: 'Move to Trash'),
-        ),
-        const PopupMenuItem(
-          value: 'purge',
-          child: MenuRow(
-            icon: Icons.delete_forever_outlined,
-            text: 'Delete permanently…',
-          ),
-        ),
-      ],
-    );
-    if (choice != null && context.mounted) {
-      await _rowAction(context, state, choice);
-    }
-  }
-
-  Future<void> _rowAction(
-    BuildContext context,
-    MailState state,
-    String v,
-  ) async {
-    final uid = message.uid;
-    switch (v) {
-      case 'read':
-        await state.setRead(uid, message.unread);
-      case 'star':
-        await state.toggleStar(uid);
-      case 'archive':
-        await state.archiveMessages([uid]);
-      case 'move':
-        if (context.mounted) {
-          await MoveToDialog.show(
-            context,
-            uids: [uid],
-            subject: message.subject,
-          );
-        }
-      case 'delete':
-        if (context.mounted) {
-          await confirmDelete(
-            context,
-            state,
-            uids: [uid],
-            permanent: state.deleteIsPermanent,
-          );
-        }
-      case 'purge':
-        if (context.mounted) {
-          await confirmDelete(
-            context,
-            state,
-            uids: [uid],
-            permanent: true,
-            purge: true,
-          );
-        }
-    }
-  }
-}
-
-class _LoadOlderTile extends StatelessWidget {
-  const _LoadOlderTile();
-
-  @override
-  Widget build(BuildContext context) {
-    final state = context.watch<MailState>();
-    final cached = state.cachedCount;
-    final server = state.serverTotal;
-    final label = server < 0
-        ? 'Cached $cached (server not checked)'
-        : cached >= server
-        ? 'All $cached loaded'
-        : 'Cached $cached of $server';
-    final canLoad = state.folderId >= 0 && (server < 0 || server > cached);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Column(
-        children: [
-          Text(label, style: Theme.of(context).textTheme.bodySmall),
-          const SizedBox(height: 4),
-          TextButton.icon(
-            icon: const Icon(Icons.history, size: 18),
-            label: const Text('Show older messages'),
-            onPressed: state.isSyncing || !canLoad
-                ? null
-                : state.loadOlderMessages,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Empty extends StatelessWidget {
-  const _Empty({required this.icon, required this.text});
-
-  final IconData icon;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 40, color: scheme.outlineVariant),
-          const SizedBox(height: 8),
-          Text(text, style: TextStyle(color: scheme.outline)),
-        ],
-      ),
     );
   }
 }

@@ -54,7 +54,7 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
   @override
   Widget build(BuildContext context) {
     if (widget.fullscreen) return _page();
-    final state = context.watch<MailState>();
+    final busy = context.select<MailState, bool>((s) => s.isBusy);
     final narrow = MailDialog.isNarrow(context);
     return Dialog(
       insetPadding: MailDialog.insets(context, wideH: 16),
@@ -89,7 +89,7 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
                 spacing: 8,
                 children: [
                   OutlinedButton.icon(
-                    icon: state.isBusy
+                    icon: busy
                         ? const SizedBox(
                             width: 16,
                             height: 16,
@@ -97,9 +97,9 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
                           )
                         : const Icon(Icons.sync, size: 16),
                     label: const Text('Refresh from server'),
-                    onPressed: state.isBusy
+                    onPressed: busy
                         ? null
-                        : () => state.refreshFolders(),
+                        : () => context.read<MailState>().refreshFolders(),
                   ),
                   TextButton(
                     onPressed: () => Navigator.of(context).pop(),
@@ -126,7 +126,7 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
       ),
       title: Row(
         children: [
-          Icon(_iconFor(f.role), size: 20),
+          Icon(folderIcon(f.role), size: 20),
           const SizedBox(width: 8),
           Expanded(child: Text(f.path, overflow: TextOverflow.ellipsis)),
         ],
@@ -189,17 +189,20 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
 
   /// Folder list, shared by the dialog and the fullscreen page.
   Widget _listBody() {
-    final state = context.watch<MailState>();
-    if (state.allFolders.isEmpty) {
+    final folders = context.select<MailState, List<Folder>>(
+      (s) => s.allFolders,
+    );
+    if (folders.isEmpty) {
       return const Center(
         child: Text('No folders yet — press Refresh from server.'),
       );
     }
     return ListView.separated(
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-      itemCount: state.allFolders.length,
+      itemCount: folders.length,
       separatorBuilder: (_, _) => const Divider(height: 1),
-      itemBuilder: (context, i) => _row(context, state, state.allFolders[i]),
+      itemBuilder: (context, i) =>
+          _row(context, context.read<MailState>(), folders[i]),
     );
   }
 
@@ -207,13 +210,13 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
   /// the list stays lazy inside Expanded while the Scaffold shrinks for the
   /// keyboard natively.
   Widget _page() {
-    final state = context.watch<MailState>();
+    final busy = context.select<MailState, bool>((s) => s.isBusy);
     return Scaffold(
       appBar: AppBar(
         title: const Text('IMAP folders'),
         actions: [
           OutlinedButton.icon(
-            icon: state.isBusy
+            icon: busy
                 ? const SizedBox(
                     width: 16,
                     height: 16,
@@ -221,7 +224,9 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
                   )
                 : const Icon(Icons.sync, size: 16),
             label: const Text('Refresh'),
-            onPressed: state.isBusy ? null : () => state.refreshFolders(),
+            onPressed: busy
+                ? null
+                : () => context.read<MailState>().refreshFolders(),
           ),
           const SizedBox(width: 8),
         ],
@@ -257,14 +262,4 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
     if (!mounted) return;
     setState(_newFolder.clear);
   }
-
-  static IconData _iconFor(FolderRole role) => switch (role) {
-    FolderRole.inbox => Icons.inbox_outlined,
-    FolderRole.sent => Icons.send_outlined,
-    FolderRole.drafts => Icons.edit_note_outlined,
-    FolderRole.trash => Icons.delete_outline,
-    FolderRole.junk => Icons.report_gmailerrorred_outlined,
-    FolderRole.archive => Icons.archive_outlined,
-    FolderRole.custom => Icons.folder_outlined,
-  };
 }

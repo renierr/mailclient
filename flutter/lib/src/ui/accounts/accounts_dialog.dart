@@ -20,19 +20,21 @@ class AccountsDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<MailState>();
+    final accounts = context.select<MailState, List<Account>>(
+      (s) => s.accounts,
+    );
     return MailDialogShell(
       title: 'Accounts',
       maxWidth: 520,
       maxHeight: 520,
       scrollBody: false,
-      body: state.accounts.isEmpty
+      body: accounts.isEmpty
           ? const Center(child: Text('No accounts yet.'))
           : ListView.separated(
-              itemCount: state.accounts.length,
+              itemCount: accounts.length,
               separatorBuilder: (_, _) => const Divider(height: 1),
               itemBuilder: (context, i) =>
-                  _row(context, state, state.accounts[i]),
+                  _row(context, context.read<MailState>(), accounts[i]),
             ),
       actions: [
         OutlinedButton.icon(

@@ -74,6 +74,7 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
   String _smtpSec = 'tls';
   bool _saving = false;
   String? _error;
+  final _revealed = <String>{};
   bool _guessed = false;
 
   @override
@@ -349,10 +350,29 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
     padding: const EdgeInsets.symmetric(vertical: 4),
     child: TextFormField(
       controller: _fields[key],
-      obscureText: obscure,
+      obscureText: obscure && !_revealed.contains(key),
       keyboardType: keyboard,
       textInputAction: TextInputAction.next,
-      decoration: InputDecoration(labelText: label, isDense: true),
+      decoration: InputDecoration(
+        labelText: label,
+        isDense: true,
+        suffixIcon: obscure
+            ? IconButton(
+                tooltip: _revealed.contains(key) ? 'Hide' : 'Show',
+                icon: Icon(
+                  _revealed.contains(key)
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                  size: 20,
+                ),
+                onPressed: () => setState(() {
+                  _revealed.contains(key)
+                      ? _revealed.remove(key)
+                      : _revealed.add(key);
+                }),
+              )
+            : null,
+      ),
       validator: (v) {
         final t = (v ?? '').trim();
         if (required && t.isEmpty) return 'Required';

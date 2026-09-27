@@ -1,23 +1,14 @@
-import 'dart:io';
-
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:open_filex/open_filex.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
 import '../../ffi/mail_core.dart';
 import '../../models/models.dart';
 import '../../models/settings.dart';
 import '../../state/mail_state.dart';
-import '../composer/composer_dialog.dart';
-import '../dialogs/mail_dialog.dart';
-import '../menu_row.dart';
-import '../message_list/message_list_pane.dart' show confirmDelete;
-import '../move_to/move_to_dialog.dart';
 import 'link_safety.dart';
 import 'mail_html_view.dart';
+import 'reader_widgets.dart';
 
 /// The selected message.
 ///
@@ -31,10 +22,10 @@ class ReaderPane extends StatefulWidget {
   final VoidCallback? onClose;
 
   @override
-  State<ReaderPane> createState() => _ReaderPaneState();
+  State<ReaderPane> createState() => ReaderPaneState();
 }
 
-class _ReaderPaneState extends State<ReaderPane> {
+class ReaderPaneState extends State<ReaderPane> {
   /// Remote images the user allowed for *this* message only. Reset whenever
   /// the selection changes, because "show once" has to mean once.
   String? _htmlWithRemoteImages;
@@ -50,11 +41,17 @@ class _ReaderPaneState extends State<ReaderPane> {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<MailState>();
-    final message = state.openBody;
+    final openUid = context.select<MailState, int>((s) => s.openUid);
+    final message = context.select<MailState, MessageBody?>((s) => s.openBody);
+    final loadRemote = context.select<MailState, bool>(
+      (s) => s.settings.loadRemoteImages,
+    );
+    final scale = context.select<MailState, double>(
+      (s) => s.settings.readerScale,
+    );
 
-    if (state.openUid < 0) {
-      return _Placeholder(text: 'Select a message');
+    if (openUid < 0) {
+      return const ReaderPlaceholder(text: 'Select a message');
     }
     if (message == null) {
       return const Center(child: CircularProgressIndicator());
@@ -67,7 +64,7 @@ class _ReaderPaneState extends State<ReaderPane> {
     }
     if (_headersForUid != message.uid) {
       _headersForUid = message.uid;
-      final folderId = state.folderId;
+      final folderId = context.read<MailState>().folderId;
       _headersFuture = MailCore.instance
           .messageHeaders(folderId, message.uid)
           .then<MessageHeaders?>((h) => h)
@@ -75,14 +72,13 @@ class _ReaderPaneState extends State<ReaderPane> {
     }
 
     final theme = Theme.of(context);
-    final scale = state.settings.readerScale;
     return Stack(
       children: [
         Positioned.fill(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _Header(
+              ReaderHeader(
                 message: message,
                 headersFuture: _headersFuture,
                 details: _details,
@@ -92,8 +88,8 @@ class _ReaderPaneState extends State<ReaderPane> {
               const Divider(height: 1),
               if (message.hasRemoteImages &&
                   _htmlWithRemoteImages == null &&
-                  !state.settings.loadRemoteImages)
-                _RemoteImagesBanner(
+                  !loadRemote)
+                RemoteImagesBanner(
                   onShowOnce: () => _showRemoteImages(message),
                 ),
               Expanded(
@@ -118,13 +114,14 @@ class _ReaderPaneState extends State<ReaderPane> {
                 ),
               ),
               if (message.attachments.any((a) => !a.isInline))
-                _AttachmentBar(message: message),
+                AttachmentBar(message: message),
             ],
           ),
         ),
         if (_hoveredLinkUrl != null && _hoveredLinkUrl!.isNotEmpty)
           Positioned(
             left: 16,
+            right: 16,
             bottom: 16,
             child: GestureDetector(
               // Desktop hover bubble doubles as a touch affordance: tap
@@ -138,10 +135,8 @@ class _ReaderPaneState extends State<ReaderPane> {
                   ).showSnackBar(const SnackBar(content: Text('Link copied')));
                 }
               },
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: MediaQuery.sizeOf(context).width - 32,
-                ),
+              child: Align(
+                alignment: Alignment.centerLeft,
                 child: Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 10,
@@ -178,8 +173,9 @@ class _ReaderPaneState extends State<ReaderPane> {
 
   Future<void> _handleLinkUrl(BuildContext context, String url) async {
     if (!LinkSafety.isWebScheme(url)) return;
-    final state = context.read<MailState>();
-    final action = LinkSafety.actionFor(state.settings.linkClickAction);
+    final action = LinkSafety.actionFor(
+      context.read<MailState>().settings.linkClickAction,
+    );
     if (action == 'browser') {
       await LinkSafety.openUrl(url);
       if (context.mounted) {
@@ -203,619 +199,5 @@ class _ReaderPaneState extends State<ReaderPane> {
     );
     if (!mounted) return;
     setState(() => _htmlWithRemoteImages = html);
-  }
-}
-
-class _Header extends StatelessWidget {
-  const _Header({
-    required this.message,
-    required this.headersFuture,
-    required this.details,
-    required this.onToggleDetails,
-    this.onClose,
-  });
-
-  final MessageBody message;
-  final Future<MessageHeaders?>? headersFuture;
-  final bool details;
-  final VoidCallback onToggleDetails;
-  final VoidCallback? onClose;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final state = context.read<MailState>();
-    final fullscreen = context.select<MailState, bool>(
-      (s) => s.readerFullscreen,
-    );
-    final starred = context.select<MailState, bool>(
-      (s) =>
-          s.messages.where((m) => m.uid == message.uid).firstOrNull?.starred ??
-          false,
-    );
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              if (onClose != null)
-                IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: onClose,
-                ),
-              Expanded(
-                child: Text(
-                  message.subject,
-                  style: theme.textTheme.titleMedium,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              IconButton(
-                tooltip: 'Reply',
-                icon: const Icon(Icons.reply_outlined),
-                onPressed: () => ComposerDialog.showReply(context, message),
-              ),
-              IconButton(
-                tooltip: starred ? 'Unstar' : 'Star',
-                icon: Icon(
-                  starred ? Icons.star : Icons.star_border,
-                  color: starred ? Colors.amber.shade700 : null,
-                ),
-                onPressed: () => state.toggleStar(message.uid),
-              ),
-              IconButton(
-                tooltip: 'Delete',
-                icon: const Icon(Icons.delete_outline),
-                onPressed: () => confirmDelete(
-                  context,
-                  state,
-                  uids: [message.uid],
-                  permanent: state.deleteIsPermanent,
-                ),
-              ),
-              // Wide layouts only: narrower ones already give the reader
-              // every pixel they have.
-              if (onClose == null)
-                IconButton(
-                  tooltip: fullscreen ? 'Exit fullscreen' : 'Fullscreen',
-                  icon: Icon(
-                    fullscreen ? Icons.close_fullscreen : Icons.open_in_full,
-                  ),
-                  onPressed: state.toggleReaderFullscreen,
-                ),
-              PopupMenuButton<String>(
-                icon: const Icon(Icons.more_vert),
-                onSelected: (v) => _more(context, state, v),
-                itemBuilder: (context) => const [
-                  PopupMenuItem(
-                    value: 'forward',
-                    child: MenuRow(
-                      icon: Icons.forward_outlined,
-                      text: 'Forward',
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: 'reply-all',
-                    child: MenuRow(
-                      icon: Icons.reply_all_outlined,
-                      text: 'Reply all',
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: 'archive',
-                    child: MenuRow(
-                      icon: Icons.archive_outlined,
-                      text: 'Archive',
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: 'move',
-                    child: MenuRow(
-                      icon: Icons.drive_file_move_outlined,
-                      text: 'Move to…',
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: 'purge',
-                    child: MenuRow(
-                      icon: Icons.delete_forever_outlined,
-                      text: 'Delete permanently…',
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: 'headers',
-                    child: MenuRow(
-                      icon: Icons.info_outline,
-                      text: 'Show headers…',
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          InkWell(
-            onTap: onToggleDetails,
-            child: Row(
-              children: [
-                _SenderAvatar(from: message.from),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: FutureBuilder<MessageHeaders?>(
-                    future: headersFuture,
-                    builder: (context, snap) {
-                      // The list feed only carries the bare address; the full
-                      // From header has the display name, like the Qt reader.
-                      final from = (snap.data?.from.isNotEmpty ?? false)
-                          ? snap.data!.from
-                          : message.from;
-                      final shown = _splitAddr(from);
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            shown.name.isNotEmpty ? shown.name : shown.addr,
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              fontWeight: FontWeight.w600,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          if (shown.name.isNotEmpty && shown.addr != shown.name)
-                            Text(
-                              shown.addr,
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.outline,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                        ],
-                      );
-                    },
-                  ),
-                ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(message.date, style: theme.textTheme.bodySmall),
-                    Icon(details ? Icons.expand_less : Icons.expand_more),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          if (!details && message.to.isNotEmpty)
-            Text('To: ${message.to}', style: theme.textTheme.bodySmall),
-          // The expander opens the full address block, like the Qt details
-          // grid — From/To/Cc/Date/Reply-To. It used to reveal only the Cc
-          // line, so on mail without Cc the tap visibly did nothing.
-          if (details)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: FutureBuilder<MessageHeaders?>(
-                future: headersFuture,
-                builder: (context, snap) {
-                  final h = snap.data;
-                  final from = (h?.from.isNotEmpty ?? false)
-                      ? h!.from
-                      : message.from;
-                  final to = (h?.to.isNotEmpty ?? false) ? h!.to : message.to;
-                  final cc = (h?.cc.isNotEmpty ?? false) ? h!.cc : message.cc;
-                  final date = (h?.date.isNotEmpty ?? false)
-                      ? h!.date
-                      : message.date;
-                  final replyTo = (h?.replyTo.isNotEmpty ?? false)
-                      ? h!.replyTo
-                      : message.replyTo;
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _DetailRow(label: 'From', value: from),
-                      if (to.isNotEmpty) _DetailRow(label: 'To', value: to),
-                      if (cc.isNotEmpty) _DetailRow(label: 'Cc', value: cc),
-                      if (date.isNotEmpty)
-                        _DetailRow(label: 'Date', value: date),
-                      if (replyTo.isNotEmpty)
-                        _DetailRow(label: 'Reply-To', value: replyTo),
-                    ],
-                  );
-                },
-              ),
-            ),
-          // Shown inline, not hidden in a details view: replying to the wrong
-          // address is not something the user can take back. Red like Qt —
-          // this is a warning, not information.
-          if (message.replyTo.isNotEmpty)
-            Container(
-              margin: const EdgeInsets.only(top: 6),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.errorContainer,
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text(
-                'Replies go to: ${message.replyTo}',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onErrorContainer,
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _more(BuildContext context, MailState state, String v) async {
-    switch (v) {
-      case 'forward':
-        if (context.mounted) {
-          await ComposerDialog.showForward(context, message);
-        }
-      case 'reply-all':
-        if (context.mounted) {
-          await ComposerDialog.showReply(context, message, replyAll: true);
-        }
-      case 'archive':
-        await state.archiveMessages([message.uid]);
-      case 'move':
-        if (context.mounted) {
-          await MoveToDialog.show(
-            context,
-            uids: [message.uid],
-            subject: message.subject,
-          );
-        }
-      case 'purge':
-        if (context.mounted) {
-          await confirmDelete(
-            context,
-            state,
-            uids: [message.uid],
-            permanent: true,
-            purge: true,
-          );
-        }
-      case 'headers':
-        if (context.mounted) _showHeaders(context, state);
-    }
-  }
-
-  Future<void> _showHeaders(BuildContext context, MailState state) async {
-    late MessageHeaders headers;
-    try {
-      headers = await MailCore.instance.messageHeaders(
-        state.folderId,
-        message.uid,
-      );
-    } catch (e) {
-      if (!context.mounted) return;
-      state.showStatus('$e', isError: true);
-      return;
-    }
-    if (!context.mounted) return;
-    await MailDialog.show(
-      context,
-      builder: (context) => AlertDialog(
-        title: const Text('Headers'),
-        content: SizedBox(
-          width: MailDialog.maxWidth(context, 480),
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (final row in {
-                  'From': headers.from,
-                  'To': headers.to,
-                  'Cc': headers.cc,
-                  'Date': headers.date,
-                  'Subject': headers.subject,
-                  'Message-ID': headers.messageId,
-                  'Reply-To': headers.replyTo,
-                }.entries)
-                  if (row.value.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: SelectableText('${row.key}: ${row.value}'),
-                    ),
-                if (headers.raw.isNotEmpty)
-                  ExpansionTile(
-                    title: const Text('Complete headers'),
-                    tilePadding: EdgeInsets.zero,
-                    children: [
-                      SelectableText(
-                        headers.raw,
-                        style: const TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  )
-                else
-                  const Text(
-                    'Complete headers are unavailable until this message is downloaded again.',
-                  ),
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _RemoteImagesBanner extends StatelessWidget {
-  const _RemoteImagesBanner({required this.onShowOnce});
-
-  final VoidCallback onShowOnce;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      color: scheme.surfaceContainerHighest,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        children: [
-          Icon(
-            Icons.image_not_supported_outlined,
-            size: 18,
-            color: scheme.outline,
-          ),
-          const SizedBox(width: 8),
-          const Expanded(
-            child: Text(
-              'Remote images were blocked. Loading them tells the sender you '
-              'opened this message.',
-            ),
-          ),
-          TextButton(onPressed: onShowOnce, child: const Text('Show once')),
-        ],
-      ),
-    );
-  }
-}
-
-/// `"Name <addr>"` split apart; a bare address yields both identical.
-({String name, String addr}) _splitAddr(String full) {
-  final s = full.trim();
-  final lt = s.indexOf('<');
-  final gt = s.lastIndexOf('>');
-  if (lt >= 0 && gt > lt) {
-    var name = s
-        .substring(0, lt)
-        .trim()
-        .replaceAll(RegExp('^["\']|["\']\$'), '');
-    final addr = s.substring(lt + 1, gt).trim();
-    if (name.isEmpty) name = addr;
-    return (name: name, addr: addr);
-  }
-  return (name: s, addr: s);
-}
-
-/// Attachment files with working Open / Save / Save-all.
-///
-/// Bytes stay in SQLite until the user acts: Open stages through the temp
-/// directory into the system viewer (`open_filex`), Save asks where
-/// (`file_picker`). A missing download is fetched first, on demand.
-class _AttachmentBar extends StatelessWidget {
-  const _AttachmentBar({required this.message});
-
-  final MessageBody message;
-
-  @override
-  Widget build(BuildContext context) {
-    final state = context.read<MailState>();
-    final files = message.attachments.where((a) => !a.isInline).toList();
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Text(
-                '${files.length} attachment(s)',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              const Spacer(),
-              if (files.length > 1)
-                TextButton.icon(
-                  icon: const Icon(Icons.save_alt, size: 16),
-                  label: const Text('Save all…'),
-                  onPressed: () => _saveAll(context, state),
-                ),
-            ],
-          ),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final a in files)
-                InputChip(
-                  avatar: const Icon(Icons.attach_file, size: 16),
-                  label: Text('${a.filename}  (${_size(a.size)})'),
-                  onPressed: () => _open(context, state, a),
-                  onDeleted: () => _saveOne(context, state, a),
-                  deleteButtonTooltipMessage: 'Save as…',
-                  deleteIcon: const Icon(Icons.save_alt, size: 16),
-                ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Cached bytes, downloading first when the message arrived without them.
-  Future<List<int>?> _bytes(MailState state, int attachmentId) async {
-    var bytes = await MailCore.instance.attachmentBytes(attachmentId);
-    if (bytes != null) return bytes;
-    await MailCore.instance.downloadAttachments(
-      state.accountId,
-      state.folderId,
-      message.uid,
-    );
-    return MailCore.instance.attachmentBytes(attachmentId);
-  }
-
-  Future<void> _open(
-    BuildContext context,
-    MailState state,
-    AttachmentInfo a,
-  ) async {
-    try {
-      state.showStatus('Opening ${a.filename}…');
-      final bytes = await _bytes(state, a.id);
-      if (bytes == null) {
-        state.showStatus('${a.filename} is not downloaded yet', isError: true);
-        return;
-      }
-      final dir = await getTemporaryDirectory();
-      final file = File('${dir.path}/mailclient-${a.id}-${a.filename}');
-      await file.writeAsBytes(bytes, flush: true);
-      final result = await OpenFilex.open(file.path);
-      if (result.type != ResultType.done) {
-        state.showStatus(
-          'Could not open ${a.filename}: ${result.message}',
-          isError: true,
-        );
-      } else {
-        state.showStatus('Opened ${a.filename}');
-      }
-    } catch (e) {
-      state.showStatus('Could not open ${a.filename}: $e', isError: true);
-    }
-  }
-
-  Future<void> _saveOne(
-    BuildContext context,
-    MailState state,
-    AttachmentInfo a,
-  ) async {
-    try {
-      // The picker writes the bytes itself and hands back where they went.
-      final bytes = await _bytes(state, a.id);
-      if (bytes == null) {
-        state.showStatus('${a.filename} is not downloaded yet', isError: true);
-        return;
-      }
-      final uri = await FilePicker.saveFile(
-        dialogTitle: 'Save attachment',
-        fileName: a.filename,
-        bytes: Uint8List.fromList(bytes),
-        mimeType: a.mimeType,
-      );
-      if (uri == null) return;
-      state.showStatus('Saved ${a.filename}');
-    } catch (e) {
-      state.showStatus('Could not save ${a.filename}: $e', isError: true);
-    }
-  }
-
-  Future<void> _saveAll(BuildContext context, MailState state) async {
-    try {
-      final dir = await FilePicker.getDirectoryPath(
-        dialogTitle: 'Save all attachments',
-      );
-      if (dir == null) return;
-      for (final a in message.attachments.where((a) => !a.isInline)) {
-        await _bytes(state, a.id);
-      }
-      final n = await MailCore.instance.saveAllAttachmentsTo(
-        state.folderId,
-        message.uid,
-        dir,
-      );
-      state.showStatus('Saved $n file(s)');
-    } catch (e) {
-      state.showStatus('Could not save attachments: $e', isError: true);
-    }
-  }
-
-  static String _size(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).round()} KB';
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-  }
-}
-
-class _Placeholder extends StatelessWidget {
-  const _Placeholder({required this.text});
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Center(
-      child: Text(text, style: TextStyle(color: scheme.outline)),
-    );
-  }
-}
-
-/// One row of the expanded address block: fixed-width label, selectable
-/// wrapping value. Selectable so a long address can be copied out.
-class _DetailRow extends StatelessWidget {
-  const _DetailRow({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 2),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 64,
-            child: Text(
-              label,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.outline,
-              ),
-            ),
-          ),
-          Expanded(
-            child: SelectableText(value, style: theme.textTheme.bodySmall),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Deterministic sender avatar, like the Qt Avatar seed.
-class _SenderAvatar extends StatelessWidget {
-  const _SenderAvatar({required this.from});
-
-  final String from;
-
-  @override
-  Widget build(BuildContext context) {
-    final bg = avatarColor(context, from);
-    final m = RegExp(r'[a-zA-Z0-9]').firstMatch(from);
-    final initial = m == null ? '?' : m.group(0)!.toUpperCase();
-    return CircleAvatar(
-      radius: 18,
-      backgroundColor: bg,
-      foregroundColor: Theme.of(context).colorScheme.onPrimary,
-      child: Text(initial, style: const TextStyle(fontSize: 15)),
-    );
   }
 }

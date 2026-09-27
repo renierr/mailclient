@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../models/models.dart';
+
 /// Shared mobile-safe dialog conventions.
 ///
 /// Why this exists: every dialog used to be a fixed-width `Dialog`/`AlertDialog`
@@ -219,6 +221,25 @@ class MailDialogShell extends StatelessWidget {
       ),
     );
   }
+}
+
+/// IMAP SPECIAL-USE role as a folder icon. One mapping so the sidebar, the
+/// move picker and the folder manager cannot drift apart.
+IconData folderIcon(FolderRole role) => switch (role) {
+  FolderRole.inbox => Icons.inbox_outlined,
+  FolderRole.sent => Icons.send_outlined,
+  FolderRole.drafts => Icons.edit_note_outlined,
+  FolderRole.trash => Icons.delete_outline,
+  FolderRole.junk => Icons.report_gmailerrorred_outlined,
+  FolderRole.archive => Icons.archive_outlined,
+  FolderRole.custom => Icons.folder_outlined,
+};
+
+/// First letter of a sender or address, for avatars. Non-letters fall back
+/// to `?` rather than a digit-less empty circle.
+String senderInitial(String from) {
+  final m = RegExp(r'[a-zA-Z0-9]').firstMatch(from);
+  return m == null ? '?' : m.group(0)!.toUpperCase();
 }
 
 /// Deterministic avatar colour from any string, like Qt `avatarColor()`.

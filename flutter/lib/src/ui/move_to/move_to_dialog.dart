@@ -30,9 +30,10 @@ class MoveToDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<MailState>();
-    final folders = state.visibleFolders;
-    final currentId = state.folderId;
+    final folders = context.select<MailState, List<Folder>>(
+      (s) => s.visibleFolders,
+    );
+    final currentId = context.select<MailState, int>((s) => s.folderId);
     final title = uids.length > 1
         ? 'Move ${uids.length} messages to:'
         : subject != null && subject!.isNotEmpty
@@ -55,13 +56,13 @@ class MoveToDialog extends StatelessWidget {
                   left: 12.0 + f.depth * 14,
                   right: 8,
                 ),
-                leading: Icon(_iconFor(f.role), size: 20),
+                leading: Icon(folderIcon(f.role), size: 20),
                 title: Text(f.leafName, overflow: TextOverflow.ellipsis),
                 onTap: current
                     ? null
                     : () {
                         Navigator.of(context).pop();
-                        state.moveMessages(uids, f.path);
+                        context.read<MailState>().moveMessages(uids, f.path);
                       },
               );
             },
@@ -80,14 +81,4 @@ class MoveToDialog extends StatelessWidget {
       ],
     );
   }
-
-  static IconData _iconFor(FolderRole role) => switch (role) {
-    FolderRole.inbox => Icons.inbox_outlined,
-    FolderRole.sent => Icons.send_outlined,
-    FolderRole.drafts => Icons.edit_note_outlined,
-    FolderRole.trash => Icons.delete_outline,
-    FolderRole.junk => Icons.report_gmailerrorred_outlined,
-    FolderRole.archive => Icons.archive_outlined,
-    FolderRole.custom => Icons.folder_outlined,
-  };
 }

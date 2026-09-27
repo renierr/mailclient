@@ -19,8 +19,11 @@ class FolderSidebar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<MailState>();
-    final folders = state.visibleFolders;
+    final folders = context.select<MailState, List<Folder>>(
+      (s) => s.visibleFolders,
+    );
+    final folderId = context.select<MailState, int>((s) => s.folderId);
+    final syncing = context.select<MailState, bool>((s) => s.isSyncing);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -32,7 +35,7 @@ class FolderSidebar extends StatelessWidget {
             onPressed: () => ComposerDialog.showBlank(context),
           ),
         ),
-        const _AccountPicker(),
+        const AccountPicker(),
         const Divider(height: 1),
         Expanded(
           child: folders.isEmpty
@@ -40,7 +43,7 @@ class FolderSidebar extends StatelessWidget {
                   child: Padding(
                     padding: const EdgeInsets.all(16),
                     child: Text(
-                      state.isSyncing
+                      syncing
                           ? 'Syncing folders…'
                           : 'No folders yet — sync or manage folders.',
                       textAlign: TextAlign.center,
@@ -55,11 +58,11 @@ class FolderSidebar extends StatelessWidget {
                   itemCount: folders.length,
                   itemBuilder: (context, i) {
                     final f = folders[i];
-                    return _FolderTile(
+                    return FolderTile(
                       folder: f,
-                      selected: f.id == state.folderId,
+                      selected: f.id == folderId,
                       onTap: () {
-                        state.selectFolder(f.id);
+                        context.read<MailState>().selectFolder(f.id);
                         onFolderSelected?.call();
                       },
                     );
@@ -77,13 +80,15 @@ class FolderSidebar extends StatelessWidget {
   }
 }
 
-class _AccountPicker extends StatelessWidget {
-  const _AccountPicker();
+class AccountPicker extends StatelessWidget {
+  const AccountPicker({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<MailState>();
-    final account = state.account;
+    final account = context.select<MailState, Account?>((s) => s.account);
+    final accounts = context.select<MailState, List<Account>>(
+      (s) => s.accounts,
+    );
     if (account == null) {
       return const Padding(
         padding: EdgeInsets.all(12),
@@ -114,7 +119,7 @@ class _AccountPicker extends StatelessWidget {
           ),
       ],
     );
-    if (state.accounts.length == 1) {
+    if (accounts.length == 1) {
       return PopupMenuButton<String>(
         onSelected: (v) => _menu(context, v),
         itemBuilder: (context) => [
@@ -124,7 +129,7 @@ class _AccountPicker extends StatelessWidget {
         child: ListTile(
           leading: avatar,
           title: title(account.displayName, account.email),
-          trailing: state.accounts.length > 1
+          trailing: accounts.length > 1
               ? null
               : const Icon(Icons.expand_more, size: 18),
         ),
@@ -142,14 +147,14 @@ class _AccountPicker extends StatelessWidget {
                 isExpanded: true,
                 value: account.id,
                 items: [
-                  for (final a in state.accounts)
+                  for (final a in accounts)
                     DropdownMenuItem(
                       value: a.id,
                       child: Text(a.email, overflow: TextOverflow.ellipsis),
                     ),
                 ],
                 onChanged: (id) {
-                  if (id != null) state.selectAccount(id);
+                  if (id != null) context.read<MailState>().selectAccount(id);
                 },
               ),
             ),
@@ -181,8 +186,9 @@ class _AccountPicker extends StatelessWidget {
   }
 }
 
-class _FolderTile extends StatelessWidget {
-  const _FolderTile({
+class FolderTile extends StatelessWidget {
+  const FolderTile({
+    super.key,
     required this.folder,
     required this.selected,
     required this.onTap,
@@ -201,7 +207,7 @@ class _FolderTile extends StatelessWidget {
       // Hierarchy lives in the IMAP path, so depth is derived rather than
       // stored: `Work/Client` sits one level in without a tree structure.
       contentPadding: EdgeInsets.only(left: 12.0 + folder.depth * 14, right: 8),
-      leading: Icon(_iconFor(folder.role), size: 20),
+      leading: Icon(folderIcon(folder.role), size: 20),
       title: Text(
         folder.leafName,
         overflow: TextOverflow.ellipsis,
@@ -225,14 +231,4 @@ class _FolderTile extends StatelessWidget {
       child: tile,
     );
   }
-
-  static IconData _iconFor(FolderRole role) => switch (role) {
-    FolderRole.inbox => Icons.inbox_outlined,
-    FolderRole.sent => Icons.send_outlined,
-    FolderRole.drafts => Icons.edit_note_outlined,
-    FolderRole.trash => Icons.delete_outline,
-    FolderRole.junk => Icons.report_gmailerrorred_outlined,
-    FolderRole.archive => Icons.archive_outlined,
-    FolderRole.custom => Icons.folder_outlined,
-  };
 }

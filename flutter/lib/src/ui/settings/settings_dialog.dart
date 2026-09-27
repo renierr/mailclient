@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../ffi/mail_core.dart';
+import '../../models/models.dart';
 import '../../models/settings.dart';
 import '../../state/mail_state.dart';
 import '../../sync/background_sync.dart';
@@ -339,7 +340,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
       _switch(
         'Show notifications for new mail',
         _draft.notificationsEnabled,
-        (v) => setState(() => _draft = _draft.copyWith(notificationsEnabled: v)),
+        (v) =>
+            setState(() => _draft = _draft.copyWith(notificationsEnabled: v)),
         help: 'Sync continues in the background; only the notification is suppressed.',
       ),
       const SizedBox(height: 8),
@@ -352,12 +354,20 @@ class _SettingsDialogState extends State<SettingsDialog> {
   );
 
   Widget _about() {
-    final state = context.watch<MailState>();
+    final accounts = context.select<MailState, List<Account>>(
+      (s) => s.accounts,
+    );
+    final accountId = context.select<MailState, int>((s) => s.accountId);
+    final busy = context.select<MailState, bool>((s) => s.isBusy);
+    final status = context.select<MailState, String>((s) => s.status);
+    final statusIsError = context.select<MailState, bool>(
+      (s) => s.statusIsError,
+    );
     final info = MailCore.instance.info;
-    _capsAccountId ??= state.accountId;
+    _capsAccountId ??= accountId;
     final caps = _capsAccountId == null
         ? null
-        : state.capabilitiesFor(_capsAccountId!);
+        : context.read<MailState>().capabilitiesFor(_capsAccountId!);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -370,27 +380,37 @@ class _SettingsDialogState extends State<SettingsDialog> {
           style: Theme.of(context).textTheme.titleMedium,
         ),
         const SizedBox(height: 8),
-        Row(
+        Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 8,
           children: [
-            Expanded(
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                minWidth: 160,
+                maxWidth: MailDialog.maxWidth(context, 360),
+              ),
               child: DropdownButton<int>(
-                value: state.accounts.any((a) => a.id == _capsAccountId)
+                value: accounts.any((a) => a.id == _capsAccountId)
                     ? _capsAccountId
                     : null,
                 hint: const Text('Add an account first'),
                 isExpanded: true,
                 items: [
-                  for (final a in state.accounts)
-                    DropdownMenuItem(value: a.id, child: Text(a.email)),
+                  for (final a in accounts)
+                    DropdownMenuItem(
+                      value: a.id,
+                      child: Text(a.email, overflow: TextOverflow.ellipsis),
+                    ),
                 ],
                 onChanged: (id) => setState(() => _capsAccountId = id),
               ),
             ),
-            const SizedBox(width: 8),
             OutlinedButton(
               onPressed: _capsAccountId == null || _capsAccountId! < 0
                   ? null
-                  : () => state.refreshCapabilities(_capsAccountId!),
+                  : () => context.read<MailState>().refreshCapabilities(
+                      _capsAccountId!,
+                    ),
               child: const Text('Refresh'),
             ),
           ],
@@ -399,19 +419,19 @@ class _SettingsDialogState extends State<SettingsDialog> {
         if (caps == null)
           Row(
             children: [
-              if (state.isBusy)
+              if (busy)
                 const SizedBox(
                   width: 14,
                   height: 14,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 ),
-              if (state.isBusy) const SizedBox(width: 8),
+              if (busy) const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  state.isBusy
+                  busy
                       ? 'Loading capabilities…'
-                      : state.statusIsError && state.status.isNotEmpty
-                      ? state.status
+                      : statusIsError && status.isNotEmpty
+                      ? status
                       : 'No capabilities loaded yet — press Refresh.',
                 ),
               ),
@@ -442,9 +462,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
   Future<void> _sendTestNotification() async {
     await showTestNotification();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Test notification sent')),
-    );
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('Test notification sent')));
   }
 
   Future<void> _save() async {
