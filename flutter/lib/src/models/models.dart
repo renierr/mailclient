@@ -173,6 +173,7 @@ class MessageBody {
     required this.isHtml,
     required this.hasRemoteImages,
     this.missingInlineImages = 0,
+    this.htmlColored = false,
     required this.attachments,
   });
 
@@ -200,6 +201,10 @@ class MessageBody {
   /// Embedded (`cid:`) images whose bytes are not stored locally, so the
   /// body shows their alt text. Mail synced before inline images were kept.
   final int missingInlineImages;
+
+  /// The HTML sets its own text or background colours (a designed mail),
+  /// so the reader keeps or darkens them instead of applying the theme.
+  final bool htmlColored;
   final List<AttachmentInfo> attachments;
 
   factory MessageBody.fromJson(Map<String, dynamic> j) => MessageBody(
@@ -215,6 +220,7 @@ class MessageBody {
         isHtml: _bool(j['is_html']),
         hasRemoteImages: _bool(j['has_remote_images']),
         missingInlineImages: _int(j['missing_inline_images']),
+        htmlColored: _bool(j['html_colored']),
         attachments: _list(j['attachments'])
             .map(AttachmentInfo.fromJson)
             .toList(growable: false),

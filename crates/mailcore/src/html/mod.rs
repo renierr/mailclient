@@ -34,6 +34,7 @@ mod urls;
 #[cfg(test)]
 mod tests;
 
+pub use css::has_own_colors;
 pub use entities::{decode_entities, escape_text};
 pub use inline::{
     inline_cid_images, is_inline_image_mime, InlineImage, MAX_INLINE_BYTES_PER_MESSAGE,

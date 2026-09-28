@@ -272,6 +272,7 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
         "attachments": files, "body_text": plain, "body_html": body_html,
         "is_html": is_html, "has_remote_images": had_remote && is_html,
         "missing_inline_images": missing_inline,
+        "html_colored": is_html && html::has_own_colors(&body_html),
         "body": legacy_body,
     }))?)
 }

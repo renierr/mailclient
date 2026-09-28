@@ -58,6 +58,12 @@ Rectangle {
     readonly property string htmlBody: message ? (message.body_html !== undefined ? message.body_html : "") : ""
     readonly property bool hasRemote: message !== undefined && message.has_remote_images === true
     property bool allowRemoteOnce: false
+    // A designed mail (own colours) in a dark theme is darkened as a whole;
+    // this per-message toggle shows it as sent. Mail without colours just
+    // takes the theme. Same rules as the Flutter reader (mail_paint.dart).
+    readonly property bool htmlColored: message !== undefined && message !== null && message.html_colored === true
+    property bool originalColors: false
+    readonly property string paintMode: !root.htmlColored ? "theme" : (Theme.dark && !root.originalColors ? "darkened" : "original")
     property bool isFullscreen: false
     signal fullscreenRequested
     // Narrower layouts give the reader the whole content area; the chevron
@@ -74,6 +80,7 @@ Rectangle {
     onMessageUidChanged: {
         // One-shot remote consent is per-message.
         root.allowRemoteOnce = false;
+        root.originalColors = false;
         root.remoteHtml = "";
         root.headerExpanded = false;
         root.hoveredLinkUrl = "";
@@ -89,6 +96,7 @@ Rectangle {
     onRemoteHtmlChanged: root.reloadHtml()
     onLoadRemoteImagesChanged: root.reloadHtml()
     onAllowRemoteOnceChanged: root.reloadHtml()
+    onPaintModeChanged: root.reloadHtml()
 
     function reloadHtml() {
         if (root.isHtml && bodyLoader.item) {
@@ -291,27 +299,51 @@ Rectangle {
         headersDialog.open();
     }
 
+    // `#rrggbb` of `invert(1) hue-rotate(180deg)` applied to `c`: the sheet
+    // colour that lands on `c` once a darkened body is inverted.
+    function invertedHex(c) {
+        function ch(v) {
+            var n = Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16);
+            return n.length < 2 ? "0" + n : n;
+        }
+        return "#" + ch(1 - (-0.574 * c.r + 1.430 * c.g + 0.144 * c.b)) + ch(1 - (0.426 * c.r + 0.430 * c.g + 0.144 * c.b))
+                + ch(1 - (0.426 * c.r + 1.430 * c.g - 0.856 * c.b));
+    }
+
+    // Behind the document, so nothing flashes a different colour first.
+    readonly property color docBackground: root.paintMode === "original" ? "#ffffff" : Theme.bg
+
     // Trusted wrapper added AFTER Rust sanitizing (so layout CSS is ours).
-    // Mail renders on a light sheet in every theme: the sanitizer keeps the
-    // sender's colours, and dark text with no background of its own is
-    // unreadable on a dark one. Same sheet as the Flutter reader.
+    // Three paints (see `paintMode`): theme colours for mail without its
+    // own; the light sheet a designed mail expects; or that sheet inverted
+    // to the dark theme, with images inverted back to their real colours.
     function wrapDoc(inner) {
         // Same policy as the Flutter reader: no network load at all unless
         // the user allowed remote images; `cid:` parts arrive as `data:`.
         var csp = "default-src 'none'; img-src data:" + (root.effectiveAutoLoad() ? " https: http:" : "")
                 + "; style-src 'unsafe-inline'; font-src 'none'; media-src 'none'; frame-src 'none'; "
                 + "form-action 'none'; base-uri 'none'";
+        var themed = root.paintMode === "theme";
+        var paper = themed ? Theme.bg : (root.paintMode === "darkened" ? root.invertedHex(Theme.bg) : "#ffffff");
+        var ink = themed ? Theme.text : "#202124";
+        var link = themed ? Theme.accent : "#1a5fd0";
+        var quote = themed ? Theme.textMuted : "#5f6368";
+        var rule = themed ? Theme.border : "#d0d4da";
+        var sheet = "background:" + paper + ";color:" + ink + ";font-family:sans-serif;font-size:" + Math.round(14
+                * Theme.uiScale) + "px;line-height:1.5;overflow-wrap:break-word";
+        var invert = "invert(1) hue-rotate(180deg)";
+        var layout = root.paintMode === "darkened" ? "html,body{background:" + Theme.bg + ";margin:0}#mail{" + sheet
+                + ";padding:16px;min-height:100vh;box-sizing:border-box;filter:" + invert + "}#mail img{filter:" + invert
+                + "}" : "html,body{background:" + paper + "}body{margin:16px;" + sheet + "}";
+        var content = root.paintMode === "darkened" ? "<div id=\"mail\">" + inner + "</div>" : inner;
         return "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" + "<meta http-equiv=\"Content-Security-Policy\" content=\""
-                + csp + "\">" + "<meta http-equiv=\"x-dns-prefetch-control\" content=\"off\">"
-                + "<style>html,body{background:#ffffff}"
-                + "body{font-family:sans-serif;font-size:" + Math.round(14 * Theme.uiScale) + "px;line-height:1.5;"
-                + "margin:16px;overflow-wrap:break-word;color:#202124}" + "a{color:#1a5fd0}"
-                + "img{max-width:100%!important;height:auto!important}pre{white-space:pre-wrap}"
-                + "blockquote{margin:8px 0;padding-left:12px;border-left:3px solid #d0d4da;color:#5f6368}" +
+                + csp + "\">" + "<meta http-equiv=\"x-dns-prefetch-control\" content=\"off\">" + "<style>" + layout
+                + "a{color:" + link + "}" + "img{max-width:100%!important;height:auto!important}pre{white-space:pre-wrap}"
+                + "blockquote{margin:8px 0;padding-left:12px;border-left:3px solid " + rule + ";color:" + quote + "}" +
                 // Newsletter tables carry fixed widths: author CSS beats
                 // presentational attributes, so they shrink to the pane
                 // instead of scrolling sideways.
-                "table{max-width:100%!important}td,th{overflow-wrap:anywhere}</style>" + "</head><body>" + inner
+                "table{max-width:100%!important}td,th{overflow-wrap:anywhere}</style>" + "</head><body>" + content
                 + "</body></html>";
     }
 
@@ -551,6 +583,13 @@ Rectangle {
                         onClicked: root.deleteRequested()
                     }
                     IconButton {
+                        visible: root.isHtml && root.htmlColored && Theme.dark
+                        text: root.originalColors ? Icons.darkMode : Icons.invertColors
+                        iconFont: true
+                        tooltip: root.originalColors ? qsTr("Darken to match the theme") : qsTr("Show original colours")
+                        onClicked: root.originalColors = !root.originalColors
+                    }
+                    IconButton {
                         text: root.isFullscreen ? Icons.closeFullscreen : Icons.openFullscreen
                         iconFont: true
                         tooltip: root.isFullscreen ? qsTr("Exit full screen") : qsTr("Enter full screen")
@@ -788,7 +827,7 @@ Rectangle {
     Component {
         id: webComp
         WebEngineView {
-            backgroundColor: "#ffffff"
+            backgroundColor: root.docBackground
             settings.javascriptEnabled: false
             // Inline cid:/data: images must render even when remote is
             // blocked, and the sanitizer already removed remote URLs — so

@@ -26,7 +26,16 @@ class ReaderHeader extends StatelessWidget {
     required this.details,
     required this.onToggleDetails,
     this.onClose,
+    this.originalColors = false,
+    this.onToggleColors,
   });
+
+  /// A designed mail in a dark theme: the sender's colours are shown as
+  /// sent rather than darkened. Only meaningful with [onToggleColors].
+  final bool originalColors;
+
+  /// Null hides the colours toggle (nothing to darken).
+  final VoidCallback? onToggleColors;
 
   final MessageBody message;
   final Future<MessageHeaders?>? headersFuture;
@@ -93,6 +102,18 @@ class ReaderHeader extends StatelessWidget {
                   permanent: permanent,
                 ),
               ),
+              if (onToggleColors != null)
+                IconButton(
+                  tooltip: originalColors
+                      ? 'Darken to match the theme'
+                      : 'Show original colours',
+                  icon: Icon(
+                    originalColors
+                        ? Icons.dark_mode_outlined
+                        : Icons.invert_colors,
+                  ),
+                  onPressed: onToggleColors,
+                ),
               // Wide layouts only: narrower ones already give the reader
               // every pixel they have.
               if (onClose == null)

@@ -36,6 +36,8 @@ QtObject {
     readonly property string deleteForever: "\ue92b"
     readonly property string deleteSweep: "\ue16c"
     readonly property string deselect: "\uebb6"
+    readonly property string darkMode: "\ue51c"
+    readonly property string invertColors: "\ue891"
     readonly property string done: "\ue876"
     readonly property string drafts: "\ue151"
     readonly property string driveFileMove: "\ue675"

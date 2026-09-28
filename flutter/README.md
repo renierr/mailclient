@@ -149,9 +149,13 @@ from the user's own server on tap. Remote images stay blocked unless
 allowed, and the WebView's Safe Browsing and metrics are off in the
 manifest.
 
-Both frontends paint HTML mail on a light sheet in every theme: the
-sanitizer keeps the sender's inline styles and colours, which assume a
-white background.
+Both frontends pick one of three paints per HTML mail (`ui/reader/mail_paint.dart`,
+`paintMode` in `MessageView.qml`). A mail that sets no colours of its own
+takes the app theme, like plain text. A designed mail (the core reports
+`html_colored`) keeps the light sheet it was made for in a light theme; in a
+dark theme it is inverted as a whole (`invert(1) hue-rotate(180deg)`, hues
+kept) with images inverted back, and a reader toggle shows the original
+colours for that message.
 
 ## Android
 

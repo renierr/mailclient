@@ -103,6 +103,30 @@ fn layout_attributes_reject_junk() {
 }
 
 #[test]
+fn own_colours_are_detected_after_sanitizing() {
+    let colored = [
+        "<p style=\"color:#333\">t</p>",
+        "<td style=\"background-color:#fff\">t</td>",
+        "<table bgcolor=\"#eee\"><tr><td>t</td></tr></table>",
+        "<font color=\"red\">t</font>",
+        "<div style=\"background:#123456\">t</div>",
+    ];
+    for h in colored {
+        assert!(has_own_colors(&sanitize(h, false).html), "{h}");
+    }
+    let plain = [
+        "<p>hi <b>there</b></p>",
+        "<p style=\"font-size:14px;margin:0\">t</p>",
+        // Dropped by the sanitizer, so it never paints.
+        "<p style=\"background:url(https://example.com/x)\">t</p>",
+        "<p>the word color: in text</p>",
+    ];
+    for h in plain {
+        assert!(!has_own_colors(&sanitize(h, false).html), "{h}");
+    }
+}
+
+#[test]
 fn preheader_hiding_is_kept() {
     let s = sanitize("<div style=\"display:none;max-height:0\">pre</div>", false);
     assert!(s.html.contains("display:none;"));

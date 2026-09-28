@@ -9,6 +9,7 @@ import '../../state/mail_state.dart';
 import 'inline_images_banner.dart';
 import 'link_safety.dart';
 import 'mail_html_view.dart';
+import 'mail_paint.dart';
 import 'reader_widgets.dart';
 
 /// The selected message.
@@ -36,6 +37,10 @@ class ReaderPaneState extends State<ReaderPane> {
 
   /// The inline-image download was asked for on the shown message.
   bool _inlineRequested = false;
+
+  /// Designed mail in a dark theme: show the sender's colours instead of
+  /// darkening them. Per message, like "Show once".
+  bool _originalColors = false;
 
   /// Link under the mouse. A notifier rather than state, so hovering
   /// repaints the bubble and not the whole pane with the mail in it.
@@ -78,6 +83,7 @@ class ReaderPaneState extends State<ReaderPane> {
       _shownFor = key;
       _details = false;
       _inlineRequested = false;
+      _originalColors = false;
     }
     if (_headersFor != key) {
       _headersFor = key;
@@ -88,6 +94,13 @@ class ReaderPaneState extends State<ReaderPane> {
     }
 
     final theme = Theme.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final paint = mailPaintFor(
+      colored: message.htmlColored,
+      dark: dark,
+      keepOriginal: _originalColors,
+    );
+    final canToggleColors = message.isHtml && message.htmlColored && dark;
     return Stack(
       children: [
         Positioned.fill(
@@ -100,6 +113,10 @@ class ReaderPaneState extends State<ReaderPane> {
                 details: _details,
                 onToggleDetails: () => setState(() => _details = !_details),
                 onClose: widget.onClose,
+                originalColors: _originalColors,
+                onToggleColors: canToggleColors
+                    ? () => setState(() => _originalColors = !_originalColors)
+                    : null,
               ),
               const Divider(height: 1),
               if (message.hasRemoteImages &&
@@ -118,6 +135,7 @@ class ReaderPaneState extends State<ReaderPane> {
                 child: message.isHtml
                     ? MailHtmlView(
                         html: _htmlWithRemoteImages ?? message.bodyHtml,
+                        paint: paint,
                         allowRemote:
                             loadRemote || _htmlWithRemoteImages != null,
                         textScale: scale,

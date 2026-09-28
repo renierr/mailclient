@@ -17,6 +17,7 @@ fn allowed_property(p: &str) -> bool {
     matches!(
         p,
         "color"
+            | "background"
             | "background-color"
             | "font"
             | "font-family"
@@ -133,6 +134,24 @@ pub(super) fn sanitize_style(raw: &str) -> Option<String> {
         out.push_str(&piece);
     }
     (!out.is_empty()).then_some(out)
+}
+
+/// Whether sanitized HTML paints its own colours (text, backgrounds).
+///
+/// Readers use it to pick a rendering: a mail without any can take the app
+/// theme as it is; a designed one needs its colours kept or darkened as a
+/// whole, since theming only half of it leaves dark text on dark ground.
+/// Works on [`super::sanitize`] output, where declarations are normalised
+/// to `prop:value;` and attributes to `name="…"`.
+pub fn has_own_colors(sanitized: &str) -> bool {
+    // Only markup counts: text is escaped, so `<` always opens a tag and
+    // "color:" in a sentence is not a colour.
+    sanitized.split('<').skip(1).any(|chunk| {
+        let tag = chunk.split('>').next().unwrap_or("").to_ascii_lowercase();
+        ["color:", "background:", " bgcolor=\"", " color=\""]
+            .iter()
+            .any(|p| tag.contains(p))
+    })
 }
 
 /// `bgcolor` / `color`: `#rgb`, `#rrggbb` or a plain colour name.

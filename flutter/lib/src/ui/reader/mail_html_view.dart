@@ -5,6 +5,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
 
+import 'mail_paint.dart';
 import 'mail_web_view.dart';
 
 /// Renders a message body that has already been sanitized by `mailcore`,
@@ -27,6 +28,7 @@ class MailHtmlView extends StatefulWidget {
   const MailHtmlView({
     super.key,
     required this.html,
+    this.paint = MailPaint.original,
     this.allowRemote = false,
     this.textScale = 1.0,
     this.onTapUrl,
@@ -38,6 +40,9 @@ class MailHtmlView extends StatefulWidget {
 
   /// Sanitized HTML. Never raw mail source.
   final String html;
+
+  /// Theme colours, the sender's, or the sender's darkened.
+  final MailPaint paint;
 
   /// Remote images were allowed for this view (the WebView's CSP follows).
   final bool allowRemote;
@@ -70,27 +75,30 @@ class _MailHtmlViewState extends State<MailHtmlView> {
       return MailWebView(
         html: widget.html,
         allowRemote: widget.allowRemote,
+        paint: widget.paint,
         textScale: widget.textScale,
         onTapUrl: widget.onTapUrl,
       );
     }
+    final palette = MailPalette.of(context, widget.paint);
     final base = Theme.of(context).textTheme.bodyMedium;
     final style = base?.copyWith(
-      color: mailInkColor,
+      color: palette.ink,
       fontSize: (base.fontSize ?? 14) * widget.textScale,
     );
-    final key = (widget.html, style);
+    final key = (widget.html, style, widget.paint, palette.paper, palette.link);
     if (_body == null || _bodyKey != key) {
       _bodyKey = key;
-      _body = _build(style);
+      _body = _build(style, palette);
     }
     return _body!;
   }
 
-  Widget _build(TextStyle? style) {
+  Widget _build(TextStyle? style, MailPalette palette) {
     final outline = Theme.of(context).colorScheme.outline;
-    return ColoredBox(
-      color: mailPaperColor,
+    final darkened = widget.paint == MailPaint.darkened;
+    final body = ColoredBox(
+      color: palette.paper,
       child: SelectionArea(
         child: CustomScrollView(
           slivers: [
@@ -100,13 +108,17 @@ class _MailHtmlViewState extends State<MailHtmlView> {
               // into view instead of laying out the whole mail up front.
               sliver: HtmlWidget(
                 widget.html,
+                // A new paint needs a new factory, which only initState
+                // builds.
+                key: ValueKey(widget.paint),
                 renderMode: RenderMode.sliverList,
                 factoryBuilder: () => _LinkHoverWidgetFactory(
                   onHoverUrl: (url) => widget.onHoverUrl?.call(url),
+                  restoreImages: darkened,
                 ),
                 textStyle: style,
                 customStylesBuilder: (element) => element.localName == 'a'
-                    ? {'color': _cssHex(mailLinkColor)}
+                    ? {'color': cssHex(palette.link)}
                     : null,
                 // Read through `widget`, so a cached body still calls the
                 // current callback.
@@ -130,16 +142,28 @@ class _MailHtmlViewState extends State<MailHtmlView> {
         ),
       ),
     );
+    // See [MailPaint.darkened]: the whole body inverts, images twice.
+    return darkened
+        ? ColorFiltered(colorFilter: darkInvert, child: body)
+        : body;
   }
 }
 
-String _cssHex(Color c) =>
-    '#${(c.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
-
 class _LinkHoverWidgetFactory extends WidgetFactory {
-  _LinkHoverWidgetFactory({this.onHoverUrl});
+  _LinkHoverWidgetFactory({this.onHoverUrl, this.restoreImages = false});
 
   final void Function(String? url)? onHoverUrl;
+
+  /// Inside an inverted body: invert images again so they look real.
+  final bool restoreImages;
+
+  @override
+  Widget? buildImageWidget(BuildTree tree, ImageSource src) {
+    final image = super.buildImageWidget(tree, src);
+    if (image == null || !restoreImages) return image;
+    return ColorFiltered(colorFilter: darkInvert, child: image);
+  }
+
   final Expando<String> _recognizerUrls = Expando<String>();
 
   @override
