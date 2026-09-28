@@ -12,7 +12,6 @@ import 'api/composer.dart';
 import 'api/contacts.dart';
 import 'api/events.dart';
 import 'api/folders.dart';
-import 'api/form.dart';
 import 'api/init.dart';
 import 'api/messages.dart';
 import 'api/mutate.dart';
@@ -54,12 +53,6 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   bool dco_decode_bool(dynamic raw);
 
   @protected
-  ComposeForm dco_decode_box_autoadd_compose_form(dynamic raw);
-
-  @protected
-  ComposeForm dco_decode_compose_form(dynamic raw);
-
-  @protected
   FolderCounts dco_decode_folder_counts(dynamic raw);
 
   @protected
@@ -73,9 +66,6 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
 
   @protected
   JobPhase dco_decode_job_phase(dynamic raw);
-
-  @protected
-  List<String> dco_decode_list_String(dynamic raw);
 
   @protected
   List<int> dco_decode_list_prim_u_32_loose(dynamic raw);
@@ -136,12 +126,6 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
-  ComposeForm sse_decode_box_autoadd_compose_form(SseDeserializer deserializer);
-
-  @protected
-  ComposeForm sse_decode_compose_form(SseDeserializer deserializer);
-
-  @protected
   FolderCounts sse_decode_folder_counts(SseDeserializer deserializer);
 
   @protected
@@ -155,9 +139,6 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
 
   @protected
   JobPhase sse_decode_job_phase(SseDeserializer deserializer);
-
-  @protected
-  List<String> sse_decode_list_String(SseDeserializer deserializer);
 
   @protected
   List<int> sse_decode_list_prim_u_32_loose(SseDeserializer deserializer);
@@ -227,15 +208,6 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
-  void sse_encode_box_autoadd_compose_form(
-    ComposeForm self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_compose_form(ComposeForm self, SseSerializer serializer);
-
-  @protected
   void sse_encode_folder_counts(FolderCounts self, SseSerializer serializer);
 
   @protected
@@ -249,9 +221,6 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
 
   @protected
   void sse_encode_job_phase(JobPhase self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_list_String(List<String> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_prim_u_32_loose(

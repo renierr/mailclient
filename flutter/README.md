@@ -201,10 +201,7 @@ the same SQLite file in that directory.
 
 ## Shared code still to promote
 
-The composer form (`api/composer.rs` mirrors `mailapp`'s composer) is a
-near-copy. It belongs in `mailcore`; that is the one place where a fix will
-otherwise have to be made twice. Account saving already lives once, in
-`mailcore::store::account_form`.
-
-Done before: the IMAP session pool, the lease, and the panic guard lived in
-both bridges and now live once in `mailcore::sync::pool`.
+Nothing known. The composer (send, drafts) lives once in `mailcore::compose`,
+account saving in `mailcore::store::account_form`, and the IMAP session pool,
+the lease and the panic guard in `mailcore::sync::pool`. Add an entry here
+before making any new copy between `mailapp` and `mailffi`.

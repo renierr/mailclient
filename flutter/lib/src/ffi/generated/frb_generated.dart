@@ -9,7 +9,6 @@ import 'api/composer.dart';
 import 'api/contacts.dart';
 import 'api/events.dart';
 import 'api/folders.dart';
-import 'api/form.dart';
 import 'api/init.dart';
 import 'api/messages.dart';
 import 'api/mutate.dart';
@@ -83,7 +82,7 @@ class MailCoreApi
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 806413641;
+  int get rustContentHash => -883527211;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -117,14 +116,6 @@ abstract class MailCoreApiApi extends BaseApi {
   });
 
   Future<void> crateApiSyncCommitBackgroundMarks({required String marksJson});
-
-  Future<ComposeForm> crateApiFormComposeFormDefault();
-
-  Future<ComposeForm> crateApiFormComposeFormParse({required String json});
-
-  Future<void> crateApiFormComposeFormRequireRecipient({
-    required ComposeForm that,
-  });
 
   Future<String> crateApiContactsContactsJson({required String prefix});
 
@@ -558,94 +549,6 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
       );
 
   @override
-  Future<ComposeForm> crateApiFormComposeFormDefault() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 8,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_compose_form,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiFormComposeFormDefaultConstMeta,
-        argValues: [],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiFormComposeFormDefaultConstMeta =>
-      const TaskConstMeta(debugName: "compose_form_default", argNames: []);
-
-  @override
-  Future<ComposeForm> crateApiFormComposeFormParse({required String json}) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_String(json, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 9,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_compose_form,
-          decodeErrorData: sse_decode_AnyhowException,
-        ),
-        constMeta: kCrateApiFormComposeFormParseConstMeta,
-        argValues: [json],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiFormComposeFormParseConstMeta =>
-      const TaskConstMeta(debugName: "compose_form_parse", argNames: ["json"]);
-
-  @override
-  Future<void> crateApiFormComposeFormRequireRecipient({
-    required ComposeForm that,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_box_autoadd_compose_form(that, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 10,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_unit,
-          decodeErrorData: sse_decode_AnyhowException,
-        ),
-        constMeta: kCrateApiFormComposeFormRequireRecipientConstMeta,
-        argValues: [that],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiFormComposeFormRequireRecipientConstMeta =>
-      const TaskConstMeta(
-        debugName: "compose_form_require_recipient",
-        argNames: ["that"],
-      );
-
-  @override
   Future<String> crateApiContactsContactsJson({required String prefix}) {
     return handler.executeNormal(
       NormalTask(
@@ -655,7 +558,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 8,
             port: port_,
           );
         },
@@ -687,7 +590,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 9,
             port: port_,
           );
         },
@@ -719,7 +622,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 10,
             port: port_,
           );
         },
@@ -747,7 +650,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 11,
             port: port_,
           );
         },
@@ -779,7 +682,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 12,
             port: port_,
           );
         },
@@ -816,7 +719,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 16,
+            funcId: 13,
             port: port_,
           );
         },
@@ -853,7 +756,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 14,
             port: port_,
           );
         },
@@ -888,7 +791,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 15,
             port: port_,
           );
         },
@@ -920,7 +823,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 16,
             port: port_,
           );
         },
@@ -952,7 +855,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 17,
             port: port_,
           );
         },
@@ -983,7 +886,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 18,
             port: port_,
           );
         },
@@ -1013,7 +916,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 22,
+            funcId: 19,
             port: port_,
           );
         },
@@ -1045,7 +948,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 20,
             port: port_,
           );
         },
@@ -1076,7 +979,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 21,
             port: port_,
           );
         },
@@ -1103,7 +1006,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 22,
             port: port_,
           );
         },
@@ -1130,7 +1033,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 26,
+            funcId: 23,
             port: port_,
           );
         },
@@ -1160,7 +1063,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 27,
+              funcId: 24,
               port: port_,
             );
           },
@@ -1194,7 +1097,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 28,
+            funcId: 25,
             port: port_,
           );
         },
@@ -1233,7 +1136,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 29,
+            funcId: 26,
             port: port_,
           );
         },
@@ -1271,7 +1174,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 30,
+            funcId: 27,
             port: port_,
           );
         },
@@ -1308,7 +1211,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 31,
+            funcId: 28,
             port: port_,
           );
         },
@@ -1343,7 +1246,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 32,
+            funcId: 29,
             port: port_,
           );
         },
@@ -1380,7 +1283,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 33,
+            funcId: 30,
             port: port_,
           );
         },
@@ -1419,7 +1322,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 34,
+            funcId: 31,
             port: port_,
           );
         },
@@ -1455,7 +1358,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 35,
+            funcId: 32,
             port: port_,
           );
         },
@@ -1486,7 +1389,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 36,
+            funcId: 33,
             port: port_,
           );
         },
@@ -1518,7 +1421,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 37,
+            funcId: 34,
             port: port_,
           );
         },
@@ -1549,7 +1452,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 38,
+            funcId: 35,
             port: port_,
           );
         },
@@ -1583,7 +1486,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 39,
+            funcId: 36,
             port: port_,
           );
         },
@@ -1618,7 +1521,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 40,
+            funcId: 37,
             port: port_,
           );
         },
@@ -1653,7 +1556,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 41,
+            funcId: 38,
             port: port_,
           );
         },
@@ -1691,7 +1594,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 42,
+            funcId: 39,
             port: port_,
           );
         },
@@ -1727,7 +1630,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 43,
+            funcId: 40,
             port: port_,
           );
         },
@@ -1757,7 +1660,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 44,
+            funcId: 41,
             port: port_,
           );
         },
@@ -1791,7 +1694,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 45,
+            funcId: 42,
             port: port_,
           );
         },
@@ -1825,7 +1728,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 46,
+            funcId: 43,
             port: port_,
           );
         },
@@ -1860,7 +1763,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 47,
+            funcId: 44,
             port: port_,
           );
         },
@@ -1895,7 +1798,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 48,
+            funcId: 45,
             port: port_,
           );
         },
@@ -1925,7 +1828,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 49,
+            funcId: 46,
             port: port_,
           );
         },
@@ -1957,7 +1860,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 50,
+            funcId: 47,
             port: port_,
           );
         },
@@ -1995,7 +1898,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 51,
+            funcId: 48,
             port: port_,
           );
         },
@@ -2025,7 +1928,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 52,
+            funcId: 49,
             port: port_,
           );
         },
@@ -2052,7 +1955,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 53,
+            funcId: 50,
             port: port_,
           );
         },
@@ -2080,7 +1983,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 54,
+            funcId: 51,
             port: port_,
           );
         },
@@ -2112,7 +2015,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 55,
+            funcId: 52,
             port: port_,
           );
         },
@@ -2148,7 +2051,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 56,
+            funcId: 53,
             port: port_,
           );
         },
@@ -2215,33 +2118,6 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   }
 
   @protected
-  ComposeForm dco_decode_box_autoadd_compose_form(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return dco_decode_compose_form(raw);
-  }
-
-  @protected
-  ComposeForm dco_decode_compose_form(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    final arr = raw as List<dynamic>;
-    if (arr.length != 11)
-      throw Exception('unexpected arr length: expect 11 but see ${arr.length}');
-    return ComposeForm(
-      to: dco_decode_list_String(arr[0]),
-      cc: dco_decode_list_String(arr[1]),
-      bcc: dco_decode_list_String(arr[2]),
-      from: dco_decode_String(arr[3]),
-      fromName: dco_decode_String(arr[4]),
-      replyTo: dco_decode_String(arr[5]),
-      subject: dco_decode_String(arr[6]),
-      body: dco_decode_String(arr[7]),
-      bodyHtml: dco_decode_String(arr[8]),
-      attachments: dco_decode_list_String(arr[9]),
-      draftUid: dco_decode_i_32(arr[10]),
-    );
-  }
-
-  @protected
   FolderCounts dco_decode_folder_counts(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -2285,12 +2161,6 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   JobPhase dco_decode_job_phase(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return JobPhase.values[raw as int];
-  }
-
-  @protected
-  List<String> dco_decode_list_String(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return (raw as List<dynamic>).map(dco_decode_String).toList();
   }
 
   @protected
@@ -2426,43 +2296,6 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   }
 
   @protected
-  ComposeForm sse_decode_box_autoadd_compose_form(
-    SseDeserializer deserializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return (sse_decode_compose_form(deserializer));
-  }
-
-  @protected
-  ComposeForm sse_decode_compose_form(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_to = sse_decode_list_String(deserializer);
-    var var_cc = sse_decode_list_String(deserializer);
-    var var_bcc = sse_decode_list_String(deserializer);
-    var var_from = sse_decode_String(deserializer);
-    var var_fromName = sse_decode_String(deserializer);
-    var var_replyTo = sse_decode_String(deserializer);
-    var var_subject = sse_decode_String(deserializer);
-    var var_body = sse_decode_String(deserializer);
-    var var_bodyHtml = sse_decode_String(deserializer);
-    var var_attachments = sse_decode_list_String(deserializer);
-    var var_draftUid = sse_decode_i_32(deserializer);
-    return ComposeForm(
-      to: var_to,
-      cc: var_cc,
-      bcc: var_bcc,
-      from: var_from,
-      fromName: var_fromName,
-      replyTo: var_replyTo,
-      subject: var_subject,
-      body: var_body,
-      bodyHtml: var_bodyHtml,
-      attachments: var_attachments,
-      draftUid: var_draftUid,
-    );
-  }
-
-  @protected
   FolderCounts sse_decode_folder_counts(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_cached = sse_decode_i_64(deserializer);
@@ -2506,18 +2339,6 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_i_32(deserializer);
     return JobPhase.values[inner];
-  }
-
-  @protected
-  List<String> sse_decode_list_String(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-
-    var len_ = sse_decode_i_32(deserializer);
-    var ans_ = <String>[];
-    for (var idx_ = 0; idx_ < len_; ++idx_) {
-      ans_.add(sse_decode_String(deserializer));
-    }
-    return ans_;
   }
 
   @protected
@@ -2677,31 +2498,6 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   }
 
   @protected
-  void sse_encode_box_autoadd_compose_form(
-    ComposeForm self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_compose_form(self, serializer);
-  }
-
-  @protected
-  void sse_encode_compose_form(ComposeForm self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_list_String(self.to, serializer);
-    sse_encode_list_String(self.cc, serializer);
-    sse_encode_list_String(self.bcc, serializer);
-    sse_encode_String(self.from, serializer);
-    sse_encode_String(self.fromName, serializer);
-    sse_encode_String(self.replyTo, serializer);
-    sse_encode_String(self.subject, serializer);
-    sse_encode_String(self.body, serializer);
-    sse_encode_String(self.bodyHtml, serializer);
-    sse_encode_list_String(self.attachments, serializer);
-    sse_encode_i_32(self.draftUid, serializer);
-  }
-
-  @protected
   void sse_encode_folder_counts(FolderCounts self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_64(self.cached, serializer);
@@ -2735,15 +2531,6 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   void sse_encode_job_phase(JobPhase self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.index, serializer);
-  }
-
-  @protected
-  void sse_encode_list_String(List<String> self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_i_32(self.length, serializer);
-    for (final item in self) {
-      sse_encode_String(item, serializer);
-    }
   }
 
   @protected

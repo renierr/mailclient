@@ -25,7 +25,6 @@ pub mod composer;
 pub mod contacts;
 pub mod events;
 pub mod folders;
-pub(crate) mod form;
 pub mod init;
 pub mod messages;
 pub mod mutate;

@@ -7,22 +7,15 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `account_delimiter`, `collect_recipients`, `folder_by_role`, `remove_source_draft`, `resync_folder`, `save_sent_copy`
-
 /// Send a message from the composer's JSON form
 /// (`{to, cc?, bcc?, from?, from_name?, reply_to?, subject, body, body_html?,
 /// attachments?, draft_uid?}`).
 ///
 /// Validation, MIME assembly and queueing happen **inline**, before this
-/// returns: that is pure local work (SQLite plus file reads), so a mistake
-/// comes back instantly with the composer still open and the text intact.
+/// returns, so a mistake comes back instantly with the composer still open.
 /// Only the SMTP submit is queued, which is why the composer can close on the
 /// `Send` job's *progress* event instead of waiting for the Sent copy and the
 /// resync that follow it.
-///
-/// An interactive send is explicit consent, so no allow-list applies here —
-/// unlike the test harness, which refuses anything outside
-/// `MAILCLIENT_TEST_SEND_ALLOWLIST` (`AGENT.md` §6).
 Future<void> sendMail({
   required PlatformInt64 accountId,
   required PlatformInt64 folderId,
@@ -34,13 +27,7 @@ Future<void> sendMail({
 );
 
 /// Append the composer's current text to Drafts, replacing what it was
-/// opened from.
-///
-/// IMAP has no "edit a message": a replace is an APPEND of the new version
-/// plus an expunge of the old, which is why this is a queued job and not
-/// something that can run while the user keeps typing. The Drafts folder is
-/// created server-side when the account has none, the way archiving creates
-/// Archive.
+/// opened from. The Drafts folder is created server-side when missing.
 Future<void> saveDraft({
   required PlatformInt64 accountId,
   required String form,

@@ -682,7 +682,8 @@ Rectangle {
                             anchors.centerIn: parent
                             visible: !root.selectionMode
                             seed: row.model.from || "?"
-                            initials: (row.model.from || "?").replace(/^[^a-zA-Z0-9]*/, "").substring(0, 1).toUpperCase()
+                            initials: (row.model.from || "?").replace(/^[^a-zA-Z0-9]*/, "").substring(0, 1).toUpperCase(
+                                          )
                         }
                         Rectangle {
                             anchors.centerIn: parent

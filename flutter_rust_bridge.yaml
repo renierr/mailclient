@@ -7,6 +7,11 @@
 # leading `..` never matches the Rust root it computes. Windows-style
 # separators for the same reason: the comparison is textual.
 #
+# On Windows the tool compares a canonical (\\?\-prefixed) root against the
+# plain output path and fails with "prefix not found"; pass the config the
+# same way, from PowerShell (MSYS2 bash eats the backslashes):
+#   flutter_rust_bridge_codegen generate --config-file '\\?\D:\<repo>\flutter_rust_bridge.yaml'
+#
 # Both outputs are committed, so a plain `cargo build` and a plain
 # `flutter run` work without the codegen tool installed. Regenerate whenever
 # anything in `crates/mailffi/src/api/` changes shape.
