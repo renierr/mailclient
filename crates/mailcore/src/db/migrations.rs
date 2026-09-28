@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 13;
+pub const SCHEMA_VERSION: u32 = 14;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -174,12 +174,55 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
             Err(e) => log::warn!("migration v13: accounts differ only by case, kept index: {e}"),
         }
     }
+    if current < 14 {
+        // v14: plain-text mail was stored with a `body_html` that mail-parser
+        // generated from the text, so it rendered as HTML. Drop exactly those.
+        if let Err(e) = drop_generated_html(conn) {
+            log::warn!("migration v14: generated html cleanup failed: {e}");
+        }
+    }
     if current != SCHEMA_VERSION {
         conn.execute(
             "update schema_meta set value = ?1 where key = 'version'",
             [SCHEMA_VERSION.to_string()],
         )?;
     }
+    Ok(())
+}
+
+/// Null `body_html` where it is only mail-parser's conversion of `body_text`
+/// (see v14). Compared byte for byte, so a real HTML part is never touched.
+fn drop_generated_html(conn: &Connection) -> Result<()> {
+    let ids: Vec<i64> = {
+        let mut stmt = conn.prepare(
+            "select id, coalesce(body_text, ''), body_html from messages
+             where body_html is not null",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut ids = Vec::new();
+        for row in rows {
+            let (id, text, html) = row?;
+            if html == mail_parser::decoders::html::text_to_html(&text) {
+                ids.push(id);
+            }
+        }
+        ids
+    };
+    let tx = conn.unchecked_transaction()?;
+    for id in &ids {
+        tx.execute("update messages set body_html = null where id = ?1", [id])?;
+    }
+    tx.commit()?;
+    log::info!(
+        "migration v14: {} plain-text bodies no longer treated as html",
+        ids.len()
+    );
     Ok(())
 }
 
@@ -232,6 +275,55 @@ fn migrate_folder_paths_utf7(conn: &Connection) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn v14_migration_drops_only_generated_html() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_FULL).unwrap();
+        conn.execute(
+            "insert into schema_meta (key, value) values ('version', '13')",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch(
+            "insert into accounts (id, name, email_address, imap_host, imap_port,
+                 imap_security, imap_username, smtp_host, smtp_port,
+                 smtp_security, smtp_username, auth_vault_key, created_at, updated_at)
+             values (1, 'n', 'a@example.com', 'h', 993, 'tls', 'u', 'h', 465, 'tls', 'u', 'k', 't', 't');
+             insert into folders (id, account_id, path, delimiter, role, created_at, updated_at)
+             values (1, 1, 'INBOX', '/', 'inbox', 't', 't');",
+        )
+        .unwrap();
+        let add = |uid: i64, text: &str, html: &str| {
+            conn.execute(
+                "insert into messages (account_id, folder_id, uid, body_text, body_html,
+                     created_at, updated_at)
+                 values (1, 1, ?1, ?2, ?3, 't', 't')",
+                rusqlite::params![uid, text, html],
+            )
+            .unwrap();
+        };
+        add(
+            1,
+            "a
+b<c",
+            "<html><body>a<br/>b&lt;c</body></html>",
+        );
+        add(2, "a", "<p>a</p>");
+
+        ensure_schema(&conn).unwrap();
+
+        let html = |uid: i64| -> Option<String> {
+            conn.query_row(
+                "select body_html from messages where uid = ?1",
+                [uid],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(html(1), None);
+        assert_eq!(html(2).as_deref(), Some("<p>a</p>"));
+    }
 
     #[test]
     fn v13_migration_makes_the_address_index_case_insensitive() {

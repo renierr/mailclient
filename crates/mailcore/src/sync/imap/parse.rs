@@ -100,7 +100,7 @@ pub(crate) fn parse_to_new(
             date,
             snippet,
             body_text,
-            body_html: parsed.body_html(0).map(|c| c.into_owned()),
+            body_html: real_html_body(&parsed),
             raw_headers: (!raw_headers.is_empty()).then_some(raw_headers),
             is_read,
             is_starred,
@@ -112,6 +112,17 @@ pub(crate) fn parse_to_new(
         },
         files,
     ))
+}
+
+/// The HTML part, if the mail has one. `body_html()` alone is not enough:
+/// for a plain-text mail mail-parser converts the text part into
+/// `<html><body>…<br/>` on the fly, and storing that made every plain mail
+/// render as HTML.
+fn real_html_body(parsed: &mail_parser::Message<'_>) -> Option<String> {
+    let part = parsed.html_part(0)?;
+    matches!(part.body, mail_parser::PartType::Html(_))
+        .then(|| parsed.body_html(0).map(|c| c.into_owned()))
+        .flatten()
 }
 
 pub(crate) fn extract_attachments(
@@ -373,6 +384,36 @@ Content-Transfer-Encoding: base64\r\n\r\nYmFy\r\n\
         );
         assert!(!body.contains("cid:"));
         assert_eq!(json["missing_inline_images"], 0);
+    }
+
+    #[test]
+    fn plain_text_mail_has_no_html_body() {
+        let raw = b"From: a@example.com
+Subject: hi
+Content-Type: text/plain
+
+line one
+line two
+";
+        let (msg, _) = parse_to_new(1, 1, 7, &[], raw, false).unwrap();
+        assert_eq!(msg.body_html, None);
+        assert!(msg.body_text.unwrap().contains("line two"));
+
+        let raw = b"From: a@example.com
+Content-Type: multipart/alternative; boundary=\"A\"
+
+--A
+Content-Type: text/plain
+
+plain
+--A
+Content-Type: text/html
+
+<p>rich</p>
+--A--
+";
+        let (msg, _) = parse_to_new(1, 1, 8, &[], raw, false).unwrap();
+        assert!(msg.body_html.unwrap().contains("<p>rich</p>"));
     }
 
     #[test]
