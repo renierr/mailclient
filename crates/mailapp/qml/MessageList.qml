@@ -654,17 +654,39 @@ Rectangle {
                     anchors.bottomMargin: Theme.sm
                     spacing: Theme.sm
 
-                    // Checkbox cell (custom-drawn so programmatic
-                    // select-all/clear always reflects — see header).
-                    // Hidden until selection mode is toggled in the header.
+                    // Unread marker column.
+                    Item {
+                        width: 8
+                        height: parent.height
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: 8
+                            height: 8
+                            radius: 4
+                            color: Theme.accent
+                            visible: row.model.unread
+                        }
+                    }
+
+                    // Avatar slot: in selection mode the checkbox takes the
+                    // avatar's place instead of a column of its own, so the
+                    // sender/subject keep their width. Custom-drawn so
+                    // programmatic select-all/clear always reflects (see header).
                     Item {
                         id: checkCell
-                        width: root.selectionMode ? Math.round(22 * Theme.uiScale) : 0
-                        visible: root.selectionMode
+                        width: Math.round(34 * Theme.uiScale)
                         height: parent.height
                         z: 1
+
+                        Avatar {
+                            anchors.centerIn: parent
+                            visible: !root.selectionMode
+                            seed: row.model.from || "?"
+                            initials: (row.model.from || "?").replace(/^[^a-zA-Z0-9]*/, "").substring(0, 1).toUpperCase()
+                        }
                         Rectangle {
-                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.centerIn: parent
+                            visible: root.selectionMode
                             width: Theme.checkSize
                             height: Theme.checkSize
                             radius: Theme.xs
@@ -685,33 +707,13 @@ Rectangle {
                         }
                         MouseArea {
                             anchors.fill: parent
+                            enabled: root.selectionMode
                             onClicked: root.toggleSelection(row.model.uid)
                         }
                     }
 
-                    // Unread marker column.
-                    Item {
-                        width: 8
-                        height: parent.height
-                        Rectangle {
-                            anchors.centerIn: parent
-                            width: 8
-                            height: 8
-                            radius: 4
-                            color: Theme.accent
-                            visible: row.model.unread
-                        }
-                    }
-
-                    Avatar {
-                        anchors.verticalCenter: parent.verticalCenter
-                        seed: row.model.from || "?"
-                        initials: (row.model.from || "?").replace(/^[^a-zA-Z0-9]*/, "").substring(0, 1).toUpperCase()
-                    }
-
                     Column {
-                        width: parent.width - 8 - (root.selectionMode ? Math.round(22 * Theme.uiScale) : 0) - Math.round(
-                                   34 * Theme.uiScale) - (Theme.sm * (root.selectionMode ? 4 : 3)) - Theme.miniButton
+                        width: parent.width - 8 - checkCell.width - Theme.sm * 3 - Theme.miniButton
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 2
 
