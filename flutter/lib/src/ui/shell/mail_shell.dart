@@ -72,6 +72,16 @@ class _MailShellState extends State<MailShell> {
     final loading = context.select<MailState, bool>((s) => s.loading);
     final hasAccounts = context.select<MailState, bool>((s) => s.hasAccounts);
     final scale = context.select<MailState, double>((s) => s.settings.uiScale);
+    // The layout and the back handling depend on these, so they must be
+    // subscriptions: a plain read here leaves the panes and PopScope stale.
+    final fullscreen = context.select<MailState, bool>(
+      (s) => s.readerFullscreen,
+    );
+    final openUid = context.select<MailState, int>((s) => s.openUid);
+    final searching = context.select<MailState, bool>((s) => s.searching);
+    final selectionMode = context.select<MailState, bool>(
+      (s) => s.selectionMode,
+    );
     final state = context.read<MailState>();
 
     if (loading) {
@@ -108,14 +118,8 @@ class _MailShellState extends State<MailShell> {
             // fixed-height rows overflow.
             final width = constraints.maxWidth;
             final effective = width / scale;
-            // Read here, in build, and pass down: provider's watch/select
-            // may only run in a build method, not in these helpers called
-            // from the layout callback.
-            final state = context.read<MailState>();
-            final fullscreen = state.readerFullscreen;
-            final openUid = state.openUid;
             final body = effective >= Breakpoints.medium
-                ? _threePane(fullscreen)
+                ? _threePane(fullscreen, openUid)
                 : effective >= Breakpoints.compact
                 ? _twoPane(fullscreen, openUid, width)
                 : _onePane();
@@ -126,8 +130,8 @@ class _MailShellState extends State<MailShell> {
             final backBlocksPop =
                 fullscreen ||
                 _searchOpen ||
-                state.searching ||
-                state.selectionMode ||
+                searching ||
+                selectionMode ||
                 (effective < Breakpoints.compact
                     ? _pane != _Pane.folders
                     : openUid >= 0);
@@ -225,12 +229,12 @@ class _MailShellState extends State<MailShell> {
     if (state.openUid >= 0) state.closeMessage();
   }
 
-  Widget _threePane(bool fullscreen) {
+  Widget _threePane(bool fullscreen, int openUid) {
     if (fullscreen) {
       // The exit lives in the reader header, next to where fullscreen was
       // entered — no extra chrome needed here. If the open message vanishes
       // (deleted elsewhere), fall back to the list instead of an empty pane.
-      if (context.read<MailState>().openUid < 0) {
+      if (openUid < 0) {
         return Row(
           children: [
             if (_sidebarVisible)

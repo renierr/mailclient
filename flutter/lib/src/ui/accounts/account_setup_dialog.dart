@@ -338,6 +338,11 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
     child: TextFormField(
       controller: _fields[key],
       obscureText: obscure && !_revealed.contains(key),
+      // A revealed password is plain text to the keyboard: keep it from
+      // learning or suggesting it, and let password managers fill it.
+      autocorrect: !obscure,
+      enableSuggestions: !obscure,
+      autofillHints: obscure ? const [AutofillHints.password] : null,
       keyboardType: keyboard,
       textInputAction: TextInputAction.next,
       decoration: InputDecoration(
