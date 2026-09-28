@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -5,8 +7,10 @@ import '../../ffi/mail_core.dart';
 import '../../models/models.dart';
 import '../../models/settings.dart';
 import '../../state/mail_state.dart';
+import '../../sync/background_power.dart';
 import '../../sync/background_sync.dart';
 import '../dialogs/mail_dialog.dart';
+import 'background_check_status.dart';
 
 /// All preferences, Roundcube-style: sections on the left, the form on the
 /// right. Everything edits a local copy; Save writes it through, Cancel
@@ -351,6 +355,12 @@ class _SettingsDialogState extends State<SettingsDialog> {
         icon: const Icon(Icons.notifications_outlined),
         label: const Text('Send test notification'),
       ),
+      // A platform capability, not a layout choice: only Android has the
+      // background worker this reports on.
+      if (Platform.isAndroid) ...[
+        const SizedBox(height: 16),
+        const BackgroundCheckStatus(),
+      ],
     ],
   );
 
@@ -500,8 +510,14 @@ class _SettingsDialogState extends State<SettingsDialog> {
       }
       // Background checks just got enabled: ask for the notification
       // permission now, not on some later cold start.
+      // Then the battery exemption, without which Doze postpones the
+      // worker by hours while the phone sleeps.
       if (d.syncIntervalMinutes > 0 && before.syncIntervalMinutes <= 0) {
         await requestNotificationPermission();
+        final power = await backgroundPowerStatus();
+        if (power != null && !power.unrestricted) {
+          await requestUnrestrictedBackground();
+        }
       }
       if (!mounted) return;
       Navigator.of(context).pop();

@@ -3,9 +3,11 @@
 ///
 /// The in-app `Timer` in `MailState` only fires while the UI lives. This is
 /// the part that survives it: a battery-safe periodic worker (OS-enforced
-/// minimum 15 minutes, only runs when a network is connected, Doze-aware via
-/// WorkManager) that calls the Rust headless check and posts a system
-/// notification for mail that arrived since the previous run.
+/// minimum 15 minutes, only runs when a network is connected) that calls the
+/// Rust headless check and posts a system notification for mail that arrived
+/// since the previous run. While the phone sleeps, Doze and App Standby defer
+/// the worker unless the app is exempt from battery optimisation — see
+/// `background_power.dart`, which Settings uses to ask for that.
 ///
 /// Flow: `scheduleBackgroundSync` (called from `MailState` whenever the
 /// sync-interval setting loads or changes) registers or cancels the worker;

@@ -35,7 +35,14 @@ impl qobject::Bridge {
             let report_progress = |done: usize, total: usize, path: &str| {
                 progress.report(&format!("Syncing {done}/{total}: {path}"));
             };
-            let r = headless::sync_account(db, &acc, &mut imap, Some(&report_progress)).await;
+            let r = headless::sync_account(
+                db,
+                &acc,
+                &mut imap,
+                headless::SyncScope::All,
+                Some(&report_progress),
+            )
+            .await;
             imap.checkin();
             let all = folders::list_by_account(db, acc.id).map_err(|e| e.to_string())?;
             let folder_id = all

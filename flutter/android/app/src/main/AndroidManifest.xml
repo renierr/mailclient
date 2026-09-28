@@ -5,6 +5,11 @@
          install-time granted below that. No exact alarms, no foreground
          service: the checker is a plain WorkManager periodic task. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Lets Settings ask for the battery-optimisation exemption. Without
+         it, Doze and App Standby defer the periodic worker by hours while
+         the phone sleeps. Play restricts this permission; the APK is
+         sideloaded. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
 
     <!-- Cleartext is opt-in per account (plaintext IMAP/SMTP), not the
          default: every account uses TLS unless explicitly configured

@@ -56,9 +56,9 @@ Future<void> refreshServerCapabilities({required PlatformInt64 accountId}) =>
 
 /// Headless new-mail check for the Android background worker.
 ///
-/// Takes the cross-process sync lock, syncs every account over fresh
-/// connections (never the GUI's pooled sessions), and returns the
-/// [`headless::BackgroundReport`] as JSON: skipped flag, mail that arrived
+/// Takes the cross-process sync lock, syncs every account's inbox over
+/// fresh connections (never the GUI's pooled sessions), and returns the
+/// [`background::BackgroundReport`] as JSON: skipped flag, mail that arrived
 /// since the previous check, cached unread total, errors.
 ///
 /// Background-isolate only: it blocks the calling worker thread for the
@@ -76,3 +76,9 @@ Future<void> commitBackgroundMarks({required String marksJson}) => MailCoreApi
     .instance
     .api
     .crateApiSyncCommitBackgroundMarks(marksJson: marksJson);
+
+/// The last background tick as [`background::LastRun`] JSON, or an empty
+/// string before the first one. Lets Settings show whether Android actually
+/// runs the worker, and whether a run was cut short.
+Future<String> backgroundLastRun() =>
+    MailCoreApi.instance.api.crateApiSyncBackgroundLastRun();

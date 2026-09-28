@@ -301,6 +301,13 @@ class MailCore {
   Future<void> commitBackgroundMarks(String marksJson) =>
       rust_sync.commitBackgroundMarks(marksJson: marksJson);
 
+  /// The last background tick (`started_at`, `finished_at`, `skipped`,
+  /// `new`, `errors`), or null before the first one ran.
+  Future<Map<String, dynamic>?> backgroundLastRun() async {
+    final raw = await rust_sync.backgroundLastRun();
+    return raw.isEmpty ? null : _decodeMap(raw);
+  }
+
   // --- search --------------------------------------------------------------
 
   /// Local FTS only, in rank order. Cheap enough to run on every keystroke.

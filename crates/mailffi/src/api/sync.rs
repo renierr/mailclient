@@ -2,9 +2,9 @@
 //! reports back on the event stream; none of them block the caller.
 
 use mailcore::store::folders;
-use mailcore::sync::headless;
 use mailcore::sync::imap::{FULL_SYNC_WINDOW, OLDER_BATCH};
 use mailcore::sync::traits::SyncProvider;
+use mailcore::sync::{background, headless};
 
 use crate::net::{spawn, JobRefresh};
 use mailcore::sync::pool::{checkout_session, resolve_account};
@@ -25,7 +25,8 @@ pub fn sync_account(account_id: i64) -> anyhow::Result<()> {
             // The shared orchestration `mailapp` and the CLI both use; we only
             // lend it a pooled session.
             let mut imap = checkout_session(&acc).await?;
-            let r = headless::sync_account(db, &acc, &mut imap, None).await;
+            let r =
+                headless::sync_account(db, &acc, &mut imap, headless::SyncScope::All, None).await;
             imap.checkin();
 
             let flags = match r.pushed_flags {
@@ -168,9 +169,9 @@ pub fn refresh_server_capabilities(account_id: i64) -> anyhow::Result<()> {
 
 /// Headless new-mail check for the Android background worker.
 ///
-/// Takes the cross-process sync lock, syncs every account over fresh
-/// connections (never the GUI's pooled sessions), and returns the
-/// [`headless::BackgroundReport`] as JSON: skipped flag, mail that arrived
+/// Takes the cross-process sync lock, syncs every account's inbox over
+/// fresh connections (never the GUI's pooled sessions), and returns the
+/// [`background::BackgroundReport`] as JSON: skipped flag, mail that arrived
 /// since the previous check, cached unread total, errors.
 ///
 /// Background-isolate only: it blocks the calling worker thread for the
@@ -179,7 +180,7 @@ pub fn refresh_server_capabilities(account_id: i64) -> anyhow::Result<()> {
 /// rather than failing, so the worker just waits for the next run.
 pub fn background_check_now() -> anyhow::Result<String> {
     let db = crate::db::shared_db()?;
-    let report = headless::background_check_blocking(db, &crate::db::db_path());
+    let report = background::background_check_blocking(db, &crate::db::db_path());
     Ok(serde_json::to_string(&report)?)
 }
 
@@ -188,7 +189,17 @@ pub fn background_check_now() -> anyhow::Result<String> {
 /// off), so a failed post reports the same mail again on the next run.
 /// `marks_json` is the report's `marks` array, passed back unchanged.
 pub fn commit_background_marks(marks_json: String) -> anyhow::Result<()> {
-    let marks: Vec<headless::SeenMark> = serde_json::from_str(&marks_json)?;
-    headless::commit_seen(crate::db::shared_db()?, &marks);
+    let marks: Vec<background::SeenMark> = serde_json::from_str(&marks_json)?;
+    background::commit_seen(crate::db::shared_db()?, &marks);
     Ok(())
+}
+
+/// The last background tick as [`background::LastRun`] JSON, or an empty
+/// string before the first one. Lets Settings show whether Android actually
+/// runs the worker, and whether a run was cut short.
+pub fn background_last_run() -> anyhow::Result<String> {
+    Ok(match background::last_run(crate::db::shared_db()?) {
+        Some(run) => serde_json::to_string(&run)?,
+        None => String::new(),
+    })
 }

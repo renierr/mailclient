@@ -17,12 +17,12 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::auth;
 use crate::db::Db;
 use crate::error::Result;
-use crate::models::{Account, FolderRole};
+use crate::models::{Account, Folder, FolderRole};
 use crate::store::{accounts, folders, messages, settings};
 use crate::sync::imap::{full_discovery_due, ImapSync, FULL_SYNC_WINDOW, QUICK_SYNC_WINDOW};
 use crate::sync::sender::SmtpSender;
@@ -77,79 +77,54 @@ pub struct RecentUnread {
     pub date: String,
 }
 
-/// One mail the background check has never reported before. Carries the ids
-/// the UI needs to open it (`account_id`/`folder_id`/`uid`), plus the
-/// metadata a notification shows. Bodies never cross here.
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct NewMail {
-    pub account_id: i64,
-    pub account_email: String,
-    pub folder_id: i64,
-    pub folder: String,
-    pub uid: u32,
-    /// Folder UIDVALIDITY this UID belongs to. A server reset restarts UIDs
-    /// from low numbers under a new validity, so a notified-UID mark that
-    /// ignores it would silence every later arrival.
-    pub uid_validity: u32,
-    pub from: String,
-    pub subject: String,
-    pub date: String,
+/// Which folders [`sync_account`] covers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SyncScope {
+    /// Every subscribed folder (INBOX full window, the rest quick).
+    #[default]
+    All,
+    /// Inbox-role folders only, over the cached folder tree when it already
+    /// has an inbox (no LIST round-trips). For the Android background tick,
+    /// which must finish inside a short Doze maintenance window.
+    InboxOnly,
 }
 
-/// Outcome of [`background_check`]: what arrived since the previous check.
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct BackgroundReport {
-    /// Another sync held the lock, so this run did nothing. Not an error —
-    /// the next scheduled run picks it up.
-    pub skipped: bool,
-    /// Unread mail first seen by this check. Empty on the very first run:
-    /// that run only records the baseline so pre-existing unread mail does
-    /// not notify all at once.
-    pub new: Vec<NewMail>,
-    /// Marks to hand to [`commit_seen`] once `new` has been notified (or
-    /// deliberately not, with alerts off). Uncommitted, `new` is reported
-    /// again on the next check.
-    pub marks: Vec<SeenMark>,
-    /// Cached inbox-unread total across accounts, for the launcher badge.
-    pub total_unread: u64,
-    pub errors: Vec<String>,
-}
+impl SyncScope {
+    /// Whether [`sync_account`] syncs `folder` under this scope (the
+    /// subscription check comes on top).
+    #[must_use]
+    pub fn covers(self, folder: &Folder) -> bool {
+        self == SyncScope::All || folder.role == FolderRole::Inbox
+    }
 
-/// Prefix for background-check high-water marks (internal bookkeeping, not
-/// a user preference, so deliberately outside the settings allowlist):
-/// `bg_seen_uid_{account_id}_{folder_id}` stores `{uidvalidity}:{max_uid}`.
-pub const BG_SEEN_PREFIX: &str = "bg_seen_uid_";
+    /// Whether the cached folder tree is enough to sync this scope without
+    /// a LIST: only for inbox-only syncs, and only once a subscribed inbox
+    /// is cached — a fresh account still discovers its folders first.
+    #[must_use]
+    pub fn cached_tree_suffices(self, cached: &[Folder]) -> bool {
+        self == SyncScope::InboxOnly
+            && cached
+                .iter()
+                .any(|f| f.role == FolderRole::Inbox && f.subscribed)
+    }
+}
 
 /// Per-folder sync progress, called as `report(done, total, path)` before
 /// each folder sync so the GUI can show "3/15: …" instead of a bare
 /// spinner; the headless CLI passes `None`.
 pub type SyncProgress<'a> = &'a dyn Fn(usize, usize, &str);
 
-/// Per-folder high-water mark from [`collect_new_mail`], stored by
-/// [`commit_seen`]. Crosses to Dart and back unchanged.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SeenMark {
-    pub account_id: i64,
-    pub folder_id: i64,
-    pub uid_validity: i64,
-    pub uid: i64,
-}
-
-impl SeenMark {
-    fn key(&self) -> String {
-        format!("{BG_SEEN_PREFIX}{}_{}", self.account_id, self.folder_id)
-    }
-}
-
 /// Sync one account over an already-connected session.
 ///
 /// Flushes the SMTP outbox, pushes local flag changes, refreshes the folder
 /// list, then syncs every subscribed folder (INBOX full window, the rest
-/// quick). Per-folder failures are recorded in `errors` and skipped.
+/// quick) — or only the inbox, per [`SyncScope`]. Per-folder failures are
+/// recorded in `errors` and skipped.
 pub async fn sync_account(
     db: &Db,
     account: &Account,
     imap: &mut ImapSync,
+    scope: SyncScope,
     progress: Option<SyncProgress<'_>>,
 ) -> AccountSyncResult {
     let mut out = AccountSyncResult {
@@ -190,46 +165,55 @@ pub async fn sync_account(
     // Throttled discovery: one LIST pass every run, full four-pass
     // discovery only when the tree changed or the interval lapsed —
     // passes 2-4 cost ~30 round-trips and dominated every Gmail start.
-    let cached_paths: std::collections::HashSet<String> = folders::list_by_account(db, account.id)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|f| f.path)
-        .collect();
+    let cached = folders::list_by_account(db, account.id).unwrap_or_default();
+    let cached_inbox = scope.cached_tree_suffices(&cached);
+    let cached_paths: std::collections::HashSet<String> =
+        cached.iter().map(|f| f.path.clone()).collect();
     let now_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    let remote = match imap.sync_folders_quick(db, account.id).await {
-        Ok(quick) => {
-            let quick_paths: std::collections::HashSet<String> =
-                quick.iter().map(|f| f.path.clone()).collect();
-            let last_full = settings::get_last_full_discovery(db, account.id);
-            if full_discovery_due(&cached_paths, &quick_paths, last_full, now_unix) {
-                match imap.sync_folders(db, account.id).await {
-                    Ok(full) => full,
-                    // Quick list already upserted: still syncable, note it.
-                    Err(e) => {
-                        out.errors.push(format!("folder list (full): {e}"));
-                        quick
+    let remote = if cached_inbox {
+        cached
+    } else {
+        match imap.sync_folders_quick(db, account.id).await {
+            Ok(quick) => {
+                let quick_paths: std::collections::HashSet<String> =
+                    quick.iter().map(|f| f.path.clone()).collect();
+                let last_full = settings::get_last_full_discovery(db, account.id);
+                if full_discovery_due(&cached_paths, &quick_paths, last_full, now_unix) {
+                    match imap.sync_folders(db, account.id).await {
+                        Ok(full) => full,
+                        // Quick list already upserted: still syncable, note it.
+                        Err(e) => {
+                            out.errors.push(format!("folder list (full): {e}"));
+                            quick
+                        }
                     }
+                } else {
+                    log::debug!("imap: folder tree unchanged and fresh, keeping quick LIST");
+                    quick
                 }
-            } else {
-                log::debug!("imap: folder tree unchanged and fresh, keeping quick LIST");
-                quick
             }
-        }
-        Err(e) => {
-            out.errors.push(format!("folder list: {e}"));
-            out.unread = unread_for_account(db, account.id);
-            return out;
+            Err(e) => {
+                out.errors.push(format!("folder list: {e}"));
+                out.unread = unread_for_account(db, account.id);
+                return out;
+            }
         }
     };
 
-    let subscribed_total = remote.iter().filter(|f| f.subscribed).count();
+    let subscribed_total = remote
+        .iter()
+        .filter(|f| f.subscribed && scope.covers(f))
+        .count();
     let mut folders_attempted = 0usize;
     for f in &remote {
         if !f.subscribed {
             out.folders_skipped_hidden += 1;
+            continue;
+        }
+        if !scope.covers(f) {
             continue;
         }
         folders_attempted += 1;
@@ -274,7 +258,7 @@ pub async fn sync_account(
 
 /// Sync every account with a fresh connection each. One account failing
 /// (bad password, offline) never stops the rest.
-pub async fn sync_all_accounts(db: &Db) -> SyncAllReport {
+pub async fn sync_all_accounts(db: &Db, scope: SyncScope) -> SyncAllReport {
     let mut report = SyncAllReport::default();
     let list = match accounts::list(db) {
         Ok(a) => a,
@@ -289,7 +273,7 @@ pub async fn sync_all_accounts(db: &Db) -> SyncAllReport {
         let result = match secrets {
             Ok(s) => match imap.connect(&s.imap_password).await {
                 Ok(()) => {
-                    let r = sync_account(db, acc, &mut imap, None).await;
+                    let r = sync_account(db, acc, &mut imap, scope, None).await;
                     imap.logout().await;
                     r
                 }
@@ -335,156 +319,7 @@ pub fn sync_all_accounts_blocking(db: &Db) -> SyncAllReport {
         .enable_all()
         .build()
         .expect("tokio runtime for headless sync");
-    rt.block_on(sync_all_accounts(db))
-}
-
-/// One background tick: lock, sync every account over fresh connections,
-/// and report mail that arrived since the previous tick.
-///
-/// The lock turns overlap with a foreground sync (or a second worker) into
-/// a quiet skip rather than a `database is locked` error. Fresh connections
-/// keep this off the GUI's pooled sessions, so a worker run can never steal
-/// or stall the session the user is reading through.
-pub async fn background_check(db: &Db, db_path: &Path) -> BackgroundReport {
-    let _lock = match acquire_sync_lock(db_path) {
-        Ok(Some(guard)) => guard,
-        Ok(None) => {
-            return BackgroundReport {
-                skipped: true,
-                total_unread: cached_total_unread(db),
-                ..Default::default()
-            };
-        }
-        Err(e) => {
-            return BackgroundReport {
-                skipped: true,
-                total_unread: cached_total_unread(db),
-                errors: vec![format!("sync lock: {e}")],
-                ..Default::default()
-            };
-        }
-    };
-    // NB: `skipped` stays false here — losing the lock returns above.
-    let report = sync_all_accounts(db).await;
-    let (new, marks) = collect_new_mail(db);
-    BackgroundReport {
-        skipped: false,
-        new,
-        marks,
-        total_unread: report.total_unread,
-        errors: report.errors,
-    }
-}
-
-/// Synchronous wrapper around [`background_check`] for FFI callers, which
-/// cannot await. Same current-thread runtime shape as
-/// [`sync_all_accounts_blocking`].
-pub fn background_check_blocking(db: &Db, db_path: &Path) -> BackgroundReport {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime for background check");
-    rt.block_on(background_check(db, db_path))
-}
-
-/// Unread inbox mail first seen since the marks were last committed.
-///
-/// Each inbox folder keeps a `{uidvalidity}:{max_uid}` mark under
-/// [`BG_SEEN_PREFIX`]. A missing mark or a changed validity means "never
-/// reliably seen": the folder's current top becomes the baseline and nothing
-/// is reported, so enabling the feature (or a server-side UID reset) does not
-/// ding for every old message at once. Otherwise unread mail above the mark
-/// is new.
-///
-/// Read-only: the returned marks move the high-water line only once passed
-/// to [`commit_seen`], which the caller does after the notification was
-/// posted — a failed post then reports the same mail again next time. The
-/// top is taken over every inbox message, read or not, and an empty inbox
-/// baselines at 0, so the first mail into a fully read inbox still counts.
-pub fn collect_new_mail(db: &Db) -> (Vec<NewMail>, Vec<SeenMark>) {
-    let tops: Vec<SeenMark> = db
-        .conn()
-        .prepare(
-            "select f.account_id, f.id, coalesce(f.uid_validity, 0),
-                        coalesce(max(m.uid), 0)
-                 from folders f
-                 left join messages m on m.folder_id = f.id
-                 where f.role = 'inbox'
-                 group by f.account_id, f.id",
-        )
-        .and_then(|mut stmt| {
-            stmt.query_map([], |row| {
-                Ok(SeenMark {
-                    account_id: row.get(0)?,
-                    folder_id: row.get(1)?,
-                    uid_validity: row.get(2)?,
-                    uid: row.get(3)?,
-                })
-            })
-            .and_then(|mapped| mapped.collect::<rusqlite::Result<Vec<_>>>())
-        })
-        .unwrap_or_default();
-
-    let mut out = Vec::new();
-    for top in &tops {
-        let seen: Option<(i64, i64)> = settings::get(db, &top.key()).ok().flatten().and_then(|s| {
-            s.split_once(':')
-                .and_then(|(v, u)| Some((v.parse().ok()?, u.parse().ok()?)))
-        });
-        // First sighting or UIDVALIDITY reset: baseline only.
-        let Some(mark) = seen.filter(|(v, _)| *v == top.uid_validity).map(|(_, u)| u) else {
-            continue;
-        };
-        out.extend(unread_above(db, top, mark));
-    }
-    (out, tops)
-}
-
-/// Record marks from [`collect_new_mail`] as seen.
-pub fn commit_seen(db: &Db, marks: &[SeenMark]) {
-    for m in marks {
-        if let Err(e) = settings::set(db, &m.key(), &format!("{}:{}", m.uid_validity, m.uid)) {
-            log::warn!("background mark for folder {} not saved: {e}", m.folder_id);
-        }
-    }
-}
-
-fn unread_above(db: &Db, top: &SeenMark, mark: i64) -> Vec<NewMail> {
-    db.conn()
-        .prepare(
-            "select a.email_address, f.path, m.uid,
-                        coalesce(m.from_addr, ''), coalesce(m.subject, ''),
-                        coalesce(m.date, '')
-                 from messages m
-                 join accounts a on a.id = m.account_id
-                 join folders f on f.id = m.folder_id
-                 where m.folder_id = ?1 and m.is_read = 0 and m.uid > ?2
-                   and m.id not in (select message_id from pending_moves)
-                 order by m.uid",
-        )
-        .and_then(|mut stmt| {
-            stmt.query_map(rusqlite::params![top.folder_id, mark], |row| {
-                Ok(NewMail {
-                    account_id: top.account_id,
-                    account_email: row.get(0)?,
-                    folder_id: top.folder_id,
-                    folder: row.get(1)?,
-                    uid: row.get(2)?,
-                    uid_validity: top.uid_validity as u32,
-                    from: row.get(3)?,
-                    subject: row.get(4)?,
-                    date: row.get(5)?,
-                })
-            })
-            .and_then(|mapped| mapped.collect::<rusqlite::Result<Vec<_>>>())
-        })
-        .unwrap_or_default()
-}
-
-// Cached inbox-unread total across accounts (no network), for the badge
-/// when a check cannot run.
-fn cached_total_unread(db: &Db) -> u64 {
-    unread_summary(db).iter().map(|a| a.unread).sum()
+    rt.block_on(sync_all_accounts(db, SyncScope::All))
 }
 
 /// Cached unread total for one account (no network).
@@ -636,12 +471,12 @@ impl Drop for SyncLock {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::models::{FolderRole, NewAccount};
     use crate::store::{accounts, folders, messages};
 
-    fn setup_db() -> (Db, i64, i64, i64) {
+    pub(crate) fn setup_db() -> (Db, i64, i64, i64) {
         let db = Db::open_in_memory().unwrap();
         let acc = accounts::create(
             &db,
@@ -665,6 +500,30 @@ mod tests {
         let inbox = folders::upsert(&db, acc, "INBOX", "/", FolderRole::Inbox).unwrap();
         let trash = folders::upsert(&db, acc, "Trash", "/", FolderRole::Trash).unwrap();
         (db, acc, inbox, trash)
+    }
+
+    #[test]
+    fn inbox_only_scope_covers_the_inbox_and_reuses_a_cached_tree() {
+        let (db, acc, _, _) = setup_db();
+        let cached = folders::list_by_account(&db, acc).unwrap();
+        let (inbox, trash): (Vec<_>, Vec<_>) =
+            cached.iter().partition(|f| f.role == FolderRole::Inbox);
+        assert!(SyncScope::InboxOnly.covers(inbox[0]));
+        assert!(!SyncScope::InboxOnly.covers(trash[0]));
+        assert!(SyncScope::All.covers(trash[0]));
+
+        assert!(SyncScope::InboxOnly.cached_tree_suffices(&cached));
+        assert!(!SyncScope::All.cached_tree_suffices(&cached));
+        // No cached inbox yet (fresh account): discover over LIST first.
+        assert!(!SyncScope::InboxOnly.cached_tree_suffices(&[]));
+        let unsubscribed: Vec<Folder> = cached
+            .into_iter()
+            .map(|mut f| {
+                f.subscribed = false;
+                f
+            })
+            .collect();
+        assert!(!SyncScope::InboxOnly.cached_tree_suffices(&unsubscribed));
     }
 
     #[test]
@@ -695,99 +554,5 @@ mod tests {
         let recent = recent_unread(&db, 10, None);
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].subject, "inbox mail");
-    }
-
-    /// One background run whose notification succeeded.
-    fn check(db: &Db) -> Vec<NewMail> {
-        let (new, marks) = collect_new_mail(db);
-        commit_seen(db, &marks);
-        new
-    }
-
-    #[test]
-    fn uncommitted_marks_report_the_same_mail_again() {
-        let (db, acc, inbox, _) = setup_db();
-        assert!(check(&db).is_empty());
-        let mut m = messages::sample_new(acc, inbox, 3);
-        m.is_read = false;
-        messages::upsert(&db, &m).unwrap();
-        // The post failed, so nothing was committed…
-        assert_eq!(collect_new_mail(&db).0.len(), 1);
-        // …and the next run offers it again.
-        assert_eq!(check(&db).len(), 1);
-        assert!(check(&db).is_empty());
-    }
-
-    #[test]
-    fn first_mail_into_a_fully_read_inbox_is_reported() {
-        let (db, acc, inbox, _) = setup_db();
-        let mut read = messages::sample_new(acc, inbox, 1);
-        read.is_read = true;
-        messages::upsert(&db, &read).unwrap();
-        assert!(check(&db).is_empty());
-        let mut fresh = messages::sample_new(acc, inbox, 2);
-        fresh.is_read = false;
-        messages::upsert(&db, &fresh).unwrap();
-        assert_eq!(check(&db).len(), 1);
-    }
-
-    #[test]
-    fn first_mail_into_an_empty_inbox_is_reported() {
-        let (db, acc, inbox, _) = setup_db();
-        assert!(check(&db).is_empty());
-        let mut fresh = messages::sample_new(acc, inbox, 1);
-        fresh.is_read = false;
-        messages::upsert(&db, &fresh).unwrap();
-        assert_eq!(check(&db).len(), 1);
-    }
-
-    #[test]
-    fn collect_new_mail_baselines_first_then_reports_once() {
-        let (db, acc, inbox, _) = setup_db();
-        let mut m1 = messages::sample_new(acc, inbox, 1);
-        m1.is_read = false;
-        m1.subject = Some("old unread".to_string());
-        messages::upsert(&db, &m1).unwrap();
-
-        // First run only records the baseline: pre-existing unread mail
-        // must not notify.
-        assert!(check(&db).is_empty());
-
-        // A genuinely new arrival reports exactly once…
-        let mut m2 = messages::sample_new(acc, inbox, 2);
-        m2.is_read = false;
-        m2.subject = Some("fresh arrival".to_string());
-        messages::upsert(&db, &m2).unwrap();
-        let new = check(&db);
-        assert_eq!(new.len(), 1);
-        assert_eq!(new[0].subject, "fresh arrival");
-        assert_eq!(new[0].uid, 2);
-        assert_eq!(new[0].folder_id, inbox);
-        // …and the next run stays quiet while it sits unread.
-        assert!(check(&db).is_empty());
-    }
-
-    #[test]
-    fn collect_new_mail_rebaselines_on_uidvalidity_change() {
-        let (db, acc, inbox, _) = setup_db();
-        let mut m1 = messages::sample_new(acc, inbox, 7);
-        m1.is_read = false;
-        messages::upsert(&db, &m1).unwrap();
-        assert!(check(&db).is_empty());
-
-        // Server-side UID reset: UIDs restart low, so without the validity
-        // in the mark every old message would look new.
-        db.conn()
-            .execute(
-                "update folders set uid_validity = 99 where id = ?1",
-                [inbox],
-            )
-            .unwrap();
-        assert!(check(&db).is_empty());
-        // …and mail arriving under the new validity reports normally.
-        let mut m2 = messages::sample_new(acc, inbox, 8);
-        m2.is_read = false;
-        messages::upsert(&db, &m2).unwrap();
-        assert_eq!(check(&db).len(), 1);
     }
 }
