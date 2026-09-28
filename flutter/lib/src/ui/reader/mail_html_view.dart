@@ -5,6 +5,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
 
+import 'image_baseline.dart';
 import 'mail_paint.dart';
 import 'mail_web_view.dart';
 
@@ -160,8 +161,12 @@ class _LinkHoverWidgetFactory extends WidgetFactory {
   @override
   Widget? buildImageWidget(BuildTree tree, ImageSource src) {
     final image = super.buildImageWidget(tree, src);
-    if (image == null || !restoreImages) return image;
-    return ColorFiltered(colorFilter: darkInvert, child: image);
+    if (image == null) return null;
+    return ImageBaseline(
+      child: restoreImages
+          ? ColorFiltered(colorFilter: darkInvert, child: image)
+          : image,
+    );
   }
 
   final Expando<String> _recognizerUrls = Expando<String>();

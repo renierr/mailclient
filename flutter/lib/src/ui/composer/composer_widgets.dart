@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../ffi/mail_core.dart';
 import '../../models/models.dart';
 import '../../state/mail_state.dart';
+import 'composer_header_row.dart';
 
 /// What the dirty-composer guard asked the user to do.
 enum DiscardChoice { cancel, discard, save }
@@ -18,13 +19,10 @@ class PickedFile {
   final String name;
 }
 
-/// The outgoing tray: picked files as removable chips plus an Add button.
-///
-/// The picker is the platform file dialog (`file_picker`); on a minimal Linux
-/// without zenity/kdialog it cannot open one, and says so instead of failing
-/// silently.
-class AttachmentPicker extends StatelessWidget {
-  const AttachmentPicker({
+/// The outgoing tray: picked files as removable chips. Empty, it takes no
+/// room; files come in through the editor toolbar ([pick]) or a drop.
+class AttachmentTray extends StatelessWidget {
+  const AttachmentTray({
     super.key,
     required this.picked,
     required this.onChanged,
@@ -33,51 +31,11 @@ class AttachmentPicker extends StatelessWidget {
   final List<PickedFile> picked;
   final VoidCallback onChanged;
 
-  @override
-  Widget build(BuildContext context) {
-    final state = context.read<MailState>();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (picked.isNotEmpty)
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (var i = 0; i < picked.length; i++)
-                Chip(
-                  avatar: const Icon(Icons.attach_file, size: 16),
-                  label: Text(picked[i].name, overflow: TextOverflow.ellipsis),
-                  deleteIcon: const Icon(Icons.close, size: 16),
-                  onDeleted: () {
-                    picked.removeAt(i);
-                    onChanged();
-                  },
-                ),
-            ],
-          ),
-        Wrap(
-          crossAxisAlignment: WrapCrossAlignment.center,
-          spacing: 4,
-          children: [
-            const Icon(Icons.attach_file, size: 16),
-            Text(
-              picked.isEmpty
-                  ? 'No files attached.'
-                  : '${picked.length} file(s) will be sent.',
-            ),
-            TextButton.icon(
-              icon: const Icon(Icons.add, size: 16),
-              label: const Text('Add files…'),
-              onPressed: () => _pick(context, state),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Future<void> _pick(BuildContext context, MailState state) async {
+  /// Open the platform file dialog and add the chosen files to [picked].
+  /// Returns whether anything was added. On a minimal Linux without
+  /// zenity/kdialog there is no dialog to open, and it says so instead of
+  /// failing silently.
+  static Future<bool> pick(MailState state, List<PickedFile> picked) async {
     List<PlatformFile> files;
     try {
       files = await FilePicker.pickFiles();
@@ -86,9 +44,8 @@ class AttachmentPicker extends StatelessWidget {
         'No file picker available ($e). On Linux this needs zenity, kdialog or qarma installed.',
         isError: true,
       );
-      return;
+      return false;
     }
-    if (!context.mounted) return;
     var added = 0;
     for (final f in files) {
       final path = f.path;
@@ -103,7 +60,32 @@ class AttachmentPicker extends StatelessWidget {
         isError: true,
       );
     }
-    onChanged();
+    return added > 0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (picked.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (var i = 0; i < picked.length; i++)
+            InputChip(
+              avatar: const Icon(Icons.attach_file, size: 16),
+              label: Text(picked[i].name, overflow: TextOverflow.ellipsis),
+              deleteIcon: const Icon(Icons.close, size: 16),
+              deleteButtonTooltipMessage: 'Remove',
+              onDeleted: () {
+                picked.removeAt(i);
+                onChanged();
+              },
+            ),
+        ],
+      ),
+    );
   }
 }
 
@@ -134,7 +116,7 @@ class ComposerNotice extends StatelessWidget {
 
 /// One-tap Markdown formatting, replacing the Qt WYSIWYG toolbar in scope:
 /// bold / italic / quote / bullet act on the body selection; image inserts
-/// an inline image at the cursor.
+/// an inline image at the cursor; the clip attaches files.
 class FormatToolbar extends StatelessWidget {
   const FormatToolbar({
     super.key,
@@ -143,6 +125,8 @@ class FormatToolbar extends StatelessWidget {
     required this.onQuote,
     required this.onBullet,
     required this.onImage,
+    required this.onAttach,
+    this.enabled = true,
   });
 
   final VoidCallback onBold;
@@ -150,47 +134,47 @@ class FormatToolbar extends StatelessWidget {
   final VoidCallback onQuote;
   final VoidCallback onBullet;
   final VoidCallback onImage;
+  final VoidCallback onAttach;
+
+  /// Off while previewing: the marks would land in text nobody can see.
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Wrap(
-        spacing: 0,
-        children: [
-          IconButton(
-            tooltip: 'Bold (**text**)',
-            icon: const Text(
-              'B',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            onPressed: onBold,
-          ),
-          IconButton(
-            tooltip: 'Italic (*text*)',
-            icon: const Text(
-              'I',
-              style: TextStyle(fontStyle: FontStyle.italic),
-            ),
-            onPressed: onItalic,
-          ),
-          IconButton(
-            tooltip: 'Quote selection',
-            icon: const Icon(Icons.format_quote_outlined, size: 20),
-            onPressed: onQuote,
-          ),
-          IconButton(
-            tooltip: 'Bullet at cursor',
-            icon: const Icon(Icons.format_list_bulleted, size: 20),
-            onPressed: onBullet,
-          ),
-          IconButton(
-            tooltip: 'Insert image inline',
-            icon: const Icon(Icons.image_outlined, size: 20),
-            onPressed: onImage,
-          ),
-        ],
-      ),
+    VoidCallback? on(VoidCallback f) => enabled ? f : null;
+    return Wrap(
+      children: [
+        IconButton(
+          tooltip: 'Bold (**text**)',
+          icon: const Text('B', style: TextStyle(fontWeight: FontWeight.bold)),
+          onPressed: on(onBold),
+        ),
+        IconButton(
+          tooltip: 'Italic (*text*)',
+          icon: const Text('I', style: TextStyle(fontStyle: FontStyle.italic)),
+          onPressed: on(onItalic),
+        ),
+        IconButton(
+          tooltip: 'Quote selection',
+          icon: const Icon(Icons.format_quote_outlined, size: 20),
+          onPressed: on(onQuote),
+        ),
+        IconButton(
+          tooltip: 'Bullet at cursor',
+          icon: const Icon(Icons.format_list_bulleted, size: 20),
+          onPressed: on(onBullet),
+        ),
+        IconButton(
+          tooltip: 'Insert image inline',
+          icon: const Icon(Icons.image_outlined, size: 20),
+          onPressed: on(onImage),
+        ),
+        IconButton(
+          tooltip: 'Attach files',
+          icon: const Icon(Icons.attach_file, size: 20),
+          onPressed: onAttach,
+        ),
+      ],
     );
   }
 }
@@ -200,29 +184,18 @@ class FormatToolbar extends StatelessWidget {
 /// Only the segment being typed is completed; picking a suggestion replaces
 /// just that segment, so a half-typed list is never clobbered.
 class RecipientField extends StatelessWidget {
-  const RecipientField({
-    super.key,
-    required this.label,
-    required this.controller,
-    this.onToggleCc,
-    this.onToggleBcc,
-    this.onToggleReplyTo,
-  });
+  const RecipientField({super.key, required this.controller, this.hint});
 
-  final String label;
   final TextEditingController controller;
-  final VoidCallback? onToggleCc;
-  final VoidCallback? onToggleBcc;
-  final VoidCallback? onToggleReplyTo;
+  final String? hint;
 
   @override
   Widget build(BuildContext context) {
     final collect = context.select<MailState, bool>(
       (s) => s.settings.collectContacts,
     );
-    final hasToggles =
-        onToggleCc != null || onToggleBcc != null || onToggleReplyTo != null;
-    Widget field() => collect
+    final decoration = ComposerHeaderRow.field(hint: hint);
+    return collect
         ? Autocomplete<Contact>(
             fieldViewBuilder: (context, fieldController, focusNode, onSubmit) {
               // Keep the outer controller authoritative: the inner one
@@ -238,7 +211,7 @@ class RecipientField extends StatelessWidget {
                 onChanged: (v) {
                   if (v != controller.text) controller.text = v;
                 },
-                decoration: InputDecoration(labelText: label),
+                decoration: decoration,
               );
             },
             optionsBuilder: (value) async {
@@ -259,30 +232,8 @@ class RecipientField extends StatelessWidget {
             controller: controller,
             keyboardType: TextInputType.emailAddress,
             textInputAction: TextInputAction.next,
-            decoration: InputDecoration(labelText: label),
+            decoration: decoration,
           );
-    // Field above, Cc/Bcc/Reply-To toggles wrapped below: a single Row of
-    // field + three buttons overflows narrow dialogs (RenderFlex).
-    if (!hasToggles) return field();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        field(),
-        Wrap(
-          children: [
-            if (onToggleCc != null)
-              TextButton(onPressed: onToggleCc, child: const Text('Cc')),
-            if (onToggleBcc != null)
-              TextButton(onPressed: onToggleBcc, child: const Text('Bcc')),
-            if (onToggleReplyTo != null)
-              TextButton(
-                onPressed: onToggleReplyTo,
-                child: const Text('Reply-To'),
-              ),
-          ],
-        ),
-      ],
-    );
   }
 
   static String currentSegment(String text) {

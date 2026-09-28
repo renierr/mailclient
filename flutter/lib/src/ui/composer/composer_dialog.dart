@@ -6,6 +6,8 @@ import '../../models/models.dart';
 import '../../state/mail_state.dart';
 import '../dialogs/mail_dialog.dart';
 import 'composer_drop_target.dart';
+import 'composer_editor.dart';
+import 'composer_header_row.dart';
 import 'composer_widgets.dart';
 import 'inline_images.dart';
 import 'markdown.dart';
@@ -266,6 +268,9 @@ class _ComposerDialogState extends State<ComposerDialog> {
   bool _showCc = false;
   bool _showBcc = false;
   bool _showReplyTo = false;
+
+  /// The send-format setting, as last built (see [ComposerEditor]).
+  String _sendFormat = 'auto';
   bool _dirty = false;
   bool _sending = false;
   bool _savingDraft = false;
@@ -368,7 +373,8 @@ class _ComposerDialogState extends State<ComposerDialog> {
     final sendFormat = context.select<MailState, String>(
       (s) => s.settings.sendFormat,
     );
-    if (widget.fullscreen) return _page(sendFormat);
+    _sendFormat = sendFormat;
+    if (widget.fullscreen) return _page();
     final narrow = MailDialog.isNarrow(context);
     // Near-fullscreen on phones so the keyboard leaves a usable body field;
     // a floating 640px box would be covered by it.
@@ -391,20 +397,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        _title,
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                    ),
-                    Text(
-                      'Send as $sendFormat',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
-                ),
+                Text(_title, style: Theme.of(context).textTheme.titleLarge),
                 if (widget.initial.replyNotice.isNotEmpty) ...[
                   const SizedBox(height: 8),
                   ComposerNotice(
@@ -413,7 +406,9 @@ class _ComposerDialogState extends State<ComposerDialog> {
                   ),
                 ],
                 const SizedBox(height: 12),
-                Expanded(
+                // Flexible, not Expanded: a short mail keeps the dialog
+                // short instead of padding it out to the height cap.
+                Flexible(
                   child: AbsorbPointer(
                     absorbing: _working,
                     // No viewInsets padding here: Dialog already pads for
@@ -447,7 +442,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
   /// Fullscreen composer page for phones (see [ComposerDialog.fullscreen]):
   /// the Scaffold shrinks for the keyboard natively, so every field stays
   /// reachable while typing.
-  Widget _page(String sendFormat) {
+  Widget _page() {
     return PopScope(
       canPop: !_working && !_dirty,
       onPopInvokedWithResult: (didPop, _) {
@@ -482,10 +477,6 @@ class _ComposerDialogState extends State<ComposerDialog> {
         body: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              'Send as $sendFormat',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
             if (_error != null) _errorLine(),
             if (widget.initial.replyNotice.isNotEmpty) ...[
               const SizedBox(height: 8),
@@ -531,147 +522,181 @@ class _ComposerDialogState extends State<ComposerDialog> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _senderFields(),
-        _addressFields(),
-        _subjectField(),
-        const SizedBox(height: 8),
-        FormatToolbar(
+        _senderRow(),
+        ..._addressRows(),
+        ComposerHeaderRow(
+          label: 'Subject',
+          child: TextField(
+            controller: _subject,
+            textInputAction: TextInputAction.next,
+            decoration: ComposerHeaderRow.field(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        ComposerEditor(
+          controller: _body,
+          images: () => _images.urls,
+          sendFormat: _sendFormat,
           onBold: () => _wrapBody('**', '**'),
           onItalic: () => _wrapBody('*', '*'),
           onQuote: _quoteBody,
           onBullet: _bulletBody,
           onImage: _insertImages,
+          onAttach: _pickFiles,
         ),
-        _messageField(),
-        _extrasSection(),
+        ..._extras(),
       ],
     );
   }
 
-  /// Sender identity, shared by dialog and page: name beside the locked-domain
-  /// From on wide screens, stacked full-width where a Row would squeeze both
-  /// fields unreadably thin (narrow window, large text).
-  Widget _senderFields() {
+  /// From: display name and the local part, with the account's domain fixed
+  /// after it. Side by side on wide screens, stacked where a Row would
+  /// squeeze both fields unreadably thin.
+  Widget _senderRow() {
     final name = TextField(
       controller: _senderName,
       textInputAction: TextInputAction.next,
-      decoration: InputDecoration(
-        labelText: 'Sender name',
-        hintText: _account?.displayName ?? '',
+      decoration: ComposerHeaderRow.field(
+        hint: _account?.displayName ?? 'Your name',
       ),
     );
-    final from = TextField(
+    final address = TextField(
       controller: _fromLocal,
       keyboardType: TextInputType.emailAddress,
       textInputAction: TextInputAction.next,
-      decoration: InputDecoration(
-        labelText: 'From',
-        suffixText: _domain,
-        helperText: _domain.isEmpty ? null : 'Domain is fixed to this account',
+      decoration: ComposerHeaderRow.field(
+        hint: 'address',
+        suffix: _domain.isEmpty
+            ? null
+            : Tooltip(
+                message: "Fixed to this account's domain",
+                child: Text(
+                  _domain,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
       ),
     );
-    if (MailDialog.isNarrow(context)) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [name, const SizedBox(height: 4), from],
-      );
-    }
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Expanded(flex: 2, child: name),
-        const SizedBox(width: 8),
-        Expanded(flex: 3, child: from),
-      ],
+    return ComposerHeaderRow(
+      label: 'From',
+      child: MailDialog.isNarrow(context)
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [name, address],
+            )
+          : Row(
+              children: [
+                Expanded(flex: 2, child: name),
+                const SizedBox(width: 12),
+                Expanded(flex: 3, child: address),
+              ],
+            ),
     );
   }
 
-  /// To/Cc/Bcc/Reply-To block, shared by dialog and page.
-  Widget _addressFields() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        RecipientField(
-          label: 'To',
-          controller: _to,
-          onToggleCc: () => setState(() => _showCc = !_showCc),
-          onToggleBcc: () => setState(() => _showBcc = !_showBcc),
-          onToggleReplyTo: () => setState(() => _showReplyTo = !_showReplyTo),
+  /// To, then whichever of Cc/Bcc/Reply-To are open. The To line offers the
+  /// ones still closed.
+  List<Widget> _addressRows() {
+    final offers = [
+      if (!_showCc) ('Cc', () => setState(() => _showCc = true)),
+      if (!_showBcc) ('Bcc', () => setState(() => _showBcc = true)),
+      if (!_showReplyTo)
+        ('Reply-To', () => setState(() => _showReplyTo = true)),
+    ];
+    Widget? trailing;
+    if (offers.isNotEmpty) {
+      trailing = MailDialog.isNarrow(context)
+          ? PopupMenuButton<VoidCallback>(
+              tooltip: 'Add Cc, Bcc or Reply-To',
+              icon: const Icon(Icons.expand_more),
+              onSelected: (open) => open(),
+              itemBuilder: (_) => [
+                for (final (label, open) in offers)
+                  PopupMenuItem(value: open, child: Text(label)),
+              ],
+            )
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final (label, open) in offers)
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    onPressed: open,
+                    child: Text(label),
+                  ),
+              ],
+            );
+    }
+    return [
+      ComposerHeaderRow(
+        label: 'To',
+        trailing: trailing,
+        child: RecipientField(controller: _to),
+      ),
+      if (_showCc)
+        ComposerHeaderRow(
+          label: 'Cc',
+          child: RecipientField(controller: _cc),
         ),
-        if (_showCc) RecipientField(label: 'Cc', controller: _cc),
-        if (_showBcc) RecipientField(label: 'Bcc', controller: _bcc),
-        if (_showReplyTo)
-          TextField(
+      if (_showBcc)
+        ComposerHeaderRow(
+          label: 'Bcc',
+          child: RecipientField(
+            controller: _bcc,
+            hint: 'Hidden from the other recipients',
+          ),
+        ),
+      if (_showReplyTo)
+        ComposerHeaderRow(
+          label: 'Reply-To',
+          child: TextField(
             controller: _replyToCtrl,
             keyboardType: TextInputType.emailAddress,
             textInputAction: TextInputAction.next,
-            decoration: const InputDecoration(
-              labelText: 'Reply-To',
-              helperText: 'Replies to this message go here instead of From',
+            decoration: ComposerHeaderRow.field(
+              hint: 'Replies go here instead of From',
             ),
           ),
-      ],
-    );
+        ),
+    ];
   }
 
-  /// Subject line, shared by dialog and page.
-  Widget _subjectField() {
-    return TextField(
-      controller: _subject,
-      textInputAction: TextInputAction.next,
-      decoration: const InputDecoration(labelText: 'Subject'),
-    );
-  }
-
-  /// Message body, shared by dialog and page: short label (a long outlined
-  /// label clips in the border gap at large text scales), Markdown hint moved
-  /// to helper text. The syntax is rendered to HTML on send (see
-  /// [MarkdownMail.toHtml]), so marked-up text arrives formatted.
-  Widget _messageField() {
-    return TextField(
-      controller: _body,
-      maxLines: null,
-      minLines: 8,
-      keyboardType: TextInputType.multiline,
-      textInputAction: TextInputAction.newline,
-      decoration: const InputDecoration(
-        labelText: 'Message',
-        helperText: 'Markdown: **bold**, *italic*, > quote — sent formatted',
-        alignLabelWithHint: true,
-        border: OutlineInputBorder(),
-      ),
-    );
-  }
-
-  /// Server-attachment notice and the picker tray, shared by dialog and page.
-  Widget _extrasSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (widget.initial.serverAttachments.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          ComposerNotice(
-            text:
-                '${widget.initial.serverAttachments.length} file(s) live on the server copy of this draft. Saving replaces it — re-attach them afterwards.',
-          ),
-          Wrap(
-            spacing: 8,
-            children: [
-              for (final a in widget.initial.serverAttachments)
-                Chip(
-                  avatar: const Icon(Icons.attach_file, size: 16),
-                  label: Text(a.filename),
-                ),
-            ],
-          ),
-        ],
-        const SizedBox(height: 4),
-        AttachmentPicker(
-          picked: _picked,
-          onChanged: () => setState(() => _dirty = true),
+  /// Server-attachment notice and the picked files, below the editor.
+  List<Widget> _extras() {
+    return [
+      if (widget.initial.serverAttachments.isNotEmpty) ...[
+        const SizedBox(height: 8),
+        ComposerNotice(
+          text:
+              '${widget.initial.serverAttachments.length} file(s) live on the server copy of this draft. Saving replaces it — re-attach them afterwards.',
+        ),
+        Wrap(
+          spacing: 8,
+          children: [
+            for (final a in widget.initial.serverAttachments)
+              Chip(
+                avatar: const Icon(Icons.attach_file, size: 16),
+                label: Text(a.filename),
+              ),
+          ],
         ),
       ],
-    );
+      AttachmentTray(
+        picked: _picked,
+        onChanged: () => setState(() => _dirty = true),
+      ),
+    ];
+  }
+
+  Future<void> _pickFiles() async {
+    if (await AttachmentTray.pick(context.read<MailState>(), _picked) &&
+        mounted) {
+      setState(() => _dirty = true);
+    }
   }
 
   /// Send/save failure. Sits outside the scrolling fields — above the action

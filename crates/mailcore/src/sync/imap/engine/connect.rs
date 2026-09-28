@@ -50,7 +50,7 @@ impl ImapSync {
                             self.endpoint.addr
                         ))
                     })?;
-            let mut stream = Stream::tls(tokio_rustls::TlsStream::Client(tls));
+            let mut stream = tls_stream(tls);
             let mut client = Client::new(Options::default());
             ImapSession::read_greeting(&mut stream, &mut client).await?;
             (stream, client)
@@ -130,7 +130,7 @@ impl ImapSync {
                         self.endpoint.addr
                     ))
                 })?;
-                let stream = Stream::tls(tokio_rustls::TlsStream::Client(tls));
+                let stream = tls_stream(tls);
                 (stream, client)
             } else {
                 (stream, client)
@@ -206,4 +206,16 @@ impl ImapSync {
         let session = self.session()?;
         session.capability().await
     }
+}
+
+/// Hand a finished TLS handshake to `imap-next`.
+///
+/// `imap-next` writes each command, APPEND literal included, into the rustls
+/// connection in one `write_all`. rustls refuses plaintext past its send
+/// buffer limit (64 KiB by default), which turned every APPEND of a larger
+/// message into "failed to write whole buffer". The message is already in
+/// memory and bounded by the attachment limits, so the cap buys nothing here.
+fn tls_stream(mut tls: tokio_rustls::client::TlsStream<TcpStream>) -> Stream {
+    tls.get_mut().1.set_buffer_limit(None);
+    Stream::tls(tokio_rustls::TlsStream::Client(tls))
 }
