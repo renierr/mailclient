@@ -32,7 +32,16 @@ class ReaderPaneState extends State<ReaderPane> {
   String? _htmlWithRemoteImages;
   (int, int) _shownFor = (-1, -1);
   bool _details = false;
-  String? _hoveredLinkUrl;
+
+  /// Link under the mouse. A notifier rather than state, so hovering
+  /// repaints the bubble and not the whole pane with the mail in it.
+  final _hoveredLink = ValueNotifier<String?>(null);
+
+  @override
+  void dispose() {
+    _hoveredLink.dispose();
+    super.dispose();
+  }
 
   /// Full `From:` header for the display name. The list feed only carries the
   /// bare address, so the name comes from here — the same source the Qt
@@ -61,7 +70,7 @@ class ReaderPaneState extends State<ReaderPane> {
     final key = (folderId, message.uid);
     if (_shownFor != key) {
       _htmlWithRemoteImages = null;
-      _hoveredLinkUrl = null;
+      _hoveredLink.value = null;
       _shownFor = key;
       _details = false;
     }
@@ -95,80 +104,84 @@ class ReaderPaneState extends State<ReaderPane> {
                   onShowOnce: () => _showRemoteImages(message),
                 ),
               Expanded(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(16),
-                  child: message.isHtml
-                      ? MailHtmlView(
-                          html: _htmlWithRemoteImages ?? message.bodyHtml,
-                          textScale: scale,
-                          onHoverUrl: (url) {
-                            if (_hoveredLinkUrl != url) {
-                              setState(() => _hoveredLinkUrl = url);
-                            }
-                          },
-                          onTapUrl: (url) => _handleLinkUrl(context, url),
-                        )
-                      : MediaQuery(
+                child: message.isHtml
+                    ? MailHtmlView(
+                        html: _htmlWithRemoteImages ?? message.bodyHtml,
+                        allowRemote:
+                            loadRemote || _htmlWithRemoteImages != null,
+                        textScale: scale,
+                        onHoverUrl: (url) => _hoveredLink.value = url,
+                        onTapUrl: (url) => _handleLinkUrl(context, url),
+                      )
+                    : SingleChildScrollView(
+                        padding: const EdgeInsets.all(16),
+                        child: MediaQuery(
                           data: MediaQuery.of(context)
                               .copyWith(textScaler: TextScaler.linear(scale)),
                           child: SelectableText(message.bodyText),
                         ),
-                ),
+                      ),
               ),
               if (message.attachments.any((a) => !a.isInline))
                 AttachmentBar(message: message),
             ],
           ),
         ),
-        if (_hoveredLinkUrl != null && _hoveredLinkUrl!.isNotEmpty)
-          Positioned(
-            left: 16,
-            right: 16,
-            bottom: 16,
-            child: GestureDetector(
-              // Desktop hover bubble doubles as a touch affordance: tap
-              // copies the URL, so long-press is not the only way.
-              onTap: () {
-                final url = _hoveredLinkUrl;
-                if (url != null && url.isNotEmpty) {
-                  Clipboard.setData(ClipboardData(text: url));
+        ValueListenableBuilder<String?>(
+          valueListenable: _hoveredLink,
+          builder: (context, hovered, _) {
+            if (hovered == null || hovered.isEmpty) {
+              return const SizedBox.shrink();
+            }
+            return Positioned(
+              left: 16,
+              right: 16,
+              bottom: 16,
+              child: GestureDetector(
+                // Desktop hover bubble doubles as a touch affordance: tap
+                // copies the URL, so long-press is not the only way.
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: hovered));
                   ScaffoldMessenger.of(
                     context,
                   ).showSnackBar(const SnackBar(content: Text('Link copied')));
-                }
-              },
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: theme.colorScheme.outlineVariant),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.12),
-                        blurRadius: 4,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Text(
-                    _hoveredLinkUrl!,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      fontFamily: 'monospace',
-                      color: theme.colorScheme.onSurfaceVariant,
+                },
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                        color: theme.colorScheme.outlineVariant,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.12),
+                          blurRadius: 4,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Text(
+                      hovered,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontFamily: 'monospace',
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 ),
               ),
-            ),
-          ),
+            );
+          },
+        ),
       ],
     );
   }

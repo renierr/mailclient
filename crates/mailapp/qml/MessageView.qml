@@ -292,21 +292,19 @@ Rectangle {
     }
 
     // Trusted wrapper added AFTER Rust sanitizing (so layout CSS is ours).
-    // Colours come from the theme so HTML mail matches the app in dark mode.
+    // Mail renders on a light sheet in every theme: the sanitizer keeps the
+    // sender's colours, and dark text with no background of its own is
+    // unreadable on a dark one. Same sheet as the Flutter reader.
     function wrapDoc(inner) {
-        return "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" + "<style>body{font-family:sans-serif;font-size:"
-                + Math.round(14 * Theme.uiScale) + "px;line-height:1.55;"
-                + "max-width:78ch;margin:16px;word-wrap:break-word;" + "color:" + Theme.text + ";background:"
-                + Theme.bg + "}" + "a{color:" + Theme.accent + "}"
-                + "img{max-width:100%;height:auto}pre{white-space:pre-wrap}"
-                + "blockquote{margin:8px 0;padding-left:12px;border-left:3px solid " + Theme.border + ";color:"
-                + Theme.textMuted + "}" +
-                // Newsletter tables carry fixed cell widths (the sanitizer keeps
-                // the attribute): author CSS beats presentational attributes, so
-                // this lets them shrink to the pane instead of scrolling sideways.
-                "table{border-collapse:collapse;max-width:100%!important}"
-                + "td,th{padding:4px 8px;overflow-wrap:anywhere}"
-                + "table[width],td[width],th[width]{width:auto!important}</style>" + "</head><body>" + inner
+        return "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" + "<style>html,body{background:#ffffff}"
+                + "body{font-family:sans-serif;font-size:" + Math.round(14 * Theme.uiScale) + "px;line-height:1.5;"
+                + "margin:16px;overflow-wrap:break-word;color:#202124}" + "a{color:#1a5fd0}"
+                + "img{max-width:100%!important;height:auto!important}pre{white-space:pre-wrap}"
+                + "blockquote{margin:8px 0;padding-left:12px;border-left:3px solid #d0d4da;color:#5f6368}" +
+                // Newsletter tables carry fixed widths: author CSS beats
+                // presentational attributes, so they shrink to the pane
+                // instead of scrolling sideways.
+                "table{max-width:100%!important}td,th{overflow-wrap:anywhere}</style>" + "</head><body>" + inner
                 + "</body></html>";
     }
 
@@ -783,7 +781,7 @@ Rectangle {
     Component {
         id: webComp
         WebEngineView {
-            backgroundColor: Theme.bg
+            backgroundColor: "#ffffff"
             settings.javascriptEnabled: false
             // Inline cid:/data: images must render even when remote is
             // blocked, and the sanitizer already removed remote URLs — so

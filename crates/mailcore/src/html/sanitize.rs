@@ -1,7 +1,10 @@
 //! The sanitizer itself: walk the input, keep what is allowed, serialise.
 
+use super::css::{keyword, safe_color, safe_font_face, safe_length, sanitize_style};
 use super::entities::{decode_entities, escape_attr, escape_text};
-use super::tags::{allowed_tag, drop_content_tag, parse_small_uint, parse_tag, void_tag};
+use super::tags::{
+    allowed_tag, drop_content_tag, is_table_tag, parse_small_uint, parse_tag, void_tag,
+};
 use super::urls::{is_http_url, safe_href, safe_img_src, urldecode_trim};
 use super::{Sanitized, MAX_HTML_BYTES, MAX_OUT_BYTES};
 
@@ -72,7 +75,11 @@ pub fn sanitize(raw: &str, allow_remote: bool) -> Sanitized {
             // Build allow-listed attributes.
             let mut attrs_out = String::new();
             for (k, v) in &t.attrs {
-                if k.starts_with("on") || k == "style" || k == "class" || k == "id" {
+                if k.starts_with("on") || k == "class" || k == "id" {
+                    continue;
+                }
+                if let Some(kept) = presentational(&t.name, k, v) {
+                    attrs_out.push_str(&format!(" {k}=\"{}\"", escape_attr(&kept)));
                     continue;
                 }
                 match t.name.as_str() {
@@ -95,20 +102,6 @@ pub fn sanitize(raw: &str, allow_remote: bool) -> Sanitized {
                     "img" if k == "alt" => {
                         let vv: String = v.chars().take(200).collect();
                         attrs_out.push_str(&format!(" alt=\"{}\"", escape_attr(&vv)));
-                    }
-                    "img" | "td" | "th" if k == "width" || k == "height" => {
-                        let d = v.trim().trim_end_matches("px");
-                        if !d.is_empty() && d.len() < 8 && d.bytes().all(|c| c.is_ascii_digit()) {
-                            if let Ok(n) = d.parse::<u32>() {
-                                let n = n.min(1200);
-                                attrs_out.push_str(&format!(" {k}=\"{n}\""));
-                            }
-                        }
-                    }
-                    "td" | "th" if k == "colspan" || k == "rowspan" => {
-                        if let Some(n) = parse_small_uint(v, 1, 20) {
-                            attrs_out.push_str(&format!(" {k}=\"{n}\""));
-                        }
                     }
                     _ => {}
                 }
@@ -162,6 +155,36 @@ pub fn sanitize(raw: &str, allow_remote: bool) -> Sanitized {
     Sanitized {
         html: out,
         had_remote,
+    }
+}
+
+/// Layout attributes that are safe on any allowed tag: `style` filtered to
+/// presentation, colours, sizes, alignment and table spacing. Everything
+/// that can name a URL is handled by the caller instead.
+fn presentational(tag: &str, k: &str, v: &str) -> Option<String> {
+    let table = is_table_tag(tag);
+    match k {
+        "style" => sanitize_style(v),
+        "dir" => keyword(v, &["ltr", "rtl", "auto"]).map(str::to_string),
+        "align" => keyword(v, &["left", "center", "right", "justify"]).map(str::to_string),
+        "valign" if table => {
+            keyword(v, &["top", "middle", "bottom", "baseline"]).map(str::to_string)
+        }
+        "bgcolor" if table => safe_color(v),
+        "color" if tag == "font" => safe_color(v),
+        "face" if tag == "font" => safe_font_face(v),
+        "size" if tag == "font" => parse_small_uint(v.trim(), 1, 7).map(|n| n.to_string()),
+        "width" | "height" if tag == "img" || tag == "col" || table => safe_length(v),
+        "border" | "cellpadding" | "cellspacing" if tag == "table" => {
+            parse_small_uint(v.trim(), 0, 40).map(|n| n.to_string())
+        }
+        "colspan" | "rowspan" if tag == "td" || tag == "th" => {
+            parse_small_uint(v.trim(), 1, 20).map(|n| n.to_string())
+        }
+        "span" if tag == "col" || tag == "colgroup" => {
+            parse_small_uint(v.trim(), 1, 20).map(|n| n.to_string())
+        }
+        _ => None,
     }
 }
 

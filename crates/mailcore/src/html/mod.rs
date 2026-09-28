@@ -5,8 +5,9 @@
 //! where a tag ends must not be guessed — quoted `>` inside attributes
 //! must not end the tag.
 //!
-//! Reader contract: [`sanitize`] strips scripts/styles/forms/active content,
-//! `on*` handlers, `style` attributes (CSS `url()` tracking), dangerous
+//! Reader contract: [`sanitize`] strips scripts/`<style>` blocks/forms/active
+//! content, `on*` handlers, `style` declarations outside the [`css`]
+//! allow-list (anything that could fetch, like `url()`), dangerous
 //! URLs (`javascript:`/`data:`-except-images/`file:`/...), and — unless
 //! `allow_remote` — remote `<img src>` (records `had_remote` so QML can
 //! offer "show once"). Text nodes are escaped on output.
@@ -16,10 +17,12 @@
 //! - [`tags`] tokenizes — which tags are allowed, and where one ends;
 //! - [`entities`] decodes the entity subset and escapes text back out;
 //! - [`urls`] decides which `href`/`src` values may survive at all;
+//! - [`css`] decides which inline styles and layout attributes survive;
 //! - [`sanitize`](sanitize()) walks the input and serialises the safe result;
 //! - [`text`] covers the other directions: HTML → plain, plain → HTML, and
 //!   the "does this need HTML at all" heuristics the send path asks about.
 
+mod css;
 mod entities;
 mod sanitize;
 mod tags;

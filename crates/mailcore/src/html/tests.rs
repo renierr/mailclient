@@ -46,6 +46,71 @@ fn rejects_javascript_href() {
 }
 
 #[test]
+fn presentational_styles_survive() {
+    let s = sanitize(
+        "<table width=\"100%\" bgcolor=\"#f4f4f4\" cellpadding=\"8\" align=\"center\">         <tr><td valign=\"top\" style=\"color:#333;font-size:16px;padding:0 12px\">         <font color=\"red\" face=\"Arial, sans-serif\">hi</font></td></tr></table>",
+        false,
+    );
+    for kept in [
+        "width=\"100%\"",
+        "bgcolor=\"#f4f4f4\"",
+        "cellpadding=\"8\"",
+        "align=\"center\"",
+        "valign=\"top\"",
+        "style=\"color:#333;font-size:16px;padding:0 12px;\"",
+        "<font color=\"red\" face=\"Arial, sans-serif\">",
+    ] {
+        assert!(s.html.contains(kept), "{kept} missing from {}", s.html);
+    }
+}
+
+#[test]
+fn styles_that_fetch_or_escape_are_dropped() {
+    for style in [
+        "background:url(https://example.com/x)",
+        "background-image:url('https://example.com/x')",
+        r"color:red;background:u\72l(https://example.com/x)",
+        "width:expression(alert(1))",
+        "behavior:url(x.htc)",
+        "color:red/*x*/;background:url(https://example.com/x)",
+        "position:fixed;top:0;left:0",
+        "content:'x'",
+        "background:&#117;rl(https://example.com/x)",
+    ] {
+        let s = sanitize(&format!("<p style=\"{style}\">t</p>"), true);
+        assert!(!s.html.contains("example.com"), "{style} -> {}", s.html);
+        assert!(!s.html.contains("expression"), "{style} -> {}", s.html);
+        assert!(!s.html.contains("position"), "{style} -> {}", s.html);
+        assert!(!s.html.contains("content"), "{style} -> {}", s.html);
+        assert!(s.html.contains('t'));
+    }
+    // The safe declaration next to a dropped one is kept.
+    let s = sanitize("<p style=\"position:absolute;color:red\">t</p>", false);
+    assert!(s.html.contains("style=\"color:red;\""), "{}", s.html);
+}
+
+#[test]
+fn layout_attributes_reject_junk() {
+    let s = sanitize(
+        "<td bgcolor=\"red;background:url(x)\" align=\"evil\" width=\"99999\">t</td>         <p bgcolor=\"red\">u</p><table border=\"500\"></table>",
+        false,
+    );
+    assert!(!s.html.contains("bgcolor=\"red;"));
+    assert!(!s.html.contains("evil"));
+    assert!(s.html.contains("width=\"1200\""));
+    assert!(!s.html.contains("<p bgcolor"));
+    assert!(s.html.contains("border=\"40\""));
+}
+
+#[test]
+fn preheader_hiding_is_kept() {
+    let s = sanitize("<div style=\"display:none;max-height:0\">pre</div>", false);
+    assert!(s.html.contains("display:none;"));
+    let s = sanitize("<div style=\"display:-webkit-box\">x</div>", false);
+    assert!(!s.html.contains("display"));
+}
+
+#[test]
 fn style_attr_dropped() {
     let s = sanitize(
         "<p style=\"background:url(https://example.com/x)\">t</p>",

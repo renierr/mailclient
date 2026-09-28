@@ -42,11 +42,42 @@ pub(super) fn allowed_tag(tag: &str) -> bool {
             | "td"
             | "th"
             | "img"
+            | "font"
+            | "center"
+            | "small"
+            | "big"
+            | "sub"
+            | "sup"
+            | "mark"
+            | "ins"
+            | "del"
+            | "abbr"
+            | "caption"
+            | "colgroup"
+            | "col"
+            | "dl"
+            | "dt"
+            | "dd"
+            | "section"
+            | "article"
+            | "header"
+            | "footer"
+            | "main"
+            | "figure"
+            | "figcaption"
     )
 }
 
 pub(super) fn void_tag(tag: &str) -> bool {
-    matches!(tag, "br" | "hr" | "img")
+    matches!(tag, "br" | "hr" | "img" | "col")
+}
+
+/// Tags that take table layout attributes (`bgcolor`, `valign`, sizes).
+pub(super) fn is_table_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "table" | "thead" | "tbody" | "tfoot" | "tr" | "td" | "th"
+    )
 }
 
 /// Tags whose *content* is dropped entirely (active/positional content).

@@ -1,36 +1,46 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
 
-/// Renders a message body that has already been sanitized by `mailcore`.
+import 'mail_web_view.dart';
+
+/// Renders a message body that has already been sanitized by `mailcore`,
+/// and scrolls it.
 ///
-/// Two implementations, picked by platform, because no single one covers the
-/// targets:
+/// Two renderers, picked by platform:
 ///
-/// - **Linux** has no `flutter_inappwebview` backend at all (the plugin ships
-///   android/ios/macos/web/windows), and Linux is this project's primary OS.
-///   It gets the pure-Dart widget renderer.
-/// - **Windows and Android** get the same widget renderer today, with the
-///   webview kept behind this one seam so swapping it in is a change to this
-///   file and nothing else. See `flutter/README.md` for what that swap costs.
+/// - **Android** uses the system WebView ([MailWebView]): a real engine
+///   lays out table-heavy newsletters properly and renders long mails far
+///   faster than a widget tree.
+/// - **Linux and Windows** use the pure-Dart `flutter_widget_from_html_core`.
+///   `webview_flutter` has no backend for either, and Linux is this
+///   project's primary OS.
 ///
 /// What must never change is the input: the HTML comes from
 /// `mailcore::html::sanitize`, with remote images already stripped unless the
 /// user asked for them. Mail HTML is hostile by default — nothing here may
 /// start fetching, executing or otherwise trusting it.
-class MailHtmlView extends StatelessWidget {
+class MailHtmlView extends StatefulWidget {
   const MailHtmlView({
     super.key,
     required this.html,
+    this.allowRemote = false,
     this.textScale = 1.0,
     this.onTapUrl,
     this.onHoverUrl,
   });
 
+  /// Whether this platform renders mail in a WebView.
+  static bool get usesWebView => !kIsWeb && Platform.isAndroid;
+
   /// Sanitized HTML. Never raw mail source.
   final String html;
+
+  /// Remote images were allowed for this view (the WebView's CSP follows).
+  final bool allowRemote;
 
   /// The reader's text size preference, as a multiplier.
   final double textScale;
@@ -38,39 +48,93 @@ class MailHtmlView extends StatelessWidget {
   /// Action invoked when user clicks an allowed link.
   final void Function(String url)? onTapUrl;
 
-  /// Callback when user hovers or un-hovers over a link.
+  /// Callback when user hovers or un-hovers over a link (desktop only).
   final void Function(String? url)? onHoverUrl;
 
   @override
+  State<MailHtmlView> createState() => _MailHtmlViewState();
+}
+
+class _MailHtmlViewState extends State<MailHtmlView> {
+  /// The built body, reused while its inputs are unchanged. `HtmlWidget`
+  /// parses long mails asynchronously and then does not cache: rebuilt by
+  /// its parent, it shows its loading state again for a frame, which blanks
+  /// the body and jumps the scroll position on every header toggle or link
+  /// hover. Returning the same widget instance skips that subtree entirely.
+  Widget? _body;
+  Object? _bodyKey;
+
+  @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return SelectionArea(
-      child: HtmlWidget(
-        html,
-        factoryBuilder: () => _LinkHoverWidgetFactory(onHoverUrl: onHoverUrl),
-        textStyle: theme.textTheme.bodyMedium?.copyWith(
-          fontSize: (theme.textTheme.bodyMedium?.fontSize ?? 14) * textScale,
-        ),
-        onTapUrl: (url) {
-          if (onTapUrl != null) {
-            onTapUrl!(url);
-            return true;
-          }
-          return false;
-        },
-        // The sanitizer keeps `cid:` and `data:` images (they travelled with
-        // the mail) and strips remote ones unless allowed, so whatever reaches
-        // here is already the user's choice. This only has to not widen it.
-        onErrorBuilder: (context, element, error) => Text(
-          '[unrenderable content]',
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.colorScheme.outline,
-          ),
+    if (MailHtmlView.usesWebView) {
+      return MailWebView(
+        html: widget.html,
+        allowRemote: widget.allowRemote,
+        textScale: widget.textScale,
+        onTapUrl: widget.onTapUrl,
+      );
+    }
+    final base = Theme.of(context).textTheme.bodyMedium;
+    final style = base?.copyWith(
+      color: mailInkColor,
+      fontSize: (base.fontSize ?? 14) * widget.textScale,
+    );
+    final key = (widget.html, style);
+    if (_body == null || _bodyKey != key) {
+      _bodyKey = key;
+      _body = _build(style);
+    }
+    return _body!;
+  }
+
+  Widget _build(TextStyle? style) {
+    final outline = Theme.of(context).colorScheme.outline;
+    return ColoredBox(
+      color: mailPaperColor,
+      child: SelectionArea(
+        child: CustomScrollView(
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.all(16),
+              // Sliver mode builds top-level blocks lazily as they scroll
+              // into view instead of laying out the whole mail up front.
+              sliver: HtmlWidget(
+                widget.html,
+                renderMode: RenderMode.sliverList,
+                factoryBuilder: () => _LinkHoverWidgetFactory(
+                  onHoverUrl: (url) => widget.onHoverUrl?.call(url),
+                ),
+                textStyle: style,
+                customStylesBuilder: (element) => element.localName == 'a'
+                    ? {'color': _cssHex(mailLinkColor)}
+                    : null,
+                // Read through `widget`, so a cached body still calls the
+                // current callback.
+                onTapUrl: (url) {
+                  final tap = widget.onTapUrl;
+                  if (tap == null) return false;
+                  tap(url);
+                  return true;
+                },
+                // The sanitizer keeps `cid:` and `data:` images (they
+                // travelled with the mail) and strips remote ones unless
+                // allowed, so whatever reaches here is already the user's
+                // choice. This only has to not widen it.
+                onErrorBuilder: (context, element, error) => Text(
+                  '[unrenderable content]',
+                  style: TextStyle(color: outline),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 }
+
+String _cssHex(Color c) =>
+    '#${(c.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
 
 class _LinkHoverWidgetFactory extends WidgetFactory {
   _LinkHoverWidgetFactory({this.onHoverUrl});
@@ -138,10 +202,3 @@ class _LinkHoverWidgetFactory extends WidgetFactory {
     return widget;
   }
 }
-
-/// Whether a real browser engine is available for the reader on this platform.
-///
-/// Used by the About view to explain which renderer is in use, so "that mail
-/// looks wrong" has an answer that does not require reading the source.
-bool get hasWebviewRenderer =>
-    Platform.isWindows || Platform.isAndroid || Platform.isMacOS;

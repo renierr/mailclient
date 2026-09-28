@@ -129,13 +129,21 @@ images stripped unless the user asked for them. `MailHtmlView` renders that
 and nothing else — it never fetches, never executes, and hands link taps back
 to the platform rather than following them.
 
-It currently uses the pure-Dart `flutter_widget_from_html_core` on every
-platform. The obvious alternative, `flutter_inappwebview`, ships backends for
-android / ios / macos / web / windows and **not Linux**, which is this
-project's primary OS, so it cannot be the single answer. A real engine renders
-table-heavy marketing mail better; if that becomes the deciding factor, the
-swap is confined to `ui/reader/mail_html_view.dart` and should be
-platform-conditional rather than wholesale.
+The renderer depends on the platform:
+
+- **Android** uses the system WebView through `webview_flutter`
+  (`ui/reader/mail_web_view.dart`). JavaScript, file and content access are
+  off, every navigation is stopped and handed to the link handler, and the
+  document carries a Content-Security-Policy that allows no network load
+  except remote images the user allowed for that message.
+- **Linux and Windows** use the pure-Dart `flutter_widget_from_html_core`,
+  since `webview_flutter` has no backend for either. The body is built as a
+  sliver list and kept while its inputs are unchanged, so a header toggle or
+  link hover does not rebuild the mail.
+
+Both frontends paint HTML mail on a light sheet in every theme: the
+sanitizer keeps the sender's inline styles and colours, which assume a
+white background.
 
 ## Android
 

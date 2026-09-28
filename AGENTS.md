@@ -145,8 +145,9 @@ Dart packages are the same kind of decision as a crate, and `flutter/pubspec.yam
 is their source of truth — read it rather than a list here. Broadly: the
 bridge (`flutter_rust_bridge`), state (`provider`), platform paths and files
 (`path_provider`, `file_picker`, `open_filex`, `url_launcher`), formatting and
-HTML (`intl`, `flutter_widget_from_html_core`), and Android background mail
-(`workmanager`, `flutter_local_notifications`, `shared_preferences`), plus the
+HTML (`intl`, `flutter_widget_from_html_core`, and `webview_flutter` for the
+Android reader), and Android background mail (`workmanager`,
+`flutter_local_notifications`), plus the
 dev-only `flutter_launcher_icons`. Anything else → ask.
 
 Anything else (new crypto, a second async runtime, new Qt modules beyond
