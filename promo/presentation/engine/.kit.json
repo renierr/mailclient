@@ -1,0 +1,12 @@
+{
+  "version": "1.2.0",
+  "files": {
+    "avatar.js": "8b8b3273f27667008f4fec5752e000003be2b5e5",
+    "theme.css": "6b1960c46e546e1129150e6283088c7ba199c7fe",
+    "tts.py": "1382bee0f99a4555390e2baaceff2ae8296da8f7",
+    "deck.js": "6d0ce1098809eb61eb9a7ba16db6e77261587dba",
+    "preview.mjs": "5d62bdae2fe24c79320c23fc0692cf7abdd89ecd",
+    "voice.mjs": "db1706f493db83fc3db9f0903bcc96b90f12de0c",
+    "render.mjs": "cb8d068aeb0f2bdd565c18f8024b900b3457127d"
+  }
+}

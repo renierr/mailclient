@@ -1,0 +1,3 @@
+/* This video's own styling, on top of engine/theme.css. Keep it small so the look stays shared. */
+#avatar { --avatar-hue: 170deg; }
+.hero-copy .mega { font-size: 122px; }

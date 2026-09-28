@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mailclient intro</title>
+<link rel="stylesheet" href="../engine/theme.css">
+<link rel="stylesheet" href="custom.css">
+</head>
+<body>
+<!--
+  One <section> per scene in script.mjs. The engine adds background, avatar, subtitles
+  and player. Elements animate in with data-fx at data-cue (+ data-delay) seconds.
+-->
+<div id="stage">
+
+  <section class="scene" data-scene="intro" data-avatar="center, hero@title" data-wave="hi">
+    <div class="hero-copy">
+      <div class="eyebrow" data-fx="up" data-cue="hi" data-delay="0.2">A desktop mail app for Omarchy Linux</div>
+      <h1 class="mega" data-fx="blur" data-cue="title" data-dur="1"><span class="grad">mailclient</span></h1>
+      <p class="lead" data-fx="up" data-cue="title" data-delay="0.6">Inbox, minus the chaos.</p>
+      <div class="chips" data-fx="up" data-cue="title" data-delay="1.1">
+        <span class="chip">Rust core</span><span class="chip">SQLite cache</span><span class="chip">Qt + Flutter</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="problem" data-look="0.3,-0.8">
+    <h2 class="title" data-fx="up" data-delay="0.3">Mail piles up fast …</h2>
+    <div class="row">
+      <div class="pill big" data-fx="pop" data-cue="a"><i class="ic ic-chat"></i>work + personal accounts</div>
+      <div class="pill big" data-fx="pop" data-cue="b"><i class="ic ic-bell"></i>noisy, online-only clients</div>
+    </div>
+    <h3 class="sub" data-fx="fade" data-cue="q1" data-delay="-0.9">… and every day you wonder</h3>
+    <div class="qgrid" style="grid-template-columns: repeat(3, 1fr)">
+      <div class="qcard" data-fx="drop" data-cue="q1" style="--tilt:-4deg"><b>?</b>Which folder held that invoice?</div>
+      <div class="qcard" data-fx="drop" data-cue="q2" style="--tilt:3deg"><b>?</b>Is this link safe to open?</div>
+      <div class="qcard" data-fx="drop" data-cue="q3" style="--tilt:-2deg"><b>?</b>Can I read it offline?</div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="core" data-look="0.3,-0.8">
+    <h2 class="title" data-fx="up" data-delay="0.2">One Rust core, two apps</h2>
+    <svg class="net" viewBox="0 0 1920 1080">
+      <g class="links">
+        <path d="M470,380 C700,380 700,540 880,540" pathLength="1" data-fx="draw" data-cue="imap" data-delay="0.3" data-flow />
+        <path d="M470,540 L880,540" pathLength="1" data-fx="draw" data-cue="imap" data-delay="0.5" data-flow />
+        <path d="M1040,540 C1220,540 1220,310 1430,310" pathLength="1" data-fx="draw" data-cue="qt" data-flow />
+        <path d="M1040,540 C1220,540 1220,470 1430,470" pathLength="1" data-fx="draw" data-cue="flutter" data-flow />
+        <path d="M1040,540 C1220,540 1220,630 1430,630" pathLength="1" data-fx="draw" data-cue="flutter" data-delay="0.4" data-flow />
+      </g>
+    </svg>
+    <div class="node source" style="left:250px;top:380px;--c1:#38bdf8" data-fx="left" data-cue="imap">personal IMAP</div>
+    <div class="node source" style="left:250px;top:540px;--c1:#a78bfa" data-fx="left" data-cue="imap" data-delay="0.2">work IMAP + SMTP</div>
+    <div class="hub" data-fx="pop" data-cue="core"><div class="hub-ring pulse"></div><span>mailcore<br>Rust + SQLite</span></div>
+    <div class="node target" style="left:1640px;top:310px" data-fx="right" data-cue="qt"><i class="ic ic-window"></i>Qt desktop</div>
+    <div class="node target" style="left:1640px;top:470px" data-fx="right" data-cue="flutter"><i class="ic ic-hex"></i>Flutter Linux + Win</div>
+    <div class="node target" style="left:1640px;top:630px" data-fx="right" data-cue="flutter" data-delay="0.4"><i class="ic ic-bell"></i>Android + bar widget</div>
+  </section>
+
+  <section class="scene" data-scene="workspace">
+    <h2 class="title" data-fx="up" data-delay="0.2">Three panes. Zero noise.</h2>
+    <div class="cards" style="--cols:3">
+      <div class="card brand" style="--c1:#38bdf8;--c2:#0ea5e9" data-fx="flip" data-cue="side">
+        <div class="logo">SB</div><h4>Sidebar</h4>
+        <p>accounts · folders · unread pills</p>
+        <span class="badge ok">offline-first</span>
+      </div>
+      <div class="card brand" style="--c1:#a78bfa;--c2:#7c3aed" data-fx="flip" data-cue="list" data-delay="0.2">
+        <div class="logo">ML</div><h4>Message list</h4>
+        <p>stars · attachment clips · sort</p>
+        <span class="badge ok">3 → 1 panes</span>
+      </div>
+      <div class="card brand" style="--c1:#6ee7b7;--c2:#10b981" data-fx="flip" data-cue="read" data-delay="0.4">
+        <div class="logo">RD</div><h4>Reader</h4>
+        <p>clean HTML · blocked images</p>
+        <span class="badge ok">safe by default</span>
+      </div>
+    </div>
+    <div class="row spaced">
+      <div class="pill" data-fx="pop" data-cue="narrow"><i class="ic ic-window"></i>narrow screens collapse gracefully</div>
+      <div class="pill alt" data-fx="pop" data-cue="unread"><i class="ic ic-bell"></i>unread dots at a glance</div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="search">
+    <div class="chat" data-fx="zoom" data-delay="0.1">
+      <div class="msg you" data-fx="up" data-cue="type"><span class="typed" data-fx="type" data-cue="type" data-dur="1.2" data-text="invoice"></span></div>
+      <div class="msg bot" data-fx="up" data-cue="hits" data-delay="-0.4">
+        <div class="tool" data-fx="left" data-cue="hits" data-delay="-0.2"><i class="ic ic-file"></i>full-text search · offline · 3 letters</div>
+        <p data-fx="fade" data-cue="hits" data-delay="0.8">Subjects, senders and bodies ranked instantly, no network needed.</p>
+        <p data-fx="fade" data-cue="backfill" data-delay="0.2">Thin local results quietly backfill from the server.</p>
+      </div>
+      <div class="note" data-fx="fade" data-cue="hits" data-delay="1.6">illustration</div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="safe">
+    <h2 class="title" data-fx="up" data-delay="0.2">Write and read with confidence</h2>
+    <div class="facts">
+      <div class="fact green" data-fx="up" data-cue="read"><i class="ic ic-shield"></i><div><h4>Protective reader</h4><p>Cleaned HTML, remote images blocked, show-once.</p></div></div>
+      <div class="fact amber" data-fx="up" data-cue="links"><i class="ic ic-chat"></i><div><h4>Link check first</h4><p>Examine every URL before it opens.</p></div></div>
+      <div class="fact violet" data-fx="up" data-cue="write"><i class="ic ic-pen"></i><div><h4>Rich composer</h4><p>Drafts, attachments, replies and forwards.</p></div></div>
+      <div class="fact cyan" data-fx="up" data-cue="write" data-delay="0.4"><i class="ic ic-refresh"></i><div><h4>Queued sending</h4><p>Outbox survives a closed window.</p></div></div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="start">
+    <h2 class="title" data-fx="up" data-delay="0.2">Get started: real commands</h2>
+    <div class="row spaced">
+      <div class="pill" data-fx="pop"><i class="ic ic-hex"></i>Rust stable</div>
+      <div class="pill" data-fx="pop"><i class="ic ic-window"></i>Qt 6 + WebEngine</div>
+      <div class="pill alt" data-fx="pop"><i class="ic ic-file"></i>SQLite bundled</div>
+    </div>
+    <div class="term" data-fx="zoom" data-cue="cmd" data-delay="0.4">
+      <div class="term-bar"><span></span><span></span><span></span><em>Terminal</em></div>
+      <div class="term-body">
+        <div class="line"><span class="prompt" data-fx="fade" data-cue="cmd">$</span> <span class="typed" data-fx="type" data-cue="cmd" data-dur="1.6" data-text="./build.sh --qt"></span></div>
+        <div class="line"><span class="prompt" data-fx="fade" data-cue="install">$</span> <span class="typed" data-fx="type" data-cue="install" data-delay="0.3" data-dur="1.8" data-text="./scripts/install-local.sh"></span></div>
+        <div class="line"><span class="prompt" data-fx="fade" data-cue="dev">$</span> <span class="typed" data-fx="type" data-cue="dev" data-delay="0.3" data-dur="1.0" data-text="./dev.sh"></span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="outro" data-avatar="hero" data-wave="bye+" data-confetti="bye">
+    <div class="hero-copy spread">
+      <div class="pill big" data-fx="pop" data-cue="free"><i class="ic ic-shield"></i>Free and open source · Rust · Qt · SQLite · offline-first</div>
+      <h1 class="mega" data-fx="blur" data-cue="bye"><span class="grad">Happy mailing!</span></h1>
+    </div>
+  </section>
+
+</div>
+<script src="../build/timeline.js" onerror="window.TIMELINE = null"></script>
+<script src="../engine/avatar.js"></script>
+<script src="../engine/deck.js"></script>
+</body>
+</html>
