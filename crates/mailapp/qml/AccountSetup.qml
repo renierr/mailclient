@@ -267,7 +267,7 @@ AppDialog {
                 Layout.fillWidth: true
                 label: qsTr("Password")
                 required: !root.editing
-                echoMode: TextInput.Password
+                password: true
                 placeholderText: root.editing ? qsTr("unchanged") : ""
                 hint: qsTr("Stored in the OS keyring (Credential Manager / Secret Service / Keychain).")
             }
@@ -332,7 +332,7 @@ AppDialog {
                 id: smtpPassField
                 Layout.fillWidth: true
                 label: qsTr("Password")
-                echoMode: TextInput.Password
+                password: true
                 placeholderText: qsTr("same as IMAP password")
             }
             Item {

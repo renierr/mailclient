@@ -87,6 +87,8 @@ QtObject {
     readonly property string swapHoriz: "\ue8d4"
     readonly property string sync: "\ue627"
     readonly property string unfoldMore: "\ue5d7"
+    readonly property string visibility: "\ue8f4"
+    readonly property string visibilityOff: "\ue8f5"
 
     /// Current-account dot in the account switcher. A drawn shape, not an
     /// icon — it stays a text glyph on purpose.

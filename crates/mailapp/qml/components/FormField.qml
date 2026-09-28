@@ -15,13 +15,15 @@ ColumnLayout {
     property alias label: labelItem.text
     property alias text: field.text
     property alias placeholderText: field.placeholderText
-    property alias echoMode: field.echoMode
+    // A secret: masked, with a reveal toggle inside the field.
+    property bool password: false
     property alias validator: field.validator
     property alias inputMethodHints: field.inputMethodHints
     property alias field: field
     property string hint: ""
     property bool required: false
     property bool invalid: false
+    property bool revealed: false
 
     signal accepted
     signal editingFinished
@@ -50,8 +52,25 @@ ColumnLayout {
         id: field
         Layout.fillWidth: true
         invalid: root.invalid
+        echoMode: root.password && !root.revealed ? TextInput.Password : TextInput.Normal
+        rightPadding: root.password ? revealButton.width + Theme.xs : Theme.sm
         onAccepted: root.accepted()
         onEditingFinished: root.editingFinished()
+
+        IconButton {
+            id: revealButton
+            visible: root.password
+            anchors.right: parent.right
+            anchors.rightMargin: 2
+            anchors.verticalCenter: parent.verticalCenter
+            implicitWidth: Theme.controlHeight - 4
+            implicitHeight: Theme.controlHeight - 4
+            iconFont: true
+            text: root.revealed ? Icons.visibilityOff : Icons.visibility
+            tooltip: root.revealed ? qsTr("Hide password") : qsTr("Show password")
+            contentColor: Theme.textMuted
+            onClicked: root.revealed = !root.revealed
+        }
     }
 
     Label {
