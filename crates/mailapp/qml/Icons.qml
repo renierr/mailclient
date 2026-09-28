@@ -52,6 +52,7 @@ QtObject {
     readonly property string formatListBulleted: "\ue241"
     readonly property string formatQuote: "\ue244"
     readonly property string forward: "\ue154"
+    readonly property string image: "\ue3f4"
     readonly property string imageBlocked: "\uf116"
     readonly property string inbox: "\ue156"
     readonly property string info: "\ue88e"

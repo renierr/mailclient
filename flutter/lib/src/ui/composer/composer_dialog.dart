@@ -6,6 +6,7 @@ import '../../models/models.dart';
 import '../../state/mail_state.dart';
 import '../dialogs/mail_dialog.dart';
 import 'composer_widgets.dart';
+import 'inline_images.dart';
 import 'markdown.dart';
 
 /// How the composer was opened — what to prefill and what Send replaces.
@@ -260,6 +261,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
   /// Files picked this session: paths the core reads at send time, so no
   /// bytes cross into Dart state.
   final List<PickedFile> _picked = [];
+  final InlineImages _images = InlineImages();
   bool _showCc = false;
   bool _showBcc = false;
   bool _showReplyTo = false;
@@ -533,6 +535,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
           onItalic: () => _wrapBody('*', '*'),
           onQuote: _quoteBody,
           onBullet: _bulletBody,
+          onImage: _insertImages,
         ),
         _messageField(),
         _extrasSection(),
@@ -730,7 +733,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
     // exactly as before — plain, with no HTML part. The core sanitizes the
     // HTML again and picks multipart under `auto`.
     final bodyHtml = MarkdownMail.hasFormatting(bodyText)
-        ? MarkdownMail.toHtml(bodyText)
+        ? MarkdownMail.toHtml(bodyText, images: _images.urls)
         : '';
     return {
       'to': _to.text,
@@ -896,6 +899,20 @@ class _ComposerDialogState extends State<ComposerDialog> {
         offset: (before + prefix + insert + suffix).length,
       ),
     );
+  }
+
+  /// Pick images and put their tokens at the cursor (see [InlineImages]).
+  Future<void> _insertImages() async {
+    final tokens = await _images.pick(context.read<MailState>());
+    if (tokens.isEmpty || !mounted) return;
+    final text = _body.text;
+    final at = _body.selection.start >= 0 ? _body.selection.start : text.length;
+    final insert = tokens.join('\n');
+    _body.value = TextEditingValue(
+      text: '${text.substring(0, at)}$insert${text.substring(at)}',
+      selection: TextSelection.collapsed(offset: at + insert.length),
+    );
+    setState(() => _dirty = true);
   }
 
   void _quoteBody() {

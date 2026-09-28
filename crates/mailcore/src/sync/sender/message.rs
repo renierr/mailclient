@@ -15,6 +15,7 @@ use crate::models::Account;
 use super::{
     addresses::{parse_reply_to, strict_mailboxes, to_group_name, valid_mailboxes},
     attachments::load_outgoing_attachments,
+    inline::{extract_data_images, InlinePart},
     policy::{SendFormat, SendPolicy},
 };
 
@@ -152,7 +153,8 @@ pub fn format_draft(account: &Account, req: &SendRequest<'_>) -> Result<Vec<u8>>
     };
     // Drafts always preserve rich text when present, independently of the
     // user's send preference; that preference is applied only on Send.
-    let (plain, html) = resolve_bodies(req.body_text, req.body_html, SendFormat::Multipart);
+    let (body_html, inlines) = split_inline_images(req.body_html, from_addr)?;
+    let (plain, html) = resolve_bodies(req.body_text, body_html.as_deref(), SendFormat::Multipart);
     let files = load_outgoing_attachments(req.attachments)?;
     let to = valid_mailboxes(req.to);
     let to_group = to.is_empty().then(|| to_group_name(&req.to.join(" ")));
@@ -178,10 +180,28 @@ pub fn format_draft(account: &Account, req: &SendRequest<'_>) -> Result<Vec<u8>>
         SendFormat::Multipart,
         plain,
         html,
+        &inlines,
         &files,
         req.request_mdn,
     )?
     .formatted())
+}
+
+/// The composer's HTML with its `data:` images pulled out as inline parts
+/// (see [`super::inline`]), Content-IDs named after the sender's domain.
+pub(crate) fn split_inline_images(
+    body_html: Option<&str>,
+    from_addr: &str,
+) -> Result<(Option<String>, Vec<InlinePart>)> {
+    let Some(html) = body_html else {
+        return Ok((None, Vec::new()));
+    };
+    let domain = from_addr
+        .rsplit_once('@')
+        .map(|(_, d)| d)
+        .unwrap_or("localhost");
+    let (html, parts) = extract_data_images(html, domain)?;
+    Ok((Some(html), parts))
 }
 /// Assemble the final [`Message`] from resolved parts (pure, no I/O):
 /// headers (incl. the `To:` group fallback), body shape, attachments.
@@ -198,6 +218,7 @@ pub(crate) fn assemble_message(
     format: SendFormat,
     plain: String,
     html: Option<String>,
+    inlines: &[InlinePart],
     files: &[(String, String, Vec<u8>)],
     request_mdn: bool,
 ) -> Result<Message> {
@@ -260,41 +281,81 @@ pub(crate) fn assemble_message(
                 .map_err(|e| StoreError::InvalidInput(format!("cannot address draft: {e}")))?,
         );
     }
+    // A plain-text body has nowhere to show an image, so inline images go
+    // along as ordinary attachments rather than being dropped.
+    let plain_only = format == SendFormat::Plain || html.is_none();
+    let mut files: Vec<(String, String, Vec<u8>)> = files.to_vec();
+    if plain_only {
+        for (n, p) in inlines.iter().enumerate() {
+            files.push((p.filename(n + 1), p.mime.clone(), p.bytes.clone()));
+        }
+    }
+    let inlines = if plain_only { &[][..] } else { inlines };
+    let body = match (format, html) {
+        (SendFormat::Plain, _) | (_, None) => Body::Plain(plain),
+        (SendFormat::Html, Some(h)) => html_body(h, inlines),
+        (_, Some(h)) => {
+            let alt = lettre::message::MultiPart::alternative()
+                .singlepart(lettre::message::SinglePart::plain(plain));
+            Body::Multi(match html_body(h, inlines) {
+                Body::Html(h) => alt.singlepart(lettre::message::SinglePart::html(h)),
+                Body::Multi(related) => alt.multipart(related),
+                Body::Plain(_) => unreachable!("html_body never yields plain"),
+            })
+        }
+    };
     Ok(if files.is_empty() {
-        match (format, html) {
-            (SendFormat::Plain, _) => builder.header(ContentType::TEXT_PLAIN).body(plain),
-            (_, Some(h)) if format == SendFormat::Html => {
-                builder.header(ContentType::TEXT_HTML).body(h)
-            }
-            (_, Some(h)) => {
-                builder.multipart(lettre::message::MultiPart::alternative_plain_html(plain, h))
-            }
-            (_, None) => builder.header(ContentType::TEXT_PLAIN).body(plain),
+        match body {
+            Body::Plain(t) => builder.header(ContentType::TEXT_PLAIN).body(t),
+            Body::Html(h) => builder.header(ContentType::TEXT_HTML).body(h),
+            Body::Multi(m) => builder.multipart(m),
         }
     } else {
-        // Body first (single part or alternative), then one `SinglePart`
-        // per file inside a `multipart/mixed` envelope.
-        let body = match (format, html) {
-            (SendFormat::Plain, _) => lettre::message::MultiPart::mixed()
-                .singlepart(lettre::message::SinglePart::plain(plain)),
-            (_, Some(h)) if format == SendFormat::Html => {
-                lettre::message::MultiPart::mixed().singlepart(lettre::message::SinglePart::html(h))
-            }
-            (_, Some(h)) => lettre::message::MultiPart::alternative_plain_html(plain, h),
-            (_, None) => lettre::message::MultiPart::mixed()
-                .singlepart(lettre::message::SinglePart::plain(plain)),
+        // Body first (single part, alternative or related), then one
+        // `SinglePart` per file inside a `multipart/mixed` envelope.
+        let mixed = lettre::message::MultiPart::mixed();
+        let mut mixed = match body {
+            Body::Plain(t) => mixed.singlepart(lettre::message::SinglePart::plain(t)),
+            Body::Html(h) => mixed.singlepart(lettre::message::SinglePart::html(h)),
+            Body::Multi(m) => mixed.multipart(m),
         };
-        let mut mixed = lettre::message::MultiPart::mixed().multipart(body);
-        for (filename, mime, bytes) in files {
-            let ctype = ContentType::parse(mime).unwrap_or_else(|_| {
-                ContentType::parse("application/octet-stream").expect("static mime parses")
-            });
+        for (filename, mime, bytes) in &files {
             mixed = mixed.singlepart(
-                lettre::message::Attachment::new(filename.clone()).body(bytes.clone(), ctype),
+                lettre::message::Attachment::new(filename.clone())
+                    .body(bytes.clone(), content_type(mime)),
             );
         }
         builder.multipart(mixed)
     }?)
+}
+
+/// The text body before attachments are wrapped around it.
+enum Body {
+    Plain(String),
+    Html(String),
+    Multi(lettre::message::MultiPart),
+}
+
+/// The HTML part, as `multipart/related` with its images when it has any.
+fn html_body(html: String, inlines: &[InlinePart]) -> Body {
+    if inlines.is_empty() {
+        return Body::Html(html);
+    }
+    let mut related =
+        lettre::message::MultiPart::related().singlepart(lettre::message::SinglePart::html(html));
+    for p in inlines {
+        related = related.singlepart(
+            lettre::message::Attachment::new_inline(p.cid.clone())
+                .body(p.bytes.clone(), content_type(&p.mime)),
+        );
+    }
+    Body::Multi(related)
+}
+
+fn content_type(mime: &str) -> ContentType {
+    ContentType::parse(mime).unwrap_or_else(|_| {
+        ContentType::parse("application/octet-stream").expect("static mime parses")
+    })
 }
 
 #[cfg(test)]

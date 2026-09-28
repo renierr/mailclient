@@ -98,7 +98,7 @@ pub fn inline_cid_images(html: &str, images: &[InlineImage]) -> (String, usize) 
                 let uri = format!(
                     "data:{};base64,{}",
                     img.mime_type.trim().to_ascii_lowercase(),
-                    base64(&img.data)
+                    base64_encode(&img.data)
                 );
                 let old = format!(" src=\"{}\"", attr(tag, "src").unwrap_or_default());
                 out.push_str(&tag.replacen(&old, &format!(" src=\"{uri}\""), 1));
@@ -125,7 +125,8 @@ fn attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
     Some(&tag[from..from + len])
 }
 
-fn base64(bytes: &[u8]) -> String {
+/// Standard base64 (RFC 4648, padded).
+pub(crate) fn base64_encode(bytes: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
@@ -150,6 +151,39 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
+/// Decode standard base64, tolerating whitespace and missing padding.
+/// `None` on any other character.
+pub(crate) fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    fn val(c: u8) -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            _ => return None,
+        } as u32)
+    }
+    let mut out = Vec::with_capacity(s.len() / 4 * 3);
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for c in s.bytes() {
+        if c.is_ascii_whitespace() {
+            continue;
+        }
+        if c == b'=' {
+            break;
+        }
+        acc = (acc << 6) | val(c)?;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,12 +198,21 @@ mod tests {
     }
 
     #[test]
+    fn base64_decode_round_trips_and_rejects_junk() {
+        for input in [&b""[..], b"f", b"fo", b"foo", &[0xfb, 0xff], b"hello world"] {
+            assert_eq!(base64_decode(&base64_encode(input)).unwrap(), input);
+        }
+        assert_eq!(base64_decode("Zm9v\r\nYmFy").unwrap(), b"foobar");
+        assert!(base64_decode("Zm9v*").is_none());
+    }
+
+    #[test]
     fn base64_matches_the_standard_alphabet() {
-        assert_eq!(base64(b""), "");
-        assert_eq!(base64(b"f"), "Zg==");
-        assert_eq!(base64(b"fo"), "Zm8=");
-        assert_eq!(base64(b"foo"), "Zm9v");
-        assert_eq!(base64(&[0xfb, 0xff]), "+/8=");
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(&[0xfb, 0xff]), "+/8=");
     }
 
     #[test]

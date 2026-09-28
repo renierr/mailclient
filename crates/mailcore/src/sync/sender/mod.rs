@@ -15,6 +15,7 @@
 mod addresses;
 mod attachments;
 mod client;
+mod inline;
 mod message;
 mod policy;
 
@@ -28,5 +29,6 @@ pub use attachments::{
     guess_mime, load_outgoing_attachments, MAX_SEND_ATTACHMENT_BYTES, MAX_SEND_ATTACHMENT_COUNT,
 };
 pub use client::{endpoint_for, SmtpEndpoint, SmtpSender};
+pub use inline::{extract_data_images, image_data_url, is_inline_image_file, InlinePart};
 pub use message::{format_draft, resolve_bodies, SendRequest};
 pub use policy::{effective_format, SendFormat, SendPolicy};

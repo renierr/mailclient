@@ -342,6 +342,10 @@ class MailCore {
   Future<void> saveDraft(int accountId, Map<String, dynamic> form) =>
       rust_composer.saveDraft(accountId: accountId, form: jsonEncode(form));
 
+  /// An image file as a `data:` URL the composer can send inline.
+  Future<String> imageDataUrl(String path) =>
+      rust_composer.imageDataUrl(path: path);
+
   Future<Map<String, dynamic>> draftForm(int accountId, int uid) async =>
       _decodeMap(await rust_composer.draftForm(accountId: accountId, uid: uid));
 

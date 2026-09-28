@@ -4,7 +4,7 @@ import QtQuick.Layouts
 import Mailclient
 
 // Formatting toolbar for the composer: bold, italic, underline, list,
-// quote, link, attach, and HTML source toggle.
+// quote, link, inline image, attach, and HTML source toggle.
 Rectangle {
     id: root
 
@@ -12,6 +12,7 @@ Rectangle {
     property var bodyEditor
     signal linkRequested
     signal attachRequested
+    signal imageRequested
     signal toggleSourceRequested
 
     implicitHeight: Math.round(38 * Theme.uiScale)
@@ -92,6 +93,13 @@ Rectangle {
             enabled: !root.sourceMode
             onClicked: if (root.bodyEditor)
                            root.bodyEditor.exec("removeFormat")
+        }
+        IconButton {
+            text: Icons.image
+            iconFont: true
+            tooltip: qsTr("Insert image inline")
+            enabled: !root.sourceMode
+            onClicked: root.imageRequested()
         }
         IconButton {
             text: Icons.attachFile

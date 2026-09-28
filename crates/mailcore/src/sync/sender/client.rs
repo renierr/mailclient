@@ -23,7 +23,7 @@ use super::{
         parse_reply_to, sender_domain_is_aligned, strict_mailboxes, to_group_name, valid_mailboxes,
     },
     attachments::load_outgoing_attachments,
-    message::{assemble_message, resolve_bodies, SendRequest},
+    message::{assemble_message, resolve_bodies, split_inline_images, SendRequest},
     policy::effective_format,
 };
 
@@ -162,8 +162,9 @@ impl SmtpSender {
         };
         // Auto resolves per message: formatting present → HTML (with a plain
         // twin when enabled), otherwise plain text.
-        let html_src = req
-            .body_html
+        let (body_html, inlines) = split_inline_images(req.body_html, from_addr)?;
+        let html_src = body_html
+            .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .or_else(|| {
@@ -177,7 +178,7 @@ impl SmtpSender {
             .map(|h| crate::html::needs_html_formatting(&crate::html::sanitize_for_send(h)))
             .unwrap_or(false);
         let format = effective_format(req.format, needs_html, req.include_plain);
-        let (plain, html) = resolve_bodies(req.body_text, req.body_html, format);
+        let (plain, html) = resolve_bodies(req.body_text, body_html.as_deref(), format);
         let files = load_outgoing_attachments(req.attachments)?;
         let to_group = to_boxes
             .is_empty()
@@ -198,6 +199,7 @@ impl SmtpSender {
             format,
             plain,
             html,
+            &inlines,
             &files,
             req.request_mdn,
         )?;

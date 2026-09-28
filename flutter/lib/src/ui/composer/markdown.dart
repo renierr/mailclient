@@ -2,7 +2,7 @@
 ///
 /// The editor is plain text with Markdown syntax (see the toolbar); this
 /// renders the subset the toolbar produces — bold, italic, quotes, bullets,
-/// links — to HTML so the formatting actually arrives instead of going out
+/// links, inline images (see [InlineImages]) — to HTML so the formatting actually arrives instead of going out
 /// as literal asterisks. Only [toHtml] output for text where [hasFormatting]
 /// is true ever reaches the core's `body_html`, so plain mail keeps going
 /// out as plain text exactly like before.
@@ -17,11 +17,13 @@ abstract final class MarkdownMail {
   static final _quoteLine = RegExp(r'^> ?');
   static final _bulletLine = RegExp(r'^[-*] ');
   static final _wordChar = RegExp(r'[\w*]');
+  static final _image = RegExp(r'!\[([^\]]*)\]\(inline:(\d+)\)');
 
   /// Whether the text carries any formatting this converter renders. The
   /// composer only sends `body_html` when this is true.
   static bool hasFormatting(String text) {
     if (_bold.hasMatch(text) || _hasItalic(text)) return true;
+    if (_image.hasMatch(text)) return true;
     for (final line in text.split('\n')) {
       final t = line.trimLeft();
       if (t.startsWith('>') || _bulletLine.hasMatch(t)) return true;
@@ -47,22 +49,25 @@ abstract final class MarkdownMail {
   }
 
   /// Render the supported subset to an HTML fragment (no `<html>` wrapper —
-  /// the core sanitizes and envelopes it).
-  static String toHtml(String text) {
+  /// the core sanitizes and envelopes it). [images] maps `inline:N` tokens
+  /// to their `data:` URLs; a token without one renders as its name.
+  static String toHtml(String text, {Map<int, String> images = const {}}) {
+    String inline(String l) => _inline(l, images);
+
     final out = StringBuffer();
     List<String>? quote;
     List<String>? bullets;
 
     void flushQuote() {
       if (quote == null) return;
-      out.write('<blockquote>${quote!.map(_inline).join('<br>')}</blockquote>');
+      out.write('<blockquote>${quote!.map(inline).join('<br>')}</blockquote>');
       quote = null;
     }
 
     void flushBullets() {
       if (bullets == null) return;
       out.write(
-        '<ul>${bullets!.map((l) => '<li>${_inline(l)}</li>').join()}</ul>',
+        '<ul>${bullets!.map((l) => '<li>${inline(l)}</li>').join()}</ul>',
       );
       bullets = null;
     }
@@ -83,7 +88,7 @@ abstract final class MarkdownMail {
       } else {
         flushQuote();
         flushBullets();
-        out.write('<p>${_inline(line)}</p>');
+        out.write('<p>${inline(line)}</p>');
       }
     }
     flushQuote();
@@ -93,11 +98,18 @@ abstract final class MarkdownMail {
 
   /// Inline spans after HTML-escaping: links (web schemes only — anything
   /// else renders as its visible text), then bold, then italic.
-  static String _inline(String text) {
+  static String _inline(String text, Map<int, String> images) {
     var s = text
         .replaceAll('&', '&amp;')
         .replaceAll('<', '&lt;')
         .replaceAll('>', '&gt;');
+    // Images first, before the link rule sees `[name](…)`. The `data:` URL
+    // is base64, so nothing below can match inside it.
+    s = s.replaceAllMapped(_image, (m) {
+      final url = images[int.parse(m.group(2)!)];
+      final alt = m.group(1)!.replaceAll('"', '&quot;');
+      return url == null ? alt : '<img alt="$alt" src="$url">';
+    });
     s = s.replaceAllMapped(_link, (m) {
       final url = m.group(2)!;
       final lower = url.trim().toLowerCase();

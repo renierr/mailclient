@@ -426,6 +426,35 @@ Dialog {
         root.dirty = true;
     }
 
+    // Images shown inside the text: each file becomes a `data:` URL the
+    // editor can display; the sender turns them into inline parts. A file
+    // that cannot go inline (type, size) is reported and not inserted.
+    function insertImages(urls) {
+        if (root.sourceMode) {
+            root.addAttachments(urls);
+            return;
+        }
+        for (var i = 0; i < urls.length; i++) {
+            var r = backend.image_data_url(urls[i].toString());
+            if (r.indexOf("data:") === 0)
+                bodyEditor.insertImage(r);
+            else
+                root.statusMessage(r);
+        }
+    }
+
+    // Dropped files: images ask inline-or-attach, everything else attaches.
+    function filesDropped(images, others) {
+        if (others.length > 0)
+            root.addAttachments(others);
+        if (images.length > 0) {
+            if (root.sourceMode)
+                root.addAttachments(images);
+            else
+                imagePlacement.ask(images);
+        }
+    }
+
     function removeAttachment(index) {
         var next = root.attachments.slice();
         next.splice(index, 1);
@@ -722,6 +751,7 @@ Dialog {
             bodyEditor: bodyEditor
             onLinkRequested: linkDialog.open()
             onAttachRequested: attachDialog.open()
+            onImageRequested: imageDialog.open()
             onToggleSourceRequested: root.toggleSource()
         }
 
@@ -857,12 +887,34 @@ Dialog {
         }
     }
 
+    // Drag & drop of files from the desktop over the whole composer.
+    ComposerDropZone {
+        anchors.fill: parent
+        z: 10
+        isInlineImage: url => backend.is_inline_image(url)
+        onFilesDropped: (images, others) => root.filesDropped(images, others)
+    }
+
+    ImagePlacementDialog {
+        id: imagePlacement
+        onInlineChosen: urls => root.insertImages(urls)
+        onAttachChosen: urls => root.addAttachments(urls)
+    }
+
     // --- file picker ------------------------------------------------------
     FileDialog {
         id: attachDialog
         title: qsTr("Attach files")
         fileMode: FileDialog.OpenFiles
         onAccepted: root.addAttachments(selectedFiles)
+    }
+
+    FileDialog {
+        id: imageDialog
+        title: qsTr("Insert image")
+        fileMode: FileDialog.OpenFiles
+        nameFilters: [qsTr("Images (*.png *.jpg *.jpeg *.gif *.webp)")]
+        onAccepted: root.insertImages(selectedFiles)
     }
 
     // --- link insertion ---------------------------------------------------

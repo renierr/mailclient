@@ -51,6 +51,12 @@ Future<String> draftForm({
   uid: uid,
 );
 
+/// An image file as a `data:` URL for the composer to show inline; the
+/// sender turns it into a `cid:` part. Errors for non-image types and for
+/// images too large to go inline (attach those instead).
+Future<String> imageDataUrl({required String path}) =>
+    MailCoreApi.instance.api.crateApiComposerImageDataUrl(path: path);
+
 /// Destroy a server draft (`\Deleted` + expunge, never filed to Trash) —
 /// what Discard means for a draft opened from the Drafts folder.
 Future<void> deleteDraft({

@@ -33,6 +33,22 @@ pub fn open_draft(db: &Db, folder_id: i64, uid: u32) -> Result<Message, String> 
     Ok(message)
 }
 
+/// A draft's HTML for an editor: sanitized, with its own `cid:` images
+/// turned back into `data:` URIs so they show — and go out again inline on
+/// the next save or send. Empty when the draft has no HTML part.
+pub fn draft_html(db: &Db, message: &Message) -> String {
+    let Some(raw) = message
+        .body_html
+        .as_deref()
+        .filter(|h| !h.trim().is_empty())
+    else {
+        return String::new();
+    };
+    let clean = crate::html::sanitize_for_send(raw);
+    let images = messages::inline_images(db, message.id).unwrap_or_default();
+    crate::html::inline_cid_images(&clean, &images).0
+}
+
 /// Result of [`save_draft`]. `previous_not_removed` is set when the new
 /// version landed but the one it replaces could not be expunged — untidy
 /// (two copies), not destructive.

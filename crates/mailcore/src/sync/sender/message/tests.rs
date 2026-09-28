@@ -147,6 +147,7 @@ fn reply_to_header_roundtrips() {
             "hello".to_string(),
             None,
             &[],
+            &[],
             false,
         )
         .unwrap()
@@ -181,6 +182,7 @@ fn bcc_only_send_carries_group_to_and_bcc_envelope() {
         "hello".to_string(),
         None,
         &[],
+        &[],
         false,
     )
     .unwrap();
@@ -202,6 +204,7 @@ fn bcc_only_send_carries_group_to_and_bcc_envelope() {
         Plain,
         "hello".to_string(),
         None,
+        &[],
         &[],
         false,
     )
@@ -233,6 +236,7 @@ fn from_name_renders_display_name() {
         "hello".to_string(),
         None,
         &[],
+        &[],
         false,
     )
     .unwrap();
@@ -260,6 +264,7 @@ fn read_receipt_request_adds_mdn_header() {
             "hello".to_string(),
             None,
             &[],
+            &[],
             mdn,
         )
         .unwrap()
@@ -273,5 +278,82 @@ fn read_receipt_request_adds_mdn_header() {
     assert!(
         !raw_off.contains("Disposition-Notification-To"),
         "MDN leaked in: {raw_off:?}"
+    );
+}
+
+#[test]
+fn inline_images_travel_as_related_parts_or_as_attachments_in_plain() {
+    use crate::sync::sender::InlinePart;
+    let from: lettre::message::Mailbox = "me@example.com".parse().unwrap();
+    let inline = [InlinePart {
+        cid: "img1@example.com".to_string(),
+        mime: "image/png".to_string(),
+        bytes: b"png-bytes".to_vec(),
+    }];
+    let build = |format, html: Option<&str>| {
+        let m = assemble_message(
+            from.clone(),
+            "hi",
+            valid_mailboxes(&["bob@example.com".to_string()]),
+            None,
+            &[],
+            &[],
+            None,
+            format,
+            "hello".to_string(),
+            html.map(str::to_string),
+            &inline,
+            &[],
+            false,
+        )
+        .unwrap();
+        String::from_utf8(m.formatted()).unwrap()
+    };
+    let html = Some(r#"<p>hi <img src="cid:img1@example.com"></p>"#);
+    for format in [SendFormat::Html, SendFormat::Multipart] {
+        let raw = build(format, html);
+        assert!(raw.contains("multipart/related"), "{format:?}: {raw}");
+        assert!(raw.contains("Content-ID: <img1@example.com>"), "{raw}");
+        assert!(raw.contains("Content-Disposition: inline"), "{raw}");
+        assert!(!raw.contains("multipart/mixed"), "{raw}");
+    }
+    assert!(build(SendFormat::Multipart, html).contains("multipart/alternative"));
+    // Plain text has nowhere to show it: the image becomes an attachment.
+    let raw = build(SendFormat::Plain, html);
+    assert!(!raw.contains("multipart/related"), "{raw}");
+    assert!(raw.contains("multipart/mixed"), "{raw}");
+    assert!(raw.contains("filename=\"image-1.png\""), "{raw}");
+}
+
+#[test]
+fn a_draft_with_a_data_image_is_stored_with_a_cid_part() {
+    let account = test_account();
+    let to = vec!["bob@example.com".to_string()];
+    let html = r#"<p>logo <img src="data:image/png;base64,Zm9v"></p>"#;
+    let req = SendRequest {
+        to: &to,
+        cc: &[],
+        bcc: &[],
+        from: None,
+        from_name: None,
+        reply_to: None,
+        subject: "draft",
+        body_text: "logo",
+        body_html: Some(html),
+        attachments: &[],
+        format: SendFormat::Multipart,
+        include_plain: true,
+        policy: &SendPolicy::Unrestricted,
+        password: "",
+        imap_password: None,
+        request_mdn: false,
+    };
+    let raw = String::from_utf8(format_draft(&account, &req).unwrap()).unwrap();
+    assert!(raw.contains("multipart/related"), "{raw}");
+    assert!(raw.contains("src=\"cid:"), "{raw}");
+    assert!(!raw.contains("data:image"), "{raw}");
+    assert!(
+        raw.contains("Content-ID: <"),
+        "the image travels as a part: {raw}"
     );
 }

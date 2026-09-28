@@ -75,6 +75,17 @@ impl qobject::Bridge {
         })
     }
 
+    pub fn image_data_url(&self, path: &QString) -> QString {
+        match compose::image_data_url(&path.to_string()) {
+            Ok(url) => qstring(&url),
+            Err(e) => qstring(&e.to_string()),
+        }
+    }
+
+    pub fn is_inline_image(&self, path: &QString) -> bool {
+        compose::is_inline_image_file(&path.to_string())
+    }
+
     pub fn draft_form(self: Pin<&mut Self>, uid: i32) -> QString {
         let folder_id = *self.current_folder_id();
         spawn_job(self, "Open draft", move |db, _progress| async move {
@@ -82,9 +93,12 @@ impl qobject::Bridge {
             ensure_attachment_data(db, message.id, true).await?;
             // QML's FileDialog deals in paths, so the draft's files are
             // materialized as temp copies the composer can re-attach.
+            // Inline images come back inside the body (see `draft_html`),
+            // so only real attachments are re-attached as files.
             let attachments = mailcore::store::messages::list_attachments(db, message.id)
                 .map_err(|e| e.to_string())?
                 .into_iter()
+                .filter(|a| !a.is_inline)
                 .map(|a| {
                     let path = draft_attachment_path(db, a.id)?;
                     Ok(serde_json::json!({
@@ -93,6 +107,7 @@ impl qobject::Bridge {
                     }))
                 })
                 .collect::<Result<Vec<_>, String>>()?;
+            let body_html = compose::draft_html(db, &message);
             Ok((
                 serde_json::json!({
                     "draft_uid": message.uid,
@@ -102,7 +117,10 @@ impl qobject::Bridge {
                     "cc": message.cc_addrs.join(", "),
                     "bcc": message.bcc_addrs.join(", "),
                     "subject": message.subject.unwrap_or_default(),
-                    "body": message.body_html.or(message.body_text).unwrap_or_default(),
+                    "body": Some(body_html)
+                        .filter(|h| !h.is_empty())
+                        .or(message.body_text)
+                        .unwrap_or_default(),
                     "attachments": attachments,
                 })
                 .to_string(),

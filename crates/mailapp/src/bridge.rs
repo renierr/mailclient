@@ -322,6 +322,17 @@ pub mod qobject {
         #[qinvokable]
         fn save_draft(self: Pin<&mut Self>, form: &QString) -> QString;
 
+        /// An image file as a `data:` URL for the composer to show inline
+        /// (the sender turns it into a `cid:` part). Returns the URL, or an
+        /// error message (not an image type, too large to go inline) —
+        /// anything not starting with `data:` is the error.
+        #[qinvokable]
+        fn image_data_url(&self, path: &QString) -> QString;
+
+        /// Whether a file would be offered as an inline image (by type).
+        #[qinvokable]
+        fn is_inline_image(&self, path: &QString) -> bool;
+
         /// Full Composer form for a draft in the current Drafts folder.
         /// Opening a draft explicitly downloads and materializes its files.
         #[qinvokable]

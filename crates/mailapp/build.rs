@@ -98,6 +98,8 @@ fn main() {
             .qml_file("qml/components/ComposerAttachmentTray.qml")
             .qml_file("qml/components/BulkActionBar.qml")
             .qml_file("qml/components/UndoToast.qml")
+            .qml_file("qml/components/ComposerDropZone.qml")
+            .qml_file("qml/components/ImagePlacementDialog.qml")
             .qml_file("qml/components/AppDialog.qml"),
     )
     .file("src/bridge.rs")

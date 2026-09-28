@@ -39,7 +39,7 @@ Item {
                                            + "px;line-height:1.55;" + "color:" + Theme.text + ";background:" + Theme.bg
                                            + ";caret-color:" + Theme.accent + "}"
                                            + "#e:empty:before{content:attr(data-placeholder);color:" + Theme.textMuted
-                                           + "}" + "blockquote{margin:8px 0;padding-left:12px;border-left:3px solid "
+                                           + "}" + "img{max-width:100%;height:auto}" + "blockquote{margin:8px 0;padding-left:12px;border-left:3px solid "
                                            + Theme.border + ";color:" + Theme.textMuted + "}" + "a{color:" + Theme.accent
                                            + "}" + "</style></head><body><div id=\"e\" contenteditable=\"true\" "
                                            + "data-placeholder=\"" + qsTr("Write your message…") + "\"></div>"
@@ -60,6 +60,12 @@ Item {
                                root.pollState();
                                root.contentChanged();
                            });
+    }
+
+    // Put an image (a `data:` URL, see Bridge.image_data_url) at the caret.
+    // The sender turns it into an inline part on Send / Save draft.
+    function insertImage(dataUrl) {
+        root.exec("insertImage", dataUrl);
     }
 
     // Read the body back. Async by nature, so the caller passes a callback

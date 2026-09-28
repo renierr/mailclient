@@ -52,5 +52,18 @@ void main() {
       expect(html, isNot(contains('<script>')));
       expect(html, contains('&lt;script&gt;'));
     });
+
+    test(
+      'inline image tokens render their data URL, unknown ones their name',
+      () {
+        const url = 'data:image/png;base64,Zm9v';
+        const text = 'see ![logo.png](inline:1) and ![gone](inline:2)';
+        expect(MarkdownMail.hasFormatting(text), isTrue);
+        expect(
+          MarkdownMail.toHtml(text, images: {1: url}),
+          '<p>see <img alt="logo.png" src="$url"> and gone</p>',
+        );
+      },
+    );
   });
 }

@@ -81,6 +81,7 @@ pub fn draft_form(account_id: i64, uid: u32) -> anyhow::Result<String> {
     let attachments: serde_json::Value =
         serde_json::from_str(&mailcore::feed::attachments_json(db, drafts.id, uid)?)
             .unwrap_or_else(|_| serde_json::Value::Array(Vec::new()));
+    let body_html = compose::draft_html(db, &m);
     Ok(serde_json::json!({
         "draft_uid": uid,
         "from": m.from_addr.unwrap_or_default(),
@@ -90,10 +91,17 @@ pub fn draft_form(account_id: i64, uid: u32) -> anyhow::Result<String> {
         "reply_to": m.reply_to.unwrap_or_default(),
         "subject": m.subject.unwrap_or_default(),
         "body": m.body_text.unwrap_or_default(),
-        "body_html": m.body_html.unwrap_or_default(),
+        "body_html": body_html,
         "attachments": attachments,
     })
     .to_string())
+}
+
+/// An image file as a `data:` URL for the composer to show inline; the
+/// sender turns it into a `cid:` part. Errors for non-image types and for
+/// images too large to go inline (attach those instead).
+pub fn image_data_url(path: String) -> anyhow::Result<String> {
+    compose::image_data_url(&path).map_err(|e| anyhow::anyhow!(e.to_string()))
 }
 
 /// Destroy a server draft (`\Deleted` + expunge, never filed to Trash) —

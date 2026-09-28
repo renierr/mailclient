@@ -133,7 +133,8 @@ class ComposerNotice extends StatelessWidget {
 }
 
 /// One-tap Markdown formatting, replacing the Qt WYSIWYG toolbar in scope:
-/// bold / italic / quote / bullet act on the body selection.
+/// bold / italic / quote / bullet act on the body selection; image inserts
+/// an inline image at the cursor.
 class FormatToolbar extends StatelessWidget {
   const FormatToolbar({
     super.key,
@@ -141,12 +142,14 @@ class FormatToolbar extends StatelessWidget {
     required this.onItalic,
     required this.onQuote,
     required this.onBullet,
+    required this.onImage,
   });
 
   final VoidCallback onBold;
   final VoidCallback onItalic;
   final VoidCallback onQuote;
   final VoidCallback onBullet;
+  final VoidCallback onImage;
 
   @override
   Widget build(BuildContext context) {
@@ -180,6 +183,11 @@ class FormatToolbar extends StatelessWidget {
             tooltip: 'Bullet at cursor',
             icon: const Icon(Icons.format_list_bulleted, size: 20),
             onPressed: onBullet,
+          ),
+          IconButton(
+            tooltip: 'Insert image inline',
+            icon: const Icon(Icons.image_outlined, size: 20),
+            onPressed: onImage,
           ),
         ],
       ),
