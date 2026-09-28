@@ -402,8 +402,8 @@ class _ComposerDialogState extends State<ComposerDialog> {
                 Expanded(
                   child: AbsorbPointer(
                     absorbing: _working,
-                    // No viewInsets padding here: the MailDialog.keyboardSafe
-                    // wrapper already pads for the keyboard once.
+                    // No viewInsets padding here: Dialog already pads for
+                    // the keyboard.
                     child: SingleChildScrollView(child: _fieldsColumn()),
                   ),
                 ),

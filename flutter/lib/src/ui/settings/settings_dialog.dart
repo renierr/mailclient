@@ -113,9 +113,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         if (railMode) const VerticalDivider(width: 1),
                         Expanded(
                           child: SingleChildScrollView(
-                            // No viewInsets padding here: the
-                            // MailDialog.keyboardSafe wrapper already pads
-                            // for the keyboard once.
+                            // No viewInsets padding here: Dialog already
+                            // pads for the keyboard.
                             padding: const EdgeInsets.symmetric(
                               horizontal: 16,
                               vertical: 4,

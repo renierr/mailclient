@@ -58,9 +58,6 @@ impl qobject::Bridge {
             Err(e) => return qstring(&e.to_string()),
         };
         push_feeds(&mut self, db, id, -1);
-        if let Err(e) = settings::set_last_active_account_id(db, id) {
-            return qstring(&e.to_string());
-        }
         self.as_mut()
             .set_account_count(accounts::list(db).map(|l| l.len() as i32).unwrap_or(1));
         qstring("")

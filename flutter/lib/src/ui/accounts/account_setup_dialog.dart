@@ -26,24 +26,13 @@ class AccountSetupDialog extends StatefulWidget {
   final bool fullscreen;
 
   static Future<bool> show(BuildContext context, {int? accountId}) async {
-    // Phones get a fullscreen page, not a floating dialog: a Scaffold
-    // resizes for the keyboard natively, while dialog + keyboard on a short
-    // screen squeeze the form to zero and it looks "vanished".
-    if (MailDialog.isNarrow(context)) {
-      return await Navigator.of(context).push<bool>(
-            MaterialPageRoute(
-              fullscreenDialog: true,
-              builder: (_) =>
-                  AccountSetupDialog(accountId: accountId, fullscreen: true),
-            ),
-          ) ??
-          false;
-    }
-    return await MailDialog.show<bool>(
+    return await MailDialog.showForm<bool>(
           context,
           // A tap outside must never drop a half-typed account form.
           barrierDismissible: false,
-          builder: (_) => AccountSetupDialog(accountId: accountId),
+          dialog: (_) => AccountSetupDialog(accountId: accountId),
+          page: (_) =>
+              AccountSetupDialog(accountId: accountId, fullscreen: true),
         ) ??
         false;
   }
@@ -182,10 +171,8 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
               Flexible(
                 child: Form(
                   key: _form,
-                  // No viewInsets padding here: the MailDialog.keyboardSafe
-                  // wrapper already pads for the keyboard once. A second
-                  // padding inside squeezes the form to zero exactly when the
-                  // keyboard opens.
+                  // No viewInsets padding here: Dialog already pads for the
+                  // keyboard, and a second padding collapses the form.
                   child: SingleChildScrollView(child: _fieldsColumn()),
                 ),
               ),

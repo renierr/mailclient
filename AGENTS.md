@@ -88,7 +88,7 @@ Layout of the Dart app, and the rules that keep it that way. `flutter/README.md`
 
 - A `Row` of text plus buttons overflows at 360px. Use `Wrap`, or put the text in `Expanded`/`Flexible` with `overflow: TextOverflow.ellipsis`. Labels sit *above* inputs on narrow layouts, never beside them.
 - No fixed `SizedBox(width: N)` for content. Clamp with `MailDialog.maxWidth`. Dialog actions are a `Wrap`, never a `Row`.
-- Any flow with a `TextField` routes through `MailDialog.showForm`: fullscreen `Scaffold` page on phones (the scaffold resizes for the keyboard), dialog on wide screens. Pure-choice dialogs stay dialogs. Do not add a second `viewInsets` padding inside a body — `MailDialog.keyboardSafe` already pads once, and doubling it collapses the content when the keyboard opens.
+- Any flow with a `TextField` routes through `MailDialog.showForm`: fullscreen `Scaffold` page on narrow or short screens (`MailDialog.prefersPage`; the scaffold resizes for the keyboard), dialog otherwise. Pure-choice dialogs stay dialogs. Never pad a dialog by `viewInsets` yourself — Material's `Dialog` already does, and doubling it collapses the content when the keyboard opens.
 - Short screens (~400px) cannot hold a `NavigationRail` or a tall dialog. Switch via `LayoutBuilder` on height, not only on width.
 - Touch targets: pane dividers keep a ~24px hit area (`PaneDivider`); do not shrink a drag handle to the 1px line. `SafeArea` on every dialog and on the status bar. System back walks the pane stack (`PopScope`: reader → list → folders) and never closes the app from a nested pane.
 - Bottom chrome (status bar, attachment bar, composer actions) must stay above the gesture inset. A hover-only affordance needs a tap equivalent — phones have no hover.

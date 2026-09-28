@@ -60,6 +60,9 @@ pub const REQUEST_MDN: &str = "request_mdn";
 /// Interface scale factor (`1` = 100%, default). Snapped to the supported
 /// steps `1` | `1.1` | `1.25` | `1.5`; unknown values fall back to `1`.
 pub const UI_SCALE: &str = "ui_scale";
+/// Post a notification when a background check finds new mail (default:
+/// on). Off still syncs; only the alert is suppressed.
+pub const NOTIFICATIONS_ENABLED: &str = "notifications_enabled";
 /// Last account selected in the UI. Absent/invalid values deliberately leave
 /// startup selection to the normal first-account fallback.
 pub const LAST_ACTIVE_ACCOUNT_ID: &str = "last_active_account_id";
@@ -97,6 +100,7 @@ pub fn defaults(key: &str) -> Option<&'static str> {
         REPLY_BELOW_QUOTE => Some("0"),
         REQUEST_MDN => Some("0"),
         UI_SCALE => Some("1"),
+        NOTIFICATIONS_ENABLED => Some("1"),
         _ => None,
     }
 }
@@ -462,6 +466,8 @@ mod tests {
         assert!(get_bool(&db, SENT_COPY_ENABLED).unwrap());
         assert!(!get_bool(&db, LOAD_REMOTE_IMAGES).unwrap());
         assert!(!get_bool(&db, "nope.unknown").unwrap());
+        // Known key, so the Flutter settings dialog can write it at all.
+        assert!(get_bool(&db, NOTIFICATIONS_ENABLED).unwrap());
 
         set_bool(&db, SENT_COPY_ENABLED, false).unwrap();
         assert!(!get_bool(&db, SENT_COPY_ENABLED).unwrap());

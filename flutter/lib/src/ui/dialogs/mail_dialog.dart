@@ -12,16 +12,23 @@ import '../../models/models.dart';
 ///
 /// Rules enforced here:
 /// - `SafeArea` around every dialog so gesture bars / notches never clip.
-/// - `AnimatedPadding` with `MediaQuery.viewInsetsOf` so the keyboard pushes
-///   content up instead of covering it.
+/// - The keyboard is handled by Material's `Dialog` itself: it pads by
+///   `viewInsets` and removes them for its child. Never pad by `viewInsets`
+///   again on top — the keyboard then costs twice its height and a dialog on
+///   a tablet or a landscape phone collapses to nothing.
 /// - Widths are `min(desired, screen - 16)` — never a fixed `SizedBox`.
-/// - Narrow screens (<600px) get near-fullscreen sheets: `insetPadding` ~8px
-///   and `maxHeight` ~ screen height, so the body scrolls above the keyboard
-///   instead of being squeezed into a floating box.
+/// - Form flows on narrow *or* short screens become fullscreen pages
+///   ([showForm]), because a Scaffold resizes for the keyboard natively.
 abstract final class MailDialog {
   /// Narrow = phone / small window. Dialogs go near-fullscreen here.
   static bool isNarrow(BuildContext context) =>
       MediaQuery.sizeOf(context).width < 600;
+
+  /// A form belongs on a fullscreen page: narrow, or too short to keep a
+  /// usable dialog once the keyboard takes roughly half the height (landscape
+  /// phones, small tablets in landscape).
+  static bool prefersPage(BuildContext context) =>
+      isNarrow(context) || MediaQuery.sizeOf(context).height < 560;
 
   /// Inset around the dialog: almost none on phones, comfortable on desktop.
   static EdgeInsets insets(BuildContext context, {double wideH = 40}) =>
@@ -36,40 +43,20 @@ abstract final class MailDialog {
     return desired > screen - 16 ? screen - 16 : desired;
   }
 
-  /// Clamp a desired max height to what fits *above the keyboard*.
+  /// Clamp a desired max height to the room above the keyboard.
   ///
-  /// The [keyboardSafe] wrapper pads the dialog by the keyboard height, so a
-  /// maxHeight computed from the full screen would overflow the remaining box
-  /// and push the dialog off-screen (on a phone: dialog gone the moment the
-  /// keyboard opens). Subtract the keyboard here so the two stay consistent.
+  /// This is only an upper bound: `Dialog` already shrinks its own box by
+  /// the keyboard, so the tighter of the two wins and nothing is subtracted
+  /// twice.
   static double maxHeight(BuildContext context, double desired) {
     final mq = MediaQuery.of(context);
     final cap = mq.size.height - mq.viewInsets.bottom - 24;
-    // A keyboard taller than the screen minus chrome leaves nothing usable;
-    // still return a sane minimum instead of a negative constraint.
-    final sane = cap < 200 ? 200.0 : cap;
-    return desired > sane ? sane : desired;
+    return desired > cap ? (cap > 0 ? cap : 0) : desired;
   }
 
-  /// Wrap dialog content so the keyboard never covers it: SafeArea for the
-  /// system bars + animated bottom padding for the keyboard.
-  ///
-  /// This is the SINGLE keyboard handler for dialogs. Do not add extra
-  /// `viewInsets.bottom` padding inside dialog bodies on top of it — doubled
-  /// padding squeezes the content to zero exactly when the keyboard opens.
-  static Widget keyboardSafe({required Widget child}) => Builder(
-    builder: (context) => SafeArea(
-      child: AnimatedPadding(
-        padding: MediaQuery.viewInsetsOf(context),
-        duration: const Duration(milliseconds: 150),
-        curve: Curves.easeOut,
-        child: child,
-      ),
-    ),
-  );
-
   /// The standard `showDialog` wrapper: safe area, non-dismissible option
-  /// for forms where a tap-outside would lose input.
+  /// for forms where a tap-outside would lose input. The keyboard is left to
+  /// `Dialog` (see the class docs).
   static Future<T?> show<T>(
     BuildContext context, {
     required WidgetBuilder builder,
@@ -78,7 +65,7 @@ abstract final class MailDialog {
     context: context,
     useSafeArea: true,
     barrierDismissible: barrierDismissible,
-    builder: (ctx) => keyboardSafe(child: Builder(builder: builder)),
+    builder: builder,
   );
 
   /// Danger-styled filled button for destructive confirms (permanent delete,
@@ -90,7 +77,8 @@ abstract final class MailDialog {
         foregroundColor: Theme.of(context).colorScheme.onError,
       );
 
-  /// Show a form flow: fullscreen page on phones, dialog on wide screens.
+  /// Show a form flow: fullscreen page on narrow or short screens, dialog
+  /// otherwise.
   ///
   /// This is the general answer to dialogs breaking under the on-screen
   /// keyboard — a floating dialog plus keyboard leaves no usable room on a
@@ -103,7 +91,7 @@ abstract final class MailDialog {
     required WidgetBuilder page,
     bool barrierDismissible = true,
   }) {
-    if (MailDialog.isNarrow(context)) {
+    if (prefersPage(context)) {
       return Navigator.of(context).push<T>(
         MaterialPageRoute(fullscreenDialog: true, builder: (ctx) => page(ctx)),
       );
