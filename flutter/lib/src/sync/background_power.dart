@@ -72,14 +72,21 @@ Future<bool> requestUnrestrictedBackground() async {
 /// Whether the system lets the app schedule exact alarms (Android 12+,
 /// denied by default since 14). Without it the alarm scheduler still fires
 /// via AllowWhileIdle, just not at the exact minute.
+///
+/// An unreachable channel means "not permitted", not "permitted": the
+/// alarm plugin silently drops an exact one-shot it may not schedule, so
+/// claiming `true` there would end the alarm chain, while `false` falls
+/// back to an inexact shot that still fires. The headless alarm isolate
+/// has no `MainActivity` channel, so its re-arm always takes that safe
+/// fallback.
 Future<bool> exactAlarmPermitted() async {
   if (!Platform.isAndroid) return true;
   try {
-    return await powerChannel.invokeMethod<bool>('exactAlarmStatus') ?? true;
+    return await powerChannel.invokeMethod<bool>('exactAlarmStatus') ?? false;
   } on PlatformException {
-    return true;
+    return false;
   } on MissingPluginException {
-    return true;
+    return false;
   }
 }
 

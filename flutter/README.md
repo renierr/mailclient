@@ -157,11 +157,14 @@ see `lib/src/sync/`):
 - **Battery-saving (WorkManager, default).** Deferrable by design: in Doze
   it only runs in maintenance windows, so notifications may wait for unlock.
 - **On-time alarm (`android_alarm_manager_plus`, opt-in in Settings →
-  Accounts & sync).** An exact `setExactAndAllowWhileIdle` alarm that fires
-  in standby and honours 5/10-minute intervals, at the cost of a wakeup per
-  check. Needs `SCHEDULE_EXACT_ALARM` (Android 12+; denied by default since
-  14 — Settings sends the user to "Alarms & reminders"); ungranted it still
-  fires via AllowWhileIdle, just inexact. The mode is stored in the shared
+  Accounts & sync).** A self-perpetuating exact one-shot
+  (`setExactAndAllowWhileIdle`) that fires in standby and honours 5/10-minute
+  intervals, at the cost of a wakeup per check (a plugin `periodic` alarm
+  cannot do this: it maps to `setRepeating` and ignores `allowWhileIdle`,
+  so Doze defers it like the worker). Needs `SCHEDULE_EXACT_ALARM`
+  (Android 12+; denied by default since 14 — Settings sends the user to
+  "Alarms & reminders"); ungranted the shot is armed inexact via
+  AllowWhileIdle and still fires, just not at the exact minute. The mode is stored in the shared
   `background_scheduler` Rust setting (default `workmanager`), which Qt
   never reads or writes — no QML change.
 
