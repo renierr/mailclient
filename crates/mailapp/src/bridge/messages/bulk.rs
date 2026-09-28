@@ -8,11 +8,11 @@
 use std::pin::Pin;
 
 use cxx_qt_lib::QString;
-use mailcore::models::FolderRole;
-use mailcore::store::{accounts, folders, messages};
+use mailcore::store::messages;
+use mailcore::undo::{self, MoveTarget, Queued};
 
 use crate::bridge::qobject;
-use crate::bridge::worker::{spawn_flag_push, spawn_job, JobRefresh};
+use crate::bridge::worker::{spawn_flag_push, spawn_job, spawn_push_after_grace, JobRefresh};
 use crate::bridge::{push_feeds, qstring, shared_db};
 use mailcore::sync::pool::{checkout_session, job_account};
 
@@ -90,137 +90,39 @@ impl qobject::Bridge {
     }
 
     pub fn delete_many(self: Pin<&mut Self>, uids_json: &QString) -> QString {
-        let uids = match parse_uids_json(&uids_json.to_string()) {
-            Ok(u) => u,
-            Err(e) => return qstring(&e),
-        };
-        let acc_id = *self.current_account_id();
-        let folder_id = *self.current_folder_id();
-        spawn_job(self, "Delete", move |db, _progress| async move {
-            let folder = folders::get(db, folder_id).map_err(|e| e.to_string())?;
-            let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
-            if folder.account_id != acc.id {
-                return Err("folder does not belong to this account".to_string());
-            }
-            let mut imap = checkout_session(&acc).await?;
-            let summary = if folder.role == FolderRole::Junk {
-                let n = imap
-                    .purge_uids(db, folder_id, &uids)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                format!("Deleted {n} permanently")
-            } else {
-                let trash = folders::list_by_account(db, acc.id)
-                    .map_err(|e| e.to_string())?
-                    .into_iter()
-                    .find(|f| f.role == FolderRole::Trash);
-                match trash.filter(|t| t.id != folder.id) {
-                    Some(t) => {
-                        let n = imap
-                            .move_uids_to(db, folder_id, &uids, &t.path)
-                            .await
-                            .map_err(|e| e.to_string())?;
-                        format!("Moved {n} to {}", t.path)
-                    }
-                    None => {
-                        let n = imap
-                            .purge_uids(db, folder_id, &uids)
-                            .await
-                            .map_err(|e| e.to_string())?;
-                        format!("Deleted {n} permanently")
-                    }
-                }
-            };
-            imap.checkin();
-            Ok((summary, Some(JobRefresh::feeds(acc_id, folder_id))))
-        })
+        match parse_uids_json(&uids_json.to_string()) {
+            Ok(uids) => self.queue_undoable(uids, MoveTarget::Trash),
+            Err(e) => qstring(&e),
+        }
     }
 
     pub fn archive_many(self: Pin<&mut Self>, uids_json: &QString) -> QString {
-        let uids = match parse_uids_json(&uids_json.to_string()) {
-            Ok(u) => u,
-            Err(e) => return qstring(&e),
-        };
-        let acc_id = *self.current_account_id();
-        let folder_id = *self.current_folder_id();
-        spawn_job(self, "Archive", move |db, _progress| async move {
-            let folder = folders::get(db, folder_id).map_err(|e| e.to_string())?;
-            let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
-            let mut imap = checkout_session(&acc).await?;
-            let archive = match folders::list_by_account(db, acc.id)
-                .map_err(|e| e.to_string())?
-                .into_iter()
-                .find(|f| f.role == FolderRole::Archive)
-            {
-                Some(a) => a,
-                None => {
-                    let delim = folders::list_by_account(db, acc.id)
-                        .unwrap_or_default()
-                        .first()
-                        .map(|f| f.delimiter.clone())
-                        .unwrap_or_else(|| "/".to_string());
-                    imap.create_folder_path(db, acc.id, "Archive", &delim)
-                        .await
-                        .map_err(|e| e.to_string())?
-                }
-            };
-            let summary = if archive.id == folder.id {
-                "Already in Archive".to_string()
-            } else {
-                let n = imap
-                    .move_uids_to(db, folder_id, &uids, &archive.path)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                format!("Archived {n} to {}", archive.path)
-            };
-            imap.checkin();
-            Ok((summary, Some(JobRefresh::feeds(acc_id, folder_id))))
-        })
+        match parse_uids_json(&uids_json.to_string()) {
+            Ok(uids) => self.queue_undoable(uids, MoveTarget::Archive),
+            Err(e) => qstring(&e),
+        }
     }
 
     pub fn move_many(self: Pin<&mut Self>, uids_json: &QString, path: &QString) -> QString {
-        let uids = match parse_uids_json(&uids_json.to_string()) {
-            Ok(u) => u,
-            Err(e) => return qstring(&e),
-        };
-        let wanted = *self.current_account_id();
-        let current = *self.current_folder_id();
-        let path = path.to_string();
-        spawn_job(self, "Move", move |db, _progress| async move {
-            let acc = job_account(db, wanted)?;
-            let dest = folders::get_by_path(db, acc.id, &path).map_err(|e| e.to_string())?;
-            if dest.id == current {
-                return Ok((
-                    "Already here".to_string(),
-                    Some(JobRefresh::feeds(acc.id, current)),
-                ));
-            }
-            let folder = folders::get(db, current).map_err(|e| e.to_string())?;
-            if folder.account_id != acc.id {
-                return Err("folder does not belong to this account".to_string());
-            }
-            let mut imap = checkout_session(&acc).await?;
-            let n = imap
-                .move_uids_to(db, current, &uids, &dest.path)
-                .await
-                .map_err(|e| e.to_string())?;
-            imap.checkin();
-            Ok((
-                format!("Moved {n} to {}", dest.path),
-                Some(JobRefresh::feeds(acc.id, current)),
-            ))
-        })
+        match parse_uids_json(&uids_json.to_string()) {
+            Ok(uids) => self.queue_undoable(uids, MoveTarget::Folder(path.to_string())),
+            Err(e) => qstring(&e),
+        }
     }
 
     pub fn purge_many(self: Pin<&mut Self>, uids_json: &QString) -> QString {
-        let uids = match parse_uids_json(&uids_json.to_string()) {
-            Ok(u) => u,
-            Err(e) => return qstring(&e),
-        };
+        match parse_uids_json(&uids_json.to_string()) {
+            Ok(uids) => self.purge_uids(uids),
+            Err(e) => qstring(&e),
+        }
+    }
+
+    /// Destroy `uids` of the current folder server-side (a job; no undo).
+    pub(crate) fn purge_uids(self: Pin<&mut Self>, uids: Vec<u32>) -> QString {
         let acc_id = *self.current_account_id();
         let folder_id = *self.current_folder_id();
         spawn_job(self, "Delete", move |db, _progress| async move {
-            let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
+            let acc = job_account(db, acc_id)?;
             let mut imap = checkout_session(&acc).await?;
             let n = imap
                 .purge_uids(db, folder_id, &uids)
@@ -232,5 +134,60 @@ impl qobject::Bridge {
                 Some(JobRefresh::feeds(acc.id, folder_id)),
             ))
         })
+    }
+
+    /// Delete / archive / move through the undo queue (`mailcore::undo`):
+    /// hide now, announce the Undo, push after the grace period. A delete
+    /// that can only destroy falls through to [`Self::purge_uids`] — QML has
+    /// already confirmed it as permanent.
+    pub(crate) fn queue_undoable(
+        mut self: Pin<&mut Self>,
+        uids: Vec<u32>,
+        target: MoveTarget,
+    ) -> QString {
+        let db = match shared_db() {
+            Ok(d) => d,
+            Err(e) => return qstring(&e),
+        };
+        let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+        if folder_id < 0 {
+            return qstring("no folder selected");
+        }
+        match undo::queue_move(db, acc_id, folder_id, &uids, target) {
+            Ok(Queued::Pending { batch, label, .. }) => {
+                push_feeds(&mut self, db, acc_id, folder_id);
+                self.as_mut()
+                    .undo_available(&qstring(&batch), &qstring(&label));
+                spawn_push_after_grace(acc_id);
+                qstring(&label)
+            }
+            Ok(Queued::Permanent) => self.purge_uids(uids),
+            Ok(Queued::AlreadyThere) => qstring("Already here"),
+            Err(e) => qstring(&e),
+        }
+    }
+
+    pub fn undo_move(mut self: Pin<&mut Self>, batch: &QString) -> QString {
+        let db = match shared_db() {
+            Ok(d) => d,
+            Err(e) => return qstring(&e),
+        };
+        match undo::undo(db, &batch.to_string()) {
+            Ok(0) => qstring("Too late to undo — already done on the server"),
+            Ok(n) => {
+                let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+                push_feeds(&mut self, db, acc_id, folder_id);
+                qstring(&if n == 1 {
+                    "Undone: 1 message is back".to_string()
+                } else {
+                    format!("Undone: {n} messages are back")
+                })
+            }
+            Err(e) => qstring(&e),
+        }
+    }
+
+    pub fn undo_grace_secs(&self) -> i32 {
+        undo::UNDO_GRACE_SECS as i32
     }
 }

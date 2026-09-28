@@ -184,6 +184,8 @@ pub async fn sync_account(
     }
 
     out.pushed_flags += imap.push_dirty_flags(db, account.id).await;
+    // After the flags: a queued move changes the message's UID.
+    imap.push_due_moves(db, account.id).await;
 
     // Throttled discovery: one LIST pass every run, full four-pass
     // discovery only when the tree changed or the interval lapsed —
@@ -457,6 +459,7 @@ fn unread_above(db: &Db, top: &SeenMark, mark: i64) -> Vec<NewMail> {
                  join accounts a on a.id = m.account_id
                  join folders f on f.id = m.folder_id
                  where m.folder_id = ?1 and m.is_read = 0 and m.uid > ?2
+                   and m.id not in (select message_id from pending_moves)
                  order by m.uid",
         )
         .and_then(|mut stmt| {
@@ -528,6 +531,7 @@ pub fn recent_unread(db: &Db, limit: u64, account_id: Option<i64>) -> Vec<Recent
                join folders f on f.id = m.folder_id
                where m.is_read = 0
                  and f.role = 'inbox'
+                 and m.id not in (select message_id from pending_moves)
                  and (?2 is null or m.account_id = ?2)
                order by m.date desc, m.id desc
                limit ?1";

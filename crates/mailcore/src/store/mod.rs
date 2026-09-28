@@ -6,6 +6,7 @@ pub mod accounts;
 pub mod contacts;
 pub mod folders;
 pub mod messages;
+pub mod pending_moves;
 pub mod queue;
 pub mod settings;
 

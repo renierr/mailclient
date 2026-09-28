@@ -140,6 +140,24 @@ create table if not exists attachments (
 );
 create index if not exists idx_attachments_message on attachments (message_id);
 
+-- ----------------------------------------------------------- pending_moves
+-- Undoable delete / archive / move. The message leaves every list at once,
+-- but the IMAP command waits until `due_at`, so Undo is just deleting this
+-- row. Rows survive a quit and are pushed by the next sync. `dest_folder_id`
+-- is NULL when the target is resolved at push time (Trash, Archive).
+create table if not exists pending_moves (
+    message_id     integer primary key references messages (id) on delete cascade,
+    batch          text not null,
+    action         text not null,
+    dest_folder_id integer references folders (id) on delete cascade,
+    due_at         text not null,
+    attempts       integer not null default 0,
+    created_at     text not null,
+    updated_at     text not null
+);
+create index if not exists idx_pending_moves_batch on pending_moves (batch);
+create index if not exists idx_pending_moves_due on pending_moves (due_at);
+
 -- ---------------------------------------------------------------- contacts
 create table if not exists contacts (
     address      text primary key,

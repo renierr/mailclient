@@ -108,27 +108,6 @@ pub struct DiscoveredFolder {
     pub delimiter: String,
     pub attributes: Vec<FlagNameAttribute<'static>>,
 }
-/// Outcome of trashing a message.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TrashOutcome {
-    Moved(String),
-    Expunged,
-}
-
-/// Outcome of moving a message.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MoveOutcome {
-    Moved(String),
-    AlreadyThere,
-}
-
-/// Outcome of archiving a message.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ArchiveOutcome {
-    Moved(String),
-    AlreadyThere,
-}
-
 /// Outcome of `ImapSync::search_server_into_cache`, so the UI can say so.
 #[derive(Debug, Default)]
 pub struct ServerSearchReport {

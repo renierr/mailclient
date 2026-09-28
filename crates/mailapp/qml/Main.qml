@@ -707,6 +707,14 @@ ApplicationWindow {
             }
         }
 
+        // A delete/archive/move was queued: the rows are already gone from
+        // the bridge's feeds, and the toast offers Undo until the push.
+        function onUndo_available(batch, label) {
+            reloadFolders();
+            reloadMessages();
+            undoToast.show(batch, label);
+        }
+
         function onJob_finished(kind, status) {
             if (jobConnections.readOnlyKinds.indexOf(kind) < 0) {
                 reloadAccounts();
@@ -1223,6 +1231,29 @@ ApplicationWindow {
             onFullscreenRequested: root.toggleReaderFullscreen()
             onStatusMessage: text => root.statusText = text
         }
+    }
+
+    function undoMove(batch) {
+        root.statusText = backend.undo_move(batch);
+        reloadFolders();
+        reloadMessages();
+    }
+
+    // Floats above the status bar; hidden until an undoable action runs.
+    UndoToast {
+        id: undoToast
+        z: 100
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: Theme.md
+        durationMs: backend.undo_grace_secs() * 1000
+        onUndoRequested: batch => root.undoMove(batch)
+    }
+
+    Shortcut {
+        sequences: [StandardKey.Undo]
+        enabled: undoToast.visible
+        onActivated: undoToast.undo()
     }
 
     footer: Rectangle {

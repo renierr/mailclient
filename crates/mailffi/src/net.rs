@@ -180,29 +180,23 @@ where
 pub(crate) fn spawn_flag_push(account_id: i64) {
     let _ = net_tx().send(Box::new(move |rt| {
         rt.block_on(async {
-            let Ok(db) = shared_db() else {
-                log::warn!("flag-push: cannot open db");
-                return;
-            };
-            if mailcore::store::messages::list_flags_dirty(db, account_id)
-                .unwrap_or_default()
-                .is_empty()
-            {
-                return;
+            match shared_db() {
+                Ok(db) => {
+                    mailcore::undo::push_local_changes(db, account_id).await;
+                }
+                Err(e) => log::warn!("local-push: cannot open db: {e}"),
             }
-            let acc = match mailcore::sync::pool::resolve_account(db, account_id) {
-                Ok(a) => a,
-                Err(e) => return log::debug!("flag-push: {e}"),
-            };
-            let mut imap = match mailcore::sync::pool::checkout_session(&acc).await {
-                Ok(l) => l,
-                Err(e) => return log::debug!("flag-push: offline, staying dirty: {e}"),
-            };
-            let pushed = imap.push_dirty_flags(db, acc.id).await;
-            if pushed > 0 {
-                log::info!("flag-push: pushed {pushed} flag change(s)");
-            }
-            imap.checkin();
         });
     }));
+}
+
+/// [`spawn_flag_push`] once an undoable action's grace period is over. The
+/// wait runs on its own thread so the net thread stays free; if the app is
+/// closed first, the queued move is pushed by the next sync instead.
+pub(crate) fn spawn_push_after_grace(account_id: i64) {
+    std::thread::spawn(move || {
+        let secs = mailcore::undo::UNDO_GRACE_SECS.max(0) as u64 + 1;
+        std::thread::sleep(std::time::Duration::from_secs(secs));
+        spawn_flag_push(account_id);
+    });
 }

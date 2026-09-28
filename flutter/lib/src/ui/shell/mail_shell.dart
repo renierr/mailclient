@@ -113,6 +113,8 @@ class _MailShellState extends State<MailShell> {
         const SingleActivator(LogicalKeyboardKey.delete, shift: true): () =>
             _deleteShortcut(state, purge: true),
         const SingleActivator(LogicalKeyboardKey.escape): () => _escape(state),
+        const SingleActivator(LogicalKeyboardKey.keyZ, control: true): () =>
+            state.undoLast(),
         // Fullscreen is a wide-layout mode; narrower ones already give the
         // reader every pixel and offer no way back out of it.
         const SingleActivator(LogicalKeyboardKey.f11): () {

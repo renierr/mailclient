@@ -379,6 +379,7 @@ pub fn search_json(
          join folders f on f.id = m.folder_id
          where messages_fts match ?1 and m.account_id = ?2
            and (?4 = '' or f.path = ?4)
+           and m.id not in (select message_id from pending_moves)
          order by rank limit ?3",
     )?;
     let mut arr = Vec::new();

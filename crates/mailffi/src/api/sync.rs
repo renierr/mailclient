@@ -73,6 +73,7 @@ pub fn sync_folder(account_id: i64, folder_id: i64) -> anyhow::Result<()> {
             }
             let mut imap = checkout_session(&acc).await?;
             imap.push_dirty_flags(db, acc.id).await;
+            imap.push_due_moves(db, acc.id).await;
             let r = imap
                 .sync_folder_window(db, folder.id, Some(FULL_SYNC_WINDOW))
                 .await

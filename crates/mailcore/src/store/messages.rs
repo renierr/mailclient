@@ -24,6 +24,7 @@ use rusqlite::{params, OptionalExtension};
 use crate::db::Db;
 use crate::error::{Result, StoreError};
 use crate::models::{Message, NewMessage};
+use crate::store::pending_moves::HIDDEN;
 use crate::store::{json_vec, now, opt_bool};
 
 pub(super) fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
@@ -178,7 +179,7 @@ pub fn list_compact_by_folder_sorted(
     let order = folder_sort_clause(sort_field, descending);
     let mut stmt = db.conn().prepare(&format!(
         "select uid, subject, from_addr, date, snippet, is_read, is_starred, has_attachments
-         from messages where folder_id = ?1
+         from messages where folder_id = ?1 and {HIDDEN}
          order by {order} limit ?2 offset ?3"
     ))?;
     let rows = stmt
@@ -246,7 +247,7 @@ pub fn get_by_uid(db: &Db, folder_id: i64, uid: u32) -> Result<Message> {
 /// Number of unread messages in a folder (badge counter).
 pub fn count_unread(db: &Db, folder_id: i64) -> Result<u64> {
     let n: i64 = db.conn().query_row(
-        "select count(*) from messages where folder_id = ?1 and is_read = 0",
+        &format!("select count(*) from messages where folder_id = ?1 and is_read = 0 and {HIDDEN}"),
         [folder_id],
         |r| r.get(0),
     )?;
@@ -270,7 +271,7 @@ pub fn list_unread_uids(db: &Db, folder_id: i64) -> Result<Vec<u32>> {
 /// shown rows vs cached rows vs server remainder).
 pub fn count_by_folder(db: &Db, folder_id: i64) -> Result<u64> {
     let n: i64 = db.conn().query_row(
-        "select count(*) from messages where folder_id = ?1",
+        &format!("select count(*) from messages where folder_id = ?1 and {HIDDEN}"),
         [folder_id],
         |r| r.get(0),
     )?;
@@ -291,12 +292,12 @@ pub struct FolderCounts {
 /// map -- callers treat a miss as zero.
 pub fn counts_by_account(db: &Db, account_id: i64) -> Result<HashMap<i64, FolderCounts>> {
     let conn = db.conn();
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "select folder_id, count(*), sum(case when is_read = 0 then 1 else 0 end)
          from messages
-         where folder_id in (select id from folders where account_id = ?1)
-         group by folder_id",
-    )?;
+         where folder_id in (select id from folders where account_id = ?1) and {HIDDEN}
+         group by folder_id"
+    ))?;
     let rows = stmt.query_map([account_id], |r| {
         let folder_id: i64 = r.get(0)?;
         let total: i64 = r.get(1)?;

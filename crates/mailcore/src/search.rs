@@ -61,6 +61,7 @@ pub fn search(db: &Db, account_id: i64, query: &str, limit: u64) -> Result<Vec<S
          from messages_fts
          join messages m on m.id = messages_fts.rowid
          where messages_fts match ?1 and m.account_id = ?2
+           and m.id not in (select message_id from pending_moves)
          order by rank limit ?3",
     )?;
     let rows = stmt

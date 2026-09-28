@@ -10,6 +10,7 @@ import 'state/mail_state.dart';
 import 'sync/background_sync.dart';
 import 'theme/app_theme.dart';
 import 'ui/shell/mail_shell.dart';
+import 'ui/shell/undo_snack_bar_host.dart';
 
 /// The app, with the loaded core wired into the widget tree.
 class MailApp extends StatefulWidget {
@@ -113,7 +114,7 @@ class _MailAppState extends State<MailApp> with WidgetsBindingObserver {
             child: child ?? const SizedBox.shrink(),
           );
         },
-        home: const MailShell(),
+        home: const UndoSnackBarHost(child: MailShell()),
       ),
     );
   }

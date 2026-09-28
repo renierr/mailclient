@@ -2,13 +2,12 @@ use std::pin::Pin;
 
 use cxx_qt_lib::QString;
 use mailcore::feed;
-use mailcore::store::{accounts, folders, messages, settings};
-use mailcore::sync::imap::{ArchiveOutcome, MoveOutcome, TrashOutcome};
+use mailcore::store::{messages, settings};
+use mailcore::undo::MoveTarget;
 
 use crate::bridge::qobject;
-use crate::bridge::worker::{spawn_flag_push, spawn_job, JobRefresh};
+use crate::bridge::worker::{spawn_flag_push, spawn_job};
 use crate::bridge::{push_feeds, qstring, shared_db, MAX_MESSAGE_LIMIT};
-use mailcore::sync::pool::{checkout_session, job_account};
 
 mod attachments;
 mod bulk;
@@ -277,93 +276,19 @@ impl qobject::Bridge {
     }
 
     pub fn delete_message(self: Pin<&mut Self>, uid: i32) -> QString {
-        let acc_id = *self.current_account_id();
-        let folder_id = *self.current_folder_id();
-        spawn_job(self, "Delete", move |db, _progress| async move {
-            let msg = messages::get_by_uid(db, folder_id, uid as u32)
-                .map_err(|_| "message is no longer available".to_string())?;
-            let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
-            let mut imap = checkout_session(&acc).await?;
-            let outcome = imap
-                .trash_message(db, msg.id)
-                .await
-                .map_err(|e| e.to_string())?;
-            imap.checkin();
-            Ok((
-                match outcome {
-                    TrashOutcome::Moved(path) => format!("Moved to {path}"),
-                    TrashOutcome::Expunged => "Deleted permanently".to_string(),
-                },
-                Some(JobRefresh::feeds(acc_id, folder_id)),
-            ))
-        })
+        self.queue_undoable(vec![uid as u32], MoveTarget::Trash)
     }
 
     pub fn archive_message(self: Pin<&mut Self>, uid: i32) -> QString {
-        let acc_id = *self.current_account_id();
-        let folder_id = *self.current_folder_id();
-        spawn_job(self, "Archive", move |db, _progress| async move {
-            let msg = messages::get_by_uid(db, folder_id, uid as u32)
-                .map_err(|_| "message is no longer available".to_string())?;
-            let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
-            let mut imap = checkout_session(&acc).await?;
-            let outcome = imap
-                .archive_message(db, msg.id)
-                .await
-                .map_err(|e| e.to_string())?;
-            imap.checkin();
-            Ok((
-                match outcome {
-                    ArchiveOutcome::Moved(path) => format!("Archived to {path}"),
-                    ArchiveOutcome::AlreadyThere => "Already in Archive".to_string(),
-                },
-                Some(JobRefresh::feeds(acc_id, folder_id)),
-            ))
-        })
+        self.queue_undoable(vec![uid as u32], MoveTarget::Archive)
     }
 
     pub fn move_message(self: Pin<&mut Self>, uid: i32, path: &QString) -> QString {
-        let wanted = *self.current_account_id();
-        let current = *self.current_folder_id();
-        let path = path.to_string();
-        spawn_job(self, "Move", move |db, _progress| async move {
-            let acc = job_account(db, wanted)?;
-            let msg = messages::get_by_uid(db, current, uid as u32)
-                .map_err(|_| "message is no longer available".to_string())?;
-            let dest = folders::get_by_path(db, acc.id, &path).map_err(|e| e.to_string())?;
-            let mut imap = checkout_session(&acc).await?;
-            let outcome = imap
-                .move_to_folder(db, msg.id, dest.id)
-                .await
-                .map_err(|e| e.to_string())?;
-            imap.checkin();
-            Ok((
-                match outcome {
-                    MoveOutcome::Moved(path) => format!("Moved to {path}"),
-                    MoveOutcome::AlreadyThere => "Already here".to_string(),
-                },
-                Some(JobRefresh::feeds(acc.id, current)),
-            ))
-        })
+        self.queue_undoable(vec![uid as u32], MoveTarget::Folder(path.to_string()))
     }
 
     pub fn purge_message(self: Pin<&mut Self>, uid: i32) -> QString {
-        let acc_id = *self.current_account_id();
-        let folder_id = *self.current_folder_id();
-        spawn_job(self, "Delete", move |db, _progress| async move {
-            let msg = messages::get_by_uid(db, folder_id, uid as u32)
-                .map_err(|_| "message is no longer available".to_string())?;
-            let acc = accounts::get(db, acc_id).map_err(|e| e.to_string())?;
-            let mut imap = checkout_session(&acc).await?;
-            imap.delete_message(db, msg.id)
-                .await
-                .map_err(|e| e.to_string())?;
-            imap.checkin();
-            Ok((
-                "Deleted permanently".to_string(),
-                Some(JobRefresh::feeds(acc_id, folder_id)),
-            ))
-        })
+        self.purge_uids(vec![uid as u32])
     }
 
     pub fn set_sort(mut self: Pin<&mut Self>, field: &QString, descending: bool) -> QString {

@@ -80,6 +80,9 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   List<(String, String)> dco_decode_list_record_string_string(dynamic raw);
 
   @protected
+  MoveResult dco_decode_move_result(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
@@ -153,6 +156,9 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   List<(String, String)> sse_decode_list_record_string_string(
     SseDeserializer deserializer,
   );
+
+  @protected
+  MoveResult sse_decode_move_result(SseDeserializer deserializer);
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
@@ -245,6 +251,9 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
     List<(String, String)> self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_move_result(MoveResult self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);

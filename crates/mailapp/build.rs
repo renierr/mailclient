@@ -97,6 +97,7 @@ fn main() {
             .qml_file("qml/components/ComposerToolbar.qml")
             .qml_file("qml/components/ComposerAttachmentTray.qml")
             .qml_file("qml/components/BulkActionBar.qml")
+            .qml_file("qml/components/UndoToast.qml")
             .qml_file("qml/components/AppDialog.qml"),
     )
     .file("src/bridge.rs")

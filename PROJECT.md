@@ -24,7 +24,7 @@ Two frontends, one core. Neither is authoritative: behaviour lives in
 `mailcore` so both inherit it, and each adapter crate only translates. On a
 desktop with both installed they open the same database file, on purpose.
 
-- `crates/mailcore`: pure Rust. Modules: `error`, `models`, `compose` (composer send/drafts for both frontends), `db/{mod,schema,migrations}`, `store/{accounts,folders,messages,queue,contacts}`, `sync/{traits,imap,sender}`, `search`.
+- `crates/mailcore`: pure Rust. Modules: `error`, `models`, `compose` (composer send/drafts for both frontends), `undo` (undoable delete/archive/move), `db/{mod,schema,migrations}`, `store/{accounts,folders,messages,pending_moves,queue,contacts}`, `sync/{traits,imap,sender}`, `search`.
 - `crates/mailapp`: `cxx-qt` QObject bridge (`Bridge`, `SettingsBridge`, `AccountListModel`, `FolderTreeModel`, `MessageListModel`, composer controller) + `main.rs` loading `Main.qml` (embedded `Mailclient` module, filesystem override via `MAILCLIENT_QML_DIR`).
 - `crates/mailapp/qml/`: `Main.qml`, `Sidebar.qml`, `MessageList.qml`, `MessageView.qml`, `Composer.qml`, `AccountSetup.qml`, `Settings.qml`, `components/*`.
 - `crates/mailffi`: `cdylib` over `mailcore` for the Flutter frontend —
@@ -59,6 +59,7 @@ version an existing database is upgraded to lives in `SCHEMA_VERSION`
 | `messages_fts` | FTS5 full-text index, external content over `messages` | `subject`, `from_addr`, `body_text`, `rowid` = `messages.id`. Kept in step by insert/delete/update triggers; the update trigger fires only when indexed text actually changed, so a flag write does not re-index the body |
 | `attachments` | names/sizes synced, bytes only on explicit request (SQLite BLOB cache) | `id`, `message_id→messages`, `filename`, `mime_type`, `size`, `content_id`, `data` (BLOB, `NULL` until downloaded), `is_inline`, `storage_path` (legacy disk pointer, unused by new code) |
 | `contacts` | autocomplete (built from mail) | `address` PK, `name` (as transferred), `alias` (user-editable override), `times_seen`, `last_seen_at` |
+| `pending_moves` | undoable delete/archive/move waiting out the grace period; hides the message from every list, count and search until pushed | `message_id→messages` PK, `batch` (the Undo handle), `action` (trash/archive/move), `dest_folder_id→folders` (NULL = resolve Trash/Archive at push), `due_at`, `attempts`, `created_at`, `updated_at` |
 | `send_queue` | outbox for reliable sending | `id`, `account_id`, `message_id→messages`, `status` (queued/sending/sent/failed), `last_error`, `retries`, `raw_mime` + `envelope_from` + `envelope_to` (the built message, so a send survives a crash), `created_at`, `updated_at`. `sending` means "owned by a submitter": rows are born `sending` (claimed by their creator), and a flush only takes `queued`/`failed` rows through the atomic `queue::claim` |
 | `settings` | user preferences | `key` PK, `value`. Keys and defaults are defined in `store::settings`, which is where to look rather than here |
 
@@ -149,7 +150,13 @@ cache-only so they render immediately.
   account explicitly. Read/star stay local + queued
   (`flags_dirty`) and push on the next sync; a quiet background job also
   pushes them seconds after every toggle (no busy latch, failures stay dirty),
-  so quitting right after reading loses nothing. Delete/purge hit IMAP at once.
+  so quitting right after reading loses nothing. Delete (to Trash), archive and
+  move are undoable: `mailcore::undo` queues them in `pending_moves`, which
+  hides the mail at once, and the IMAP move runs after `UNDO_GRACE_SECS` from
+  the quiet background push or any sync (only rows past their grace period);
+  a quit before then leaves them for the next sync. Undo deletes the rows.
+  A delete that destroys (Junk, Trash, no Trash folder) and an explicit purge
+  still hit IMAP at once, behind a confirm.
 - **What**: multi-pass folder discovery every run (recursive `LIST`, `LSUB`
   merge, per-root subtree `LIST` incl. dotted prefixes, `LIST` inside every
   `NAMESPACE` prefix — a single `LIST "*"` missed folders like Archive on

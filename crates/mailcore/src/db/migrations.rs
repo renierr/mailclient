@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 14;
+pub const SCHEMA_VERSION: u32 = 15;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -42,6 +42,20 @@ begin
     insert into messages_fts (rowid, subject, from_addr, body_text)
     values (new.id, new.subject, new.from_addr, new.body_text);
 end;";
+
+/// v15 DDL: `pending_moves` — undoable moves wait here until pushed.
+const SCHEMA_V15: &str = "create table if not exists pending_moves (
+    message_id     integer primary key references messages (id) on delete cascade,
+    batch          text not null,
+    action         text not null,
+    dest_folder_id integer references folders (id) on delete cascade,
+    due_at         text not null,
+    attempts       integer not null default 0,
+    created_at     text not null,
+    updated_at     text not null
+);
+create index if not exists idx_pending_moves_batch on pending_moves (batch);
+create index if not exists idx_pending_moves_due on pending_moves (due_at);";
 
 /// Run `ALTER TABLE ... ADD COLUMN` statements, tolerating columns that are
 /// already there.
@@ -180,6 +194,10 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         if let Err(e) = drop_generated_html(conn) {
             log::warn!("migration v14: generated html cleanup failed: {e}");
         }
+    }
+    if current < 15 {
+        // v15: `pending_moves`, the grace-period queue behind Undo.
+        conn.execute_batch(SCHEMA_V15)?;
     }
     if current != SCHEMA_VERSION {
         conn.execute(

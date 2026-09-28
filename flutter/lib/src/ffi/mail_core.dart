@@ -36,6 +36,7 @@ export 'generated/api/accounts.dart' show Selection;
 export 'generated/api/events.dart' show JobEvent, JobPhase;
 export 'generated/api/folders.dart' show FolderCounts;
 export 'generated/api/init.dart' show AppInfo;
+export 'generated/api/mutate.dart' show MoveResult;
 
 /// The mail core, in process.
 ///
@@ -214,14 +215,17 @@ class MailCore {
     starred: starred,
   )).toInt();
 
-  // --- moving and deleting (queued) ---------------------------------------
+  // --- moving and deleting (undoable, or queued when destroying) ---------------------------------------
 
-  Future<void> deleteMessages(int accountId, int folderId, List<int> uids) =>
-      rust_mutate.deleteMessages(
-        accountId: accountId,
-        folderId: folderId,
-        uids: uids,
-      );
+  Future<rust_mutate.MoveResult> deleteMessages(
+    int accountId,
+    int folderId,
+    List<int> uids,
+  ) => rust_mutate.deleteMessages(
+    accountId: accountId,
+    folderId: folderId,
+    uids: uids,
+  );
 
   Future<void> purgeMessages(int accountId, int folderId, List<int> uids) =>
       rust_mutate.purgeMessages(
@@ -230,14 +234,17 @@ class MailCore {
         uids: uids,
       );
 
-  Future<void> archiveMessages(int accountId, int folderId, List<int> uids) =>
-      rust_mutate.archiveMessages(
-        accountId: accountId,
-        folderId: folderId,
-        uids: uids,
-      );
+  Future<rust_mutate.MoveResult> archiveMessages(
+    int accountId,
+    int folderId,
+    List<int> uids,
+  ) => rust_mutate.archiveMessages(
+    accountId: accountId,
+    folderId: folderId,
+    uids: uids,
+  );
 
-  Future<void> moveMessages(
+  Future<rust_mutate.MoveResult> moveMessages(
     int accountId,
     int folderId,
     List<int> uids,
@@ -248,6 +255,12 @@ class MailCore {
     uids: uids,
     destPath: destPath,
   );
+
+  /// Take back a queued delete/archive/move; returns the status line text.
+  Future<String> undoMove(String batch) => rust_mutate.undoMove(batch: batch);
+
+  /// Seconds a delete/archive/move stays undoable.
+  int undoGraceSecs() => rust_mutate.undoGraceSecs();
 
   Future<void> createFolder(int accountId, String path) =>
       rust_mutate.createFolder(accountId: accountId, path: path);

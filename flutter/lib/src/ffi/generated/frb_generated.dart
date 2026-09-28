@@ -82,7 +82,7 @@ class MailCoreApi
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => -883527211;
+  int get rustContentHash => -809187413;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -98,7 +98,7 @@ abstract class MailCoreApiApi extends BaseApi {
 
   Future<String> crateApiAccountsAccountsJson();
 
-  Future<void> crateApiMutateArchiveMessages({
+  Future<MoveResult> crateApiMutateArchiveMessages({
     required PlatformInt64 accountId,
     required PlatformInt64 folderId,
     required List<int> uids,
@@ -135,7 +135,7 @@ abstract class MailCoreApiApi extends BaseApi {
     required int uid,
   });
 
-  Future<void> crateApiMutateDeleteMessages({
+  Future<MoveResult> crateApiMutateDeleteMessages({
     required PlatformInt64 accountId,
     required PlatformInt64 folderId,
     required List<int> uids,
@@ -214,7 +214,7 @@ abstract class MailCoreApiApi extends BaseApi {
     required PlatformInt64 offset,
   });
 
-  Future<void> crateApiMutateMoveMessages({
+  Future<MoveResult> crateApiMutateMoveMessages({
     required PlatformInt64 accountId,
     required PlatformInt64 folderId,
     required List<int> uids,
@@ -319,6 +319,10 @@ abstract class MailCoreApiApi extends BaseApi {
     required PlatformInt64 folderId,
     required int uid,
   });
+
+  int crateApiMutateUndoGraceSecs();
+
+  Future<String> crateApiMutateUndoMove({required String batch});
 }
 
 class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
@@ -386,7 +390,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
       const TaskConstMeta(debugName: "accounts_json", argNames: []);
 
   @override
-  Future<void> crateApiMutateArchiveMessages({
+  Future<MoveResult> crateApiMutateArchiveMessages({
     required PlatformInt64 accountId,
     required PlatformInt64 folderId,
     required List<int> uids,
@@ -406,7 +410,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           );
         },
         codec: SseCodec(
-          decodeSuccessData: sse_decode_unit,
+          decodeSuccessData: sse_decode_move_result,
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiMutateArchiveMessagesConstMeta,
@@ -704,7 +708,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
       );
 
   @override
-  Future<void> crateApiMutateDeleteMessages({
+  Future<MoveResult> crateApiMutateDeleteMessages({
     required PlatformInt64 accountId,
     required PlatformInt64 folderId,
     required List<int> uids,
@@ -724,7 +728,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           );
         },
         codec: SseCodec(
-          decodeSuccessData: sse_decode_unit,
+          decodeSuccessData: sse_decode_move_result,
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiMutateDeleteMessagesConstMeta,
@@ -1305,7 +1309,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
       );
 
   @override
-  Future<void> crateApiMutateMoveMessages({
+  Future<MoveResult> crateApiMutateMoveMessages({
     required PlatformInt64 accountId,
     required PlatformInt64 folderId,
     required List<int> uids,
@@ -1327,7 +1331,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           );
         },
         codec: SseCodec(
-          decodeSuccessData: sse_decode_unit,
+          decodeSuccessData: sse_decode_move_result,
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiMutateMoveMessagesConstMeta,
@@ -2071,6 +2075,56 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
     argNames: ["accountId", "folderId", "uid"],
   );
 
+  @override
+  int crateApiMutateUndoGraceSecs() {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 54)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_i_32,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiMutateUndoGraceSecsConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMutateUndoGraceSecsConstMeta =>
+      const TaskConstMeta(debugName: "undo_grace_secs", argNames: []);
+
+  @override
+  Future<String> crateApiMutateUndoMove({required String batch}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(batch, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 55,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiMutateUndoMoveConstMeta,
+        argValues: [batch],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMutateUndoMoveConstMeta =>
+      const TaskConstMeta(debugName: "undo_move", argNames: ["batch"]);
+
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
@@ -2185,6 +2239,19 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   List<(String, String)> dco_decode_list_record_string_string(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_record_string_string).toList();
+  }
+
+  @protected
+  MoveResult dco_decode_move_result(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return MoveResult(
+      batch: dco_decode_String(arr[0]),
+      label: dco_decode_String(arr[1]),
+      purging: dco_decode_bool(arr[2]),
+    );
   }
 
   @protected
@@ -2374,6 +2441,15 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
       ans_.add(sse_decode_record_string_string(deserializer));
     }
     return ans_;
+  }
+
+  @protected
+  MoveResult sse_decode_move_result(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_batch = sse_decode_String(deserializer);
+    var var_label = sse_decode_String(deserializer);
+    var var_purging = sse_decode_bool(deserializer);
+    return MoveResult(batch: var_batch, label: var_label, purging: var_purging);
   }
 
   @protected
@@ -2575,6 +2651,14 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
     for (final item in self) {
       sse_encode_record_string_string(item, serializer);
     }
+  }
+
+  @protected
+  void sse_encode_move_result(MoveResult self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.batch, serializer);
+    sse_encode_String(self.label, serializer);
+    sse_encode_bool(self.purging, serializer);
   }
 
   @protected

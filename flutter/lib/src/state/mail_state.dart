@@ -262,11 +262,12 @@ class MailState extends ChangeNotifier {
 
   /// Delete a selection — Trash, or destroyed where Trash does not apply.
   /// Queued; the list refreshes when the job reports back.
-  Future<void> deleteMessages(List<int> uids) => _queue(
-    'Delete',
+  /// Delete a selection: to Trash and undoable (see [undoOffer]), or — from
+  /// Junk, from Trash, or without a Trash folder — a purge job the UI has
+  /// already confirmed as permanent.
+  Future<void> deleteMessages(List<int> uids) => _queueUndoable(
     () => _core.deleteMessages(_accountId, _folderId, uids),
-    clearSelection: true,
-    closeUid: uids,
+    uids,
   );
 
   /// Destroy a selection server-side. No undo; the UI always confirms first.
@@ -277,19 +278,41 @@ class MailState extends ChangeNotifier {
     closeUid: uids,
   );
 
-  Future<void> archiveMessages(List<int> uids) => _queue(
-    'Archive',
+  Future<void> archiveMessages(List<int> uids) => _queueUndoable(
     () => _core.archiveMessages(_accountId, _folderId, uids),
-    clearSelection: true,
-    closeUid: uids,
+    uids,
   );
 
-  Future<void> moveMessages(List<int> uids, String destPath) => _queue(
-    'Move',
+  Future<void> moveMessages(List<int> uids, String destPath) => _queueUndoable(
     () => _core.moveMessages(_accountId, _folderId, uids, destPath),
-    clearSelection: true,
-    closeUid: uids,
+    uids,
   );
+
+  /// The latest undoable action, for the Undo snackbar. `seq` grows with
+  /// every offer so a repeat of the same label still shows.
+  ({String batch, String label, int seq})? get undoOffer => _undoOffer;
+  ({String batch, String label, int seq})? _undoOffer;
+  int _undoSeq = 0;
+
+  int get undoGraceSecs => _core.undoGraceSecs();
+
+  /// Take back a queued action (Undo on the snackbar, Ctrl+Z).
+  Future<void> undo(String batch) async {
+    try {
+      showStatus(await _core.undoMove(batch));
+      if (_undoOffer?.batch == batch) _undoOffer = null;
+      await _reloadMessages();
+      await _reloadFolders();
+    } catch (e) {
+      showStatus(_message(e), isError: true);
+    }
+  }
+
+  /// Undo the latest offer, if it is still there.
+  Future<void> undoLast() async {
+    final offer = _undoOffer;
+    if (offer != null) await undo(offer.batch);
+  }
 
   Future<void> markReadMany(List<int> uids, bool read) async {
     await _core.markReadMany(_accountId, _folderId, uids, read);
@@ -770,6 +793,43 @@ class MailState extends ChangeNotifier {
         );
       }
       notifyListeners();
+    } catch (e) {
+      showStatus(_message(e), isError: true);
+    }
+  }
+
+  /// Delete / archive / move through the core's undo queue: the messages
+  /// are hidden at once, so this re-reads the lists itself instead of
+  /// waiting for a job event. A destroying delete comes back as `purging`
+  /// and is tracked like any other job.
+  Future<void> _queueUndoable(
+    Future<MoveResult> Function() start,
+    List<int> uids,
+  ) async {
+    try {
+      final r = await start();
+      _selectedUids.clear();
+      _selectionMode = false;
+      if (r.purging) {
+        _busyKinds.add('Purge');
+        if (uids.contains(_openUid)) {
+          _pendingClose = (
+            kind: 'Purge',
+            accountId: _accountId,
+            folderId: _folderId,
+            uid: _openUid,
+          );
+        }
+        notifyListeners();
+        return;
+      }
+      if (r.batch.isNotEmpty) {
+        if (uids.contains(_openUid)) closeMessage();
+        _undoOffer = (batch: r.batch, label: r.label, seq: ++_undoSeq);
+        await _reloadMessages();
+        await _reloadFolders();
+      }
+      showStatus(r.label);
     } catch (e) {
       showStatus(_message(e), isError: true);
     }

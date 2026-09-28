@@ -8,7 +8,7 @@ use cxx_qt_lib::QString;
 
 use crate::bridge::qobject;
 use crate::bridge::{push_feeds, qstring, shared_db};
-use mailcore::sync::pool::{checkout_session, guard, job_account};
+use mailcore::sync::pool::guard;
 
 /// What to refresh on the GUI after a job.
 #[derive(Clone, Copy)]
@@ -87,52 +87,37 @@ pub(crate) const BUSY_MESSAGE: &str = "busy — wait for the current action";
 
 type JobFn = Box<dyn FnOnce(&tokio::runtime::Runtime) + Send>;
 
-/// Fire-and-forget push of locally-dirtied read/star flags, run after every
-/// toggle (open auto-read, mark read/unread, star, bulk variants) so Seen
-/// reaches the server within seconds instead of waiting for the next full
-/// sync — quitting right after reading loses nothing.
+/// Fire-and-forget push of local changes — read/star toggles and undoable
+/// moves whose grace period is over (see `mailcore::undo`). Run after every
+/// toggle so Seen reaches the server within seconds instead of waiting for
+/// the next full sync — quitting right after reading loses nothing.
 ///
 /// Deliberately outside [`spawn_job`]: no busy latch (a slow network must
 /// never block the next click), no status line, no feed rebuild (the feeds
 /// already show the local change). Exits early without touching the network
-/// when nothing is dirty. Failures stay dirty for the next regular sync.
+/// when nothing is queued. Failures stay queued for the next regular sync.
 pub(crate) fn spawn_flag_push(account_id: i64) {
     let _ = net_tx().send(Box::new(move |rt| {
         rt.block_on(async {
-            let db = match shared_db() {
-                Ok(d) => d,
-                Err(e) => {
-                    log::warn!("flag-push: cannot open db: {e}");
-                    return;
+            match shared_db() {
+                Ok(db) => {
+                    mailcore::undo::push_local_changes(db, account_id).await;
                 }
-            };
-            if mailcore::store::messages::list_flags_dirty(db, account_id)
-                .unwrap_or_default()
-                .is_empty()
-            {
-                return;
+                Err(e) => log::warn!("local-push: cannot open db: {e}"),
             }
-            let acc = match job_account(db, account_id) {
-                Ok(a) => a,
-                Err(e) => {
-                    log::debug!("flag-push: {e}");
-                    return;
-                }
-            };
-            let mut imap = match checkout_session(&acc).await {
-                Ok(l) => l,
-                Err(e) => {
-                    log::debug!("flag-push: offline, staying dirty: {e}");
-                    return;
-                }
-            };
-            let pushed = imap.push_dirty_flags(db, acc.id).await;
-            if pushed > 0 {
-                log::info!("flag-push: pushed {pushed} flag change(s)");
-            }
-            imap.checkin();
         });
     }));
+}
+
+/// [`spawn_flag_push`] once an undoable action's grace period is over. The
+/// wait runs on its own thread so the net thread stays free; if the app
+/// quits first, the queued move is pushed by the next sync instead.
+pub(crate) fn spawn_push_after_grace(account_id: i64) {
+    std::thread::spawn(move || {
+        let secs = mailcore::undo::UNDO_GRACE_SECS.max(0) as u64 + 1;
+        std::thread::sleep(std::time::Duration::from_secs(secs));
+        spawn_flag_push(account_id);
+    });
 }
 
 fn net_tx() -> &'static mpsc::Sender<JobFn> {

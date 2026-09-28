@@ -7,15 +7,15 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `owned_folder`, `require_selection`
+// These functions are ignored because they are not marked as `pub`: `owned_folder`, `queue`, `require_selection`
 
-/// Delete a selection — which means Trash, except where it cannot.
+/// Delete a selection — which means Trash, undoable, except where it cannot.
 ///
 /// Junk is destroyed outright (spam never passes through Trash), and so is
 /// anything deleted from inside Trash itself or in an account that has no
-/// Trash folder at all. The status line says which of the two happened,
-/// because the difference is not recoverable.
-Future<void> deleteMessages({
+/// Trash folder at all: that starts a purge job instead, because the
+/// difference is not recoverable. The UI confirms that case first.
+Future<MoveResult> deleteMessages({
   required PlatformInt64 accountId,
   required PlatformInt64 folderId,
   required List<int> uids,
@@ -37,9 +37,10 @@ Future<void> purgeMessages({
   uids: uids,
 );
 
-/// Move a selection to the Archive folder, creating it when the account has
-/// none — one-click archive should not first make the user set up a folder.
-Future<void> archiveMessages({
+/// Move a selection to the Archive folder, undoable. The folder is created
+/// on push when the account has none — one-click archive should not first
+/// make the user set up a folder.
+Future<MoveResult> archiveMessages({
   required PlatformInt64 accountId,
   required PlatformInt64 folderId,
   required List<int> uids,
@@ -50,8 +51,8 @@ Future<void> archiveMessages({
 );
 
 /// Move a selection to any folder of the same account, addressed by path so
-/// subfolders come along for free.
-Future<void> moveMessages({
+/// subfolders come along for free. Undoable.
+Future<MoveResult> moveMessages({
   required PlatformInt64 accountId,
   required PlatformInt64 folderId,
   required List<int> uids,
@@ -63,6 +64,14 @@ Future<void> moveMessages({
   destPath: destPath,
 );
 
+/// Take back a queued action before it reaches the server. Returns the
+/// status line text, also when it was too late.
+Future<String> undoMove({required String batch}) =>
+    MailCoreApi.instance.api.crateApiMutateUndoMove(batch: batch);
+
+/// Seconds an action stays undoable.
+int undoGraceSecs() => MailCoreApi.instance.api.crateApiMutateUndoGraceSecs();
+
 /// Create an IMAP folder. `/` separates levels in `path` and is mapped onto
 /// the account's own hierarchy delimiter; missing parents are created too and
 /// an existing path is success, not an error.
@@ -73,3 +82,33 @@ Future<void> createFolder({
   accountId: accountId,
   path: path,
 );
+
+/// Result of an undoable action.
+///
+/// `batch` is the Undo handle for [`undo_move`]; empty means there is
+/// nothing to undo — either a permanent delete job started (`purging`, its
+/// result arrives as a `Purge` job event) or nothing happened (`label` says
+/// why).
+class MoveResult {
+  final String batch;
+  final String label;
+  final bool purging;
+
+  const MoveResult({
+    required this.batch,
+    required this.label,
+    required this.purging,
+  });
+
+  @override
+  int get hashCode => batch.hashCode ^ label.hashCode ^ purging.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MoveResult &&
+          runtimeType == other.runtimeType &&
+          batch == other.batch &&
+          label == other.label &&
+          purging == other.purging;
+}

@@ -50,6 +50,20 @@ pub mod qobject {
         #[qsignal]
         fn job_progress(self: Pin<&mut Self>, kind: &QString, status: &QString);
 
+        /// An undoable delete/archive/move was queued: show `label` with an
+        /// Undo that passes `batch` to `undo_move`, for `undo_grace_secs`.
+        #[qsignal]
+        fn undo_available(self: Pin<&mut Self>, batch: &QString, label: &QString);
+
+        /// Take back a queued action before it reaches the server. Returns
+        /// the status line text (also when it was too late).
+        #[qinvokable]
+        fn undo_move(self: Pin<&mut Self>, batch: &QString) -> QString;
+
+        /// Seconds an action stays undoable.
+        #[qinvokable]
+        fn undo_grace_secs(&self) -> i32;
+
         /// Health check callable from QML: returns `"pong: <message>"`.
         #[qinvokable]
         fn ping(&self, message: &QString) -> QString;
@@ -226,22 +240,22 @@ pub mod qobject {
         #[qinvokable]
         fn toggle_star(self: Pin<&mut Self>, uid: i32) -> QString;
 
-        /// Move a message to Trash (what the delete action means), except:
-        /// spam is destroyed immediately (junk never touches Trash) and so is
-        /// anything deleted from inside Trash itself. Returns `"Moved to
-        /// <folder>"`, or `"Deleted permanently"` for both destroy cases.
+        /// Move a message to Trash (what the delete action means), undoable:
+        /// the message leaves the list now and moves on the server after the
+        /// grace period, announced via `undo_available`. Spam, mail already in
+        /// Trash, and accounts without Trash are destroyed at once instead (a
+        /// job; no undo). Returns the status line text or an error.
         #[qinvokable]
         fn delete_message(self: Pin<&mut Self>, uid: i32) -> QString;
 
-        /// Move a message to the Archive folder (one-click archive).
-        /// Creates the Archive folder server-side when the account has none.
-        /// Returns `"Archived to <folder>"` or `"Already in Archive"`.
+        /// Move a message to the Archive folder (one-click archive), undoable
+        /// like `delete_message`. The Archive folder is created server-side
+        /// on push when the account has none.
         #[qinvokable]
         fn archive_message(self: Pin<&mut Self>, uid: i32) -> QString;
 
         /// Move a message to any folder of the same account (by path,
-        /// subfolders included — hierarchy is part of the path).
-        /// Returns `"Moved to <folder>"` or `"Already here"`.
+        /// subfolders included), undoable like `delete_message`.
         #[qinvokable]
         fn move_message(self: Pin<&mut Self>, uid: i32, path: &QString) -> QString;
 
@@ -274,19 +288,16 @@ pub mod qobject {
         #[qinvokable]
         fn set_star_many(self: Pin<&mut Self>, uids_json: &QString, starred: bool) -> QString;
 
-        /// Bulk delete (Trash semantics per folder, like `delete_message` but
-        /// one IMAP session for the whole set). Returns e.g. `"Moved 5 to
-        /// Trash"` or `"Deleted 5 permanently"`.
+        /// Bulk delete, same rules and undo as `delete_message`, one IMAP
+        /// command for the whole set.
         #[qinvokable]
         fn delete_many(self: Pin<&mut Self>, uids_json: &QString) -> QString;
 
-        /// Bulk archive to the Archive folder (created on demand). Returns
-        /// e.g. `"Archived 5"` or `"Already in Archive"`.
+        /// Bulk archive, undoable like `archive_message`.
         #[qinvokable]
         fn archive_many(self: Pin<&mut Self>, uids_json: &QString) -> QString;
 
-        /// Bulk move to any same-account folder (one IMAP session). Returns
-        /// e.g. `"Moved 5 to <folder>"` or `"Already here"`.
+        /// Bulk move to any same-account folder, undoable like `move_message`.
         #[qinvokable]
         fn move_many(self: Pin<&mut Self>, uids_json: &QString, path: &QString) -> QString;
 

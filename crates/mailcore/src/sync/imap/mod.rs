@@ -33,8 +33,8 @@ pub use roles::{attr_text, is_selectable, map_folder_role, normalize_folder_path
 pub use session::ImapSession;
 pub(crate) use types::vec1;
 pub use types::{
-    endpoint_for, ArchiveOutcome, DiscoveredFolder, ImapEndpoint, MoveOutcome, SelectResult,
-    ServerSearchReport, TrashOutcome, FULL_SYNC_WINDOW, MAX_ATTACHMENTS_PER_MESSAGE,
-    MAX_ATTACHMENT_BYTES, OLDER_BATCH, QUICK_SYNC_WINDOW,
+    endpoint_for, DiscoveredFolder, ImapEndpoint, SelectResult, ServerSearchReport,
+    FULL_SYNC_WINDOW, MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_BYTES, OLDER_BATCH,
+    QUICK_SYNC_WINDOW,
 };
 pub use utf7::{decode_modified_utf7, encode_modified_utf7, mailbox_for_wire};

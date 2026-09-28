@@ -91,6 +91,7 @@ impl qobject::Bridge {
             let folder = folders::get_by_path(db, acc.id, &path).map_err(|e| e.to_string())?;
             let mut imap = checkout_session(&acc).await?;
             imap.push_dirty_flags(db, acc.id).await;
+            imap.push_due_moves(db, acc.id).await;
             let r = imap
                 .sync_folder_window(db, folder.id, Some(FULL_SYNC_WINDOW))
                 .await

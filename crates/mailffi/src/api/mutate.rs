@@ -1,57 +1,47 @@
 //! Server-side message moves and deletes.
 //!
+//! Delete, archive and move are undoable: `mailcore::undo` hides the
+//! messages at once and the IMAP move runs after the grace period, so these
+//! return an Undo handle instead of starting a job. Only a delete that
+//! destroys (and an explicit purge) is a job.
+//!
 //! All of these take a *selection* — a list of UIDs — rather than having a
 //! single-message and a bulk variant of each. The Qt bridge grew both, and
 //! they drifted; a one-element list is the same operation, and the IMAP
 //! commands underneath (`UID MOVE`, `UID STORE`+`UID EXPUNGE`) are set-shaped
 //! anyway, so a hundred selected mails cost one round trip, not a hundred.
 
-use mailcore::models::FolderRole;
 use mailcore::store::folders;
+use mailcore::undo::{self, MoveTarget, Queued};
 
-use crate::net::{spawn, JobRefresh};
+use crate::db::shared_db;
+use crate::net::{spawn, spawn_push_after_grace, JobRefresh};
 use mailcore::sync::pool::{checkout_session, resolve_account};
 
-/// Delete a selection — which means Trash, except where it cannot.
+/// Result of an undoable action.
+///
+/// `batch` is the Undo handle for [`undo_move`]; empty means there is
+/// nothing to undo — either a permanent delete job started (`purging`, its
+/// result arrives as a `Purge` job event) or nothing happened (`label` says
+/// why).
+pub struct MoveResult {
+    pub batch: String,
+    pub label: String,
+    pub purging: bool,
+}
+
+/// Delete a selection — which means Trash, undoable, except where it cannot.
 ///
 /// Junk is destroyed outright (spam never passes through Trash), and so is
 /// anything deleted from inside Trash itself or in an account that has no
-/// Trash folder at all. The status line says which of the two happened,
-/// because the difference is not recoverable.
-pub fn delete_messages(account_id: i64, folder_id: i64, uids: Vec<u32>) -> anyhow::Result<()> {
-    require_selection(&uids)?;
-    spawn(
-        "Delete",
-        format!("delete:{folder_id}"),
-        move |db, _progress| async move {
-            let acc = resolve_account(db, account_id)?;
-            let folder = owned_folder(db, &acc, folder_id)?;
-            let mut imap = checkout_session(&acc).await?;
-            let trash = folders::list_by_account(db, acc.id)
-                .map_err(|e| e.to_string())?
-                .into_iter()
-                .find(|f| f.role == FolderRole::Trash)
-                .filter(|t| t.id != folder.id);
-            let summary = match trash.filter(|_| folder.role != FolderRole::Junk) {
-                Some(t) => {
-                    let n = imap
-                        .move_uids_to(db, folder_id, &uids, &t.path)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    format!("Moved {n} to {}", t.path)
-                }
-                None => {
-                    let n = imap
-                        .purge_uids(db, folder_id, &uids)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    format!("Deleted {n} permanently")
-                }
-            };
-            imap.checkin();
-            Ok((summary, Some(JobRefresh::folder(acc.id, folder_id))))
-        },
-    )
+/// Trash folder at all: that starts a purge job instead, because the
+/// difference is not recoverable. The UI confirms that case first.
+pub fn delete_messages(
+    account_id: i64,
+    folder_id: i64,
+    uids: Vec<u32>,
+) -> anyhow::Result<MoveResult> {
+    queue(account_id, folder_id, uids, MoveTarget::Trash)
 }
 
 /// Destroy a selection server-side (`\Deleted` + expunge). No undo — only for
@@ -78,76 +68,78 @@ pub fn purge_messages(account_id: i64, folder_id: i64, uids: Vec<u32>) -> anyhow
     )
 }
 
-/// Move a selection to the Archive folder, creating it when the account has
-/// none — one-click archive should not first make the user set up a folder.
-pub fn archive_messages(account_id: i64, folder_id: i64, uids: Vec<u32>) -> anyhow::Result<()> {
-    require_selection(&uids)?;
-    spawn(
-        "Archive",
-        format!("archive:{folder_id}"),
-        move |db, _progress| async move {
-            let acc = resolve_account(db, account_id)?;
-            let folder = owned_folder(db, &acc, folder_id)?;
-            let mut imap = checkout_session(&acc).await?;
-            let known = folders::list_by_account(db, acc.id).map_err(|e| e.to_string())?;
-            let archive = match known.iter().find(|f| f.role == FolderRole::Archive) {
-                Some(a) => a.clone(),
-                None => {
-                    let delim = known
-                        .first()
-                        .map(|f| f.delimiter.clone())
-                        .unwrap_or_else(|| "/".to_string());
-                    imap.create_folder_path(db, acc.id, "Archive", &delim)
-                        .await
-                        .map_err(|e| e.to_string())?
-                }
-            };
-            let summary = if archive.id == folder.id {
-                "Already in Archive".to_string()
-            } else {
-                let n = imap
-                    .move_uids_to(db, folder_id, &uids, &archive.path)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                format!("Archived {n} to {}", archive.path)
-            };
-            imap.checkin();
-            Ok((summary, Some(JobRefresh::folder(acc.id, folder_id))))
-        },
-    )
+/// Move a selection to the Archive folder, undoable. The folder is created
+/// on push when the account has none — one-click archive should not first
+/// make the user set up a folder.
+pub fn archive_messages(
+    account_id: i64,
+    folder_id: i64,
+    uids: Vec<u32>,
+) -> anyhow::Result<MoveResult> {
+    queue(account_id, folder_id, uids, MoveTarget::Archive)
 }
 
 /// Move a selection to any folder of the same account, addressed by path so
-/// subfolders come along for free.
+/// subfolders come along for free. Undoable.
 pub fn move_messages(
     account_id: i64,
     folder_id: i64,
     uids: Vec<u32>,
     dest_path: String,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<MoveResult> {
+    queue(account_id, folder_id, uids, MoveTarget::Folder(dest_path))
+}
+
+/// Take back a queued action before it reaches the server. Returns the
+/// status line text, also when it was too late.
+pub fn undo_move(batch: String) -> anyhow::Result<String> {
+    let n = undo::undo(shared_db()?, &batch).map_err(anyhow::Error::msg)?;
+    Ok(match n {
+        0 => "Too late to undo — already done on the server".to_string(),
+        1 => "Undone: 1 message is back".to_string(),
+        n => format!("Undone: {n} messages are back"),
+    })
+}
+
+/// Seconds an action stays undoable.
+#[flutter_rust_bridge::frb(sync)]
+pub fn undo_grace_secs() -> i32 {
+    undo::UNDO_GRACE_SECS as i32
+}
+
+fn queue(
+    account_id: i64,
+    folder_id: i64,
+    uids: Vec<u32>,
+    target: MoveTarget,
+) -> anyhow::Result<MoveResult> {
     require_selection(&uids)?;
-    spawn(
-        "Move",
-        format!("move:{folder_id}"),
-        move |db, _progress| async move {
-            let acc = resolve_account(db, account_id)?;
-            let folder = owned_folder(db, &acc, folder_id)?;
-            let dest = folders::get_by_path(db, acc.id, &dest_path).map_err(|e| e.to_string())?;
-            if dest.id == folder.id {
-                return Ok(("Already here".to_string(), None));
+    let db = shared_db()?;
+    let queued =
+        undo::queue_move(db, account_id, folder_id, &uids, target).map_err(anyhow::Error::msg)?;
+    Ok(match queued {
+        Queued::Pending { batch, label, .. } => {
+            spawn_push_after_grace(account_id);
+            MoveResult {
+                batch,
+                label,
+                purging: false,
             }
-            let mut imap = checkout_session(&acc).await?;
-            let n = imap
-                .move_uids_to(db, folder_id, &uids, &dest.path)
-                .await
-                .map_err(|e| e.to_string())?;
-            imap.checkin();
-            Ok((
-                format!("Moved {n} to {}", dest.path),
-                Some(JobRefresh::folder(acc.id, folder_id)),
-            ))
+        }
+        Queued::Permanent => {
+            purge_messages(account_id, folder_id, uids)?;
+            MoveResult {
+                batch: String::new(),
+                label: String::new(),
+                purging: true,
+            }
+        }
+        Queued::AlreadyThere => MoveResult {
+            batch: String::new(),
+            label: "Already here".to_string(),
+            purging: false,
         },
-    )
+    })
 }
 
 /// Create an IMAP folder. `/` separates levels in `path` and is mapped onto
