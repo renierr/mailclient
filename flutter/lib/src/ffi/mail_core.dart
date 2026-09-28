@@ -346,6 +346,9 @@ class MailCore {
   Future<String> imageDataUrl(String path) =>
       rust_composer.imageDataUrl(path: path);
 
+  /// Whether a file would be offered as an inline image (by type).
+  bool isInlineImage(String path) => rust_composer.isInlineImage(path: path);
+
   Future<Map<String, dynamic>> draftForm(int accountId, int uid) async =>
       _decodeMap(await rust_composer.draftForm(accountId: accountId, uid: uid));
 

@@ -57,6 +57,10 @@ Future<String> draftForm({
 Future<String> imageDataUrl({required String path}) =>
     MailCoreApi.instance.api.crateApiComposerImageDataUrl(path: path);
 
+/// Whether a file would be offered as an inline image (by type).
+bool isInlineImage({required String path}) =>
+    MailCoreApi.instance.api.crateApiComposerIsInlineImage(path: path);
+
 /// Destroy a server draft (`\Deleted` + expunge, never filed to Trash) —
 /// what Discard means for a draft opened from the Drafts folder.
 Future<void> deleteDraft({

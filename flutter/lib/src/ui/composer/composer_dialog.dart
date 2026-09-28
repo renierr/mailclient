@@ -5,6 +5,7 @@ import '../../ffi/mail_core.dart';
 import '../../models/models.dart';
 import '../../state/mail_state.dart';
 import '../dialogs/mail_dialog.dart';
+import 'composer_drop_target.dart';
 import 'composer_widgets.dart';
 import 'inline_images.dart';
 import 'markdown.dart';
@@ -523,6 +524,10 @@ class _ComposerDialogState extends State<ComposerDialog> {
 
   /// All composer fields, shared by the dialog and the fullscreen page.
   Widget _fieldsColumn() {
+    return ComposerDropTarget(onFiles: _dropFiles, child: _fields());
+  }
+
+  Widget _fields() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -903,7 +908,38 @@ class _ComposerDialogState extends State<ComposerDialog> {
 
   /// Pick images and put their tokens at the cursor (see [InlineImages]).
   Future<void> _insertImages() async {
-    final tokens = await _images.pick(context.read<MailState>());
+    _insertTokens(await _images.pick(context.read<MailState>()));
+  }
+
+  /// Dropped files: other files attach at once; images ask whether they go
+  /// inline or attach.
+  Future<void> _dropFiles(List<({String path, String name})> files) async {
+    if (_working) return;
+    final core = MailCore.instance;
+    final images = files.where((f) => core.isInlineImage(f.path)).toList();
+    final others = files.where((f) => !core.isInlineImage(f.path)).toList();
+    _attach(others);
+    if (images.isEmpty) return;
+    final placement = await askImagePlacement(context, images.length);
+    if (!mounted || placement == null) return;
+    if (placement == ImagePlacement.attach) {
+      _attach(images);
+    } else {
+      _insertTokens(await _images.load(context.read<MailState>(), images));
+    }
+  }
+
+  void _attach(List<({String path, String name})> files) {
+    var added = false;
+    for (final f in files) {
+      if (_picked.any((p) => p.path == f.path)) continue;
+      _picked.add(PickedFile(path: f.path, name: f.name));
+      added = true;
+    }
+    if (added) setState(() => _dirty = true);
+  }
+
+  void _insertTokens(List<String> tokens) {
     if (tokens.isEmpty || !mounted) return;
     final text = _body.text;
     final at = _body.selection.start >= 0 ? _body.selection.start : text.length;

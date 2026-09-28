@@ -144,7 +144,8 @@ regenerating.
 Dart packages are the same kind of decision as a crate, and `flutter/pubspec.yaml`
 is their source of truth — read it rather than a list here. Broadly: the
 bridge (`flutter_rust_bridge`), state (`provider`), platform paths and files
-(`path_provider`, `file_picker`, `open_filex`, `url_launcher`), formatting and
+(`path_provider`, `file_picker`, `open_filex`, `url_launcher`, and
+`desktop_drop` for files dropped onto the composer), formatting and
 HTML (`intl`, `flutter_widget_from_html_core`, and `webview_flutter` for the
 Android reader), and Android background mail (`workmanager`,
 `flutter_local_notifications`), plus the

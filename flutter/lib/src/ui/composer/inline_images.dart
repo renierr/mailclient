@@ -35,15 +35,25 @@ class InlineImages {
       );
       return const [];
     }
+    return load(state, [
+      for (final f in files)
+        if (f.path != null && f.path!.isNotEmpty) (path: f.path!, name: f.name),
+    ]);
+  }
+
+  /// Load [files] (picked or dropped) as inline images; returns their
+  /// tokens. Files that cannot go inline are reported and skipped.
+  Future<List<String>> load(
+    MailState state,
+    List<({String path, String name})> files,
+  ) async {
     final tokens = <String>[];
-    for (final f in files) {
-      final path = f.path;
-      if (path == null || path.isEmpty) continue;
+    for (final (:path, :name) in files) {
       try {
         final url = await MailCore.instance.imageDataUrl(path);
         final id = _next++;
         _urls[id] = url;
-        tokens.add(token(id, f.name));
+        tokens.add(token(id, name));
       } catch (e) {
         state.showStatus(
           e.toString().replaceFirst('Exception: ', ''),

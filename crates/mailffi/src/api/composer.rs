@@ -104,6 +104,12 @@ pub fn image_data_url(path: String) -> anyhow::Result<String> {
     compose::image_data_url(&path).map_err(|e| anyhow::anyhow!(e.to_string()))
 }
 
+/// Whether a file would be offered as an inline image (by type).
+#[flutter_rust_bridge::frb(sync)]
+pub fn is_inline_image(path: String) -> bool {
+    compose::is_inline_image_file(&path)
+}
+
 /// Destroy a server draft (`\Deleted` + expunge, never filed to Trash) —
 /// what Discard means for a draft opened from the Drafts folder.
 pub fn delete_draft(account_id: i64, uid: u32) -> anyhow::Result<()> {
