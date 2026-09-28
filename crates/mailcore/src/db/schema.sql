@@ -27,7 +27,8 @@ create table if not exists accounts (
     created_at         text not null,
     updated_at         text not null
 );
-create unique index if not exists idx_accounts_email on accounts (email_address);
+-- Addresses are case-insensitive: `User@x` and `user@x` are one mailbox.
+create unique index if not exists idx_accounts_email_nocase on accounts (email_address collate nocase);
 
 -- ----------------------------------------------------------------- folders
 create table if not exists folders (

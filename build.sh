@@ -71,10 +71,12 @@ require_keystore() {
     # Strip CR: key.properties may carry CRLF line endings (Gradle tolerates
     # them, shell comparisons do not).
     store="$(grep -E '^storeFile=' "$props" | cut -d= -f2- | tr -d '\r' || true)"
-    # A relative storeFile resolves against flutter/android/.
+    # Gradle's file() in app/build.gradle.kts resolves a relative storeFile
+    # against the app module, flutter/android/app/. Absolute paths (POSIX or
+    # a Windows drive letter) are taken as they are.
     case "$store" in
-        /*) ;;
-        *) store="flutter/android/$store" ;;
+        /* | [A-Za-z]:*) ;;
+        *) store="flutter/android/app/$store" ;;
     esac
     [ -n "$store" ] && [ -f "$store" ] || {
         echo "keystore not found at '$store' (storeFile in $props)." >&2

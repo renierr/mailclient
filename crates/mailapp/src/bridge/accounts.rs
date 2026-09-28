@@ -55,7 +55,7 @@ impl qobject::Bridge {
         // the window afterwards.
         let id = match account_form::save(db, &form.to_string(), &mut KeyringStore) {
             Ok(id) => id,
-            Err(e) => return qstring(&e.to_string()),
+            Err(e) => return qstring(&account_form::user_message(&e)),
         };
         push_feeds(&mut self, db, id, -1);
         self.as_mut()

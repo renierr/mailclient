@@ -181,3 +181,13 @@ pub fn background_check_now() -> anyhow::Result<String> {
     let report = headless::background_check_blocking(db, &crate::db::db_path());
     Ok(serde_json::to_string(&report)?)
 }
+
+/// Record the marks from a [`background_check_now`] report as seen. The
+/// worker calls this only once the notification was posted (or alerts are
+/// off), so a failed post reports the same mail again on the next run.
+/// `marks_json` is the report's `marks` array, passed back unchanged.
+pub fn commit_background_marks(marks_json: String) -> anyhow::Result<()> {
+    let marks: Vec<headless::SeenMark> = serde_json::from_str(&marks_json)?;
+    headless::commit_seen(crate::db::shared_db()?, &marks);
+    Ok(())
+}

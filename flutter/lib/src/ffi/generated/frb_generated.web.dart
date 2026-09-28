@@ -39,6 +39,9 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   AnyhowException dco_decode_AnyhowException(dynamic raw);
 
   @protected
+  Map<String, String> dco_decode_Map_String_String_None(dynamic raw);
+
+  @protected
   RustStreamSink<JobEvent> dco_decode_StreamSink_job_event_Sse(dynamic raw);
 
   @protected
@@ -84,10 +87,16 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  List<(String, String)> dco_decode_list_record_string_string(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw);
+
+  @protected
+  (String, String) dco_decode_record_string_string(dynamic raw);
 
   @protected
   Selection dco_decode_selection(dynamic raw);
@@ -106,6 +115,11 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
 
   @protected
   AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
+
+  @protected
+  Map<String, String> sse_decode_Map_String_String_None(
+    SseDeserializer deserializer,
+  );
 
   @protected
   RustStreamSink<JobEvent> sse_decode_StreamSink_job_event_Sse(
@@ -155,10 +169,20 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
+  List<(String, String)> sse_decode_list_record_string_string(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
   Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  (String, String) sse_decode_record_string_string(
+    SseDeserializer deserializer,
+  );
 
   @protected
   Selection sse_decode_selection(SseDeserializer deserializer);
@@ -178,6 +202,12 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   @protected
   void sse_encode_AnyhowException(
     AnyhowException self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_Map_String_String_None(
+    Map<String, String> self,
     SseSerializer serializer,
   );
 
@@ -242,11 +272,23 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   );
 
   @protected
+  void sse_encode_list_record_string_string(
+    List<(String, String)> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_list_prim_u_8_strict(
     Uint8List? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_record_string_string(
+    (String, String) self,
     SseSerializer serializer,
   );
 

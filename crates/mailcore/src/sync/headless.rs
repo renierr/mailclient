@@ -17,7 +17,7 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::auth;
 use crate::db::Db;
@@ -106,6 +106,10 @@ pub struct BackgroundReport {
     /// that run only records the baseline so pre-existing unread mail does
     /// not notify all at once.
     pub new: Vec<NewMail>,
+    /// Marks to hand to [`commit_seen`] once `new` has been notified (or
+    /// deliberately not, with alerts off). Uncommitted, `new` is reported
+    /// again on the next check.
+    pub marks: Vec<SeenMark>,
     /// Cached inbox-unread total across accounts, for the launcher badge.
     pub total_unread: u64,
     pub errors: Vec<String>,
@@ -121,18 +125,20 @@ pub const BG_SEEN_PREFIX: &str = "bg_seen_uid_";
 /// spinner; the headless CLI passes `None`.
 pub type SyncProgress<'a> = &'a dyn Fn(usize, usize, &str);
 
-/// One unread inbox row feeding [`collect_new_mail`]: identity (account,
-/// folder, uid, validity) plus notification metadata.
-struct UnreadRow {
-    account_id: i64,
-    account_email: String,
-    folder_id: i64,
-    folder: String,
-    uid: i64,
-    validity: i64,
-    from: String,
-    subject: String,
-    date: String,
+/// Per-folder high-water mark from [`collect_new_mail`], stored by
+/// [`commit_seen`]. Crosses to Dart and back unchanged.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeenMark {
+    pub account_id: i64,
+    pub folder_id: i64,
+    pub uid_validity: i64,
+    pub uid: i64,
+}
+
+impl SeenMark {
+    fn key(&self) -> String {
+        format!("{BG_SEEN_PREFIX}{}_{}", self.account_id, self.folder_id)
+    }
 }
 
 /// Sync one account over an already-connected session.
@@ -358,9 +364,11 @@ pub async fn background_check(db: &Db, db_path: &Path) -> BackgroundReport {
     };
     // NB: `skipped` stays false here — losing the lock returns above.
     let report = sync_all_accounts(db).await;
+    let (new, marks) = collect_new_mail(db);
     BackgroundReport {
         skipped: false,
-        new: collect_new_mail(db),
+        new,
+        marks,
         total_unread: report.total_unread,
         errors: report.errors,
     }
@@ -377,41 +385,38 @@ pub fn background_check_blocking(db: &Db, db_path: &Path) -> BackgroundReport {
     rt.block_on(background_check(db, db_path))
 }
 
-/// Unread inbox mail first seen since the previous call, per folder.
+/// Unread inbox mail first seen since the marks were last committed.
 ///
 /// Each inbox folder keeps a `{uidvalidity}:{max_uid}` mark under
 /// [`BG_SEEN_PREFIX`]. A missing mark or a changed validity means "never
-/// reliably seen": record the current top as the baseline and report
-/// nothing, so enabling the feature (or a server-side UID reset) does not
-/// ding for every old message at once. Otherwise only unread mail above the
-/// mark is new; the mark always advances to the current top, read or not.
-pub fn collect_new_mail(db: &Db) -> Vec<NewMail> {
-    let rows: Vec<UnreadRow> = db
+/// reliably seen": the folder's current top becomes the baseline and nothing
+/// is reported, so enabling the feature (or a server-side UID reset) does not
+/// ding for every old message at once. Otherwise unread mail above the mark
+/// is new.
+///
+/// Read-only: the returned marks move the high-water line only once passed
+/// to [`commit_seen`], which the caller does after the notification was
+/// posted — a failed post then reports the same mail again next time. The
+/// top is taken over every inbox message, read or not, and an empty inbox
+/// baselines at 0, so the first mail into a fully read inbox still counts.
+pub fn collect_new_mail(db: &Db) -> (Vec<NewMail>, Vec<SeenMark>) {
+    let tops: Vec<SeenMark> = db
         .conn()
         .prepare(
-            "select m.account_id, a.email_address, m.folder_id, f.path,
-                        m.uid, coalesce(f.uid_validity, 0),
-                        coalesce(m.from_addr, ''), coalesce(m.subject, ''),
-                        coalesce(m.date, '')
-                 from messages m
-                 join accounts a on a.id = m.account_id
-                 join folders f on f.id = m.folder_id
-                 where m.is_read = 0
-                   and f.role = 'inbox'
-                 order by m.account_id, m.folder_id, m.uid",
+            "select f.account_id, f.id, coalesce(f.uid_validity, 0),
+                        coalesce(max(m.uid), 0)
+                 from folders f
+                 left join messages m on m.folder_id = f.id
+                 where f.role = 'inbox'
+                 group by f.account_id, f.id",
         )
         .and_then(|mut stmt| {
             stmt.query_map([], |row| {
-                Ok(UnreadRow {
+                Ok(SeenMark {
                     account_id: row.get(0)?,
-                    account_email: row.get(1)?,
-                    folder_id: row.get(2)?,
-                    folder: row.get(3)?,
-                    uid: row.get(4)?,
-                    validity: row.get(5)?,
-                    from: row.get(6)?,
-                    subject: row.get(7)?,
-                    date: row.get(8)?,
+                    folder_id: row.get(1)?,
+                    uid_validity: row.get(2)?,
+                    uid: row.get(3)?,
                 })
             })
             .and_then(|mapped| mapped.collect::<rusqlite::Result<Vec<_>>>())
@@ -419,45 +424,61 @@ pub fn collect_new_mail(db: &Db) -> Vec<NewMail> {
         .unwrap_or_default();
 
     let mut out = Vec::new();
-    let mut i = 0;
-    while i < rows.len() {
-        let (account_id, folder_id) = (rows[i].account_id, rows[i].folder_id);
-        let mut j = i;
-        while j < rows.len() && rows[j].account_id == account_id && rows[j].folder_id == folder_id {
-            j += 1;
-        }
-        let group = &rows[i..j];
-        let validity = group[0].validity;
-        let top_uid = group.last().map(|r| r.uid).unwrap_or(0);
-        let key = format!("{BG_SEEN_PREFIX}{account_id}_{folder_id}");
-        let seen: Option<(i64, i64)> = settings::get(db, &key).ok().flatten().and_then(|s| {
+    for top in &tops {
+        let seen: Option<(i64, i64)> = settings::get(db, &top.key()).ok().flatten().and_then(|s| {
             s.split_once(':')
                 .and_then(|(v, u)| Some((v.parse().ok()?, u.parse().ok()?)))
         });
-        let fresh_baseline = seen.is_none_or(|(v, _)| v != validity);
-        if fresh_baseline {
-            // First sighting (or UIDVALIDITY reset): baseline, report nothing.
-        } else {
-            let mark = seen.map(|(_, u)| u).unwrap_or(0);
-            out.extend(group.iter().filter(|r| r.uid > mark).map(|r| NewMail {
-                account_id,
-                account_email: r.account_email.clone(),
-                folder_id,
-                folder: r.folder.clone(),
-                uid: r.uid as u32,
-                uid_validity: validity as u32,
-                from: r.from.clone(),
-                subject: r.subject.clone(),
-                date: r.date.clone(),
-            }));
-        }
-        let _ = settings::set(db, &key, &format!("{validity}:{top_uid}"));
-        i = j;
+        // First sighting or UIDVALIDITY reset: baseline only.
+        let Some(mark) = seen.filter(|(v, _)| *v == top.uid_validity).map(|(_, u)| u) else {
+            continue;
+        };
+        out.extend(unread_above(db, top, mark));
     }
-    out
+    (out, tops)
 }
 
-/// Cached inbox-unread total across accounts (no network), for the badge
+/// Record marks from [`collect_new_mail`] as seen.
+pub fn commit_seen(db: &Db, marks: &[SeenMark]) {
+    for m in marks {
+        if let Err(e) = settings::set(db, &m.key(), &format!("{}:{}", m.uid_validity, m.uid)) {
+            log::warn!("background mark for folder {} not saved: {e}", m.folder_id);
+        }
+    }
+}
+
+fn unread_above(db: &Db, top: &SeenMark, mark: i64) -> Vec<NewMail> {
+    db.conn()
+        .prepare(
+            "select a.email_address, f.path, m.uid,
+                        coalesce(m.from_addr, ''), coalesce(m.subject, ''),
+                        coalesce(m.date, '')
+                 from messages m
+                 join accounts a on a.id = m.account_id
+                 join folders f on f.id = m.folder_id
+                 where m.folder_id = ?1 and m.is_read = 0 and m.uid > ?2
+                 order by m.uid",
+        )
+        .and_then(|mut stmt| {
+            stmt.query_map(rusqlite::params![top.folder_id, mark], |row| {
+                Ok(NewMail {
+                    account_id: top.account_id,
+                    account_email: row.get(0)?,
+                    folder_id: top.folder_id,
+                    folder: row.get(1)?,
+                    uid: row.get(2)?,
+                    uid_validity: top.uid_validity as u32,
+                    from: row.get(3)?,
+                    subject: row.get(4)?,
+                    date: row.get(5)?,
+                })
+            })
+            .and_then(|mapped| mapped.collect::<rusqlite::Result<Vec<_>>>())
+        })
+        .unwrap_or_default()
+}
+
+// Cached inbox-unread total across accounts (no network), for the badge
 /// when a check cannot run.
 fn cached_total_unread(db: &Db) -> u64 {
     unread_summary(db).iter().map(|a| a.unread).sum()
@@ -545,13 +566,14 @@ impl SyncLock {
     }
 
     fn pid_alive(pid: u32) -> bool {
-        #[cfg(target_os = "linux")]
+        // Android has /proc too, but is not `target_os = "linux"`.
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             // A live process has a /proc entry; a zombie/reaped pid does not.
             // PID reuse is harmless here: at worst we skip one background run.
             Path::new(&format!("/proc/{pid}")).exists()
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
             let _ = pid;
             true
@@ -671,6 +693,50 @@ mod tests {
         assert_eq!(recent[0].subject, "inbox mail");
     }
 
+    /// One background run whose notification succeeded.
+    fn check(db: &Db) -> Vec<NewMail> {
+        let (new, marks) = collect_new_mail(db);
+        commit_seen(db, &marks);
+        new
+    }
+
+    #[test]
+    fn uncommitted_marks_report_the_same_mail_again() {
+        let (db, acc, inbox, _) = setup_db();
+        assert!(check(&db).is_empty());
+        let mut m = messages::sample_new(acc, inbox, 3);
+        m.is_read = false;
+        messages::upsert(&db, &m).unwrap();
+        // The post failed, so nothing was committed…
+        assert_eq!(collect_new_mail(&db).0.len(), 1);
+        // …and the next run offers it again.
+        assert_eq!(check(&db).len(), 1);
+        assert!(check(&db).is_empty());
+    }
+
+    #[test]
+    fn first_mail_into_a_fully_read_inbox_is_reported() {
+        let (db, acc, inbox, _) = setup_db();
+        let mut read = messages::sample_new(acc, inbox, 1);
+        read.is_read = true;
+        messages::upsert(&db, &read).unwrap();
+        assert!(check(&db).is_empty());
+        let mut fresh = messages::sample_new(acc, inbox, 2);
+        fresh.is_read = false;
+        messages::upsert(&db, &fresh).unwrap();
+        assert_eq!(check(&db).len(), 1);
+    }
+
+    #[test]
+    fn first_mail_into_an_empty_inbox_is_reported() {
+        let (db, acc, inbox, _) = setup_db();
+        assert!(check(&db).is_empty());
+        let mut fresh = messages::sample_new(acc, inbox, 1);
+        fresh.is_read = false;
+        messages::upsert(&db, &fresh).unwrap();
+        assert_eq!(check(&db).len(), 1);
+    }
+
     #[test]
     fn collect_new_mail_baselines_first_then_reports_once() {
         let (db, acc, inbox, _) = setup_db();
@@ -681,20 +747,20 @@ mod tests {
 
         // First run only records the baseline: pre-existing unread mail
         // must not notify.
-        assert!(collect_new_mail(&db).is_empty());
+        assert!(check(&db).is_empty());
 
         // A genuinely new arrival reports exactly once…
         let mut m2 = messages::sample_new(acc, inbox, 2);
         m2.is_read = false;
         m2.subject = Some("fresh arrival".to_string());
         messages::upsert(&db, &m2).unwrap();
-        let new = collect_new_mail(&db);
+        let new = check(&db);
         assert_eq!(new.len(), 1);
         assert_eq!(new[0].subject, "fresh arrival");
         assert_eq!(new[0].uid, 2);
         assert_eq!(new[0].folder_id, inbox);
         // …and the next run stays quiet while it sits unread.
-        assert!(collect_new_mail(&db).is_empty());
+        assert!(check(&db).is_empty());
     }
 
     #[test]
@@ -703,7 +769,7 @@ mod tests {
         let mut m1 = messages::sample_new(acc, inbox, 7);
         m1.is_read = false;
         messages::upsert(&db, &m1).unwrap();
-        assert!(collect_new_mail(&db).is_empty());
+        assert!(check(&db).is_empty());
 
         // Server-side UID reset: UIDs restart low, so without the validity
         // in the mark every old message would look new.
@@ -713,11 +779,11 @@ mod tests {
                 [inbox],
             )
             .unwrap();
-        assert!(collect_new_mail(&db).is_empty());
+        assert!(check(&db).is_empty());
         // …and mail arriving under the new validity reports normally.
         let mut m2 = messages::sample_new(acc, inbox, 8);
         m2.is_read = false;
         messages::upsert(&db, &m2).unwrap();
-        assert_eq!(collect_new_mail(&db).len(), 1);
+        assert_eq!(check(&db).len(), 1);
     }
 }

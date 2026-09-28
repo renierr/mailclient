@@ -53,6 +53,13 @@ pub fn set_setting(key: String, value: String) -> anyhow::Result<()> {
     Ok(s::set(shared_db()?, &key, &value)?)
 }
 
+/// Write several preferences in one transaction: all apply or none do.
+/// `values` maps key to raw string value; unknown keys fail the whole batch.
+pub fn set_settings(values: std::collections::HashMap<String, String>) -> anyhow::Result<()> {
+    let pairs: Vec<(String, String)> = values.into_iter().collect();
+    Ok(s::set_many(shared_db()?, &pairs)?)
+}
+
 /// Message-list ordering. Separate from [`set_setting`] because the two keys
 /// are only meaningful together, and `mailcore` normalizes the pair.
 pub fn set_sort(field: String, descending: bool) -> anyhow::Result<()> {

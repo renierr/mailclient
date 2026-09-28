@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 12;
+pub const SCHEMA_VERSION: u32 = 13;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -160,6 +160,20 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
             log::warn!("migration v12: folder UTF-7 rename failed: {e}");
         }
     }
+    if current < 13 {
+        // v13: the address index ignores case, so `User@x` cannot be added
+        // next to `user@x`. Existing rows that already differ only by case
+        // would make the unique index fail; keep the old one then.
+        match conn.execute_batch(
+            "create unique index if not exists idx_accounts_email_nocase
+                 on accounts (email_address collate nocase);",
+        ) {
+            Ok(()) => {
+                conn.execute_batch("drop index if exists idx_accounts_email;")?;
+            }
+            Err(e) => log::warn!("migration v13: accounts differ only by case, kept index: {e}"),
+        }
+    }
     if current != SCHEMA_VERSION {
         conn.execute(
             "update schema_meta set value = ?1 where key = 'version'",
@@ -218,6 +232,44 @@ fn migrate_folder_paths_utf7(conn: &Connection) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn v13_migration_makes_the_address_index_case_insensitive() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_FULL).unwrap();
+        conn.execute(
+            "insert into schema_meta (key, value) values ('version', '12')",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch(
+            "drop index idx_accounts_email_nocase;
+             create unique index idx_accounts_email on accounts (email_address);",
+        )
+        .unwrap();
+
+        ensure_schema(&conn).unwrap();
+
+        let insert = |email: &str| {
+            conn.execute(
+                "insert into accounts (name, email_address, imap_host, imap_port,
+                     imap_security, imap_username, smtp_host, smtp_port,
+                     smtp_security, smtp_username, auth_vault_key, created_at, updated_at)
+                 values ('n', ?1, 'h', 993, 'tls', 'u', 'h', 465, 'tls', 'u', 'k', 't', 't')",
+                [email],
+            )
+        };
+        insert("user@example.com").unwrap();
+        assert!(insert("User@Example.com").is_err());
+        let old: i64 = conn
+            .query_row(
+                "select count(*) from sqlite_master where name = 'idx_accounts_email'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(old, 0);
+    }
 
     #[test]
     fn v8_migration_adds_alias_column_and_updates_version() {

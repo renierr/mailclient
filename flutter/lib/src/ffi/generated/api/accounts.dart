@@ -22,13 +22,11 @@ Future<String> accountsJson() =>
 Future<String> accountForm({required PlatformInt64 id}) =>
     MailCoreApi.instance.api.crateApiAccountsAccountForm(id: id);
 
-/// Create or update an account from the setup dialog's JSON form
-/// (`{name, email, from_name?, imap_host, imap_port, imap_sec, imap_user,
-/// password, smtp_host, smtp_port, smtp_sec, smtp_user, smtp_password?}`).
+/// Create or update an account from the setup dialog's JSON form.
 ///
-/// Keyed by email address, like the Qt frontend: re-saving a known address
-/// edits that account (and migrates its secrets into the current keyring
-/// backend) instead of creating a duplicate. Returns the account id.
+/// The decision — edit by id, update a known address, reject a duplicate,
+/// keep a blank password — lives in `mailcore::store::account_form`, shared
+/// with the Qt frontend. Returns the account id.
 Future<PlatformInt64> saveAccount({required String form}) =>
     MailCoreApi.instance.api.crateApiAccountsSaveAccount(form: form);
 

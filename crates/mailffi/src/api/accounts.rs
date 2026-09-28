@@ -41,7 +41,8 @@ pub fn account_form(id: i64) -> anyhow::Result<String> {
 /// keep a blank password — lives in `mailcore::store::account_form`, shared
 /// with the Qt frontend. Returns the account id.
 pub fn save_account(form: String) -> anyhow::Result<i64> {
-    Ok(account_form::save(shared_db()?, &form, &mut KeyringStore)?)
+    account_form::save(shared_db()?, &form, &mut KeyringStore)
+        .map_err(|e| anyhow::anyhow!(account_form::user_message(&e)))
 }
 
 /// Delete an account with its folders, messages and keyring secrets.

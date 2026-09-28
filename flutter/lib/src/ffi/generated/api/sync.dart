@@ -67,3 +67,12 @@ Future<void> refreshServerCapabilities({required PlatformInt64 accountId}) =>
 /// rather than failing, so the worker just waits for the next run.
 Future<String> backgroundCheckNow() =>
     MailCoreApi.instance.api.crateApiSyncBackgroundCheckNow();
+
+/// Record the marks from a [`background_check_now`] report as seen. The
+/// worker calls this only once the notification was posted (or alerts are
+/// off), so a failed post reports the same mail again on the next run.
+/// `marks_json` is the report's `marks` array, passed back unchanged.
+Future<void> commitBackgroundMarks({required String marksJson}) => MailCoreApi
+    .instance
+    .api
+    .crateApiSyncCommitBackgroundMarks(marksJson: marksJson);

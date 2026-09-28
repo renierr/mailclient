@@ -47,6 +47,17 @@ pub fn save_account_secrets(
 
 /// Load both passwords; empty/missing SMTP falls back to the IMAP password.
 pub fn load_account_secrets(vault_key: &str) -> Result<AccountSecrets> {
+    let stored = load_stored_secrets(vault_key)?;
+    Ok(AccountSecrets {
+        smtp_password: resolve_smtp(&stored.imap_password, &stored.smtp_password),
+        imap_password: stored.imap_password,
+    })
+}
+
+/// Both passwords exactly as stored: an empty SMTP password stays empty
+/// ("same as IMAP") instead of being resolved. For editing, where a blank
+/// field must keep what is there rather than copy the IMAP password over.
+pub fn load_stored_secrets(vault_key: &str) -> Result<AccountSecrets> {
     #[cfg(not(target_os = "android"))]
     let raw = entry(vault_key)?
         .get_password()
@@ -74,8 +85,8 @@ pub fn load_account_secrets(vault_key: &str) -> Result<AccountSecrets> {
         ));
     }
     Ok(AccountSecrets {
-        smtp_password: resolve_smtp(&imap, &smtp),
         imap_password: imap,
+        smtp_password: smtp,
     })
 }
 
@@ -142,7 +153,8 @@ mod android_vault {
     use super::*;
     use std::collections::HashMap;
     use std::fs;
-    use std::path::PathBuf;
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
     use std::sync::Mutex;
 
     static VAULT_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
@@ -170,48 +182,72 @@ mod android_vault {
             .unwrap_or_else(|| PathBuf::from("auth_vault.json"))
     }
 
+    /// Serialises every read-modify-write of the vault file. The foreground
+    /// app and the background check share this process, so one lock is
+    /// enough.
+    static VAULT_WRITE: Mutex<()> = Mutex::new(());
+
+    /// The whole vault. A missing file is an empty vault; an unreadable or
+    /// corrupt one is an error — never an empty map, or the next write would
+    /// silently drop every other account's secrets.
+    fn read_map(path: &Path) -> Result<HashMap<String, String>> {
+        if !path.exists() {
+            return Ok(HashMap::new());
+        }
+        let data = fs::read_to_string(path)
+            .map_err(|e| StoreError::Keyring(format!("read vault failed: {e}")))?;
+        serde_json::from_str(&data).map_err(|e| StoreError::Keyring(format!("corrupt vault: {e}")))
+    }
+
+    /// Write via a temp file and rename, so a kill mid-write leaves the old
+    /// vault intact instead of a truncated one.
+    fn write_map(path: &Path, map: &HashMap<String, String>) -> Result<()> {
+        let data = serde_json::to_string_pretty(map)
+            .map_err(|e| StoreError::Keyring(format!("serialize vault failed: {e}")))?;
+        let tmp = path.with_extension("json.tmp");
+        let write = || -> std::io::Result<()> {
+            let mut f = fs::File::create(&tmp)?;
+            f.write_all(data.as_bytes())?;
+            f.sync_all()?;
+            fs::rename(&tmp, path)
+        };
+        write().map_err(|e| StoreError::Keyring(format!("write vault failed: {e}")))
+    }
+
+    fn update(change: impl FnOnce(&mut HashMap<String, String>)) -> Result<()> {
+        let _guard = VAULT_WRITE.lock().unwrap_or_else(|p| p.into_inner());
+        let path = vault_file();
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let mut map = read_map(&path)?;
+        change(&mut map);
+        write_map(&path, &map)
+    }
+
     pub fn get_secret(vault_key: &str) -> Result<String> {
         let path = vault_file();
         if !path.exists() {
             return Err(StoreError::Keyring("vault file does not exist".into()));
         }
-        let data = fs::read_to_string(&path)
-            .map_err(|e| StoreError::Keyring(format!("read vault failed: {e}")))?;
-        let map: HashMap<String, String> = serde_json::from_str(&data)
-            .map_err(|e| StoreError::Keyring(format!("corrupt vault: {e}")))?;
-        map.get(vault_key)
-            .cloned()
+        read_map(&path)?
+            .remove(vault_key)
             .ok_or_else(|| StoreError::Keyring("key not found in vault".into()))
     }
 
     pub fn set_secret(vault_key: &str, secret: &str) -> Result<()> {
-        let path = vault_file();
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let mut map: HashMap<String, String> = if path.exists() {
-            let data = fs::read_to_string(&path).unwrap_or_default();
-            serde_json::from_str(&data).unwrap_or_default()
-        } else {
-            HashMap::new()
-        };
-        map.insert(vault_key.to_string(), secret.to_string());
-        let data = serde_json::to_string_pretty(&map)
-            .map_err(|e| StoreError::Keyring(format!("serialize vault failed: {e}")))?;
-        fs::write(&path, data).map_err(|e| StoreError::Keyring(format!("write vault failed: {e}")))
+        update(|map| {
+            map.insert(vault_key.to_string(), secret.to_string());
+        })
     }
 
     pub fn delete_secret(vault_key: &str) -> Result<()> {
-        let path = vault_file();
-        if !path.exists() {
+        if !vault_file().exists() {
             return Ok(());
         }
-        let data = fs::read_to_string(&path).unwrap_or_default();
-        let mut map: HashMap<String, String> = serde_json::from_str(&data).unwrap_or_default();
-        map.remove(vault_key);
-        let data = serde_json::to_string_pretty(&map)
-            .map_err(|e| StoreError::Keyring(format!("serialize vault failed: {e}")))?;
-        fs::write(&path, data).map_err(|e| StoreError::Keyring(format!("write vault failed: {e}")))
+        update(|map| {
+            map.remove(vault_key);
+        })
     }
 }
 

@@ -19,6 +19,11 @@ Future<String> settingsJson() =>
 Future<void> setSetting({required String key, required String value}) =>
     MailCoreApi.instance.api.crateApiSettingsSetSetting(key: key, value: value);
 
+/// Write several preferences in one transaction: all apply or none do.
+/// `values` maps key to raw string value; unknown keys fail the whole batch.
+Future<void> setSettings({required Map<String, String> values}) =>
+    MailCoreApi.instance.api.crateApiSettingsSetSettings(values: values);
+
 /// Message-list ordering. Separate from [`set_setting`] because the two keys
 /// are only meaningful together, and `mailcore` normalizes the pair.
 Future<void> setSort({required String field, required bool descending}) =>

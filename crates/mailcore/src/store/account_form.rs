@@ -8,6 +8,7 @@
 
 use serde_json::Value;
 
+use crate::auth::{self, AccountSecrets};
 use crate::db::Db;
 use crate::error::{Result, StoreError};
 use crate::models::{Account, NewAccount};
@@ -20,6 +21,11 @@ use crate::sync::pool;
 pub trait SecretStore {
     /// Store both passwords. An empty SMTP password means "same as IMAP".
     fn save(&mut self, vault_key: &str, imap_password: &str, smtp_password: &str) -> Result<()>;
+    /// Both passwords as stored, the SMTP one unresolved (empty = same as
+    /// IMAP).
+    fn load(&mut self, vault_key: &str) -> Result<AccountSecrets>;
+    /// Remove an entry, used to undo a save whose account row then failed.
+    fn delete(&mut self, vault_key: &str) -> Result<()>;
 }
 
 /// The OS keyring (or the Android app-private vault).
@@ -27,49 +33,64 @@ pub struct KeyringStore;
 
 impl SecretStore for KeyringStore {
     fn save(&mut self, vault_key: &str, imap_password: &str, smtp_password: &str) -> Result<()> {
-        crate::auth::save_account_secrets(vault_key, imap_password, smtp_password)
+        auth::save_account_secrets(vault_key, imap_password, smtp_password)
+    }
+
+    fn load(&mut self, vault_key: &str) -> Result<AccountSecrets> {
+        auth::load_stored_secrets(vault_key)
+    }
+
+    fn delete(&mut self, vault_key: &str) -> Result<()> {
+        auth::delete_account_secrets(vault_key)
     }
 }
 
 /// Create or update an account from the setup dialog's JSON form.
 ///
 /// An `id` edits that account, so changing its address renames it instead of
-/// creating a second one. Without an id, a known email address updates that
-/// account. Either way a blank password keeps the stored secret — the dialog
-/// never shows it, so re-typing must not be required. A new account requires
-/// one. Returns the account id.
+/// creating a second one; no id creates one. An address another account
+/// already uses is refused either way (case-insensitively). On an edit each
+/// blank password keeps its stored secret — the dialog never shows them, so
+/// re-typing must not be required. A new account requires the IMAP one.
+/// Returns the account id. Show errors with [`user_message`].
 pub fn save(db: &Db, form: &str, secrets: &mut dyn SecretStore) -> Result<i64> {
-    let v: Value = serde_json::from_str(form)
-        .map_err(|_| StoreError::InvalidInput("invalid account form".into()))?;
-    let text = |k: &str| {
+    let v: Value = serde_json::from_str(form).map_err(|_| invalid("invalid account form"))?;
+    let raw = |k: &str| {
         v.get(k)
             .and_then(Value::as_str)
             .unwrap_or_default()
-            .trim()
             .to_string()
     };
+    let text = |k: &str| raw(k).trim().to_string();
     // Ports arrive as strings from a text field, but a numeric preset is just
-    // as plausible — accept either rather than silently defaulting.
-    let port = |k: &str, dflt: u16| -> u16 {
-        v.get(k)
-            .and_then(|x| {
-                x.as_str()
-                    .and_then(|s| s.parse().ok())
-                    .or_else(|| x.as_u64().and_then(|n| u16::try_from(n).ok()))
-            })
-            .unwrap_or(dflt)
+    // as plausible — accept either. Anything else is refused rather than
+    // silently replaced by the default.
+    let port = |k: &str, dflt: u16| -> Result<u16> {
+        match v.get(k) {
+            None | Some(Value::Null) => Ok(dflt),
+            Some(Value::String(s)) if s.trim().is_empty() => Ok(dflt),
+            Some(x) => x
+                .as_str()
+                .and_then(|s| s.trim().parse().ok())
+                .or_else(|| x.as_u64().and_then(|n| u16::try_from(n).ok()))
+                .filter(|p| *p > 0)
+                .ok_or_else(|| invalid("a port must be a number from 1 to 65535")),
+        }
     };
 
     let email = text("email");
     let imap_host = text("imap_host");
     let smtp_host = text("smtp_host");
-    let password = text("password");
+    // Passwords are taken verbatim: a leading or trailing space is part of
+    // the secret.
+    let password = raw("password");
+    let smtp_password = raw("smtp_password");
     let imap_user = text("imap_user");
     if email.is_empty() || imap_host.is_empty() {
-        return Err(StoreError::InvalidInput("fill email and IMAP host".into()));
+        return Err(invalid("fill email and IMAP host"));
     }
     if smtp_host.is_empty() {
-        return Err(StoreError::InvalidInput("fill the SMTP host".into()));
+        return Err(invalid("fill the SMTP host"));
     }
     let smtp_user = match text("smtp_user") {
         ref s if s.is_empty() => imap_user.clone(),
@@ -85,55 +106,56 @@ pub fn save(db: &Db, form: &str, secrets: &mut dyn SecretStore) -> Result<i64> {
         email_address: email.clone(),
         from_name: text("from_name"),
         imap_host,
-        imap_port: port("imap_port", 993),
+        imap_port: port("imap_port", 993)?,
         imap_security: text("imap_sec"),
         imap_username: imap_user,
         smtp_host,
-        smtp_port: port("smtp_port", 465),
+        smtp_port: port("smtp_port", 465)?,
         smtp_security: text("smtp_sec"),
         smtp_username: smtp_user,
         auth_vault_key: String::new(),
         check_interval_secs: 300,
     };
 
-    // An edit names its account by id. Without one, re-saving a known email
-    // updates it rather than creating a duplicate.
     let edit_id = v.get("id").and_then(Value::as_i64).filter(|id| *id >= 0);
     let all = accounts::list(db)?;
     if let Some(other) = all
         .iter()
-        .find(|a| a.email_address == email && edit_id.is_some_and(|id| a.id != id))
+        .find(|a| a.email_address.eq_ignore_ascii_case(&email) && Some(a.id) != edit_id)
     {
-        return Err(StoreError::InvalidInput(format!(
+        return Err(invalid(&format!(
             "another account already uses {}",
             other.email_address
         )));
     }
-    let target = match edit_id {
-        Some(id) => Some(
-            all.into_iter()
-                .find(|a| a.id == id)
-                .ok_or_else(|| StoreError::NotFound("this account no longer exists".into()))?,
-        ),
-        None => all.into_iter().find(|a| a.email_address == email),
-    };
 
-    let id = match target {
-        Some(existing) => {
-            save_edit(
-                db,
-                secrets,
-                &existing,
-                &draft,
-                &password,
-                &text("smtp_password"),
-            )?;
+    let id = match edit_id {
+        Some(id) => {
+            let existing = all
+                .into_iter()
+                .find(|a| a.id == id)
+                .ok_or_else(|| invalid("this account no longer exists"))?;
+            save_edit(db, secrets, &existing, &draft, &password, &smtp_password)?;
             existing.id
         }
-        None => create_new(db, secrets, draft, &password, &text("smtp_password"))?,
+        None => create_new(db, secrets, draft, &password, &smtp_password)?,
     };
     settings::set_last_active_account_id(db, id)?;
     Ok(id)
+}
+
+fn invalid(msg: &str) -> StoreError {
+    StoreError::InvalidInput(msg.to_string())
+}
+
+/// Text of a [`save`] error for the form, without the `invalid input:`
+/// prefix the error's `Display` adds.
+#[must_use]
+pub fn user_message(e: &StoreError) -> String {
+    match e {
+        StoreError::InvalidInput(m) => m.clone(),
+        other => other.to_string(),
+    }
 }
 
 fn save_edit(
@@ -144,14 +166,35 @@ fn save_edit(
     password: &str,
     smtp_password: &str,
 ) -> Result<()> {
+    // Secrets first: if the keyring refuses, nothing has changed yet, instead
+    // of new connection details sitting next to the old password.
+    if !password.is_empty() || !smtp_password.is_empty() {
+        // Each blank field keeps its stored value. An unreadable entry only
+        // matters when the IMAP password is not being replaced.
+        let stored = secrets.load(&existing.auth_vault_key);
+        let imap = if password.is_empty() {
+            match &stored {
+                Ok(s) => s.imap_password.clone(),
+                Err(_) => {
+                    return Err(invalid(
+                        "enter the IMAP password too: the stored one cannot be read",
+                    ))
+                }
+            }
+        } else {
+            password.to_string()
+        };
+        let smtp = if smtp_password.is_empty() {
+            stored.map(|s| s.smtp_password).unwrap_or_default()
+        } else {
+            smtp_password.to_string()
+        };
+        secrets.save(&existing.auth_vault_key, &imap, &smtp)?;
+    }
     accounts::update_connection(db, existing.id, draft)?;
     // Host, user or password may have changed: drop the pooled session so
     // the next action connects with the new values.
     pool::evict_session(existing.id);
-    // A blank password keeps the stored secret.
-    if !password.is_empty() {
-        secrets.save(&existing.auth_vault_key, password, smtp_password)?;
-    }
     Ok(())
 }
 
@@ -163,17 +206,20 @@ fn create_new(
     smtp_password: &str,
 ) -> Result<i64> {
     if password.is_empty() {
-        return Err(StoreError::InvalidInput(
-            "a password is required for a new account".into(),
-        ));
+        return Err(invalid("a password is required for a new account"));
     }
-    let vault = crate::auth::new_vault_key();
+    let vault = auth::new_vault_key();
     secrets.save(&vault, password, smtp_password)?;
     let with_vault = NewAccount {
-        auth_vault_key: vault,
+        auth_vault_key: vault.clone(),
         ..draft
     };
-    accounts::create(db, &with_vault)
+    accounts::create(db, &with_vault).inspect_err(|_| {
+        // No row points at the secret: do not leave it orphaned.
+        if let Err(e) = secrets.delete(&vault) {
+            log::warn!("orphaned keyring entry not removed: {e}");
+        }
+    })
 }
 
 #[cfg(test)]
@@ -181,6 +227,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    #[derive(Default)]
     struct Memory {
         saved: HashMap<String, (String, String)>,
     }
@@ -198,6 +245,21 @@ mod tests {
             );
             Ok(())
         }
+
+        fn load(&mut self, vault_key: &str) -> Result<AccountSecrets> {
+            self.saved
+                .get(vault_key)
+                .map(|(i, s)| AccountSecrets {
+                    imap_password: i.clone(),
+                    smtp_password: s.clone(),
+                })
+                .ok_or_else(|| StoreError::Keyring("missing".into()))
+        }
+
+        fn delete(&mut self, vault_key: &str) -> Result<()> {
+            self.saved.remove(vault_key);
+            Ok(())
+        }
     }
 
     fn form(extra: &str) -> String {
@@ -207,36 +269,55 @@ mod tests {
         )
     }
 
+    fn stored(db: &Db, secrets: &Memory, id: i64) -> (String, String) {
+        let key = accounts::get(db, id).unwrap().auth_vault_key;
+        secrets.saved.get(&key).unwrap().clone()
+    }
+
     #[test]
     fn a_new_account_stores_the_password_and_a_blank_edit_keeps_it() {
         let db = Db::open_in_memory().unwrap();
-        let mut secrets = Memory {
-            saved: HashMap::new(),
-        };
+        let mut secrets = Memory::default();
         let id = save(&db, &form(""), &mut secrets).unwrap();
-        let created = accounts::get(&db, id).unwrap();
-        assert_eq!(
-            secrets.saved.get(&created.auth_vault_key).unwrap().0,
-            "s3cret"
-        );
+        assert_eq!(stored(&db, &secrets, id).0, "s3cret");
 
-        let edited = form(r#","password":"","imap_port":143"#);
-        let again = save(&db, &edited, &mut secrets).unwrap();
-        assert_eq!(again, id);
+        let edited = form(&format!(r#","id":{id},"password":"","imap_port":143"#));
+        assert_eq!(save(&db, &edited, &mut secrets).unwrap(), id);
         assert_eq!(accounts::get(&db, id).unwrap().imap_port, 143);
-        assert_eq!(
-            secrets.saved.len(),
-            1,
-            "a blank password must not be stored"
-        );
+        assert_eq!(stored(&db, &secrets, id), ("s3cret".into(), String::new()));
+    }
+
+    #[test]
+    fn each_blank_password_keeps_its_own_stored_value() {
+        let db = Db::open_in_memory().unwrap();
+        let mut secrets = Memory::default();
+        let id = save(&db, &form(r#","smtp_password":"smtp1""#), &mut secrets).unwrap();
+
+        // Only the SMTP password changes.
+        let smtp_only = form(&format!(
+            r#","id":{id},"password":"","smtp_password":"smtp2""#
+        ));
+        save(&db, &smtp_only, &mut secrets).unwrap();
+        assert_eq!(stored(&db, &secrets, id), ("s3cret".into(), "smtp2".into()));
+
+        // Only the IMAP password changes; the separate SMTP one survives.
+        let imap_only = form(&format!(r#","id":{id},"password":"new""#));
+        save(&db, &imap_only, &mut secrets).unwrap();
+        assert_eq!(stored(&db, &secrets, id), ("new".into(), "smtp2".into()));
+    }
+
+    #[test]
+    fn passwords_keep_surrounding_spaces() {
+        let db = Db::open_in_memory().unwrap();
+        let mut secrets = Memory::default();
+        let id = save(&db, &form(r#","password":" pw ""#), &mut secrets).unwrap();
+        assert_eq!(stored(&db, &secrets, id).0, " pw ");
     }
 
     #[test]
     fn an_id_renames_instead_of_creating_a_second_account() {
         let db = Db::open_in_memory().unwrap();
-        let mut secrets = Memory {
-            saved: HashMap::new(),
-        };
+        let mut secrets = Memory::default();
         let id = save(&db, &form(""), &mut secrets).unwrap();
         let renamed = format!(
             r#"{{"id":{id},"email":"other@example.com","imap_host":"imap.example.com","smtp_host":"smtp.example.com","password":"new"}}"#
@@ -250,40 +331,46 @@ mod tests {
     }
 
     #[test]
-    fn a_port_given_as_a_number_is_accepted() {
+    fn a_port_given_as_a_number_is_accepted_and_nonsense_is_refused() {
         let db = Db::open_in_memory().unwrap();
-        let mut secrets = Memory {
-            saved: HashMap::new(),
-        };
+        let mut secrets = Memory::default();
         let json = r#"{"email":"user@example.com","imap_host":"imap.example.com","imap_port":143,"smtp_host":"smtp.example.com","smtp_port":587,"password":"s"}"#;
         let id = save(&db, json, &mut secrets).unwrap();
         let a = accounts::get(&db, id).unwrap();
         assert_eq!((a.imap_port, a.smtp_port), (143, 587));
+
+        let bad = form(&format!(r#","id":{id},"imap_port":"99999""#));
+        assert!(matches!(
+            save(&db, &bad, &mut secrets),
+            Err(StoreError::InvalidInput(_))
+        ));
     }
 
     #[test]
     fn an_address_another_account_already_uses_is_refused() {
         let db = Db::open_in_memory().unwrap();
-        let mut secrets = Memory {
-            saved: HashMap::new(),
-        };
+        let mut secrets = Memory::default();
         save(&db, &form(""), &mut secrets).unwrap();
-        let other = form(r#","email":"other@example.com""#);
-        let other_id = save(&db, &other, &mut secrets).unwrap();
-        let clash = format!(
-            r#"{{"id":{other_id},"email":"user@example.com","imap_host":"imap.example.com","smtp_host":"smtp.example.com","password":"s"}}"#
+
+        // Adding the same address again, in any case, is not an edit.
+        let again = form(r#","email":"User@Example.com""#);
+        let err = save(&db, &again, &mut secrets).unwrap_err();
+        assert_eq!(
+            user_message(&err),
+            "another account already uses user@example.com"
         );
-        let err = save(&db, &clash, &mut secrets).unwrap_err();
-        assert!(matches!(err, StoreError::InvalidInput(_)));
+
+        let other_id = save(&db, &form(r#","email":"other@example.com""#), &mut secrets).unwrap();
+        let clash = form(&format!(r#","id":{other_id}"#));
+        assert!(save(&db, &clash, &mut secrets).is_err());
         assert_eq!(accounts::list(&db).unwrap().len(), 2);
+        assert_eq!(secrets.saved.len(), 2, "a refused save stores no secret");
     }
 
     #[test]
     fn a_new_account_without_a_password_is_refused() {
         let db = Db::open_in_memory().unwrap();
-        let mut secrets = Memory {
-            saved: HashMap::new(),
-        };
+        let mut secrets = Memory::default();
         let err = save(&db, &form(r#","password":"""#), &mut secrets).unwrap_err();
         assert!(matches!(err, StoreError::InvalidInput(_)));
         assert!(accounts::list(&db).unwrap().is_empty());

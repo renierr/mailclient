@@ -134,6 +134,26 @@ pub fn set(db: &Db, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// Write several preferences at once: all or none. Only known keys are
+/// accepted, so a typo fails the whole batch instead of half-applying it.
+pub fn set_many(db: &Db, pairs: &[(String, String)]) -> Result<()> {
+    if let Some((k, _)) = pairs.iter().find(|(k, _)| defaults(k).is_none()) {
+        return Err(crate::error::StoreError::InvalidInput(format!(
+            "unknown setting: {k}"
+        )));
+    }
+    let tx = db.conn().unchecked_transaction()?;
+    for (k, v) in pairs {
+        tx.execute(
+            "insert into settings (key, value) values (?1, ?2)
+             on conflict (key) do update set value = excluded.value",
+            params![k, v],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 /// Store a boolean value (`1`/`0`).
 pub fn set_bool(db: &Db, key: &str, value: bool) -> Result<()> {
     set(db, key, if value { "1" } else { "0" })
@@ -457,6 +477,17 @@ mod tests {
         assert_eq!(get_delay_secs(&db, MARK_READ_DELAY_SECS), 0);
         set_bool(&db, AUTO_MARK_READ, false).unwrap();
         assert!(!get_bool(&db, AUTO_MARK_READ).unwrap());
+    }
+
+    #[test]
+    fn set_many_is_all_or_nothing() {
+        let db = Db::open_in_memory().unwrap();
+        let pair = |k: &str, v: &str| (k.to_string(), v.to_string());
+        let bad = [pair(SIGNATURE_TEXT, "x"), pair("nope", "1")];
+        assert!(set_many(&db, &bad).is_err());
+        assert_eq!(get(&db, SIGNATURE_TEXT).unwrap(), None);
+        set_many(&db, &[pair(SIGNATURE_TEXT, "x"), pair(UI_SCALE, "1.25")]).unwrap();
+        assert_eq!(get(&db, SIGNATURE_TEXT).unwrap().as_deref(), Some("x"));
     }
 
     #[test]

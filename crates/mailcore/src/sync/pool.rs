@@ -63,11 +63,27 @@ pub fn job_account(db: &Db, captured: i64) -> Result<Account, String> {
 /// Process-global rather than a per-bridge field: bridge entry points cannot
 /// hand out the `&mut` a checkout needs, while a module pool keeps every call
 /// site a two-line change. See the module docs for the threading contract.
-fn imap_pool() -> std::sync::MutexGuard<'static, HashMap<i64, ImapSync>> {
-    static POOL: std::sync::OnceLock<Mutex<HashMap<i64, ImapSync>>> = std::sync::OnceLock::new();
-    POOL.get_or_init(|| Mutex::new(HashMap::new()))
+fn imap_pool() -> std::sync::MutexGuard<'static, Pool> {
+    static POOL: std::sync::OnceLock<Mutex<Pool>> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| Mutex::new(Pool::default()))
         .lock()
         .unwrap_or_else(|e| e.into_inner())
+}
+
+/// Idle sessions plus a per-account generation. Eviction bumps the
+/// generation, so a session that was checked out *before* an account edit or
+/// delete is disconnected on check-in instead of going back into the pool
+/// with the old host and password.
+#[derive(Default)]
+struct Pool {
+    idle: HashMap<i64, ImapSync>,
+    generation: HashMap<i64, u64>,
+}
+
+impl Pool {
+    fn generation(&self, account_id: i64) -> u64 {
+        self.generation.get(&account_id).copied().unwrap_or(0)
+    }
 }
 
 /// A checked-out session. Check it back in on clean completion; anything else
@@ -75,6 +91,7 @@ fn imap_pool() -> std::sync::MutexGuard<'static, HashMap<i64, ImapSync>> {
 /// never handed to the next checkout.
 pub struct SessionLease {
     account_id: i64,
+    generation: u64,
     session: Option<ImapSync>,
 }
 
@@ -84,9 +101,17 @@ impl SessionLease {
     /// caught at the next checkout via `is_healthy().await` instead of
     /// serving work.
     pub fn checkin(mut self) {
-        if let Some(s) = self.session.take() {
-            if s.is_connected() {
-                imap_pool().insert(self.account_id, s);
+        if let Some(mut s) = self.session.take() {
+            let mut pool = imap_pool();
+            if pool.generation(self.account_id) != self.generation {
+                drop(pool);
+                log::info!(
+                    "imap: account {} changed while leased, dropping its session",
+                    self.account_id
+                );
+                s.disconnect();
+            } else if s.is_connected() {
+                pool.idle.insert(self.account_id, s);
             }
         }
     }
@@ -122,7 +147,10 @@ impl Drop for SessionLease {
 /// the next action.
 pub async fn checkout_session(account: &Account) -> Result<SessionLease, String> {
     let id = account.id;
-    let existing = imap_pool().remove(&id);
+    let (existing, generation) = {
+        let mut pool = imap_pool();
+        (pool.idle.remove(&id), pool.generation(id))
+    };
     let session = match existing {
         Some(mut s) => {
             if s.is_healthy().await {
@@ -137,6 +165,7 @@ pub async fn checkout_session(account: &Account) -> Result<SessionLease, String>
     };
     Ok(SessionLease {
         account_id: id,
+        generation,
         session: Some(session),
     })
 }
@@ -154,7 +183,9 @@ async fn connect_fresh(account: &Account) -> Result<ImapSync, String> {
 
 /// Drop one account's pooled session (account edited or deleted).
 pub fn evict_session(account_id: i64) {
-    if imap_pool().remove(&account_id).is_some() {
+    let mut pool = imap_pool();
+    *pool.generation.entry(account_id).or_insert(0) += 1;
+    if pool.idle.remove(&account_id).is_some() {
         log::info!("imap: evicted pooled session for account {account_id}");
     }
 }
@@ -164,7 +195,7 @@ pub fn evict_session(account_id: i64) {
 /// the wait for BYE with no read timeout. Closing the sockets reaps the
 /// server-side sessions just as well, exactly like a network drop.
 pub fn drop_all_sessions() {
-    let n = imap_pool().drain().count();
+    let n = imap_pool().idle.drain().count();
     if n > 0 {
         log::info!("imap: dropped {n} pooled session(s) on shutdown");
     }
@@ -214,6 +245,16 @@ mod tests {
             auth_vault_key: "vault:work".to_string(),
             check_interval_secs: 300,
         }
+    }
+
+    #[test]
+    fn eviction_bumps_only_that_accounts_generation() {
+        // One lock per statement: two guards in one expression deadlock.
+        let generation_of = |id| imap_pool().generation(id);
+        let (a, b) = (generation_of(9001), generation_of(9002));
+        evict_session(9001);
+        assert_eq!(generation_of(9001), a + 1);
+        assert_eq!(generation_of(9002), b);
     }
 
     #[test]
