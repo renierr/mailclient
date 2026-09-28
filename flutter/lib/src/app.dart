@@ -40,7 +40,7 @@ class _MailAppState extends State<MailApp> with WidgetsBindingObserver {
     final plugin = FlutterLocalNotificationsPlugin();
     await plugin.initialize(
       settings: const InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        android: AndroidInitializationSettings(notificationIcon),
       ),
       // Fires for taps while the app is alive; cold-start taps arrive via
       // the launch details below.

@@ -273,6 +273,12 @@ class _ComposerDialogState extends State<ComposerDialog> {
       _bcc.text.trim().isNotEmpty;
   String? _error;
 
+  /// The account the composer was opened for, pinned at open: switching
+  /// accounts behind an open composer must not send or save as the other one.
+  late final int _accountId;
+  late final int _folderId;
+  late final Account? _account;
+
   static String _localPartOf(String address) {
     final at = address.indexOf('@');
     return at < 0 ? address : address.substring(0, at);
@@ -287,6 +293,10 @@ class _ComposerDialogState extends State<ComposerDialog> {
   void initState() {
     super.initState();
     final i = widget.initial;
+    final state = context.read<MailState>();
+    _accountId = state.accountId;
+    _folderId = state.folderId;
+    _account = state.account;
     // Controllers need the account address, which lives behind a context
     // lookup — defer to didChangeDependencies once.
     _fromLocal = TextEditingController()..addListener(_edited);
@@ -309,8 +319,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
     super.didChangeDependencies();
     if (_prefilled) return;
     _prefilled = true;
-    final state = context.read<MailState>();
-    final accountEmail = state.account?.email ?? '';
+    final accountEmail = _account?.email ?? '';
     _domain = _domainOf(accountEmail);
     // Prefill must not mark the composer dirty: listeners are attached in
     // initState, so detach, fill, re-attach, then explicitly mark clean.
@@ -323,7 +332,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
     _fromLocal.text = widget.initial.fromAddr.isNotEmpty
         ? _localPartOf(widget.initial.fromAddr)
         : _localPartOf(accountEmail);
-    _senderName.text = state.account?.fromName ?? '';
+    _senderName.text = _account?.fromName ?? '';
     for (final c in [_fromLocal, _senderName]) {
       c.addListener(_edited);
     }
@@ -353,8 +362,10 @@ class _ComposerDialogState extends State<ComposerDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.read<MailState>();
-    if (widget.fullscreen) return _page(state);
+    final sendFormat = context.select<MailState, String>(
+      (s) => s.settings.sendFormat,
+    );
+    if (widget.fullscreen) return _page(sendFormat);
     final narrow = MailDialog.isNarrow(context);
     // Near-fullscreen on phones so the keyboard leaves a usable body field;
     // a floating 640px box would be covered by it.
@@ -386,7 +397,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
                       ),
                     ),
                     Text(
-                      'Send as ${state.settings.sendFormat}',
+                      'Send as $sendFormat',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ],
@@ -407,6 +418,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
                     child: SingleChildScrollView(child: _fieldsColumn()),
                   ),
                 ),
+                if (_error != null) _errorLine(),
                 const SizedBox(height: 12),
                 Wrap(
                   alignment: WrapAlignment.end,
@@ -432,7 +444,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
   /// Fullscreen composer page for phones (see [ComposerDialog.fullscreen]):
   /// the Scaffold shrinks for the keyboard natively, so every field stays
   /// reachable while typing.
-  Widget _page(MailState state) {
+  Widget _page(String sendFormat) {
     return PopScope(
       canPop: !_working && !_dirty,
       onPopInvokedWithResult: (didPop, _) {
@@ -468,9 +480,10 @@ class _ComposerDialogState extends State<ComposerDialog> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'Send as ${state.settings.sendFormat}',
+              'Send as $sendFormat',
               style: Theme.of(context).textTheme.bodySmall,
             ),
+            if (_error != null) _errorLine(),
             if (widget.initial.replyNotice.isNotEmpty) ...[
               const SizedBox(height: 8),
               ComposerNotice(text: widget.initial.replyNotice, danger: true),
@@ -536,7 +549,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
       textInputAction: TextInputAction.next,
       decoration: InputDecoration(
         labelText: 'Sender name',
-        hintText: context.read<MailState>().account?.displayName ?? '',
+        hintText: _account?.displayName ?? '',
       ),
     );
     final from = TextField(
@@ -622,8 +635,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
     );
   }
 
-  /// Server-attachment notice, the picker tray and the error line, shared by
-  /// dialog and page.
+  /// Server-attachment notice and the picker tray, shared by dialog and page.
   Widget _extrasSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -650,16 +662,20 @@ class _ComposerDialogState extends State<ComposerDialog> {
           picked: _picked,
           onChanged: () => setState(() => _dirty = true),
         ),
-        if (_error != null) ...[
-          const SizedBox(height: 4),
-          Text(
-            _error!,
-            style: TextStyle(color: Theme.of(context).colorScheme.error),
-          ),
-        ],
       ],
     );
   }
+
+  /// Send/save failure. Sits outside the scrolling fields — above the action
+  /// row in the dialog, at the top of the page (whose actions are in the
+  /// AppBar) — so it is never scrolled out of sight below a long body.
+  Widget _errorLine() => Padding(
+    padding: const EdgeInsets.only(top: 8),
+    child: Text(
+      _error!,
+      style: TextStyle(color: Theme.of(context).colorScheme.error),
+    ),
+  );
 
   /// Dialog action row buttons, extracted so the dialog body stays readable.
   /// The fullscreen page spreads the same actions across AppBar + bottomBar.
@@ -708,7 +724,6 @@ class _ComposerDialogState extends State<ComposerDialog> {
   }
 
   Map<String, dynamic> _form() {
-    final state = context.read<MailState>();
     final bodyText = _body.text;
     // Markdown renders to the HTML twin only when the text carries real
     // formatting; otherwise body_html stays empty and the mail goes out
@@ -721,7 +736,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
       'to': _to.text,
       'cc': _cc.text,
       'bcc': _bcc.text,
-      'from': _effectiveFrom(state.account?.email ?? ''),
+      'from': _effectiveFrom(_account?.email ?? ''),
       'from_name': _senderName.text,
       'reply_to': _showReplyTo ? _replyToCtrl.text : '',
       'subject': _subject.text,
@@ -747,11 +762,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
       // Validation and queueing happen inline in the core: a mistake comes
       // back here with the composer still open and the text intact. Only the
       // SMTP submit runs in the background, reported on the status line.
-      await MailCore.instance.sendMail(
-        state.accountId,
-        state.folderId,
-        _form(),
-      );
+      await MailCore.instance.sendMail(_accountId, _folderId, _form());
       if (!mounted) return;
       Navigator.of(context).pop();
       state.showStatus('Sending…');
@@ -766,13 +777,12 @@ class _ComposerDialogState extends State<ComposerDialog> {
 
   Future<void> _saveDraft() async {
     if (_working) return;
-    final state = context.read<MailState>();
     setState(() {
       _savingDraft = true;
       _error = null;
     });
     try {
-      await MailCore.instance.saveDraft(state.accountId, _form());
+      await MailCore.instance.saveDraft(_accountId, _form());
       if (!mounted) return;
       Navigator.of(context).pop();
     } catch (e) {
@@ -786,7 +796,6 @@ class _ComposerDialogState extends State<ComposerDialog> {
 
   Future<void> _deleteDraft() async {
     if (_working) return;
-    final state = context.read<MailState>();
     final confirmed =
         await MailDialog.show<bool>(
           context,
@@ -811,10 +820,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
         false;
     if (!confirmed || !mounted) return;
     try {
-      await MailCore.instance.deleteDraft(
-        state.accountId,
-        widget.initial.draftUid,
-      );
+      await MailCore.instance.deleteDraft(_accountId, widget.initial.draftUid);
       if (!mounted) return;
       Navigator.of(context).pop();
     } catch (e) {

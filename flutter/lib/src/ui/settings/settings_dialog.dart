@@ -21,6 +21,8 @@ class SettingsDialog extends StatefulWidget {
   static Future<void> show(BuildContext context) async {
     await MailDialog.showForm(
       context,
+      // A tap outside must not throw away unsaved edits.
+      barrierDismissible: false,
       dialog: (_) => const SettingsDialog(),
       page: (_) => const SettingsDialog(fullscreen: true),
     );
@@ -459,6 +461,13 @@ class _SettingsDialogState extends State<SettingsDialog> {
   }
 
   Future<void> _sendTestNotification() async {
+    if (!await requestNotificationPermission()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Notifications are not allowed')),
+      );
+      return;
+    }
     await showTestNotification();
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -472,32 +481,28 @@ class _SettingsDialogState extends State<SettingsDialog> {
       _error = null;
     });
     try {
-      final d = _draft;
-      final writes = <String, String>{
-        SettingKeys.sentCopy: _yn(d.sentCopy),
-        SettingKeys.loadRemoteImages: _yn(d.loadRemoteImages),
-        SettingKeys.sendFormat: d.sendFormat,
-        SettingKeys.includePlain: _yn(d.includePlain),
-        SettingKeys.autoMarkRead: _yn(d.autoMarkRead),
-        SettingKeys.markReadDelay: '${d.markReadDelaySecs}',
-        SettingKeys.collectContacts: _yn(d.collectContacts),
-        SettingKeys.confirmDelete: _yn(d.confirmDelete),
-        SettingKeys.listDensity: d.density,
-        SettingKeys.readerFontSize: d.readerFontSize,
-        SettingKeys.linkClickAction: d.linkClickAction,
-        SettingKeys.syncInterval: '${d.syncIntervalMinutes}',
-        SettingKeys.notificationsEnabled: _yn(d.notificationsEnabled),
-        SettingKeys.signatureEnabled: _yn(d.signatureEnabled),
-        SettingKeys.signatureText: d.signatureText,
-        SettingKeys.replyBelowQuote: _yn(d.replyBelowQuote),
-        SettingKeys.requestMdn: _yn(d.requestMdn),
-        SettingKeys.uiScale: '${d.uiScale}',
+      final before = state.settings;
+      final now = _values(_draft);
+      final old = _values(before);
+      // Only what changed, in one all-or-nothing batch: a failure leaves
+      // every setting as it was, and an untouched interval does not
+      // reschedule the sync timers.
+      final writes = {
+        for (final e in now.entries)
+          if (old[e.key] != e.value) e.key: e.value,
       };
-      for (final e in writes.entries) {
-        await state.setSetting(e.key, e.value);
+      await state.setSettings(writes);
+      final d = _draft;
+      if (d.sortField != before.sortField ||
+          d.sortDescending != before.sortDescending) {
+        // Sort is its own call: the two keys only make sense together.
+        await state.setSort(d.sortField, d.sortDescending);
       }
-      // Sort is its own call: the two keys only make sense together.
-      await state.setSort(d.sortField, d.sortDescending);
+      // Background checks just got enabled: ask for the notification
+      // permission now, not on some later cold start.
+      if (d.syncIntervalMinutes > 0 && before.syncIntervalMinutes <= 0) {
+        await requestNotificationPermission();
+      }
       if (!mounted) return;
       Navigator.of(context).pop();
     } catch (e) {
@@ -510,6 +515,28 @@ class _SettingsDialogState extends State<SettingsDialog> {
       });
     }
   }
+
+  /// Every stored setting of [d] in its raw string form.
+  static Map<String, String> _values(AppSettings d) => {
+    SettingKeys.sentCopy: _yn(d.sentCopy),
+    SettingKeys.loadRemoteImages: _yn(d.loadRemoteImages),
+    SettingKeys.sendFormat: d.sendFormat,
+    SettingKeys.includePlain: _yn(d.includePlain),
+    SettingKeys.autoMarkRead: _yn(d.autoMarkRead),
+    SettingKeys.markReadDelay: '${d.markReadDelaySecs}',
+    SettingKeys.collectContacts: _yn(d.collectContacts),
+    SettingKeys.confirmDelete: _yn(d.confirmDelete),
+    SettingKeys.listDensity: d.density,
+    SettingKeys.readerFontSize: d.readerFontSize,
+    SettingKeys.linkClickAction: d.linkClickAction,
+    SettingKeys.syncInterval: '${d.syncIntervalMinutes}',
+    SettingKeys.notificationsEnabled: _yn(d.notificationsEnabled),
+    SettingKeys.signatureEnabled: _yn(d.signatureEnabled),
+    SettingKeys.signatureText: d.signatureText,
+    SettingKeys.replyBelowQuote: _yn(d.replyBelowQuote),
+    SettingKeys.requestMdn: _yn(d.requestMdn),
+    SettingKeys.uiScale: '${d.uiScale}',
+  };
 
   static String _yn(bool v) => v ? '1' : '0';
 
@@ -586,10 +613,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
           children: [
             labels,
             const SizedBox(height: 2),
-            Align(
-              alignment: Alignment.centerRight,
-              child: control(expanded: false),
-            ),
+            // Expanded: a long option label ellipsizes instead of
+            // overflowing the dropdown at 360px / large text.
+            control(expanded: true),
           ],
         ),
       );
@@ -639,16 +665,18 @@ class _SettingsDialogState extends State<SettingsDialog> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _sectionDropdown(),
-          const SizedBox(height: 8),
-          _body(),
+          // Save is in the AppBar, so the error goes to the top where it is
+          // seen, not below a long scroll.
           if (_error != null) ...[
-            const SizedBox(height: 8),
             Text(
               _error!,
               style: TextStyle(color: Theme.of(context).colorScheme.error),
             ),
+            const SizedBox(height: 8),
           ],
+          _sectionDropdown(),
+          const SizedBox(height: 8),
+          _body(),
         ],
       ),
     );

@@ -23,6 +23,8 @@ class AccountsDialog extends StatelessWidget {
     final accounts = context.select<MailState, List<Account>>(
       (s) => s.accounts,
     );
+    // Subscribed too, so the "active" marker follows an account switch.
+    final activeId = context.select<MailState, int>((s) => s.accountId);
     return MailDialogShell(
       title: 'Accounts',
       maxWidth: 520,
@@ -33,8 +35,12 @@ class AccountsDialog extends StatelessWidget {
           : ListView.separated(
               itemCount: accounts.length,
               separatorBuilder: (_, _) => const Divider(height: 1),
-              itemBuilder: (context, i) =>
-                  _row(context, context.read<MailState>(), accounts[i]),
+              itemBuilder: (context, i) => _row(
+                context,
+                context.read<MailState>(),
+                accounts[i],
+                activeId,
+              ),
             ),
       actions: [
         OutlinedButton.icon(
@@ -67,8 +73,8 @@ class AccountsDialog extends StatelessWidget {
     );
   }
 
-  Widget _row(BuildContext context, MailState state, Account a) {
-    final current = a.id == state.accountId;
+  Widget _row(BuildContext context, MailState state, Account a, int activeId) {
+    final current = a.id == activeId;
     final avatarBg = avatarColor(context, a.email);
     return ListTile(
       dense: true,

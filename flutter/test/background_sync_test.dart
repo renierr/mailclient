@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mailclient/src/sync/background_sync.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   group('effectiveBackgroundMinutes', () {
@@ -43,23 +42,37 @@ void main() {
     });
   });
 
-  group('readNotifiedMark', () {
-    test('a missing mark is never-notified', () async {
-      SharedPreferences.setMockInitialValues({});
-      final prefs = await SharedPreferences.getInstance();
-      expect(readNotifiedMark(prefs, 1, 2), isNull);
+  group('notifyDecision', () {
+    Future<bool> yes() async => true;
+    Future<bool> no() async => false;
+
+    test('nothing new commits the baseline without asking', () async {
+      var asked = false;
+      final d = await notifyDecision(
+        hasNew: false,
+        alertsOn: true,
+        permitted: () async => asked = true,
+      );
+      expect(d, NotifyDecision.commit);
+      expect(asked, isFalse);
     });
 
-    test('reads a validity-scoped mark', () async {
-      SharedPreferences.setMockInitialValues({'notified_uid_1_2': '42:9'});
-      final prefs = await SharedPreferences.getInstance();
-      expect(readNotifiedMark(prefs, 1, 2), (validity: 42, uid: 9));
+    test('alerts off or not permitted commit without posting', () async {
+      expect(
+        await notifyDecision(hasNew: true, alertsOn: false, permitted: yes),
+        NotifyDecision.commit,
+      );
+      expect(
+        await notifyDecision(hasNew: true, alertsOn: true, permitted: no),
+        NotifyDecision.commit,
+      );
     });
 
-    test('keeps a legacy bare UID so already-alerted mail stays quiet', () async {
-      SharedPreferences.setMockInitialValues({'notified_uid_1_2': 9});
-      final prefs = await SharedPreferences.getInstance();
-      expect(readNotifiedMark(prefs, 1, 2), (validity: 0, uid: 9));
+    test('new mail with alerts on and permitted posts', () async {
+      expect(
+        await notifyDecision(hasNew: true, alertsOn: true, permitted: yes),
+        NotifyDecision.post,
+      );
     });
   });
 
@@ -67,13 +80,17 @@ void main() {
     test('decodes the Rust report shape', () {
       final report = decodeBackgroundReport('''
         {"skipped": false, "total_unread": 2, "errors": [],
-         "new": [{"account_id": 1, "account_email": "a@x.y",
+         "new": [{"account_id": 1, "account_email": "user@example.com",
                   "folder_id": 4, "folder": "INBOX", "uid": 9,
-                  "from": "bob", "subject": "hi", "date": "today"}]}
+                  "uid_validity": 7, "from": "sender@example.org",
+                  "subject": "hi", "date": "today"}],
+         "marks": [{"account_id": 1, "folder_id": 4,
+                    "uid_validity": 7, "uid": 9}]}
       ''');
       expect(report['skipped'], false);
       expect(report['total_unread'], 2);
       expect((report['new'] as List).length, 1);
+      expect((report['marks'] as List).single['uid'], 9);
     });
   });
 }

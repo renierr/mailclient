@@ -66,11 +66,22 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
   final _revealed = <String>{};
   bool _guessed = false;
 
+  /// Anything typed or changed since open (or since the stored account
+  /// loaded) — back and Cancel then ask before dropping it.
+  bool _dirty = false;
+
+  void _edited() {
+    if (!_dirty) setState(() => _dirty = true);
+  }
+
   @override
   void initState() {
     super.initState();
     _fields['imap_port']!.text = '993';
     _fields['smtp_port']!.text = '465';
+    for (final c in _fields.values) {
+      c.addListener(_edited);
+    }
     _fields['email']!.addListener(_maybeGuess);
     if (widget.accountId != null) _loadExisting(widget.accountId!);
   }
@@ -89,6 +100,8 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
       _imapSec = _normSec(form['imap_sec'] as String?) ?? _imapSec;
       _smtpSec = _normSec(form['smtp_sec'] as String?) ?? _smtpSec;
       _guessed = true;
+      // Filling in the stored values is not an edit.
+      _dirty = false;
     });
   }
 
@@ -122,6 +135,7 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
 
   void _onImapSec(String v) => setState(() {
     _imapSec = v;
+    _dirty = true;
     // Qt port auto-swap: standard ports follow the encryption.
     if (v == 'tls' && _fields['imap_port']!.text == '143') {
       _fields['imap_port']!.text = '993';
@@ -132,6 +146,7 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
 
   void _onSmtpSec(String v) => setState(() {
     _smtpSec = v;
+    _dirty = true;
     if (v == 'tls' && _fields['smtp_port']!.text == '587') {
       _fields['smtp_port']!.text = '465';
     } else if (v != 'tls' && _fields['smtp_port']!.text == '465') {
@@ -148,9 +163,57 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
     super.dispose();
   }
 
+  /// Same guard as the composer: system back, the page's close button and
+  /// Cancel all come through here, so a half-typed account is never dropped
+  /// without asking.
+  Widget _guarded(Widget child) => PopScope(
+    canPop: !_saving && !_dirty,
+    onPopInvokedWithResult: (didPop, _) {
+      if (!didPop && !_saving) _maybeClose();
+    },
+    child: child,
+  );
+
+  Future<void> _maybeClose() async {
+    if (!_dirty) {
+      Navigator.of(context).pop(false);
+      return;
+    }
+    final discard =
+        await MailDialog.show<bool>(
+          context,
+          builder: (context) => AlertDialog(
+            title: const Text('Discard changes?'),
+            content: const Text('The account form has unsaved changes.'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Keep editing'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('Discard'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (discard && mounted) Navigator.of(context).pop(false);
+  }
+
+  Widget _errorLine() => Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Text(
+      _error!,
+      style: TextStyle(color: Theme.of(context).colorScheme.error),
+    ),
+  );
+
   @override
-  Widget build(BuildContext context) {
-    if (widget.fullscreen) return _page();
+  Widget build(BuildContext context) =>
+      _guarded(widget.fullscreen ? _page() : _dialog());
+
+  Widget _dialog() {
     final maxW = MailDialog.maxWidth(context, 480);
     final maxH = MailDialog.maxHeight(context, 600);
     return Dialog(
@@ -177,6 +240,9 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
                 ),
               ),
               const SizedBox(height: 8),
+              // Outside the scrolling fields, so a rejected save is visible
+              // however far down the form is scrolled.
+              if (_error != null) _errorLine(),
               // Wrap, not Row: the buttons stack instead of overflowing at
               // large text scales.
               Wrap(
@@ -184,9 +250,7 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
                 spacing: 8,
                 children: [
                   TextButton(
-                    onPressed: _saving
-                        ? null
-                        : () => Navigator.of(context).pop(false),
+                    onPressed: _saving ? null : _maybeClose,
                     child: const Text('Cancel'),
                   ),
                   FilledButton(
@@ -211,7 +275,7 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
         title: Text(editing ? 'Edit account' : 'Add account'),
         actions: [
           TextButton(
-            onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+            onPressed: _saving ? null : _maybeClose,
             child: const Text('Cancel'),
           ),
           FilledButton(
@@ -231,7 +295,12 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
             child: SingleChildScrollView(
               keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               padding: const EdgeInsets.all(16),
-              child: _fieldsColumn(),
+              // Save sits in the AppBar, so the error goes at the top rather
+              // than below a long form.
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [if (_error != null) _errorLine(), _fieldsColumn()],
+              ),
             ),
           ),
         ),
@@ -281,13 +350,6 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
               : 'SMTP password (blank = same as IMAP)',
           obscure: true,
         ),
-        if (_error != null) ...[
-          const SizedBox(height: 12),
-          Text(
-            _error!,
-            style: TextStyle(color: Theme.of(context).colorScheme.error),
-          ),
-        ],
       ],
     );
   }
@@ -392,6 +454,9 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
         onChanged: (v) => onChanged(v ?? value),
       );
 
+  static bool _isSecret(String key) =>
+      key == 'password' || key == 'smtp_password';
+
   Future<void> _save() async {
     if (!(_form.currentState?.validate() ?? false)) return;
     setState(() {
@@ -400,7 +465,9 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
     });
     try {
       final id = await MailCore.instance.saveAccount({
-        for (final e in _fields.entries) e.key: e.value.text.trim(),
+        // Passwords go verbatim: a space at either end can be part of one.
+        for (final e in _fields.entries)
+          e.key: _isSecret(e.key) ? e.value.text : e.value.text.trim(),
         'imap_sec': _imapSec,
         'smtp_sec': _smtpSec,
         // Without the id, changing the address creates a second account

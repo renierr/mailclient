@@ -27,9 +27,10 @@ class ReaderPane extends StatefulWidget {
 
 class ReaderPaneState extends State<ReaderPane> {
   /// Remote images the user allowed for *this* message only. Reset whenever
-  /// the selection changes, because "show once" has to mean once.
+  /// the selection changes, because "show once" has to mean once. Keyed on
+  /// folder *and* uid: uids are only unique within a folder.
   String? _htmlWithRemoteImages;
-  int _shownForUid = -1;
+  (int, int) _shownFor = (-1, -1);
   bool _details = false;
   String? _hoveredLinkUrl;
 
@@ -37,11 +38,12 @@ class ReaderPaneState extends State<ReaderPane> {
   /// bare address, so the name comes from here — the same source the Qt
   /// reader uses. Null while loading or when the headers are gone.
   Future<MessageHeaders?>? _headersFuture;
-  int _headersForUid = -1;
+  (int, int) _headersFor = (-1, -1);
 
   @override
   Widget build(BuildContext context) {
     final openUid = context.select<MailState, int>((s) => s.openUid);
+    final folderId = context.select<MailState, int>((s) => s.folderId);
     final message = context.select<MailState, MessageBody?>((s) => s.openBody);
     final loadRemote = context.select<MailState, bool>(
       (s) => s.settings.loadRemoteImages,
@@ -56,15 +58,15 @@ class ReaderPaneState extends State<ReaderPane> {
     if (message == null) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (_shownForUid != message.uid) {
+    final key = (folderId, message.uid);
+    if (_shownFor != key) {
       _htmlWithRemoteImages = null;
       _hoveredLinkUrl = null;
-      _shownForUid = message.uid;
+      _shownFor = key;
       _details = false;
     }
-    if (_headersForUid != message.uid) {
-      _headersForUid = message.uid;
-      final folderId = context.read<MailState>().folderId;
+    if (_headersFor != key) {
+      _headersFor = key;
       _headersFuture = MailCore.instance
           .messageHeaders(folderId, message.uid)
           .then<MessageHeaders?>((h) => h)
@@ -190,14 +192,15 @@ class ReaderPaneState extends State<ReaderPane> {
   }
 
   Future<void> _showRemoteImages(MessageBody message) async {
-    final state = context.read<MailState>();
+    final key = _shownFor;
     // Re-sanitized by the core rather than patched here: the list feed stripped
     // the remote references entirely, so there is nothing local to un-strip.
     final html = await MailCore.instance.messageHtmlWithRemoteImages(
-      state.folderId,
+      key.$1,
       message.uid,
     );
-    if (!mounted) return;
+    // The user may have moved on while it loaded.
+    if (!mounted || _shownFor != key) return;
     setState(() => _htmlWithRemoteImages = html);
   }
 }

@@ -33,8 +33,15 @@ class _MailShellState extends State<MailShell> {
   /// dialog (a dialog plus keyboard leaves no room on a phone).
   bool _searchOpen = false;
 
+  /// Layout class of the last build, for the shortcut handlers (which run
+  /// outside the LayoutBuilder that knows the width).
+  bool _narrow = false;
+  bool _wide = true;
+
   void _focusSearch() {
-    setState(() => _searchOpen = true);
+    // Wide layouts keep a permanent field in the AppBar; only the narrow
+    // ones have an inline field to open (and later to close again).
+    if (_narrow) setState(() => _searchOpen = true);
     // The inline field may just have appeared; focus it after the frame.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _searchFocus.requestFocus();
@@ -102,12 +109,15 @@ class _MailShellState extends State<MailShell> {
         // Qt parity: Delete trashes, Shift+Delete purges, Esc leaves the
         // reader/fullscreen, F11 toggles reader fullscreen.
         const SingleActivator(LogicalKeyboardKey.delete): () =>
-            _deleteOpen(state, permanent: false),
+            _deleteShortcut(state, purge: false),
         const SingleActivator(LogicalKeyboardKey.delete, shift: true): () =>
-            _deleteOpen(state, permanent: true),
+            _deleteShortcut(state, purge: true),
         const SingleActivator(LogicalKeyboardKey.escape): () => _escape(state),
-        const SingleActivator(LogicalKeyboardKey.f11): () =>
-            state.toggleReaderFullscreen(),
+        // Fullscreen is a wide-layout mode; narrower ones already give the
+        // reader every pixel and offer no way back out of it.
+        const SingleActivator(LogicalKeyboardKey.f11): () {
+          if (_wide && state.openUid >= 0) state.toggleReaderFullscreen();
+        },
       },
       child: Focus(
         autofocus: true,
@@ -118,6 +128,12 @@ class _MailShellState extends State<MailShell> {
             // fixed-height rows overflow.
             final width = constraints.maxWidth;
             final effective = width / scale;
+            _narrow = effective < Breakpoints.compact;
+            _wide = effective >= Breakpoints.medium;
+            // Plain assignments, not setState: these are derived from what
+            // this very build reads, and everything below uses them.
+            if (!_narrow) _searchOpen = false;
+            if (_narrow) _syncPaneToOpen(openUid);
             final body = effective >= Breakpoints.medium
                 ? _threePane(fullscreen, openUid)
                 : effective >= Breakpoints.compact
@@ -145,7 +161,7 @@ class _MailShellState extends State<MailShell> {
                 appBar: ShellTopBar(
                   showBack:
                       effective < Breakpoints.compact && _pane != _Pane.folders,
-                  onBack: () => setState(() => _pane = _pane.previous),
+                  onBack: () => _paneBack(state),
                   searchFocus: _searchFocus,
                   searchController: _searchController,
                   narrow: effective < Breakpoints.compact,
@@ -178,13 +194,44 @@ class _MailShellState extends State<MailShell> {
     );
   }
 
-  void _deleteOpen(MailState state, {required bool permanent}) {
-    final uid = state.openUid;
-    if (uid < 0) return;
-    if (permanent) {
-      state.purgeMessages([uid]);
+  /// Delete / Shift+Delete: the selection when there is one, else the open
+  /// message — through the same confirm as the buttons, so the setting and
+  /// the always-ask rule for permanent deletes hold for the keyboard too.
+  void _deleteShortcut(MailState state, {required bool purge}) {
+    final uids = state.selectionMode && state.selectedUids.isNotEmpty
+        ? state.selectedUids.toList(growable: false)
+        : state.openUid >= 0
+        ? [state.openUid]
+        : const <int>[];
+    if (uids.isEmpty) return;
+    confirmDelete(
+      context,
+      state,
+      uids: uids,
+      permanent: purge || state.deleteIsPermanent,
+      purge: purge,
+    );
+  }
+
+  /// One-pane layout: the reader pane is showing exactly when a message is
+  /// open. Covers messages opened from outside the list (notification tap,
+  /// search hit) and messages that close underneath it (moved, deleted).
+  void _syncPaneToOpen(int openUid) {
+    if (openUid >= 0) {
+      _pane = _Pane.reader;
+    } else if (_pane == _Pane.reader) {
+      _pane = _Pane.list;
+    }
+  }
+
+  /// Back from a narrow pane. Leaving the reader closes the message, so its
+  /// mark-read timer and the Delete/Esc shortcuts stop acting on it.
+  void _paneBack(MailState state) {
+    if (_pane == _Pane.reader) {
+      state.closeMessage();
+      _go(_Pane.list);
     } else {
-      state.deleteMessages([uid]);
+      _go(_pane.previous);
     }
   }
 
@@ -219,11 +266,7 @@ class _MailShellState extends State<MailShell> {
     if (effective < Breakpoints.compact) {
       // Narrow stack: reader → list → folders. Folders is the root there,
       // so from it the pop is allowed through (app closes).
-      if (_pane == _Pane.reader) {
-        setState(() => _pane = _Pane.list);
-      } else if (_pane == _Pane.list) {
-        setState(() => _pane = _Pane.folders);
-      }
+      if (_pane != _Pane.folders) _paneBack(state);
       return;
     }
     if (state.openUid >= 0) state.closeMessage();
@@ -303,7 +346,9 @@ class _MailShellState extends State<MailShell> {
   Widget _onePane() => switch (_pane) {
     _Pane.folders => FolderSidebar(onFolderSelected: () => _go(_Pane.list)),
     _Pane.list => MessageListPane(onMessageOpened: () => _go(_Pane.reader)),
-    _Pane.reader => ReaderPane(onClose: () => _go(_Pane.list)),
+    _Pane.reader => ReaderPane(
+      onClose: () => _paneBack(context.read<MailState>()),
+    ),
   };
 
   void _go(_Pane pane) => setState(() => _pane = pane);

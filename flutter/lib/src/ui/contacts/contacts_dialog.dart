@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 
 import '../../ffi/mail_core.dart';
 import '../../models/models.dart';
-import '../../state/mail_state.dart';
 import '../dialogs/mail_dialog.dart';
 
 /// The auto-collected contact list: search, rename via alias, remove.
@@ -36,6 +34,10 @@ class _ContactsDialogState extends State<ContactsDialog> {
   String? _editing;
   bool _loading = true;
 
+  /// Last failed load/alias/remove, shown in the dialog itself: the status
+  /// bar is hidden behind it (a whole page away on phones).
+  String? _error;
+
   @override
   void initState() {
     super.initState();
@@ -65,11 +67,14 @@ class _ContactsDialogState extends State<ContactsDialog> {
       setState(() {
         _contacts = list;
         _loading = false;
+        _error = null;
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _loading = false);
-      context.read<MailState>().showStatus('$e', isError: true);
+      setState(() {
+        _loading = false;
+        _error = '$e';
+      });
     }
   }
 
@@ -94,6 +99,7 @@ class _ContactsDialogState extends State<ContactsDialog> {
               _explainer(),
               const SizedBox(height: 12),
               _searchField(),
+              _errorLine(),
               const SizedBox(height: 8),
               Expanded(child: _listBody()),
               Align(
@@ -132,12 +138,30 @@ class _ContactsDialogState extends State<ContactsDialog> {
     );
   }
 
-  /// Loading / empty / list states, shared by the dialog and the page.
-  Widget _listBody() {
+  Widget _errorLine() {
+    final error = _error;
+    if (error == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Text(
+        error,
+        style: TextStyle(color: Theme.of(context).colorScheme.error),
+      ),
+    );
+  }
+
+  /// Loading or empty state, or null when there are rows to show.
+  Widget? _placeholder() {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_contacts.isEmpty) {
       return Center(child: Text(_emptyText, style: _emptyStyle));
     }
+    return null;
+  }
+
+  /// List for the dialog, whose header is short enough to stay fixed.
+  Widget _listBody() {
+    if (_placeholder() case final Widget placeholder) return placeholder;
     return ListView.separated(
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       itemCount: _contacts.length,
@@ -154,26 +178,39 @@ class _ContactsDialogState extends State<ContactsDialog> {
     );
   }
 
-  /// Fullscreen contacts page for phones (see [ContactsDialog.fullscreen]):
-  /// the list stays lazy inside Expanded while the Scaffold shrinks for the
-  /// keyboard natively.
+  /// Fullscreen contacts page for phones (see [ContactsDialog.fullscreen]).
+  /// Header and rows scroll as one lazy sliver list: a fixed header over an
+  /// Expanded list overflows a landscape phone once the keyboard is up.
   Widget _page() {
+    final placeholder = _placeholder();
     return Scaffold(
       appBar: AppBar(title: const Text('Contacts')),
       body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: _explainer(),
+        child: CustomScrollView(
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              sliver: SliverToBoxAdapter(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _explainer(),
+                    const SizedBox(height: 12),
+                    _searchField(),
+                    _errorLine(),
+                  ],
+                ),
+              ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: _searchField(),
-            ),
-            const SizedBox(height: 8),
-            Expanded(child: _listBody()),
+            if (placeholder != null)
+              SliverFillRemaining(hasScrollBody: false, child: placeholder)
+            else
+              SliverList.separated(
+                itemCount: _contacts.length,
+                separatorBuilder: (_, _) => const Divider(height: 1),
+                itemBuilder: (context, i) => _row(_contacts[i]),
+              ),
           ],
         ),
       ),
@@ -283,6 +320,7 @@ class _ContactsDialogState extends State<ContactsDialog> {
   }
 
   Future<void> _saveAlias(Contact c) async {
+    setState(() => _error = null);
     try {
       await MailCore.instance.setContactAlias(c.address, _alias.text.trim());
       if (!mounted) return;
@@ -290,7 +328,7 @@ class _ContactsDialogState extends State<ContactsDialog> {
       await _reload();
     } catch (e) {
       if (!mounted) return;
-      context.read<MailState>().showStatus('$e', isError: true);
+      setState(() => _error = '$e');
     }
   }
 
@@ -317,14 +355,15 @@ class _ContactsDialogState extends State<ContactsDialog> {
           ),
         ) ??
         false;
-    if (!confirmed) return;
+    if (!confirmed || !mounted) return;
+    setState(() => _error = null);
     try {
       await MailCore.instance.deleteContact(c.address);
       if (!mounted) return;
       await _reload();
     } catch (e) {
       if (!mounted) return;
-      context.read<MailState>().showStatus('$e', isError: true);
+      setState(() => _error = '$e');
     }
   }
 }

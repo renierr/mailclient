@@ -32,6 +32,11 @@ class FolderManagerDialog extends StatefulWidget {
 class _FolderManagerDialogState extends State<FolderManagerDialog> {
   final _newFolder = TextEditingController();
   bool _canCreate = false;
+  bool _creating = false;
+
+  /// Why the last create failed, shown under the field — the status bar is
+  /// behind this dialog (and a whole page away on phones).
+  String? _error;
 
   @override
   void initState() {
@@ -73,12 +78,7 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
                 style: Theme.of(context).textTheme.titleLarge,
               ),
               const SizedBox(height: 12),
-              _createRow(),
-              const SizedBox(height: 4),
-              Text(
-                'Uncheck to hide a folder from the sidebar.',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
+              _header(),
               const SizedBox(height: 8),
               Expanded(child: _listBody()),
               const SizedBox(height: 8),
@@ -114,8 +114,8 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
     );
   }
 
-  Widget _row(BuildContext context, MailState state, Folder f) {
-    final current = f.id == state.folderId;
+  Widget _row(BuildContext context, MailState state, Folder f, int openId) {
+    final current = f.id == openId;
     return ListTile(
       selected: current,
       contentPadding: EdgeInsets.zero,
@@ -165,8 +165,14 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
       ),
     );
     final button = FilledButton(
-      onPressed: _canCreate ? () => _create(state) : null,
-      child: const Text('Create'),
+      onPressed: _canCreate && !_creating ? () => _create(state) : null,
+      child: _creating
+          ? const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Text('Create'),
     );
     if (MailDialog.isNarrow(context)) {
       return Column(
@@ -187,30 +193,57 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
     );
   }
 
-  /// Folder list, shared by the dialog and the fullscreen page.
+  /// Create row, create error and the hint line, shared by dialog and page.
+  Widget _header() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _createRow(),
+        if (_error case final String error) ...[
+          const SizedBox(height: 4),
+          Text(
+            error,
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+        ],
+        const SizedBox(height: 4),
+        Text(
+          'Uncheck to hide a folder from the sidebar.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      ],
+    );
+  }
+
+  /// Folder list for the dialog, whose header is short enough to stay fixed.
   Widget _listBody() {
     final folders = context.select<MailState, List<Folder>>(
       (s) => s.allFolders,
     );
-    if (folders.isEmpty) {
-      return const Center(
-        child: Text('No folders yet — press Refresh from server.'),
-      );
-    }
+    // Subscribed, so the "current" marker follows a folder switch.
+    final openId = context.select<MailState, int>((s) => s.folderId);
+    if (folders.isEmpty) return _emptyHint();
     return ListView.separated(
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       itemCount: folders.length,
       separatorBuilder: (_, _) => const Divider(height: 1),
       itemBuilder: (context, i) =>
-          _row(context, context.read<MailState>(), folders[i]),
+          _row(context, context.read<MailState>(), folders[i], openId),
     );
   }
 
-  /// Fullscreen folder manager for phones (see [FolderManagerDialog.fullscreen]):
-  /// the list stays lazy inside Expanded while the Scaffold shrinks for the
-  /// keyboard natively.
+  Widget _emptyHint() =>
+      const Center(child: Text('No folders yet — press Refresh from server.'));
+
+  /// Fullscreen folder manager for phones (see [FolderManagerDialog.fullscreen]).
+  /// Header and rows scroll as one lazy sliver list: a fixed header over an
+  /// Expanded list overflows a landscape phone once the keyboard is up.
   Widget _page() {
     final busy = context.select<MailState, bool>((s) => s.isBusy);
+    final folders = context.select<MailState, List<Folder>>(
+      (s) => s.allFolders,
+    );
+    final openId = context.select<MailState, int>((s) => s.folderId);
     return Scaffold(
       appBar: AppBar(
         title: const Text('IMAP folders'),
@@ -232,22 +265,26 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
         ],
       ),
       body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: _createRow(),
+        child: CustomScrollView(
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              sliver: SliverToBoxAdapter(child: _header()),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-              child: Text(
-                'Uncheck to hide a folder from the sidebar.',
-                style: Theme.of(context).textTheme.bodySmall,
+            if (folders.isEmpty)
+              SliverFillRemaining(hasScrollBody: false, child: _emptyHint())
+            else
+              SliverList.separated(
+                itemCount: folders.length,
+                separatorBuilder: (_, _) => const Divider(height: 1),
+                itemBuilder: (context, i) => _row(
+                  context,
+                  context.read<MailState>(),
+                  folders[i],
+                  openId,
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Expanded(child: _listBody()),
           ],
         ),
       ),
@@ -256,10 +293,34 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
 
   Future<void> _create(MailState state) async {
     final path = _newFolder.text.trim();
-    if (path.isEmpty) return;
+    if (path.isEmpty || _creating) return;
+    setState(() {
+      _creating = true;
+      _error = null;
+    });
+    final before = state.status;
+    final finished = state.nextFinished('Folders');
     // `/` separates levels; the core maps it onto the account delimiter.
     await state.createFolder(path.replaceAll('\\', '/'));
     if (!mounted) return;
-    setState(_newFolder.clear);
+    // A refused queue reports straight to the status line and never finishes.
+    if (state.statusIsError && state.status != before) {
+      setState(() {
+        _creating = false;
+        _error = state.status;
+      });
+      return;
+    }
+    final e = await finished;
+    if (!mounted) return;
+    setState(() {
+      _creating = false;
+      // The name stays on failure, so a typo can be fixed and retried.
+      if (e.ok) {
+        _newFolder.clear();
+      } else {
+        _error = e.status.isEmpty ? 'Could not create the folder' : e.status;
+      }
+    });
   }
 }

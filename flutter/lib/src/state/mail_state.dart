@@ -42,8 +42,14 @@ class MailState extends ChangeNotifier {
   final Set<String> _busyKinds = {};
 
   /// Open message a queued move/trash/archive should leave behind, once that
-  /// job finishes successfully. -1 means nothing is waiting to close.
-  int _pendingCloseUid = -1;
+  /// job finishes successfully, with the job it waits for. Only that job's
+  /// finish acts on it — an unrelated sync or a failed search must neither
+  /// close the reader nor cancel the wait.
+  ({String kind, int accountId, int folderId, int uid})? _pendingClose;
+
+  /// Callers waiting for the next finish of a job kind — a form that has to
+  /// know whether *its* job worked, which the shared status line cannot say.
+  final Map<String, List<Completer<JobEvent>>> _finishWaiters = {};
 
   AppSettings _settings = AppSettings.defaults;
 
@@ -238,6 +244,9 @@ class MailState extends ChangeNotifier {
     _openUid = -1;
     _openMessage = null;
     _markReadTimer?.cancel();
+    // Fullscreen only makes sense over an open message; left set, the next
+    // message would open straight into it.
+    _readerFullscreen = false;
     notifyListeners();
   }
 
@@ -482,10 +491,16 @@ class MailState extends ChangeNotifier {
 
   Future<void> reloadSettings() => _reloadSettings();
 
-  Future<void> setSetting(String key, String value) async {
-    await _core.setSetting(key, value);
+  Future<void> setSetting(String key, String value) =>
+      setSettings({key: value});
+
+  /// Write several settings at once (all or none), then reload once. The
+  /// sync timers are only rescheduled when the interval is part of the batch.
+  Future<void> setSettings(Map<String, String> values) async {
+    if (values.isEmpty) return;
+    await _core.setSettings(values);
     await _reloadSettings();
-    if (key == SettingKeys.syncInterval) {
+    if (values.containsKey(SettingKeys.syncInterval)) {
       _rescheduleAutoSync();
       unawaited(rescheduleBackgroundSync());
     }
@@ -514,15 +529,37 @@ class MailState extends ChangeNotifier {
       case JobPhase.finished:
         _busyKinds.remove(e.kind);
         if (e.status.isNotEmpty) showStatus(e.status, isError: !e.ok);
-        if (e.ok && _pendingCloseUid >= 0 && _pendingCloseUid == _openUid) {
-          closeMessage();
-          _pendingCloseUid = -1;
-        } else if (!e.ok) {
-          _pendingCloseUid = -1;
+        _settlePendingClose(e);
+        for (final c in _finishWaiters.remove(e.kind) ?? const []) {
+          c.complete(e);
         }
         _refreshFor(e);
     }
     notifyListeners();
+  }
+
+  /// Completes with the next finishing event of [kind]. Register before
+  /// queueing the job, so a fast finish cannot slip past.
+  Future<JobEvent> nextFinished(String kind) {
+    final c = Completer<JobEvent>();
+    (_finishWaiters[kind] ??= []).add(c);
+    return c.future;
+  }
+
+  /// A failed job reports no account/folder, so failure matches on kind
+  /// alone; success must also name the folder the messages left.
+  void _settlePendingClose(JobEvent e) {
+    final pending = _pendingClose;
+    if (pending == null || e.kind != pending.kind) return;
+    if (e.ok) {
+      if (e.accountId != pending.accountId || e.folderId != pending.folderId) {
+        return;
+      }
+      if (_openUid == pending.uid && _folderId == pending.folderId) {
+        closeMessage();
+      }
+    }
+    _pendingClose = null;
   }
 
   void _refreshFor(JobEvent e) {
@@ -724,7 +761,14 @@ class MailState extends ChangeNotifier {
         _selectedUids.clear();
         _selectionMode = false;
       }
-      if (closeUid.contains(_openUid)) _pendingCloseUid = _openUid;
+      if (closeUid.contains(_openUid)) {
+        _pendingClose = (
+          kind: kind,
+          accountId: _accountId,
+          folderId: _folderId,
+          uid: _openUid,
+        );
+      }
       notifyListeners();
     } catch (e) {
       showStatus(_message(e), isError: true);

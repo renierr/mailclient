@@ -278,6 +278,10 @@ class MailCore {
   Future<Map<String, dynamic>> backgroundCheckNow() async =>
       _decodeMap(await rust_sync.backgroundCheckNow());
 
+  /// Commit a report's `marks` (JSON array) once its mail was notified.
+  Future<void> commitBackgroundMarks(String marksJson) =>
+      rust_sync.commitBackgroundMarks(marksJson: marksJson);
+
   // --- search --------------------------------------------------------------
 
   /// Local FTS only, in rank order. Cheap enough to run on every keystroke.
@@ -377,6 +381,10 @@ class MailCore {
 
   Future<void> setSetting(String key, String value) =>
       rust_settings.setSetting(key: key, value: value);
+
+  /// Several settings in one transaction: all apply or none do.
+  Future<void> setSettings(Map<String, String> values) =>
+      rust_settings.setSettings(values: values);
 
   Future<void> setSort(String field, bool descending) =>
       rust_settings.setSort(field: field, descending: descending);

@@ -11,17 +11,16 @@
 /// sync-interval setting loads or changes) registers or cancels the worker;
 /// the OS wakes `backgroundSyncDispatcher` in a headless Dart isolate, which
 /// runs `runBackgroundCheck`, shows the notification, and returns.
-/// Each mail notifies once: SharedPreferences stores the highest notified
-/// inbox UID per account and folder, independent of the Rust sync watermark.
+/// Each mail notifies once: the Rust check reports mail above a per-folder
+/// mark and hands the new marks back, and they are committed only after the
+/// notification was posted — a failed post is reported again next run.
 library;
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:workmanager/workmanager.dart';
 
 import '../ffi/mail_core.dart';
@@ -39,6 +38,10 @@ const newMailChannelName = 'New mail';
 
 /// Payload prefix for "open this message" taps: `mail:<account>:<folder>:<uid>`.
 const openPayloadPrefix = 'mail:';
+
+/// Status-bar icon. Must be the single-colour layer: the adaptive launcher
+/// icon renders as a white blob there.
+const notificationIcon = '@drawable/ic_launcher_monochrome';
 
 /// What the background worker should run at: 0 disables, anything below the
 /// OS minimum clamps up to it. Pure, so it is unit-tested.
@@ -107,38 +110,53 @@ Future<void> runBackgroundCheck() async {
   final core = await MailCore.load();
   final report = await core.backgroundCheckNow();
   if (report['skipped'] == true) return;
-  final settings = await core.settings();
   final items = (report['new'] as List<dynamic>? ?? const [])
       .whereType<Map<String, dynamic>>()
       .toList(growable: false);
-  if (items.isEmpty) return;
-  final prefs = await SharedPreferences.getInstance();
-  final pending = <_PendingMail>[];
-  for (final item in items) {
-    final mail = _PendingMail.from(item);
-    if (mail == null) continue;
-    final mark = readNotifiedMark(prefs, mail.accountId, mail.folderId);
-    if (mark != null &&
-        (mark.validity == mail.uidValidity || mark.validity == 0) &&
-        mail.uid <= mark.uid) {
-      continue;
-    }
-    pending.add(mail);
+  final marks = jsonEncode(report['marks'] ?? const []);
+  switch (await notifyDecision(
+    hasNew: items.isNotEmpty,
+    alertsOn: (await core.settings()).notificationsEnabled,
+    permitted: () => notificationsPermitted(),
+  )) {
+    case NotifyDecision.commit:
+      // Nothing to show, or alerts off / not allowed: record what this run
+      // saw so enabling them later does not ding for the gap.
+      await core.commitBackgroundMarks(marks);
+    case NotifyDecision.post:
+      try {
+        await showNewMailNotification(items);
+      } catch (_) {
+        // Marks stay uncommitted, so the next run reports this mail again.
+        return;
+      }
+      await core.commitBackgroundMarks(marks);
   }
-  if (pending.isEmpty) return;
-  // Alerts off: remember what this run saw so turning them back on does not
-  // ding for mail that arrived in the gap. The Rust cursor has already moved.
-  if (!settings.notificationsEnabled) {
-    await _advanceNotifiedMarks(prefs, pending);
-    return;
-  }
-  try {
-    await showNewMailNotification(pending.map((m) => m.item).toList(growable: false));
-  } catch (_) {
-    // Leave the marks where they are so the next run retries the post.
-    return;
-  }
-  await _advanceNotifiedMarks(prefs, pending);
+}
+
+/// What a background run does with its report.
+enum NotifyDecision { post, commit }
+
+/// Pure decision for [runBackgroundCheck], so it is unit-tested. Permission
+/// is only asked when there is something to post.
+Future<NotifyDecision> notifyDecision({
+  required bool hasNew,
+  required bool alertsOn,
+  required Future<bool> Function() permitted,
+}) async {
+  if (!hasNew || !alertsOn) return NotifyDecision.commit;
+  return await permitted() ? NotifyDecision.post : NotifyDecision.commit;
+}
+
+/// Whether the OS will actually show a notification. `show()` does not
+/// throw when the user denied it, so this is checked up front.
+Future<bool> notificationsPermitted() async {
+  if (!Platform.isAndroid) return true;
+  final android = FlutterLocalNotificationsPlugin()
+      .resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin
+      >();
+  return await android?.areNotificationsEnabled() ?? true;
 }
 
 /// Post a mock notification with all display options, for testing from
@@ -169,7 +187,7 @@ Future<void> showNewMailNotification(
   if (plugin == null) {
     await notifications.initialize(
       settings: const InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        android: AndroidInitializationSettings(notificationIcon),
       ),
     );
   }
@@ -246,86 +264,18 @@ int _asInt(Object? v) => switch (v) {
   _ => -1,
 };
 
-/// Highest UID already handled for one folder, scoped to a UIDVALIDITY.
-/// A server reset changes the validity and the old UID must not silence
-/// mail that reuses it.
-class _PendingMail {
-  const _PendingMail(this.item, this.accountId, this.folderId, this.uid, this.uidValidity);
-
-  final Map<String, dynamic> item;
-  final int accountId;
-  final int folderId;
-  final int uid;
-  final int uidValidity;
-
-  static _PendingMail? from(Map<String, dynamic> item) {
-    final accountId = _asInt(item['account_id']);
-    final folderId = _asInt(item['folder_id']);
-    final uid = _asInt(item['uid']);
-    final validity = _asInt(item['uid_validity']);
-    if (accountId < 0 || folderId < 0 || uid < 0 || validity < 0) return null;
-    return _PendingMail(item, accountId, folderId, uid, validity);
-  }
-}
-
-({int validity, int uid})? readNotifiedMark(SharedPreferences prefs, int accountId, int folderId) {
-  final key = _notifiedKey(accountId, folderId);
-  // A key previously stored as an int throws on getString. That is the
-  // legacy mark, handled below.
-  final raw = _stringOrNull(prefs, key);
-  if (raw != null) {
-    final parts = raw.split(':');
-    if (parts.length != 2) return null;
-    final validity = int.tryParse(parts[0]);
-    final uid = int.tryParse(parts[1]);
-    if (validity == null || uid == null) return null;
-    return (validity: validity, uid: uid);
-  }
-  // Earlier builds stored a bare UID. Keep it so the format change does not
-  // re-notify mail already alerted; the next advance rewrites the string.
-  final legacy = prefs.getInt(key);
-  if (legacy == null) return null;
-  return (validity: 0, uid: legacy);
-}
-
-String _notifiedKey(int accountId, int folderId) => 'notified_uid_${accountId}_$folderId';
-
-String? _stringOrNull(SharedPreferences prefs, String key) {
-  try {
-    return prefs.getString(key);
-  } catch (_) {
-    return null;
-  }
-}
-
-Future<void> _advanceNotifiedMarks(SharedPreferences prefs, List<_PendingMail> pending) async {
-  final top = <(int, int), ({int validity, int uid})>{};
-  for (final mail in pending) {
-    final key = (mail.accountId, mail.folderId);
-    final current = top[key];
-    if (current == null || mail.uidValidity != current.validity || mail.uid > current.uid) {
-      top[key] = (validity: mail.uidValidity, uid: mail.uid);
-    }
-  }
-  for (final entry in top.entries) {
-    final stored = readNotifiedMark(prefs, entry.key.$1, entry.key.$2);
-    final next = entry.value;
-    if (stored != null && stored.validity == next.validity && stored.uid >= next.uid) {
-      continue;
-    }
-    await prefs.setString(_notifiedKey(entry.key.$1, entry.key.$2), '${next.validity}:${next.uid}');
-  }
-}
-
 /// Ask Android for the runtime notification permission (API 33+ shows a
-/// system prompt; older versions grant it at install time and the native
-/// side answers `true` immediately). Only worth calling when background
-/// checks are enabled — no worker, no notifications, no prompt.
+/// system prompt; older versions grant it at install time). Call it when
+/// background checks get enabled or before a test notification — no
+/// worker, no notifications, no prompt.
 Future<bool> requestNotificationPermission() async {
   if (!Platform.isAndroid) return true;
-  const channel = MethodChannel('mailclient/permissions');
+  final android = FlutterLocalNotificationsPlugin()
+      .resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin
+      >();
   try {
-    return await channel.invokeMethod<bool>('requestNotifications') ?? false;
+    return await android?.requestNotificationsPermission() ?? true;
   } catch (_) {
     return false;
   }
