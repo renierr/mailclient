@@ -63,6 +63,12 @@ pub const UI_SCALE: &str = "ui_scale";
 /// Post a notification when a background check finds new mail (default:
 /// on). Off still syncs; only the alert is suppressed.
 pub const NOTIFICATIONS_ENABLED: &str = "notifications_enabled";
+/// Which Android scheduler runs the background check: `workmanager`
+/// (default, battery-saving, deferrable in Doze) | `alarm` (exact alarm that
+/// fires in Doze, more wakeups). Unknown/empty values fall back to
+/// `workmanager`. Desktop and Qt never read this — the Qt bridge only touches
+/// the keys it displays, so a Flutter-Android-only key is invisible to it.
+pub const BACKGROUND_SCHEDULER: &str = "background_scheduler";
 /// Last account selected in the UI. Absent/invalid values deliberately leave
 /// startup selection to the normal first-account fallback.
 pub const LAST_ACTIVE_ACCOUNT_ID: &str = "last_active_account_id";
@@ -101,6 +107,7 @@ pub fn defaults(key: &str) -> Option<&'static str> {
         REQUEST_MDN => Some("0"),
         UI_SCALE => Some("1"),
         NOTIFICATIONS_ENABLED => Some("1"),
+        BACKGROUND_SCHEDULER => Some("workmanager"),
         _ => None,
     }
 }
@@ -384,6 +391,27 @@ pub fn set_sync_interval(db: &Db, value: i64) -> Result<()> {
     )
 }
 
+/// Validated background scheduler: `alarm` | `workmanager` (default).
+/// Unknown/empty values fall back to `workmanager`, so a hand-edited row or
+/// a frontend that never heard of the alarm mode keeps the safe default.
+#[must_use]
+pub fn normalize_background_scheduler(raw: &str) -> &'static str {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "alarm" | "exact" | "alarmmanager" => "alarm",
+        _ => "workmanager",
+    }
+}
+
+/// Current background scheduler, resilient to unknown stored values.
+pub fn get_background_scheduler(db: &Db) -> String {
+    match get(db, BACKGROUND_SCHEDULER) {
+        Ok(Some(v)) => normalize_background_scheduler(&v).to_string(),
+        _ => defaults(BACKGROUND_SCHEDULER)
+            .unwrap_or("workmanager")
+            .to_string(),
+    }
+}
+
 /// Plain-text signature body (`""` when unset).
 pub fn get_signature_text(db: &Db) -> String {
     match get(db, SIGNATURE_TEXT) {
@@ -592,6 +620,16 @@ mod tests {
         assert_eq!(get_link_click(&db), "examine");
         assert_eq!(get_sync_interval(&db), 0);
         assert_eq!(get_signature_text(&db), "");
+        assert_eq!(get_background_scheduler(&db), "workmanager");
+        assert_eq!(normalize_background_scheduler("alarm"), "alarm");
+        assert_eq!(normalize_background_scheduler(" ALARM "), "alarm");
+        assert_eq!(normalize_background_scheduler("workmanager"), "workmanager");
+        assert_eq!(normalize_background_scheduler(""), "workmanager");
+        assert_eq!(normalize_background_scheduler("nonsense"), "workmanager");
+        set(&db, BACKGROUND_SCHEDULER, "alarm").unwrap();
+        assert_eq!(get_background_scheduler(&db), "alarm");
+        set(&db, BACKGROUND_SCHEDULER, "nonsense").unwrap();
+        assert_eq!(get_background_scheduler(&db), "workmanager");
         assert!(!get_bool(&db, SIGNATURE_ENABLED).unwrap());
         assert!(!get_bool(&db, REPLY_BELOW_QUOTE).unwrap());
         assert!(!get_bool(&db, REQUEST_MDN).unwrap());

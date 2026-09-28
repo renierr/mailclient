@@ -32,6 +32,7 @@ void main() {
       expect(s.readerScale, 1.2);
       expect(s.linkClickAction, 'browser');
       expect(s.syncIntervalMinutes, 15);
+      expect(s.backgroundScheduler, 'workmanager');
       expect(s.uiScale, 1.25);
       expect(s.sortField, 'from');
       expect(s.sortDescending, isFalse);
@@ -45,6 +46,7 @@ void main() {
       expect(s.isCompact, isFalse);
       expect(s.readerScale, 1.0);
       expect(s.linkClickAction, 'examine');
+      expect(s.backgroundScheduler, 'workmanager');
       expect(s.uiScale, 1.0);
       expect(s.sortDescending, isTrue);
     });
@@ -56,6 +58,19 @@ void main() {
       });
       expect(s.sentCopy, isFalse);
       expect(s.autoMarkRead, isTrue);
+    });
+
+    test('background scheduler sticks to the known values', () {
+      expect(
+        AppSettings.fromJson({'background_scheduler': 'alarm'})
+            .backgroundScheduler,
+        'alarm',
+      );
+      expect(
+        AppSettings.fromJson({'background_scheduler': 'nonsense'})
+            .backgroundScheduler,
+        'workmanager',
+      );
     });
   });
 

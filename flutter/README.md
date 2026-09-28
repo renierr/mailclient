@@ -149,6 +149,22 @@ The renderer depends on the platform:
   sliver list and kept while its inputs are unchanged, so a header toggle or
   link hover does not rebuild the mail.
 
+### Background checks on Android
+
+Two schedulers run the same Rust inbox check (`mailcore::sync::background`,
+see `lib/src/sync/`):
+
+- **Battery-saving (WorkManager, default).** Deferrable by design: in Doze
+  it only runs in maintenance windows, so notifications may wait for unlock.
+- **On-time alarm (`android_alarm_manager_plus`, opt-in in Settings →
+  Accounts & sync).** An exact `setExactAndAllowWhileIdle` alarm that fires
+  in standby and honours 5/10-minute intervals, at the cost of a wakeup per
+  check. Needs `SCHEDULE_EXACT_ALARM` (Android 12+; denied by default since
+  14 — Settings sends the user to "Alarms & reminders"); ungranted it still
+  fires via AllowWhileIdle, just inexact. The mode is stored in the shared
+  `background_scheduler` Rust setting (default `workmanager`), which Qt
+  never reads or writes — no QML change.
+
 Opening a mail makes no network request. Inline (`cid:`) images are part
 of the message: sync keeps their bytes, and the core embeds them as
 `data:` URIs before the body reaches either frontend. Mail synced before

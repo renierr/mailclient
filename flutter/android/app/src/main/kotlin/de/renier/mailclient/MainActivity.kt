@@ -1,6 +1,7 @@
 package de.renier.mailclient
 
 import android.annotation.SuppressLint
+import android.app.AlarmManager
 import android.app.usage.UsageStatsManager
 import android.content.ActivityNotFoundException
 import android.content.Context
@@ -21,6 +22,8 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "status" -> result.success(powerStatus())
                     "requestUnrestricted" -> result.success(requestUnrestricted())
+                    "exactAlarmStatus" -> result.success(canScheduleExactAlarms())
+                    "requestExactAlarm" -> result.success(requestExactAlarm())
                     else -> result.notImplemented()
                 }
             }
@@ -66,5 +69,29 @@ class MainActivity : FlutterActivity() {
 
     private companion object {
         const val POWER_CHANNEL = "mailclient/background_power"
+    }
+
+    // Whether the exact-alarm scheduler may fire at the exact minute.
+    // Below Android 12 there is no such permission; since 14 it is denied
+    // by default and the user grants it in the system settings.
+    private fun canScheduleExactAlarms(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+        val alarms = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        return alarms.canScheduleExactAlarms()
+    }
+
+    // Open the system's "Alarms & reminders" screen for this app.
+    private fun requestExactAlarm(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+        val screen = Intent(
+            Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+            Uri.parse("package:$packageName"),
+        )
+        return try {
+            startActivity(screen)
+            true
+        } catch (_: ActivityNotFoundException) {
+            false
+        }
     }
 }

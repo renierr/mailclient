@@ -95,6 +95,13 @@ Future<void> scheduleBackgroundSync({required int intervalMinutes}) async {
   );
 }
 
+/// Stop the WorkManager periodic check, if any. Used when the exact-alarm
+/// scheduler takes over, so the two never run side by side.
+Future<void> cancelBackgroundSync() async {
+  if (!Platform.isAndroid) return;
+  await Workmanager().cancelByUniqueName(backgroundSyncTask);
+}
+
 @pragma('vm:entry-point')
 void backgroundSyncDispatcher() {
   Workmanager().executeTask((task, _) async {

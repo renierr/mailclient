@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../ffi/mail_core.dart';
+import '../../sync/background_alarm.dart';
 import '../../sync/background_power.dart';
 
 /// Android-only Settings block: whether the background worker may run on
@@ -18,6 +19,8 @@ class _BackgroundCheckStatusState extends State<BackgroundCheckStatus>
     with WidgetsBindingObserver {
   PowerStatus? _power;
   Map<String, dynamic>? _lastRun;
+  String _scheduler = schedulerWorkmanager;
+  bool _exactAlarm = true;
   bool _loaded = false;
 
   @override
@@ -41,8 +44,12 @@ class _BackgroundCheckStatusState extends State<BackgroundCheckStatus>
   Future<void> _load() async {
     final power = await backgroundPowerStatus();
     Map<String, dynamic>? lastRun;
+    var scheduler = schedulerWorkmanager;
+    var exactAlarm = true;
     try {
       lastRun = await MailCore.instance.backgroundLastRun();
+      scheduler = (await MailCore.instance.settings()).backgroundScheduler;
+      exactAlarm = await exactAlarmPermitted();
     } catch (_) {
       lastRun = null;
     }
@@ -50,6 +57,8 @@ class _BackgroundCheckStatusState extends State<BackgroundCheckStatus>
     setState(() {
       _power = power;
       _lastRun = lastRun;
+      _scheduler = scheduler;
+      _exactAlarm = exactAlarm;
       _loaded = true;
     });
   }
@@ -67,6 +76,33 @@ class _BackgroundCheckStatusState extends State<BackgroundCheckStatus>
       children: [
         Text('Background checks', style: theme.textTheme.titleSmall),
         const SizedBox(height: 8),
+        _line(
+          context,
+          _scheduler == schedulerAlarm
+              ? Icons.alarm_outlined
+              : Icons.battery_saver_outlined,
+          _scheduler == schedulerAlarm
+              ? 'On-time alarm: checks fire in standby too.'
+              : 'Battery-saving worker: standby may delay checks until '
+                    'the phone is unlocked.',
+        ),
+        if (_scheduler == schedulerAlarm && !_exactAlarm)
+          _line(
+            context,
+            Icons.notification_important_outlined,
+            'Exact alarms are not allowed: the alarm still fires in '
+            'standby, just not at the exact minute.',
+            error: true,
+          ),
+        if (_scheduler == schedulerAlarm && !_exactAlarm)
+          Padding(
+            padding: const EdgeInsets.only(top: 4, bottom: 4),
+            child: FilledButton.tonalIcon(
+              onPressed: requestExactAlarm,
+              icon: const Icon(Icons.alarm_add_outlined),
+              label: const Text('Allow exact alarms'),
+            ),
+          ),
         if (power != null)
           _line(
             context,

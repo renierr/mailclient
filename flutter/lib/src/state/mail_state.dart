@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../ffi/mail_core.dart';
 import '../models/models.dart';
 import '../models/settings.dart';
+import '../sync/background_alarm.dart';
 import '../sync/background_sync.dart';
 
 /// What the app is showing, and how it reacts to the core changing underneath.
@@ -518,12 +519,14 @@ class MailState extends ChangeNotifier {
       setSettings({key: value});
 
   /// Write several settings at once (all or none), then reload once. The
-  /// sync timers are only rescheduled when the interval is part of the batch.
+  /// sync timers are only rescheduled when the interval or the scheduler is
+  /// part of the batch.
   Future<void> setSettings(Map<String, String> values) async {
     if (values.isEmpty) return;
     await _core.setSettings(values);
     await _reloadSettings();
-    if (values.containsKey(SettingKeys.syncInterval)) {
+    if (values.containsKey(SettingKeys.syncInterval) ||
+        values.containsKey(SettingKeys.backgroundScheduler)) {
       _rescheduleAutoSync();
       unawaited(rescheduleBackgroundSync());
     }
@@ -669,11 +672,24 @@ class MailState extends ChangeNotifier {
     });
   }
 
-  /// Re-register the Android background worker from the current setting.
-  /// Called after startup and on every interval change; disabling (0)
-  /// cancels the worker. Off Android this is a no-op.
-  Future<void> rescheduleBackgroundSync() =>
-      scheduleBackgroundSync(intervalMinutes: _settings.syncIntervalMinutes);
+  /// Re-register the Android background check from the current settings.
+  /// Called after startup and on every interval or scheduler change;
+  /// disabling (0) cancels both schedulers, and switching the mode stops the
+  /// inactive one so WorkManager and the exact alarm never run side by side.
+  /// Off Android this is a no-op.
+  Future<void> rescheduleBackgroundSync() async {
+    if (_settings.backgroundScheduler == schedulerAlarm) {
+      await cancelBackgroundSync();
+      await scheduleAlarmSync(
+        intervalMinutes: _settings.syncIntervalMinutes,
+      );
+    } else {
+      await cancelAlarmSync();
+      await scheduleBackgroundSync(
+        intervalMinutes: _settings.syncIntervalMinutes,
+      );
+    }
+  }
 
   /// Open a specific message from a notification tap, switching account
   /// and/or folder as needed. A folder that vanished meanwhile leaves the

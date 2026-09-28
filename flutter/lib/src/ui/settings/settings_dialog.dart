@@ -7,6 +7,7 @@ import '../../ffi/mail_core.dart';
 import '../../models/models.dart';
 import '../../models/settings.dart';
 import '../../state/mail_state.dart';
+import '../../sync/background_alarm.dart';
 import '../../sync/background_power.dart';
 import '../../sync/background_sync.dart';
 import '../dialogs/mail_dialog.dart';
@@ -340,8 +341,27 @@ class _SettingsDialogState extends State<SettingsDialog> {
         (v) => setState(() => _draft = _draft.copyWith(syncIntervalMinutes: v)),
         help:
             'Also checks in the background while the app is closed. '
-            'Android runs background checks at most every 15 minutes.',
+            'The battery-saving method checks at most every 15 minutes; '
+            'the on-time alarm honours shorter intervals.',
       ),
+      // The scheduler is an Android-only capability: only there Doze
+      // defers the battery-saving worker until the phone is unlocked.
+      if (Platform.isAndroid)
+        _choice<String>(
+          'Background check method',
+          _draft.backgroundScheduler,
+          const [schedulerWorkmanager, schedulerAlarm],
+          (v) => switch (v) {
+            schedulerAlarm => 'On-time alarm',
+            _ => 'Battery-saving (recommended)',
+          },
+          (v) =>
+              setState(() => _draft = _draft.copyWith(backgroundScheduler: v)),
+          help:
+              'Battery-saving may delay checks until you unlock the phone. '
+              'The on-time alarm fires in standby too, but wakes the phone '
+              'for every check.',
+        ),
       _switch(
         'Show notifications for new mail',
         _draft.notificationsEnabled,
@@ -519,6 +539,15 @@ class _SettingsDialogState extends State<SettingsDialog> {
           await requestUnrestrictedBackground();
         }
       }
+      // Switching to the alarm scheduler needs the exact-alarm grant on
+      // Android 14+; without it the alarm still fires, just not exact.
+      if (d.backgroundScheduler == schedulerAlarm &&
+          before.backgroundScheduler != schedulerAlarm &&
+          d.syncIntervalMinutes > 0) {
+        if (!await exactAlarmPermitted()) {
+          await requestExactAlarm();
+        }
+      }
       if (!mounted) return;
       Navigator.of(context).pop();
     } catch (e) {
@@ -546,6 +575,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     SettingKeys.readerFontSize: d.readerFontSize,
     SettingKeys.linkClickAction: d.linkClickAction,
     SettingKeys.syncInterval: '${d.syncIntervalMinutes}',
+    SettingKeys.backgroundScheduler: d.backgroundScheduler,
     SettingKeys.notificationsEnabled: _yn(d.notificationsEnabled),
     SettingKeys.signatureEnabled: _yn(d.signatureEnabled),
     SettingKeys.signatureText: d.signatureText,

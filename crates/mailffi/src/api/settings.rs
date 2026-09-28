@@ -29,6 +29,7 @@ pub fn settings_json() -> anyhow::Result<String> {
         s::READER_FONT_SIZE: s::get_reader_font(db),
         s::LINK_CLICK_ACTION: s::get_link_click(db),
         s::SYNC_INTERVAL_MINUTES: s::get_sync_interval(db),
+        s::BACKGROUND_SCHEDULER: s::get_background_scheduler(db),
         s::NOTIFICATIONS_ENABLED: flag(s::NOTIFICATIONS_ENABLED),
         s::SIGNATURE_ENABLED: flag(s::SIGNATURE_ENABLED),
         s::SIGNATURE_TEXT: s::get_signature_text(db),

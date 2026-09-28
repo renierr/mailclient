@@ -69,6 +69,33 @@ Future<bool> requestUnrestrictedBackground() async {
   }
 }
 
+/// Whether the system lets the app schedule exact alarms (Android 12+,
+/// denied by default since 14). Without it the alarm scheduler still fires
+/// via AllowWhileIdle, just not at the exact minute.
+Future<bool> exactAlarmPermitted() async {
+  if (!Platform.isAndroid) return true;
+  try {
+    return await powerChannel.invokeMethod<bool>('exactAlarmStatus') ?? true;
+  } on PlatformException {
+    return true;
+  } on MissingPluginException {
+    return true;
+  }
+}
+
+/// Open the system "Alarms & reminders" screen so the user can allow exact
+/// alarms. Returns once the screen is up — re-read the status on resume.
+Future<bool> requestExactAlarm() async {
+  if (!Platform.isAndroid) return false;
+  try {
+    return await powerChannel.invokeMethod<bool>('requestExactAlarm') ?? false;
+  } on PlatformException {
+    return false;
+  } on MissingPluginException {
+    return false;
+  }
+}
+
 /// Human name of a standby bucket, or null for buckets that do not limit
 /// the worker (exempt, active, working set) and unknown values.
 String? limitingBucketLabel(int bucket) => switch (bucket) {

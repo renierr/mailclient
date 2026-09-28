@@ -19,6 +19,7 @@ abstract final class SettingKeys {
   static const readerFontSize = 'reader_font_size';
   static const linkClickAction = 'link_click_action';
   static const syncInterval = 'sync_interval_minutes';
+  static const backgroundScheduler = 'background_scheduler';
   static const notificationsEnabled = 'notifications_enabled';
   static const signatureEnabled = 'signature_enabled';
   static const signatureText = 'signature_text';
@@ -44,6 +45,7 @@ class AppSettings {
     required this.readerFontSize,
     required this.linkClickAction,
     required this.syncIntervalMinutes,
+    required this.backgroundScheduler,
     required this.notificationsEnabled,
     required this.signatureEnabled,
     required this.signatureText,
@@ -66,6 +68,7 @@ class AppSettings {
   final String readerFontSize;
   final String linkClickAction;
   final int syncIntervalMinutes;
+  final String backgroundScheduler;
   final bool notificationsEnabled;
   final bool signatureEnabled;
   final String signatureText;
@@ -90,6 +93,7 @@ class AppSettings {
     readerFontSize: 'normal',
     linkClickAction: 'examine',
     syncIntervalMinutes: 0,
+    backgroundScheduler: 'workmanager',
     notificationsEnabled: true,
     signatureEnabled: false,
     signatureText: '',
@@ -114,6 +118,7 @@ class AppSettings {
         linkClickAction:
             _str(j[SettingKeys.linkClickAction], orElse: 'examine'),
         syncIntervalMinutes: _int(j[SettingKeys.syncInterval]),
+        backgroundScheduler: _scheduler(j[SettingKeys.backgroundScheduler]),
         notificationsEnabled: _flag(j[SettingKeys.notificationsEnabled], orElse: true),
         signatureEnabled: _flag(j[SettingKeys.signatureEnabled]),
         signatureText: _str(j[SettingKeys.signatureText]),
@@ -137,6 +142,7 @@ class AppSettings {
     String? readerFontSize,
     String? linkClickAction,
     int? syncIntervalMinutes,
+    String? backgroundScheduler,
     bool? notificationsEnabled,
     bool? signatureEnabled,
     String? signatureText,
@@ -159,6 +165,7 @@ class AppSettings {
         readerFontSize: readerFontSize ?? this.readerFontSize,
         linkClickAction: linkClickAction ?? this.linkClickAction,
         syncIntervalMinutes: syncIntervalMinutes ?? this.syncIntervalMinutes,
+        backgroundScheduler: backgroundScheduler ?? this.backgroundScheduler,
         notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
         signatureEnabled: signatureEnabled ?? this.signatureEnabled,
         signatureText: signatureText ?? this.signatureText,
@@ -284,3 +291,11 @@ String _str(Object? v, {String orElse = ''}) => switch (v) {
       null || '' => orElse,
       _ => v.toString(),
     };
+
+/// Scheduler for the Android background check: `alarm` or `workmanager`.
+/// Anything else falls back to WorkManager, the default — mirrors
+/// `mailcore::store::settings::normalize_background_scheduler`.
+String _scheduler(Object? v) {
+  final s = '${v ?? ''}'.trim().toLowerCase();
+  return s == 'alarm' ? 'alarm' : 'workmanager';
+}
