@@ -1,0 +1,12 @@
+# LF in the repo and in every working tree, on Linux and Windows alike.
+# Overrides a global core.autocrlf, so generated files (flutter pub get,
+# qmlformat, codegen) written with LF no longer show up as modified.
+* text=auto eol=lf
+
+# Binary assets: never touch.
+*.png binary
+*.ico binary
+*.jpg binary
+*.ttf binary
+*.jks binary
+*.keystore binary
