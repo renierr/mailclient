@@ -101,7 +101,11 @@ class ReaderPaneState extends State<ReaderPane> {
       keepOriginal: _originalColors,
     );
     final canToggleColors = message.isHtml && message.htmlColored && dark;
+    // Expand: the only non-positioned child is the hover bubble, empty when
+    // no link is hovered, so a loose parent (the shell's Row) would size the
+    // Stack — and the whole reader with it — to nothing.
     return Stack(
+      fit: StackFit.expand,
       children: [
         Positioned.fill(
           child: Column(

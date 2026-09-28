@@ -8,6 +8,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../models/models.dart';
@@ -51,6 +52,11 @@ class MailCore {
   final AppInfo info;
 
   static MailCore? _instance;
+
+  /// Stand in a fake core for widget tests that build panes reading
+  /// [instance] directly.
+  @visibleForTesting
+  static set debugInstance(MailCore core) => _instance = core;
 
   /// The loaded core. Throws if [load] has not completed — which is a bug in
   /// startup order, not a condition to handle.
