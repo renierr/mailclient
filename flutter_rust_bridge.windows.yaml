@@ -1,0 +1,14 @@
+# flutter_rust_bridge codegen config for Windows — the twin of
+# `flutter_rust_bridge.yaml` (see there); keep the two in sync.
+#
+# The tool compares paths textually, so on Windows they need backslashes.
+# It also compares a canonical (\\?\-prefixed) root against the plain output
+# path and fails with "prefix not found" unless the config is passed the
+# same way. From PowerShell (MSYS2 bash eats the backslashes):
+#   flutter_rust_bridge_codegen generate --config-file '\\?\D:\<repo>\flutter_rust_bridge.windows.yaml'
+rust_input: crate::api
+rust_root: crates\mailffi
+rust_output: crates\mailffi\src\frb_generated.rs
+dart_root: flutter
+dart_output: flutter\lib\src\ffi\generated
+dart_entrypoint_class_name: MailCoreApi

@@ -35,9 +35,10 @@ desktop with both installed they open the same database file, on purpose.
   `src/models`, `src/state`, `src/ui/{shell,sidebar,message_list,reader,accounts}`.
   See `flutter/README.md` for the layering and its open questions.
 - `scripts/`: `install-local.sh`, `qt-env.sh`, `smoke.sh`. Output bundle: `dist/mailclient/`.
-- `flutter_rust_bridge.yaml` (repo root): FFI codegen config. At the root
-  rather than in `flutter/` because the tool does not normalise a leading `..`
-  on Windows.
+- `flutter_rust_bridge.yaml` (repo root): FFI codegen config, with the
+  Windows twin `flutter_rust_bridge.windows.yaml` (backslash paths). At the
+  root rather than in `flutter/` because the tool does not normalise a
+  leading `..`.
 
 See `AGENT.md` for agent rules, dependency policy, and Definition of Done.
 

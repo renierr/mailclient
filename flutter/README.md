@@ -118,9 +118,17 @@ Both generated files are committed, so a plain `cargo build` and a plain
 flutter_rust_bridge_codegen generate
 ```
 
+On Windows, from PowerShell, pass the Windows twin of the config explicitly
+(the tool compares paths textually, so they need backslashes there):
+
+```powershell
+flutter_rust_bridge_codegen generate --config-file '\\?\D:\<repo>\flutter_rust_bridge.windows.yaml'
+```
+
 The config lives in `flutter_rust_bridge.yaml` at the repository root rather
 than here: the tool joins the config file's directory onto the paths without
-normalising, so a leading `..` never matches the Rust root it computes.
+normalising, so a leading `..` never matches the Rust root it computes. Keep
+it and `flutter_rust_bridge.windows.yaml` in sync.
 
 ## Reading HTML mail
 
