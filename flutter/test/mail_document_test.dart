@@ -9,14 +9,14 @@ void main() {
     test('blocks every network load by default', () {
       final policy = csp(mailDocument('<p>hi</p>', allowRemote: false));
       expect(policy, contains("default-src 'none'"));
-      expect(policy, contains('img-src data: cid:;'));
+      expect(policy, contains('img-src data:;'));
       expect(policy, isNot(contains('https:')));
       expect(policy, contains("font-src 'none'"));
     });
 
     test('lets remote images through only when allowed', () {
       final policy = csp(mailDocument('<p>hi</p>', allowRemote: true));
-      expect(policy, contains('img-src data: cid: https: http:;'));
+      expect(policy, contains('img-src data: https: http:;'));
       expect(policy, contains("default-src 'none'"));
     });
 
@@ -27,6 +27,7 @@ void main() {
         lessThan(doc.indexOf('marker')),
       );
       expect(doc, contains('<body><p>marker</p></body>'));
+      expect(doc, contains('x-dns-prefetch-control" content="off"'));
     });
   });
 }

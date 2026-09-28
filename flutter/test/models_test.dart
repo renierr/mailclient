@@ -87,6 +87,7 @@ void main() {
         jsonDecode('''
         {"uid": 12, "subject": "Hi", "from": "a@x.de", "to": "b@x.de",
          "body_html": "<p>hi</p>", "is_html": true, "has_remote_images": true,
+         "missing_inline_images": 2,
          "attachments": [
            {"id": 1, "filename": "a.pdf", "mime_type": "application/pdf",
             "size": 2048, "is_inline": false},
@@ -96,11 +97,19 @@ void main() {
       );
 
       expect(m.hasRemoteImages, isTrue);
+      expect(m.missingInlineImages, 2);
       expect(m.attachments, hasLength(2));
       expect(m.attachments.where((a) => !a.isInline).single.filename, 'a.pdf');
       // An attachment without a declared type is still openable; the default
       // keeps the bar from rendering an empty subtitle.
       expect(m.attachments.last.mimeType, 'application/octet-stream');
+    });
+
+    test('an older core without the inline count means none missing', () {
+      final m = MessageBody.fromJson(
+        jsonDecode('{"uid": 1, "is_html": true}') as Map<String, dynamic>,
+      );
+      expect(m.missingInlineImages, 0);
     });
   });
 

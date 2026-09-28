@@ -6,6 +6,7 @@ import '../../ffi/mail_core.dart';
 import '../../models/models.dart';
 import '../../models/settings.dart';
 import '../../state/mail_state.dart';
+import 'inline_images_banner.dart';
 import 'link_safety.dart';
 import 'mail_html_view.dart';
 import 'reader_widgets.dart';
@@ -32,6 +33,9 @@ class ReaderPaneState extends State<ReaderPane> {
   String? _htmlWithRemoteImages;
   (int, int) _shownFor = (-1, -1);
   bool _details = false;
+
+  /// The inline-image download was asked for on the shown message.
+  bool _inlineRequested = false;
 
   /// Link under the mouse. A notifier rather than state, so hovering
   /// repaints the bubble and not the whole pane with the mail in it.
@@ -73,6 +77,7 @@ class ReaderPaneState extends State<ReaderPane> {
       _hoveredLink.value = null;
       _shownFor = key;
       _details = false;
+      _inlineRequested = false;
     }
     if (_headersFor != key) {
       _headersFor = key;
@@ -102,6 +107,12 @@ class ReaderPaneState extends State<ReaderPane> {
                   !loadRemote)
                 RemoteImagesBanner(
                   onShowOnce: () => _showRemoteImages(message),
+                ),
+              if (message.isHtml && message.missingInlineImages > 0)
+                InlineImagesBanner(
+                  count: message.missingInlineImages,
+                  busy: _inlineRequested,
+                  onDownload: () => _downloadInlineImages(message),
                 ),
               Expanded(
                 child: message.isHtml
@@ -201,6 +212,24 @@ class ReaderPaneState extends State<ReaderPane> {
       if (context.mounted) {
         await ExamineLinkDialog.show(context, url);
       }
+    }
+  }
+
+  /// Fetches the message's parts from the user's own server; the finished
+  /// job re-reads the open message, which then embeds them.
+  Future<void> _downloadInlineImages(MessageBody message) async {
+    final state = context.read<MailState>();
+    setState(() => _inlineRequested = true);
+    try {
+      await MailCore.instance.downloadAttachments(
+        state.accountId,
+        _shownFor.$1,
+        message.uid,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _inlineRequested = false);
+      state.showStatus('Could not download images: $e', isError: true);
     }
   }
 

@@ -18,12 +18,14 @@
 //! - [`entities`] decodes the entity subset and escapes text back out;
 //! - [`urls`] decides which `href`/`src` values may survive at all;
 //! - [`css`] decides which inline styles and layout attributes survive;
+//! - [`inline`] swaps `cid:` references for the message's own image bytes;
 //! - [`sanitize`](sanitize()) walks the input and serialises the safe result;
 //! - [`text`] covers the other directions: HTML → plain, plain → HTML, and
 //!   the "does this need HTML at all" heuristics the send path asks about.
 
 mod css;
 mod entities;
+mod inline;
 mod sanitize;
 mod tags;
 mod text;
@@ -33,6 +35,10 @@ mod urls;
 mod tests;
 
 pub use entities::{decode_entities, escape_text};
+pub use inline::{
+    inline_cid_images, is_inline_image_mime, InlineImage, MAX_INLINE_BYTES_PER_MESSAGE,
+    MAX_INLINE_IMAGE_BYTES,
+};
 pub use sanitize::{sanitize, sanitize_for_send};
 pub use text::{html_to_text, looks_like_html, needs_html_formatting, text_to_html, wrap_document};
 

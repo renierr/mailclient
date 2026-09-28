@@ -114,7 +114,8 @@ class _MailWebViewState extends State<MailWebView> {
 /// Nothing from the mail can reach `<head>` — the sanitizer drops `head`,
 /// `meta` and `style` — and a second CSP could only narrow this one anyway.
 String mailDocument(String body, {required bool allowRemote}) {
-  final img = allowRemote ? "data: cid: https: http:" : "data: cid:";
+  // `cid:` images arrive already embedded as `data:` by the core.
+  final img = allowRemote ? "data: https: http:" : "data:";
   final csp = [
     "default-src 'none'",
     "img-src $img",
@@ -130,6 +131,8 @@ String mailDocument(String body, {required bool allowRemote}) {
   return '<!DOCTYPE html><html><head><meta charset="utf-8">'
       '<meta http-equiv="Content-Security-Policy" '
       'content="${const HtmlEscape(HtmlEscapeMode.attribute).convert(csp)}">'
+      // CSP does not cover DNS prefetching of link hosts; this does.
+      '<meta http-equiv="x-dns-prefetch-control" content="off">'
       '<meta name="viewport" content="width=device-width, initial-scale=1">'
       '<style>'
       'html,body{background:${hex(mailPaperColor)}}'

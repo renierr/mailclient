@@ -9,7 +9,8 @@ mod flags;
 
 pub use attachments::{
     add_attachment, attachment_has_data, delete_attachments_for_message, get_attachment,
-    list_attachments, replace_attachments, save_attachment_to_path, set_has_attachments,
+    inline_images, list_attachments, replace_attachments, save_attachment_to_path,
+    set_has_attachments,
 };
 pub use flags::{
     clear_flags_dirty, delete_many_by_uids, list_flags_dirty, set_flags, set_flags_by_uid,

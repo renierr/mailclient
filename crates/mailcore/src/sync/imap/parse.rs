@@ -5,6 +5,7 @@ use imap_types::flag::Flag;
 
 use crate::db::Db;
 use crate::error::{Result, StoreError};
+use crate::html::{is_inline_image_mime, MAX_INLINE_BYTES_PER_MESSAGE, MAX_INLINE_IMAGE_BYTES};
 use crate::models::{NewAttachment, NewMessage};
 use crate::store::{contacts, messages, settings};
 
@@ -132,7 +133,16 @@ pub(crate) fn extract_attachments(
         if len == 0 {
             continue;
         }
-        let data: Option<Vec<u8>> = if with_bytes {
+        let mime_type = part.content_type().map(|ct| match &ct.c_subtype {
+            Some(sub) => format!(
+                "{}/{}",
+                ct.c_type.to_ascii_lowercase(),
+                sub.to_ascii_lowercase()
+            ),
+            None => ct.c_type.to_ascii_lowercase(),
+        });
+        let content_id = part.content_id().map(str::to_string);
+        let data: Option<Vec<u8>> = if with_bytes || is_inline_image(&content_id, &mime_type, len) {
             match &part.body {
                 PartType::Binary(b) | PartType::InlineBinary(b) => Some(b.to_vec()),
                 PartType::Text(t) | PartType::Html(t) => Some(t.as_bytes().to_vec()),
@@ -145,19 +155,11 @@ pub(crate) fn extract_attachments(
         if with_bytes && data.as_ref().is_none_or(|b| b.is_empty()) {
             continue;
         }
-        let mime_type = part.content_type().map(|ct| match &ct.c_subtype {
-            Some(sub) => format!(
-                "{}/{}",
-                ct.c_type.to_ascii_lowercase(),
-                sub.to_ascii_lowercase()
-            ),
-            None => ct.c_type.to_ascii_lowercase(),
-        });
         let is_inline = matches!(part.body, PartType::InlineBinary(_));
         out.push(NewAttachment {
             filename: part.attachment_name().map(str::to_string),
             mime_type,
-            content_id: part.content_id().map(str::to_string),
+            content_id,
             size: len as u64,
             data,
             is_inline,
@@ -170,6 +172,17 @@ pub(crate) fn store_attachments(db: &Db, message_id: i64, files: Vec<NewAttachme
     messages::replace_attachments(db, message_id, &files)
 }
 
+/// A part the HTML body can show by `cid:`. Its bytes are kept at sync time
+/// even though other attachments store metadata only: the full message is
+/// already in memory, and opening a mail must never need the network.
+fn is_inline_image(content_id: &Option<String>, mime: &Option<String>, len: usize) -> bool {
+    content_id.as_deref().is_some_and(|c| !c.trim().is_empty())
+        && mime.as_deref().is_some_and(is_inline_image_mime)
+        && len <= MAX_INLINE_IMAGE_BYTES
+}
+
+/// Store attachment rows for a freshly synced message: names and sizes,
+/// plus the bytes of inline images up to the per-message budget.
 pub(crate) fn store_attachment_meta(db: &Db, message_id: i64, files: Vec<NewAttachment>) {
     if files.is_empty() {
         return;
@@ -182,9 +195,17 @@ pub(crate) fn store_attachment_meta(db: &Db, message_id: i64, files: Vec<NewAtta
         }
         _ => {}
     }
+    let mut budget = MAX_INLINE_BYTES_PER_MESSAGE;
     for f in &files {
+        let keep = f
+            .data
+            .as_ref()
+            .filter(|d| is_inline_image(&f.content_id, &f.mime_type, d.len()) && d.len() <= budget);
+        if let Some(d) = keep {
+            budget -= d.len();
+        }
         let meta = NewAttachment {
-            data: None,
+            data: keep.cloned(),
             ..f.clone()
         };
         if let Err(e) = messages::add_attachment(db, message_id, &meta) {
@@ -298,6 +319,60 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn sync_keeps_inline_image_bytes_and_the_reader_embeds_them() {
+        let db = Db::open_in_memory().unwrap();
+        let account_id = accounts::create(
+            &db,
+            &crate::models::NewAccount {
+                name: "Test".to_string(),
+                email_address: "alice@example.com".to_string(),
+                from_name: String::new(),
+                imap_host: "imap.example.com".to_string(),
+                imap_port: 993,
+                imap_security: "tls".to_string(),
+                imap_username: "alice@example.com".to_string(),
+                smtp_host: "smtp.example.com".to_string(),
+                smtp_port: 465,
+                smtp_security: "tls".to_string(),
+                smtp_username: "alice@example.com".to_string(),
+                auth_vault_key: "test".to_string(),
+                check_interval_secs: 60,
+            },
+        )
+        .unwrap();
+        let folder_id = folders::upsert(&db, account_id, "INBOX", "/", FolderRole::Inbox).unwrap();
+        let raw = b"From: bob@example.org\r\nTo: alice@example.com\r\nSubject: logo\r\n\
+Content-Type: multipart/mixed; boundary=\"M\"\r\n\r\n\
+--M\r\nContent-Type: multipart/related; boundary=\"R\"\r\n\r\n\
+--R\r\nContent-Type: text/html\r\n\r\n<p>hi<img src=\"cid:logo@example.org\" alt=\"Logo\"></p>\r\n\
+--R\r\nContent-Type: image/png\r\nContent-ID: <logo@example.org>\r\n\
+Content-Disposition: inline\r\nContent-Transfer-Encoding: base64\r\n\r\nZm9v\r\n\
+--R--\r\n\
+--M\r\nContent-Type: application/pdf; name=\"a.pdf\"\r\n\
+Content-Disposition: attachment; filename=\"a.pdf\"\r\n\
+Content-Transfer-Encoding: base64\r\n\r\nYmFy\r\n\
+--M--\r\n";
+        let (msg, files) = parse_to_new(account_id, folder_id, 5, &[], raw, false).unwrap();
+        let id = messages::upsert(&db, &msg).unwrap();
+        store_attachment_meta(&db, id, files);
+
+        let stored = messages::list_attachments(&db, id).unwrap();
+        let pdf = stored.iter().find(|a| a.content_id.is_none()).unwrap();
+        assert!(!messages::attachment_has_data(&db, pdf.id).unwrap());
+        assert_eq!(messages::inline_images(&db, id).unwrap().len(), 1);
+
+        let json: serde_json::Value =
+            serde_json::from_str(&crate::feed::message_json(&db, folder_id, 5).unwrap()).unwrap();
+        let body = json["body_html"].as_str().unwrap();
+        assert!(
+            body.contains("src=\"data:image/png;base64,Zm9v\""),
+            "{body}"
+        );
+        assert!(!body.contains("cid:"));
+        assert_eq!(json["missing_inline_images"], 0);
     }
 
     #[test]

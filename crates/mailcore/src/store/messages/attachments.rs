@@ -3,7 +3,9 @@
 //!
 //! Bytes live in the BLOB column so a message and its files travel with the
 //! single SQLite file; sync stores names and sizes only, and the bytes
-//! arrive on an explicit user request.
+//! arrive on an explicit user request. The exception is inline images
+//! (`cid:` parts), whose bytes sync keeps so the reader can show a body
+//! without going online.
 
 use rusqlite::{params, OptionalExtension};
 
@@ -105,6 +107,32 @@ pub fn list_attachments(db: &Db, message_id: i64) -> Result<Vec<Attachment>> {
                 is_inline: row.get::<_, i64>(7)? != 0,
             })
         })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Stored bytes of every `cid:`-addressable image part of a message, for
+/// [`crate::html::inline_cid_images`]. Local only: parts whose bytes were
+/// never stored are simply absent.
+pub fn inline_images(db: &Db, message_id: i64) -> Result<Vec<crate::html::InlineImage>> {
+    let mut stmt = db.conn().prepare(
+        "select content_id, mime_type, data from attachments
+         where message_id = ?1 and content_id is not null
+           and data is not null and length(data) between 1 and ?2
+           and lower(mime_type) like 'image/%'
+         order by id",
+    )?;
+    let rows = stmt
+        .query_map(
+            params![message_id, crate::html::MAX_INLINE_IMAGE_BYTES as i64],
+            |row| {
+                Ok(crate::html::InlineImage {
+                    content_id: row.get(0)?,
+                    mime_type: row.get(1)?,
+                    data: row.get(2)?,
+                })
+            },
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }

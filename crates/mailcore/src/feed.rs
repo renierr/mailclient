@@ -160,7 +160,18 @@ pub fn message_html(db: &Db, folder_id: i64, uid: u32, allow_remote: bool) -> Re
     let m = messages::get_by_uid(db, folder_id, uid)?;
     let (body_html, _, _, _) =
         sanitized_bodies(m.body_html.as_deref(), m.body_text.as_deref(), allow_remote);
-    Ok(body_html)
+    Ok(with_inline_images(db, m.id, &body_html).0)
+}
+
+/// Resolve `cid:` images from the message's stored parts. Reads SQLite
+/// only — a part without stored bytes turns into its alt text and is
+/// counted, so the reader can offer an explicit download.
+fn with_inline_images(db: &Db, message_id: i64, body_html: &str) -> (String, usize) {
+    let images = messages::inline_images(db, message_id).unwrap_or_else(|e| {
+        log::warn!("inline images for message {message_id}: {e}");
+        Vec::new()
+    });
+    html::inline_cid_images(body_html, &images)
 }
 
 /// List snippets are single-line by contract: the FTS `snippet()` context
@@ -227,6 +238,11 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
     let is_trash = folder.as_ref().is_some_and(|f| f.role == FolderRole::Trash);
     let (body_html, had_remote, is_html, plain) =
         sanitized_bodies(m.body_html.as_deref(), m.body_text.as_deref(), allow_remote);
+    let (body_html, missing_inline) = if is_html {
+        with_inline_images(db, m.id, &body_html)
+    } else {
+        (body_html, 0)
+    };
     let legacy_body = if is_html {
         body_html.clone()
     } else {
@@ -255,6 +271,7 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
         "has_attachments": m.has_attachments || !files.is_empty(),
         "attachments": files, "body_text": plain, "body_html": body_html,
         "is_html": is_html, "has_remote_images": had_remote && is_html,
+        "missing_inline_images": missing_inline,
         "body": legacy_body,
     }))?)
 }

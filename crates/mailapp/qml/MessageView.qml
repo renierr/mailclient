@@ -296,7 +296,14 @@ Rectangle {
     // sender's colours, and dark text with no background of its own is
     // unreadable on a dark one. Same sheet as the Flutter reader.
     function wrapDoc(inner) {
-        return "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" + "<style>html,body{background:#ffffff}"
+        // Same policy as the Flutter reader: no network load at all unless
+        // the user allowed remote images; `cid:` parts arrive as `data:`.
+        var csp = "default-src 'none'; img-src data:" + (root.effectiveAutoLoad() ? " https: http:" : "")
+                + "; style-src 'unsafe-inline'; font-src 'none'; media-src 'none'; frame-src 'none'; "
+                + "form-action 'none'; base-uri 'none'";
+        return "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" + "<meta http-equiv=\"Content-Security-Policy\" content=\""
+                + csp + "\">" + "<meta http-equiv=\"x-dns-prefetch-control\" content=\"off\">"
+                + "<style>html,body{background:#ffffff}"
                 + "body{font-family:sans-serif;font-size:" + Math.round(14 * Theme.uiScale) + "px;line-height:1.5;"
                 + "margin:16px;overflow-wrap:break-word;color:#202124}" + "a{color:#1a5fd0}"
                 + "img{max-width:100%!important;height:auto!important}pre{white-space:pre-wrap}"

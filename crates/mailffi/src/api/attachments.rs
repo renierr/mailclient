@@ -1,7 +1,7 @@
 //! Attachments.
 //!
-//! Sync stores names and sizes only; bytes cost bandwidth and are downloaded
-//! on explicit request, then cached in SQLite as BLOBs. Every function here
+//! Sync stores names and sizes only (inline images aside, which the reader
+//! embeds); bytes cost bandwidth and are downloaded on explicit request, then cached in SQLite as BLOBs. Every function here
 //! is therefore a deliberate user action, never something a list render does.
 //!
 //! Bytes cross the FFI boundary as a `Vec<u8>` rather than as a file path.

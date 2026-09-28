@@ -141,6 +141,14 @@ The renderer depends on the platform:
   sliver list and kept while its inputs are unchanged, so a header toggle or
   link hover does not rebuild the mail.
 
+Opening a mail makes no network request. Inline (`cid:`) images are part
+of the message: sync keeps their bytes, and the core embeds them as
+`data:` URIs before the body reaches either frontend. Mail synced before
+that shows their alt text and a Download banner, which fetches the parts
+from the user's own server on tap. Remote images stay blocked unless
+allowed, and the WebView's Safe Browsing and metrics are off in the
+manifest.
+
 Both frontends paint HTML mail on a light sheet in every theme: the
 sanitizer keeps the sender's inline styles and colours, which assume a
 white background.

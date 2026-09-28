@@ -172,6 +172,7 @@ class MessageBody {
     required this.bodyHtml,
     required this.isHtml,
     required this.hasRemoteImages,
+    this.missingInlineImages = 0,
     required this.attachments,
   });
 
@@ -195,6 +196,10 @@ class MessageBody {
   /// Whether sanitizing actually removed remote references — what the
   /// "images were blocked" banner is about.
   final bool hasRemoteImages;
+
+  /// Embedded (`cid:`) images whose bytes are not stored locally, so the
+  /// body shows their alt text. Mail synced before inline images were kept.
+  final int missingInlineImages;
   final List<AttachmentInfo> attachments;
 
   factory MessageBody.fromJson(Map<String, dynamic> j) => MessageBody(
@@ -209,6 +214,7 @@ class MessageBody {
         bodyHtml: _str(j['body_html']),
         isHtml: _bool(j['is_html']),
         hasRemoteImages: _bool(j['has_remote_images']),
+        missingInlineImages: _int(j['missing_inline_images']),
         attachments: _list(j['attachments'])
             .map(AttachmentInfo.fromJson)
             .toList(growable: false),
