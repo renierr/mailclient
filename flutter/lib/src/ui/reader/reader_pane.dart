@@ -145,6 +145,9 @@ class ReaderPaneState extends State<ReaderPane> {
             textScale: scale,
             header: header,
             headerReady: _headersFuture,
+            // Original colours show the mail as sent: its own palette and
+            // its original fixed-width layout, sideways scroll included.
+            fitWidths: !_originalColors,
             onHoverUrl: (url) => _hoveredLink.value = url,
             onTapUrl: (url) => _handleLinkUrl(context, url),
           )

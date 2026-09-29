@@ -36,6 +36,7 @@ class MailHtmlView extends StatefulWidget {
     this.onHoverUrl,
     this.header,
     this.headerReady,
+    this.fitWidths = true,
   });
 
   /// Scrolls away with the body (the reader's header and attachments).
@@ -43,6 +44,11 @@ class MailHtmlView extends StatefulWidget {
 
   /// Completes once [header] has its final content (see [MailWebView]).
   final Future<Object?>? headerReady;
+
+  /// Narrow pages loosen fixed-width newsletter layouts to fit. False keeps
+  /// the mail's original fixed-width layout — paired with the reader's
+  /// "show original colours" toggle, the mail is shown as sent.
+  final bool fitWidths;
 
   /// Whether this platform renders mail in a WebView.
   static bool get usesWebView => !kIsWeb && Platform.isAndroid;
@@ -89,6 +95,7 @@ class _MailHtmlViewState extends State<MailHtmlView> {
         onTapUrl: widget.onTapUrl,
         header: widget.header,
         headerReady: widget.headerReady,
+        fitWidths: widget.fitWidths,
       );
     }
     final palette = MailPalette.of(context, widget.paint);

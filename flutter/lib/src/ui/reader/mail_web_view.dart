@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
@@ -33,9 +34,16 @@ class MailWebView extends StatefulWidget {
     this.onTapUrl,
     this.header,
     this.headerReady,
+    this.fitWidths = true,
   });
 
   final Widget? header;
+
+  /// Narrow pages loosen fixed-width newsletter layouts to fit (see
+  /// [fitMailWidths]). False keeps the mail's original fixed-width layout,
+  /// sideways scroll included — used with the reader's "show original
+  /// colours" toggle, where the mail is shown as sent in both respects.
+  final bool fitWidths;
 
   /// Completes once [header] has its final content (the full headers are
   /// read after the body). The first load waits for it: a header that grew
@@ -92,6 +100,23 @@ class _MailWebViewState extends State<MailWebView> {
   /// scrolling moves the header without rebuilding the WebView.
   final _scrollY = ValueNotifier<double>(0);
 
+  /// Cached display density: the scroll callback fires per scroll delta and
+  /// must not do a [MediaQuery] lookup on every one.
+  double? _dpr;
+
+  /// Latest scroll offset, flushed to [_scrollY] at most once per frame: the
+  /// platform reports many deltas per vsync and each notifier set rebuilds
+  /// the overlay.
+  double _pendingY = 0;
+  bool _scrollScheduled = false;
+
+  /// Drag distance on the header overlay, flushed to the page as one
+  /// `scrollBy` per frame instead of one platform-channel call per motion
+  /// event.
+  double _pendingDy = 0;
+  bool _dragScheduled = false;
+  Timer? _fling;
+
   @override
   void initState() {
     super.initState();
@@ -104,11 +129,18 @@ class _MailWebViewState extends State<MailWebView> {
     // Android reports the View's scroll in physical pixels.
     _controller.setOnScrollPositionChange((change) {
       if (!mounted) return;
-      final y = change.y / MediaQuery.devicePixelRatioOf(context);
+      final y = change.y / (_dpr ?? MediaQuery.devicePixelRatioOf(context));
       // Once the header is off the top it stays put: the notifier holds
       // one value and nothing rebuilds while the mail scrolls.
       final gone = (_headerHeight ?? 0) + 1;
-      _scrollY.value = y < gone ? y : gone;
+      _pendingY = y < gone ? y : gone;
+      if (_scrollScheduled || _scrollY.value == _pendingY) return;
+      _scrollScheduled = true;
+      SchedulerBinding.instance.scheduleFrameCallback((_) {
+        _scrollScheduled = false;
+        if (!mounted) return;
+        if (_scrollY.value != _pendingY) _scrollY.value = _pendingY;
+      });
     });
     if (platform is AndroidWebViewController) {
       platform
@@ -130,6 +162,7 @@ class _MailWebViewState extends State<MailWebView> {
   @override
   void dispose() {
     _settle?.cancel();
+    _fling?.cancel();
     _scrollY.dispose();
     super.dispose();
   }
@@ -137,6 +170,7 @@ class _MailWebViewState extends State<MailWebView> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _dpr = MediaQuery.devicePixelRatioOf(context);
     _requestSync();
   }
 
@@ -144,6 +178,7 @@ class _MailWebViewState extends State<MailWebView> {
   void didUpdateWidget(MailWebView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.headerReady != oldWidget.headerReady) _watchHeader();
+    if (widget.html != oldWidget.html) _stopFling();
     _requestSync();
   }
 
@@ -205,7 +240,9 @@ class _MailWebViewState extends State<MailWebView> {
       _layoutWidth = mailLayoutWidth(widget.html);
     }
     // The page's own side margins (16px each) are not the mail's to use.
-    final fit = _layoutWidth > width - 32;
+    // With [MailWebView.fitWidths] off the mail keeps its original fixed
+    // widths and scrolls sideways, like the sender laid it out.
+    final fit = widget.fitWidths && _layoutWidth > width - 32;
     final darkenedOn = widget.paint == MailPaint.darkened ? surface : null;
     final key = (
       widget.html,
@@ -228,6 +265,48 @@ class _MailWebViewState extends State<MailWebView> {
         fit: fit,
       ),
     );
+  }
+
+  /// Queue a header drag distance, flushed as one `scrollBy` per frame.
+  void _forwardDrag(double dy) {
+    _stopFling();
+    _pendingDy += dy;
+    if (_dragScheduled) return;
+    _dragScheduled = true;
+    SchedulerBinding.instance.scheduleFrameCallback((_) {
+      _dragScheduled = false;
+      final dy = _pendingDy.truncate();
+      _pendingDy -= dy;
+      if (dy != 0 && mounted) _controller.scrollBy(0, dy);
+    });
+  }
+
+  /// A short decaying fling from a header swipe's release velocity
+  /// (physical pixels per millisecond). Native flings never reach the page
+  /// because the overlay eats the gesture; without this a swipe starting
+  /// on the header stops dead on release.
+  void _flingFrom(double velocity) {
+    _stopFling();
+    if (!mounted || velocity.abs() < 0.5) return;
+    var v = velocity;
+    _fling = Timer.periodic(const Duration(milliseconds: 16), (t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      v *= 0.92;
+      if (v.abs() < 0.5) {
+        t.cancel();
+        _fling = null;
+        return;
+      }
+      _controller.scrollBy(0, (v * 16).round());
+    });
+  }
+
+  void _stopFling() {
+    _fling?.cancel();
+    _fling = null;
   }
 
   @override
@@ -261,19 +340,28 @@ class _MailWebViewState extends State<MailWebView> {
               Positioned(top: -y, left: 0, right: 0, child: child!),
           child: GestureDetector(
             // Dragging on the header scrolls the page underneath, as if
-            // the header were part of it.
-            onVerticalDragUpdate: (d) =>
-                _controller.scrollBy(0, (-d.delta.dy * dpr).round()),
-            child: MeasureSize(
-              onChange: (size) {
-                if (!mounted || size.height == _headerHeight) return;
-                // The spacer only matters at the top of the page, where a
-                // header change (details expanded) happens anyway; the
-                // reload that resizes it resets the scroll.
-                _headerHeight = size.height;
-                _requestSync();
-              },
-              child: Material(child: header),
+            // the header were part of it. Motion events are batched into
+            // one `scrollBy` per frame; the release velocity becomes a
+            // short decaying fling, so a swipe off the header keeps moving
+            // like a native one instead of stopping dead.
+            onVerticalDragUpdate: (d) => _forwardDrag(-d.delta.dy * dpr),
+            onVerticalDragEnd: (d) =>
+                _flingFrom(-(d.primaryVelocity ?? 0) * dpr / 1000),
+            onVerticalDragCancel: _stopFling,
+            child: RepaintBoundary(
+              // Its own layer: scrolling only re-composites the header's
+              // bitmap instead of repainting it on every frame.
+              child: MeasureSize(
+                onChange: (size) {
+                  if (!mounted || size.height == _headerHeight) return;
+                  // The spacer only matters at the top of the page, where a
+                  // header change (details expanded) happens anyway; the
+                  // reload that resizes it resets the scroll.
+                  _headerHeight = size.height;
+                  _requestSync();
+                },
+                child: Material(child: header),
+              ),
             ),
           ),
         ),

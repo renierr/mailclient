@@ -4,6 +4,7 @@ import 'package:mailclient/src/ffi/mail_core.dart';
 import 'package:mailclient/src/models/models.dart';
 import 'package:mailclient/src/models/settings.dart';
 import 'package:mailclient/src/state/mail_state.dart';
+import 'package:mailclient/src/ui/reader/mail_html_view.dart';
 import 'package:mailclient/src/ui/reader/reader_pane.dart';
 import 'package:provider/provider.dart';
 
@@ -99,5 +100,48 @@ void main() {
     await tester.drag(find.byType(CustomScrollView), const Offset(0, -300));
     await tester.pump();
     expect(tester.getTopLeft(subject).dy, lessThan(before - 200));
+  });
+
+  // Original colours show the mail as sent: its own palette and its
+  // original fixed-width layout, sideways scroll included. The toggle
+  // flips MailHtmlView.fitWidths with it.
+  testWidgets('original colours also restore the original width layout', (
+    tester,
+  ) async {
+    final core = _OneMessageCore({
+      'uid': 9,
+      'subject': 'Newsletter',
+      'from': 'news@example.com',
+      'body_text': 'fallback',
+      'is_html': true,
+      'html_colored': true,
+      'body_html': '<table width="600"><tr><td>hi</td></tr></table>',
+    });
+    MailCore.debugInstance = core;
+    final state = MailState(core);
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: state,
+        child: MaterialApp(
+          theme: ThemeData.dark(),
+          home: const Scaffold(body: ReaderPane()),
+        ),
+      ),
+    );
+    await state.openMessage(9);
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    MailHtmlView view() =>
+        tester.widget<MailHtmlView>(find.byType(MailHtmlView));
+    expect(view().fitWidths, isTrue);
+
+    await tester.tap(find.byTooltip('Show original colours'));
+    await tester.pump();
+    expect(view().fitWidths, isFalse);
+
+    await tester.tap(find.byTooltip('Darken to match the theme'));
+    await tester.pump();
+    expect(view().fitWidths, isTrue);
   });
 }

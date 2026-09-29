@@ -82,5 +82,12 @@ void main() {
         contains('td,th{overflow-wrap:anywhere}'),
       );
     });
+
+    test('the original layout keeps fixed widths (original-colours toggle)', () {
+      final doc = mailDocument(body, allowRemote: false, fit: false);
+      expect(doc, contains(body));
+      expect(doc, isNot(contains('max-width:600px')));
+      expect(doc, isNot(contains('box-sizing')));
+    });
   });
 }
