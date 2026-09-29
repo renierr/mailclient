@@ -144,6 +144,7 @@ class ReaderPaneState extends State<ReaderPane> {
             allowRemote: loadRemote || _htmlWithRemoteImages != null,
             textScale: scale,
             header: header,
+            headerReady: _headersFuture,
             onHoverUrl: (url) => _hoveredLink.value = url,
             onTapUrl: (url) => _handleLinkUrl(context, url),
           )

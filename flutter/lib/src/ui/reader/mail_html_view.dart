@@ -35,10 +35,14 @@ class MailHtmlView extends StatefulWidget {
     this.onTapUrl,
     this.onHoverUrl,
     this.header,
+    this.headerReady,
   });
 
   /// Scrolls away with the body (the reader's header and attachments).
   final Widget? header;
+
+  /// Completes once [header] has its final content (see [MailWebView]).
+  final Future<Object?>? headerReady;
 
   /// Whether this platform renders mail in a WebView.
   static bool get usesWebView => !kIsWeb && Platform.isAndroid;
@@ -84,6 +88,7 @@ class _MailHtmlViewState extends State<MailHtmlView> {
         textScale: widget.textScale,
         onTapUrl: widget.onTapUrl,
         header: widget.header,
+        headerReady: widget.headerReady,
       );
     }
     final palette = MailPalette.of(context, widget.paint);

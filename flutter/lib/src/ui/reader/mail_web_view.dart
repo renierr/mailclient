@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
+import 'mail_fit.dart';
 import 'mail_paint.dart';
 import 'measure_size.dart';
 
@@ -30,9 +32,15 @@ class MailWebView extends StatefulWidget {
     this.textScale = 1.0,
     this.onTapUrl,
     this.header,
+    this.headerReady,
   });
 
   final Widget? header;
+
+  /// Completes once [header] has its final content (the full headers are
+  /// read after the body). The first load waits for it: a header that grew
+  /// afterwards would reload the whole mail to resize the spacer.
+  final Future<Object?>? headerReady;
 
   /// Theme colours, the sender's, or the sender's darkened.
   final MailPaint paint;
@@ -54,13 +62,31 @@ class MailWebView extends StatefulWidget {
 
 class _MailWebViewState extends State<MailWebView> {
   late final WebViewController _controller;
-  String? _loaded;
+
+  /// Inputs of the loaded document. Compared instead of the document
+  /// itself, which for a mail with embedded images is megabytes long.
+  Object? _loaded;
   int? _zoom;
   Color? _background;
 
   /// Header height the document reserves; null until first measured, and
   /// nothing loads before that (it would load twice).
   double? _headerHeight;
+
+  /// Page width in logical (= CSS) pixels; null until laid out.
+  double? _width;
+
+  /// [mailLayoutWidth] of [MailWebView.html], computed once per mail.
+  String? _layoutFor;
+  int _layoutWidth = 0;
+
+  /// [MailWebView.headerReady] has completed for the shown mail.
+  bool _headerReady = false;
+
+  /// The shown mail has been loaded once. Until then, triggers are
+  /// coalesced so the header settles and the mail loads once.
+  bool _shown = false;
+  Timer? _settle;
 
   /// Page scroll in logical pixels, for the header overlay. A notifier, so
   /// scrolling moves the header without rebuilding the WebView.
@@ -78,7 +104,11 @@ class _MailWebViewState extends State<MailWebView> {
     // Android reports the View's scroll in physical pixels.
     _controller.setOnScrollPositionChange((change) {
       if (!mounted) return;
-      _scrollY.value = change.y / MediaQuery.devicePixelRatioOf(context);
+      final y = change.y / MediaQuery.devicePixelRatioOf(context);
+      // Once the header is off the top it stays put: the notifier holds
+      // one value and nothing rebuilds while the mail scrolls.
+      final gone = (_headerHeight ?? 0) + 1;
+      _scrollY.value = y < gone ? y : gone;
     });
     if (platform is AndroidWebViewController) {
       platform
@@ -87,6 +117,7 @@ class _MailWebViewState extends State<MailWebView> {
         ..setGeolocationEnabled(false)
         ..setMediaPlaybackRequiresUserGesture(true);
     }
+    _watchHeader();
   }
 
   NavigationDecision _onNavigation(NavigationRequest request) {
@@ -98,6 +129,7 @@ class _MailWebViewState extends State<MailWebView> {
 
   @override
   void dispose() {
+    _settle?.cancel();
     _scrollY.dispose();
     super.dispose();
   }
@@ -105,13 +137,44 @@ class _MailWebViewState extends State<MailWebView> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _sync();
+    _requestSync();
   }
 
   @override
   void didUpdateWidget(MailWebView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _sync();
+    if (widget.headerReady != oldWidget.headerReady) _watchHeader();
+    _requestSync();
+  }
+
+  /// A new mail: hold its first load until the header has its final
+  /// content, so the spacer is sized once instead of reloading the mail.
+  void _watchHeader() {
+    final ready = widget.headerReady;
+    _shown = false;
+    _headerReady = ready == null;
+    ready
+        ?.then<void>((_) {}, onError: (_) {})
+        .timeout(const Duration(seconds: 1), onTimeout: () {})
+        .then((_) {
+          if (!mounted || widget.headerReady != ready) return;
+          _headerReady = true;
+          _requestSync();
+        });
+  }
+
+  /// Before the first load, wait for the triggers to go quiet (the header
+  /// rebuilds and is measured a frame after its content arrives); after
+  /// it, apply changes right away.
+  void _requestSync() {
+    if (_shown) {
+      _sync();
+      return;
+    }
+    _settle?.cancel();
+    _settle = Timer(const Duration(milliseconds: 50), () {
+      if (mounted) _sync();
+    });
   }
 
   /// Load only what changed: a reload resets the scroll position.
@@ -135,22 +198,56 @@ class _MailWebViewState extends State<MailWebView> {
       _controller.setBackgroundColor(background);
     }
     final top = widget.header == null ? 0.0 : _headerHeight;
-    if (top == null) return;
-    final doc = mailDocument(
-      widget.html,
-      allowRemote: widget.allowRemote,
-      palette: palette,
-      darkenedOn: widget.paint == MailPaint.darkened ? surface : null,
-      topSpace: top,
-    );
-    if (doc != _loaded) {
-      _loaded = doc;
-      _controller.loadHtmlString(doc);
+    final width = _width;
+    if (top == null || width == null || !_headerReady) return;
+    if (!identical(_layoutFor, widget.html)) {
+      _layoutFor = widget.html;
+      _layoutWidth = mailLayoutWidth(widget.html);
     }
+    // The page's own side margins (16px each) are not the mail's to use.
+    final fit = _layoutWidth > width - 32;
+    final darkenedOn = widget.paint == MailPaint.darkened ? surface : null;
+    final key = (
+      widget.html,
+      widget.allowRemote,
+      (palette.paper, palette.ink, palette.link, palette.quote, palette.rule),
+      darkenedOn,
+      top.ceil(),
+      fit,
+    );
+    _shown = true;
+    if (key == _loaded) return;
+    _loaded = key;
+    _controller.loadHtmlString(
+      mailDocument(
+        widget.html,
+        allowRemote: widget.allowRemote,
+        palette: palette,
+        darkenedOn: darkenedOn,
+        topSpace: top,
+        fit: fit,
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        if (width != _width) {
+          _width = width;
+          // A rotation reloads only if it changes whether the mail fits.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _requestSync();
+          });
+        }
+        return _page(context);
+      },
+    );
+  }
+
+  Widget _page(BuildContext context) {
     final header = widget.header;
     final web = WebViewWidget(controller: _controller);
     if (header == null) return web;
@@ -174,7 +271,7 @@ class _MailWebViewState extends State<MailWebView> {
                 // header change (details expanded) happens anyway; the
                 // reload that resizes it resets the scroll.
                 _headerHeight = size.height;
-                _sync();
+                _requestSync();
               },
               child: Material(child: header),
             ),
@@ -199,6 +296,7 @@ String mailDocument(
   MailPalette palette = MailPalette.light,
   Color? darkenedOn,
   double topSpace = 0,
+  bool fit = false,
 }) {
   // `cid:` images arrive already embedded as `data:` by the core.
   final img = allowRemote ? "data: https: http:" : "data:";
@@ -225,8 +323,10 @@ String mailDocument(
             '#mail img{filter:$darkInvertCss}';
   // Room for the header overlaying the top of the page (see [MailWebView]).
   final spacer = '<div id="mc-top" style="height:${topSpace.ceil()}px"></div>';
+  // A layout wider than the page is loosened to fit it (see [fitMailWidths]).
+  final shown = fit ? fitMailWidths(body) : body;
   final content =
-      spacer + (darkenedOn == null ? body : '<div id="mail">$body</div>');
+      spacer + (darkenedOn == null ? shown : '<div id="mail">$shown</div>');
   return '<!DOCTYPE html><html><head><meta charset="utf-8">'
       '<meta http-equiv="Content-Security-Policy" '
       'content="${const HtmlEscape(HtmlEscapeMode.attribute).convert(csp)}">'
@@ -239,6 +339,10 @@ String mailDocument(
       // instead of scrolling sideways; author CSS beats their attributes.
       'img{max-width:100%!important;height:auto!important}'
       'table{max-width:100%!important}'
+      // A long URL in a cell would otherwise set the cell's minimum width.
+      'td,th{overflow-wrap:anywhere}'
+      // Loosened widths are caps; padding must fit inside them.
+      '${fit ? 'div,table{box-sizing:border-box}' : ''}'
       'pre{white-space:pre-wrap}'
       'blockquote{margin:8px 0;padding-left:12px;'
       'border-left:3px solid ${cssHex(palette.rule)};'
