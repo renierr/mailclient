@@ -98,18 +98,13 @@ class ReaderHeader extends StatelessWidget {
                         onPressed: onClose,
                       ),
                     Expanded(
-                      // Display text lets scroll gestures fall through to
-                      // the WebView underneath, so every fling is the
-                      // native one (see MailWebView). Semantics stay on.
-                      child: IgnorePointer(
-                        child: Text(
-                          message.subject,
-                          style: theme.textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
+                      child: Text(
+                        message.subject,
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
                         ),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ],
@@ -121,51 +116,46 @@ class ReaderHeader extends StatelessWidget {
                     SenderAvatar(from: sender.name),
                     const SizedBox(width: 12),
                     Expanded(
-                      // Display text: scroll gestures fall through to the
-                      // WebView (see MailWebView); the avatar, chevron and
-                      // actions beside it stay tappable.
-                      child: IgnorePointer(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    sender.name,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: theme.textTheme.bodyMedium?.copyWith(
-                                      fontWeight: FontWeight.w700,
-                                    ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  sender.name,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
                                   ),
                                 ),
-                                const SizedBox(width: 8),
-                                Text(message.date, style: muted),
-                              ],
+                              ),
+                              const SizedBox(width: 8),
+                              Text(message.date, style: muted),
+                            ],
+                          ),
+                          if (sender.addr != sender.name)
+                            Text(
+                              sender.addr,
+                              overflow: TextOverflow.ellipsis,
+                              style: muted,
                             ),
-                            if (sender.addr != sender.name)
-                              Text(
-                                sender.addr,
-                                overflow: TextOverflow.ellipsis,
-                                style: muted,
-                              ),
-                            if (!details && to.isNotEmpty)
-                              Text(
-                                'To $to',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: muted,
-                              ),
-                            // Shown inline, not only in the details: replying
-                            // to the wrong address cannot be taken back.
-                            if (replyToDiffers)
-                              Text(
-                                'Replies go to $replyTo, not to the sender',
-                                overflow: TextOverflow.ellipsis,
-                                style: muted?.copyWith(color: scheme.error),
-                              ),
-                          ],
-                        ),
+                          if (!details && to.isNotEmpty)
+                            Text(
+                              'To $to',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: muted,
+                            ),
+                          // Shown inline, not only in the details: replying
+                          // to the wrong address cannot be taken back.
+                          if (replyToDiffers)
+                            Text(
+                              'Replies go to $replyTo, not to the sender',
+                              overflow: TextOverflow.ellipsis,
+                              style: muted?.copyWith(color: scheme.error),
+                            ),
+                        ],
                       ),
                     ),
                     IconButton(
@@ -180,23 +170,19 @@ class ReaderHeader extends StatelessWidget {
                 if (details)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
-                    // Display text: scroll gestures fall through to the
-                    // WebView (see MailWebView).
-                    child: IgnorePointer(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          HeaderDetailRow(label: 'From', value: from),
-                          if (to.isNotEmpty)
-                            HeaderDetailRow(label: 'To', value: to),
-                          if (cc.isNotEmpty)
-                            HeaderDetailRow(label: 'Cc', value: cc),
-                          if (date.isNotEmpty)
-                            HeaderDetailRow(label: 'Date', value: date),
-                          if (replyTo.isNotEmpty)
-                            HeaderDetailRow(label: 'Reply-To', value: replyTo),
-                        ],
-                      ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        HeaderDetailRow(label: 'From', value: from),
+                        if (to.isNotEmpty)
+                          HeaderDetailRow(label: 'To', value: to),
+                        if (cc.isNotEmpty)
+                          HeaderDetailRow(label: 'Cc', value: cc),
+                        if (date.isNotEmpty)
+                          HeaderDetailRow(label: 'Date', value: date),
+                        if (replyTo.isNotEmpty)
+                          HeaderDetailRow(label: 'Reply-To', value: replyTo),
+                      ],
                     ),
                   ),
                 const SizedBox(height: 4),

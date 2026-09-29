@@ -47,29 +47,15 @@ class AttachmentCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              // Display content: scroll gestures fall through to the
-              // WebView underneath (see MailWebView); buttons stay out.
+              Icon(Icons.attach_file, size: 16, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 6),
               Expanded(
-                child: IgnorePointer(
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.attach_file,
-                        size: 16,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          files.length == 1
-                              ? '1 attachment'
-                              : '${files.length} attachments',
-                          overflow: TextOverflow.ellipsis,
-                          style: small?.copyWith(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                    ],
-                  ),
+                child: Text(
+                  files.length == 1
+                      ? '1 attachment'
+                      : '${files.length} attachments',
+                  overflow: TextOverflow.ellipsis,
+                  style: small?.copyWith(fontWeight: FontWeight.w600),
                 ),
               ),
               if (files.length > 1)
@@ -84,26 +70,16 @@ class AttachmentCard extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: IgnorePointer(
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            a.filename,
-                            overflow: TextOverflow.ellipsis,
-                            style: small,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          formatBytes(a.size),
-                          style: small?.copyWith(
-                            color: scheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                    ),
+                  child: Text(
+                    a.filename,
+                    overflow: TextOverflow.ellipsis,
+                    style: small,
                   ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  formatBytes(a.size),
+                  style: small?.copyWith(color: scheme.onSurfaceVariant),
                 ),
                 TextButton(
                   style: compact,

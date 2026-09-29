@@ -28,24 +28,15 @@ class InlineImagesBanner extends StatelessWidget {
         spacing: 8,
         runSpacing: 4,
         children: [
-          // Display content: scroll gestures fall through to the WebView
-          // underneath (see MailWebView); only the button stays tappable.
-          IgnorePointer(
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.image_outlined, size: 18, color: scheme.outline),
-                ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxWidth: MediaQuery.sizeOf(context).width - 48,
-                  ),
-                  child: Text(
-                    count == 1
-                        ? '1 embedded image is not downloaded yet.'
-                        : '$count embedded images are not downloaded yet.',
-                  ),
-                ),
-              ],
+          Icon(Icons.image_outlined, size: 18, color: scheme.outline),
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.sizeOf(context).width - 48,
+            ),
+            child: Text(
+              count == 1
+                  ? '1 embedded image is not downloaded yet.'
+                  : '$count embedded images are not downloaded yet.',
             ),
           ),
           TextButton(
