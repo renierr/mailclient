@@ -9,7 +9,9 @@ import '../../state/mail_state.dart';
 import 'inline_images_banner.dart';
 import 'link_safety.dart';
 import 'mail_html_view.dart';
+import 'attachment_card.dart';
 import 'mail_paint.dart';
+import 'reader_header.dart';
 import 'reader_widgets.dart';
 
 /// The selected message.
@@ -18,15 +20,11 @@ import 'reader_widgets.dart';
 /// remote content is ask the core to re-sanitize with images allowed, and only
 /// because the user pressed the button that says so.
 class ReaderPane extends StatefulWidget {
-  const ReaderPane({super.key, this.onClose, this.allowFullscreen = true});
+  const ReaderPane({super.key, this.onClose});
 
-  /// Back affordance in the reader header — the two-pane layout, where the
-  /// app bar has no back button of its own.
+  /// Back in front of the subject — wherever the app bar has no back button
+  /// of its own (two panes, or full screen).
   final VoidCallback? onClose;
-
-  /// Only the three-pane layout offers fullscreen; narrower ones already give
-  /// the reader every pixel.
-  final bool allowFullscreen;
 
   @override
   State<ReaderPane> createState() => ReaderPaneState();
@@ -106,66 +104,71 @@ class ReaderPaneState extends State<ReaderPane> {
       keepOriginal: _originalColors,
     );
     final canToggleColors = message.isHtml && message.htmlColored && dark;
+    // Header, image notice and attachments scroll away with the body: on a
+    // phone the mail gets the whole pane as soon as the reader scrolls.
+    final header = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ReaderHeader(
+          message: message,
+          headersFuture: _headersFuture,
+          details: _details,
+          onToggleDetails: () => setState(() => _details = !_details),
+          onClose: widget.onClose,
+          originalColors: _originalColors,
+          onToggleColors: canToggleColors
+              ? () => setState(() => _originalColors = !_originalColors)
+              : null,
+          onShowRemoteImages:
+              message.hasRemoteImages &&
+                  _htmlWithRemoteImages == null &&
+                  !loadRemote
+              ? () => _showRemoteImages(message)
+              : null,
+        ),
+        if (message.isHtml && message.missingInlineImages > 0)
+          InlineImagesBanner(
+            count: message.missingInlineImages,
+            busy: _inlineRequested,
+            onDownload: () => _downloadInlineImages(message),
+          ),
+        if (message.attachments.any((a) => !a.isInline))
+          AttachmentCard(message: message),
+      ],
+    );
+    final body = message.isHtml
+        ? MailHtmlView(
+            html: _htmlWithRemoteImages ?? message.bodyHtml,
+            paint: paint,
+            allowRemote: loadRemote || _htmlWithRemoteImages != null,
+            textScale: scale,
+            header: header,
+            onHoverUrl: (url) => _hoveredLink.value = url,
+            onTapUrl: (url) => _handleLinkUrl(context, url),
+          )
+        : CustomScrollView(
+            slivers: [
+              SliverToBoxAdapter(child: header),
+              SliverPadding(
+                padding: const EdgeInsets.all(16),
+                sliver: SliverToBoxAdapter(
+                  child: MediaQuery(
+                    data: MediaQuery.of(context)
+                        .copyWith(textScaler: TextScaler.linear(scale)),
+                    child: SelectableText(message.bodyText),
+                  ),
+                ),
+              ),
+            ],
+          );
     // Expand: the only non-positioned child is the hover bubble, empty when
     // no link is hovered, so a loose parent (the shell's Row) would size the
     // Stack — and the whole reader with it — to nothing.
     return Stack(
       fit: StackFit.expand,
       children: [
-        Positioned.fill(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              ReaderHeader(
-                message: message,
-                headersFuture: _headersFuture,
-                details: _details,
-                onToggleDetails: () => setState(() => _details = !_details),
-                onClose: widget.onClose,
-                allowFullscreen: widget.allowFullscreen,
-                originalColors: _originalColors,
-                onToggleColors: canToggleColors
-                    ? () => setState(() => _originalColors = !_originalColors)
-                    : null,
-              ),
-              const Divider(height: 1),
-              if (message.hasRemoteImages &&
-                  _htmlWithRemoteImages == null &&
-                  !loadRemote)
-                RemoteImagesBanner(
-                  onShowOnce: () => _showRemoteImages(message),
-                ),
-              if (message.isHtml && message.missingInlineImages > 0)
-                InlineImagesBanner(
-                  count: message.missingInlineImages,
-                  busy: _inlineRequested,
-                  onDownload: () => _downloadInlineImages(message),
-                ),
-              Expanded(
-                child: message.isHtml
-                    ? MailHtmlView(
-                        html: _htmlWithRemoteImages ?? message.bodyHtml,
-                        paint: paint,
-                        allowRemote:
-                            loadRemote || _htmlWithRemoteImages != null,
-                        textScale: scale,
-                        onHoverUrl: (url) => _hoveredLink.value = url,
-                        onTapUrl: (url) => _handleLinkUrl(context, url),
-                      )
-                    : SingleChildScrollView(
-                        padding: const EdgeInsets.all(16),
-                        child: MediaQuery(
-                          data: MediaQuery.of(context)
-                              .copyWith(textScaler: TextScaler.linear(scale)),
-                          child: SelectableText(message.bodyText),
-                        ),
-                      ),
-              ),
-              if (message.attachments.any((a) => !a.isInline))
-                AttachmentBar(message: message),
-            ],
-          ),
-        ),
+        Positioned.fill(child: body),
         ValueListenableBuilder<String?>(
           valueListenable: _hoveredLink,
           builder: (context, hovered, _) {

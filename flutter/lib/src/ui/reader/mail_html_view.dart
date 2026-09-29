@@ -10,7 +10,7 @@ import 'mail_paint.dart';
 import 'mail_web_view.dart';
 
 /// Renders a message body that has already been sanitized by `mailcore`,
-/// and scrolls it.
+/// and scrolls it together with [header] above it, as one page.
 ///
 /// Two renderers, picked by platform:
 ///
@@ -34,7 +34,11 @@ class MailHtmlView extends StatefulWidget {
     this.textScale = 1.0,
     this.onTapUrl,
     this.onHoverUrl,
+    this.header,
   });
+
+  /// Scrolls away with the body (the reader's header and attachments).
+  final Widget? header;
 
   /// Whether this platform renders mail in a WebView.
   static bool get usesWebView => !kIsWeb && Platform.isAndroid;
@@ -79,6 +83,7 @@ class _MailHtmlViewState extends State<MailHtmlView> {
         paint: widget.paint,
         textScale: widget.textScale,
         onTapUrl: widget.onTapUrl,
+        header: widget.header,
       );
     }
     final palette = MailPalette.of(context, widget.paint);
@@ -92,61 +97,81 @@ class _MailHtmlViewState extends State<MailHtmlView> {
       _bodyKey = key;
       _body = _build(style, palette);
     }
-    return _body!;
+    // The header rebuilds freely; the body sliver is the cached instance.
+    return SelectionArea(
+      child: CustomScrollView(
+        slivers: [
+          if (widget.header case final Widget header)
+            SliverToBoxAdapter(child: header),
+          _body!,
+          // Paper down to the bottom of a short mail.
+          if (widget.paint != MailPaint.darkened)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: ColoredBox(color: palette.paper),
+            ),
+        ],
+      ),
+    );
   }
 
+  /// The body as a sliver. Normal paints build it lazily (sliver list);
+  /// the darkened paint needs one box to invert as a whole, so it lays the
+  /// mail out as a column.
   Widget _build(TextStyle? style, MailPalette palette) {
     final outline = Theme.of(context).colorScheme.outline;
     final darkened = widget.paint == MailPaint.darkened;
-    final body = ColoredBox(
-      color: palette.paper,
-      child: SelectionArea(
-        child: CustomScrollView(
-          slivers: [
-            SliverPadding(
+    Widget html(RenderMode mode) => HtmlWidget(
+      widget.html,
+      // A new paint needs a new factory, which only initState builds.
+      key: ValueKey(widget.paint),
+      renderMode: mode,
+      factoryBuilder: () => _LinkHoverWidgetFactory(
+        onHoverUrl: (url) => widget.onHoverUrl?.call(url),
+        restoreImages: darkened,
+      ),
+      textStyle: style,
+      customStylesBuilder: (element) =>
+          element.localName == 'a' ? {'color': cssHex(palette.link)} : null,
+      // Read through `widget`, so a cached body still calls the current
+      // callback.
+      onTapUrl: (url) {
+        final tap = widget.onTapUrl;
+        if (tap == null) return false;
+        tap(url);
+        return true;
+      },
+      // The sanitizer keeps `cid:` and `data:` images (they travelled with
+      // the mail) and strips remote ones unless allowed, so whatever
+      // reaches here is already the user's choice. This only has to not
+      // widen it.
+      onErrorBuilder: (context, element, error) =>
+          Text('[unrenderable content]', style: TextStyle(color: outline)),
+    );
+    if (darkened) {
+      // See [MailPaint.darkened]: the whole body inverts, images twice.
+      return SliverToBoxAdapter(
+        child: ColorFiltered(
+          colorFilter: darkInvert,
+          child: ColoredBox(
+            color: palette.paper,
+            child: Padding(
               padding: const EdgeInsets.all(16),
-              // Sliver mode builds top-level blocks lazily as they scroll
-              // into view instead of laying out the whole mail up front.
-              sliver: HtmlWidget(
-                widget.html,
-                // A new paint needs a new factory, which only initState
-                // builds.
-                key: ValueKey(widget.paint),
-                renderMode: RenderMode.sliverList,
-                factoryBuilder: () => _LinkHoverWidgetFactory(
-                  onHoverUrl: (url) => widget.onHoverUrl?.call(url),
-                  restoreImages: darkened,
-                ),
-                textStyle: style,
-                customStylesBuilder: (element) => element.localName == 'a'
-                    ? {'color': cssHex(palette.link)}
-                    : null,
-                // Read through `widget`, so a cached body still calls the
-                // current callback.
-                onTapUrl: (url) {
-                  final tap = widget.onTapUrl;
-                  if (tap == null) return false;
-                  tap(url);
-                  return true;
-                },
-                // The sanitizer keeps `cid:` and `data:` images (they
-                // travelled with the mail) and strips remote ones unless
-                // allowed, so whatever reaches here is already the user's
-                // choice. This only has to not widen it.
-                onErrorBuilder: (context, element, error) => Text(
-                  '[unrenderable content]',
-                  style: TextStyle(color: outline),
-                ),
-              ),
+              child: html(RenderMode.column),
             ),
-          ],
+          ),
         ),
+      );
+    }
+    return DecoratedSliver(
+      decoration: BoxDecoration(color: palette.paper),
+      sliver: SliverPadding(
+        padding: const EdgeInsets.all(16),
+        // Sliver mode builds top-level blocks lazily as they scroll into
+        // view instead of laying out the whole mail up front.
+        sliver: html(RenderMode.sliverList),
       ),
     );
-    // See [MailPaint.darkened]: the whole body inverts, images twice.
-    return darkened
-        ? ColorFiltered(colorFilter: darkInvert, child: body)
-        : body;
   }
 }
 

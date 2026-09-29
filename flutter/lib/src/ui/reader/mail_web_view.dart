@@ -5,6 +5,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import 'mail_paint.dart';
+import 'measure_size.dart';
 
 /// Sanitized mail HTML in the system WebView (Android).
 ///
@@ -15,6 +16,11 @@ import 'mail_paint.dart';
 ///   remote images when the user allowed them for this message;
 /// - every navigation stopped and handed to [onTapUrl], so a link never
 ///   opens inside the reader.
+///
+/// [header] scrolls with the page: it overlays the top of the WebView,
+/// follows its scroll position, and the document starts with a spacer of the
+/// header's height. The WebView keeps its own scroller — sizing it to the
+/// whole mail would make one enormous platform surface for a long newsletter.
 class MailWebView extends StatefulWidget {
   const MailWebView({
     super.key,
@@ -23,7 +29,10 @@ class MailWebView extends StatefulWidget {
     required this.paint,
     this.textScale = 1.0,
     this.onTapUrl,
+    this.header,
   });
+
+  final Widget? header;
 
   /// Theme colours, the sender's, or the sender's darkened.
   final MailPaint paint;
@@ -49,6 +58,14 @@ class _MailWebViewState extends State<MailWebView> {
   int? _zoom;
   Color? _background;
 
+  /// Header height the document reserves; null until first measured, and
+  /// nothing loads before that (it would load twice).
+  double? _headerHeight;
+
+  /// Page scroll in logical pixels, for the header overlay. A notifier, so
+  /// scrolling moves the header without rebuilding the WebView.
+  final _scrollY = ValueNotifier<double>(0);
+
   @override
   void initState() {
     super.initState();
@@ -58,6 +75,11 @@ class _MailWebViewState extends State<MailWebView> {
         NavigationDelegate(onNavigationRequest: _onNavigation),
       );
     final platform = _controller.platform;
+    // Android reports the View's scroll in physical pixels.
+    _controller.setOnScrollPositionChange((change) {
+      if (!mounted) return;
+      _scrollY.value = change.y / MediaQuery.devicePixelRatioOf(context);
+    });
     if (platform is AndroidWebViewController) {
       platform
         ..setAllowFileAccess(false)
@@ -72,6 +94,12 @@ class _MailWebViewState extends State<MailWebView> {
     if (request.url.startsWith('about:')) return NavigationDecision.navigate;
     if (request.isMainFrame) widget.onTapUrl?.call(request.url);
     return NavigationDecision.prevent;
+  }
+
+  @override
+  void dispose() {
+    _scrollY.dispose();
+    super.dispose();
   }
 
   @override
@@ -106,11 +134,14 @@ class _MailWebViewState extends State<MailWebView> {
       _background = background;
       _controller.setBackgroundColor(background);
     }
+    final top = widget.header == null ? 0.0 : _headerHeight;
+    if (top == null) return;
     final doc = mailDocument(
       widget.html,
       allowRemote: widget.allowRemote,
       palette: palette,
       darkenedOn: widget.paint == MailPaint.darkened ? surface : null,
+      topSpace: top,
     );
     if (doc != _loaded) {
       _loaded = doc;
@@ -119,7 +150,39 @@ class _MailWebViewState extends State<MailWebView> {
   }
 
   @override
-  Widget build(BuildContext context) => WebViewWidget(controller: _controller);
+  Widget build(BuildContext context) {
+    final header = widget.header;
+    final web = WebViewWidget(controller: _controller);
+    if (header == null) return web;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    return Stack(
+      children: [
+        Positioned.fill(child: web),
+        ValueListenableBuilder<double>(
+          valueListenable: _scrollY,
+          builder: (context, y, child) =>
+              Positioned(top: -y, left: 0, right: 0, child: child!),
+          child: GestureDetector(
+            // Dragging on the header scrolls the page underneath, as if
+            // the header were part of it.
+            onVerticalDragUpdate: (d) =>
+                _controller.scrollBy(0, (-d.delta.dy * dpr).round()),
+            child: MeasureSize(
+              onChange: (size) {
+                if (!mounted || size.height == _headerHeight) return;
+                // The spacer only matters at the top of the page, where a
+                // header change (details expanded) happens anyway; the
+                // reload that resizes it resets the scroll.
+                _headerHeight = size.height;
+                _sync();
+              },
+              child: Material(child: header),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 /// The full document handed to the WebView: CSP first, then the sheet
@@ -135,6 +198,7 @@ String mailDocument(
   required bool allowRemote,
   MailPalette palette = MailPalette.light,
   Color? darkenedOn,
+  double topSpace = 0,
 }) {
   // `cid:` images arrive already embedded as `data:` by the core.
   final img = allowRemote ? "data: https: http:" : "data:";
@@ -153,12 +217,16 @@ String mailDocument(
       'font-family:sans-serif;font-size:15px;line-height:1.5;'
       'overflow-wrap:break-word';
   final layout = darkenedOn == null
-      ? 'html,body{background:${cssHex(palette.paper)}}body{margin:16px;$sheet}'
+      ? 'html,body{background:${cssHex(palette.paper)}}'
+            'body{margin:0 16px 16px;$sheet}#mc-top{margin-bottom:16px}'
       : 'html,body{background:${cssHex(darkenedOn)};margin:0}'
             '#mail{$sheet;padding:16px;min-height:100vh;box-sizing:border-box;'
             'filter:$darkInvertCss}'
             '#mail img{filter:$darkInvertCss}';
-  final content = darkenedOn == null ? body : '<div id="mail">$body</div>';
+  // Room for the header overlaying the top of the page (see [MailWebView]).
+  final spacer = '<div id="mc-top" style="height:${topSpace.ceil()}px"></div>';
+  final content =
+      spacer + (darkenedOn == null ? body : '<div id="mail">$body</div>');
   return '<!DOCTYPE html><html><head><meta charset="utf-8">'
       '<meta http-equiv="Content-Security-Policy" '
       'content="${const HtmlEscape(HtmlEscapeMode.attribute).convert(csp)}">'

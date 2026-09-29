@@ -47,6 +47,7 @@ Rectangle {
     signal archiveRequested
     signal moveRequested
     signal deleteRequested
+    signal purgeRequested
     signal statusMessage(string text)
 
     color: Theme.bg
@@ -63,7 +64,8 @@ Rectangle {
     // takes the theme. Same rules as the Flutter reader (mail_paint.dart).
     readonly property bool htmlColored: message !== undefined && message !== null && message.html_colored === true
     property bool originalColors: false
-    readonly property string paintMode: !root.htmlColored ? "theme" : (Theme.dark && !root.originalColors ? "darkened" : "original")
+    readonly property string paintMode: !root.htmlColored ? "theme" : (Theme.dark && !root.originalColors ? "darkened" :
+                                                                                                            "original")
     property bool isFullscreen: false
     signal fullscreenRequested
     // Narrower layouts give the reader the whole content area; the chevron
@@ -306,8 +308,10 @@ Rectangle {
             var n = Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16);
             return n.length < 2 ? "0" + n : n;
         }
-        return "#" + ch(1 - (-0.574 * c.r + 1.430 * c.g + 0.144 * c.b)) + ch(1 - (0.426 * c.r + 0.430 * c.g + 0.144 * c.b))
-                + ch(1 - (0.426 * c.r + 1.430 * c.g - 0.856 * c.b));
+        return "#" + ch(1 - (-0.574 * c.r + 1.430 * c.g + 0.144 * c.b)) + ch(1 - (0.426 * c.r + 0.430 * c.g + 0.144
+                                                                                  * c.b)) + ch(1 - (0.426 * c.r + 1.430
+                                                                                                    * c.g - 0.856
+                                                                                                    * c.b));
     }
 
     // Behind the document, so nothing flashes a different colour first.
@@ -344,15 +348,22 @@ Rectangle {
         var quote = themed ? Theme.textMuted : "#5f6368";
         var rule = themed ? Theme.border : "#d0d4da";
         var sheet = "background:" + paper + ";color:" + ink + ";font-family:sans-serif;font-size:" + Math.round(14
-                * Theme.uiScale) + "px;line-height:1.5;overflow-wrap:break-word";
+                                                                                                                * Theme.uiScale)
+                + "px;line-height:1.5;overflow-wrap:break-word";
         var invert = "invert(1) hue-rotate(180deg)";
         var layout = root.paintMode === "darkened" ? "html,body{background:" + Theme.bg + ";margin:0}#mail{" + sheet
-                + ";padding:16px;min-height:100vh;box-sizing:border-box;filter:" + invert + "}#mail img{filter:" + invert
-                + "}" : "html,body{background:" + paper + "}body{margin:16px;" + sheet + "}";
-        var content = root.paintMode === "darkened" ? "<div id=\"mail\">" + inner + "</div>" : inner;
-        return "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" + "<meta http-equiv=\"Content-Security-Policy\" content=\""
-                + csp + "\">" + "<meta http-equiv=\"x-dns-prefetch-control\" content=\"off\">" + "<style>" + layout
-                + "a{color:" + link + "}" + "img{max-width:100%!important;height:auto!important}pre{white-space:pre-wrap}"
+                                                     + ";padding:16px;min-height:100vh;box-sizing:border-box;filter:"
+                                                     + invert + "}#mail img{filter:" + invert + "}" :
+                                                     "html,body{background:" + paper + "}body{margin:0 16px 16px;"
+                                                     + sheet + "}#mc-top{margin-bottom:16px}";
+        // Room for the header block, which overlays the top of the page and
+        // scrolls with it (see `syncSpacer`).
+        var spacer = "<div id=\"mc-top\" style=\"height:" + Math.ceil(headerBlock.height) + "px\"></div>";
+        var content = spacer + (root.paintMode === "darkened" ? "<div id=\"mail\">" + inner + "</div>" : inner);
+        return "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+                + "<meta http-equiv=\"Content-Security-Policy\" content=\"" + csp + "\">"
+                + "<meta http-equiv=\"x-dns-prefetch-control\" content=\"off\">" + "<style>" + layout + "a{color:"
+                + link + "}" + "img{max-width:100%!important;height:auto!important}pre{white-space:pre-wrap}"
                 + "blockquote{margin:8px 0;padding-left:12px;border-left:3px solid " + rule + ";color:" + quote + "}" +
                 // Newsletter tables carry fixed widths: author CSS beats
                 // presentational attributes, so they shrink to the pane
@@ -361,390 +372,44 @@ Rectangle {
                 + "</head><body>" + content + "</body></html>";
     }
 
-    ColumnLayout {
+    // Typed handle on the loaded HTML body (the Loader's `item` is a plain
+    // QObject to the tooling).
+    readonly property WebEngineView webView: bodyLoader.item as WebEngineView
+    // Where the body is scrolled to. The header block follows it, so the
+    // whole pane reads as one scrolling page.
+    readonly property real contentScrollY: root.isHtml ? (root.webView ? root.webView.scrollPosition.y : 0) :
+                                                         plainFlick.contentY
+    // The header overlay stops short of the body's own scrollbar.
+    readonly property int scrollGutter: 12
+
+    // Keep the document's top spacer as tall as the header block above it.
+    // ApplicationWorld: `javascriptEnabled` only governs the mail's own
+    // (main-world) scripts, and the mail has none — the sanitizer strips them.
+    function syncSpacer() {
+        if (!root.isHtml || !root.webView)
+            return;
+        root.webView.runJavaScript("var e=document.getElementById('mc-top');if(e)e.style.height='" + Math.ceil(
+                                       headerBlock.height) + "px';", WebEngineScript.ApplicationWorld);
+    }
+
+    // --- content ------------------------------------------------------------
+    // One scrolling page: the header and attachments sit in an overlay that
+    // moves with the body's scroll position, and the body reserves their
+    // height at its top (plain: a y offset; HTML: a spacer in the document).
+    // The body keeps its own scroller, so a long newsletter never becomes one
+    // giant WebEngine surface.
+    Item {
         anchors.fill: parent
-        spacing: 0
         visible: root.message !== undefined
+        clip: true
 
-        // --- header -------------------------------------------------------
-        Rectangle {
-            Layout.fillWidth: true
-            implicitHeight: headerCol.implicitHeight + Theme.lg * 2
-            color: Theme.bg
-
-            Rectangle {
-                anchors.bottom: parent.bottom
-                width: parent.width
-                height: 1
-                color: Theme.border
-            }
-
-            ColumnLayout {
-                id: headerCol
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.margins: Theme.lg
-                spacing: Theme.md
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: Theme.sm
-                    IconButton {
-                        visible: root.showBack
-                        text: Icons.arrowBack
-                        iconFont: true
-                        tooltip: qsTr("Back to the list")
-                        onClicked: root.backRequested()
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: root.message ? root.message.subject : ""
-                        color: Theme.text
-                        font.pixelSize: Theme.fontTitle
-                        font.bold: true
-                        wrapMode: Text.Wrap
-                        maximumLineCount: 3
-                        elide: Text.ElideRight
-                    }
-                }
-
-                // Sender block: avatar + display name / address + recipient.
-                // Extra lines (To/Cc/full date) collapse behind the chevron
-                // on narrow panes; actions live on their own row below.
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: Theme.md
-
-                    Avatar {
-                        implicitWidth: Math.round(36 * Theme.uiScale)
-                        implicitHeight: Math.round(36 * Theme.uiScale)
-                        seed: root.sender.name || root.sender.addr || "?"
-                        initials: (root.sender.name || "?").replace(/^[^a-zA-Z0-9]*/, "").substring(0, 1).toUpperCase()
-                    }
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 0
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: Theme.sm
-                            Label {
-                                text: root.sender.name || (root.message ? root.message.from : "")
-                                color: Theme.text
-                                font.pixelSize: Theme.fontBase
-                                font.bold: true
-                                elide: Text.ElideRight
-                                Layout.fillWidth: true
-                            }
-                            Label {
-                                // `date_key` names the one case whose text is
-                                // a word; mailcore cannot translate it itself
-                                // (see feed::ShortDate).
-                                text: !root.message ? "" : root.message.date_key === "yesterday" ? qsTr("Yesterday") :
-                                                                                                   root.message.date
-                                color: Theme.textMuted
-                                font.pixelSize: Theme.fontSmall
-                            }
-                        }
-                        Label {
-                            visible: root.sender.addr !== "" && root.sender.addr !== root.sender.name
-                            text: root.sender.addr
-                            color: Theme.textMuted
-                            font.pixelSize: Theme.fontSmall
-                            elide: Text.ElideRight
-                            Layout.fillWidth: true
-                        }
-                        Label {
-                            visible: !root.headerExpanded && root.toLine !== ""
-                            text: qsTr("To %1").arg(root.toLine)
-                            color: Theme.textMuted
-                            font.pixelSize: Theme.fontSmall
-                            elide: Text.ElideRight
-                            Layout.fillWidth: true
-                        }
-                        // A differing Reply-To is shown inline (not just in
-                        // the Headers dialog): replies go there, not to From.
-                        Label {
-                            visible: root.replyToDiffers
-                            text: qsTr("Replies go to %1, not to the sender").arg(root.replyToAddr)
-                            color: Theme.danger
-                            font.pixelSize: Theme.fontSmall
-                            elide: Text.ElideRight
-                            Layout.fillWidth: true
-                        }
-                    }
-
-                    IconButton {
-                        text: root.headerExpanded ? Icons.expandMore : Icons.chevronRight
-                        iconFont: true
-                        fontSize: Theme.fontMedium
-                        tooltip: root.headerExpanded ? qsTr("Hide details") : qsTr("Show details")
-                        onClicked: root.headerExpanded = !root.headerExpanded
-                    }
-                }
-
-                // Expanded details: full From/To/Cc/date (same source as the
-                // Headers dialog, inline so nothing needs copying around).
-                GridLayout {
-                    Layout.fillWidth: true
-                    visible: root.headerExpanded
-                    columns: 2
-                    columnSpacing: Theme.md
-                    rowSpacing: Theme.xs
-
-                    Label {
-                        text: qsTr("From")
-                        color: Theme.textMuted
-                        font.pixelSize: Theme.fontSmall
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: root.headersInfo.from || root.sender.addr
-                        color: Theme.text
-                        font.pixelSize: Theme.fontSmall
-                        wrapMode: Text.WrapAnywhere
-                        textFormat: Text.PlainText
-                    }
-                    Label {
-                        text: qsTr("To")
-                        color: Theme.textMuted
-                        font.pixelSize: Theme.fontSmall
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: root.toLine
-                        color: Theme.text
-                        font.pixelSize: Theme.fontSmall
-                        wrapMode: Text.WrapAnywhere
-                        textFormat: Text.PlainText
-                    }
-                    Label {
-                        text: qsTr("Cc")
-                        color: Theme.textMuted
-                        font.pixelSize: Theme.fontSmall
-                        visible: root.ccLine !== ""
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: root.ccLine
-                        color: Theme.text
-                        font.pixelSize: Theme.fontSmall
-                        wrapMode: Text.WrapAnywhere
-                        textFormat: Text.PlainText
-                        visible: text !== ""
-                    }
-                    Label {
-                        text: qsTr("Date")
-                        color: Theme.textMuted
-                        font.pixelSize: Theme.fontSmall
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: root.fullDate
-                        color: Theme.text
-                        font.pixelSize: Theme.fontSmall
-                        textFormat: Text.PlainText
-                    }
-                    Label {
-                        text: qsTr("Reply-To")
-                        color: Theme.textMuted
-                        font.pixelSize: Theme.fontSmall
-                        visible: (root.headersInfo.reply_to || "") !== ""
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: root.headersInfo.reply_to || ""
-                        color: root.replyToDiffers ? Theme.danger : Theme.text
-                        font.pixelSize: Theme.fontSmall
-                        wrapMode: Text.WrapAnywhere
-                        textFormat: Text.PlainText
-                        visible: (root.headersInfo.reply_to || "") !== ""
-                    }
-                }
-
-                // Actions on their own row (right-aligned, as before).
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: Theme.xs
-                    Item {
-                        Layout.fillWidth: true
-                    }
-                    IconButton {
-                        text: Icons.reply
-                        iconFont: true
-                        tooltip: qsTr("Reply (R)")
-                        onClicked: root.replyRequested()
-                    }
-                    IconButton {
-                        text: Icons.forward
-                        iconFont: true
-                        tooltip: qsTr("Forward (F)")
-                        onClicked: root.forwardRequested()
-                    }
-                    IconButton {
-                        text: root.message && root.message.starred ? Icons.star : Icons.starBorder
-                        iconFont: true
-                        contentColor: root.message && root.message.starred ? Theme.star : Theme.text
-                        tooltip: qsTr("Star (S)")
-                        onClicked: root.starRequested()
-                    }
-                    IconButton {
-                        text: Icons.trash
-                        iconFont: true
-                        tooltip: qsTr("Delete (Del)")
-                        contentColor: Theme.danger
-                        onClicked: root.deleteRequested()
-                    }
-                    IconButton {
-                        visible: root.isHtml && root.htmlColored && Theme.dark
-                        text: root.originalColors ? Icons.darkMode : Icons.invertColors
-                        iconFont: true
-                        tooltip: root.originalColors ? qsTr("Darken to match the theme") : qsTr("Show original colours")
-                        onClicked: root.originalColors = !root.originalColors
-                    }
-                    IconButton {
-                        text: root.isFullscreen ? Icons.closeFullscreen : Icons.openFullscreen
-                        iconFont: true
-                        tooltip: root.isFullscreen ? qsTr("Exit full screen") : qsTr("Enter full screen")
-                        onClicked: root.fullscreenRequested()
-                    }
-                    IconButton {
-                        text: Icons.moreVert
-                        iconFont: true
-                        tooltip: qsTr("More actions")
-                        onClicked: moreMenu.popup()
-                    }
-                }
-            }
-        }
-
-        // Privacy banner: sanitizer saw remote images but autoload is off.
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.margins: Theme.md
-            implicitHeight: Math.round(40 * Theme.uiScale)
-            visible: root.isHtml && root.hasRemote && !root.effectiveAutoLoad()
-            radius: Theme.radius
-            color: Theme.bgAlt
-            border.width: 1
-            border.color: Theme.border
-
-            RowLayout {
-                anchors.fill: parent
-                anchors.leftMargin: Theme.md
-                anchors.rightMargin: Theme.sm
-                spacing: Theme.sm
-                Label {
-                    text: Icons.imageBlocked
-                    font.family: Icons.fontFamily
-                }
-                Label {
-                    Layout.fillWidth: true
-                    wrapMode: Text.Wrap
-                    color: Theme.text
-                    text: qsTr("Remote images blocked (tracking protection).")
-                    font.pixelSize: Theme.fontSmall
-                }
-                AppButton {
-                    text: qsTr("Show once")
-                    onClicked: root.showRemoteOnce()
-                }
-            }
-        }
-
-        // --- attachments --------------------------------------------------
-        // Names/sizes sync with the mail; bytes stay on the server until the
-        // user explicitly opens or saves a file (offline-first). Opening
-        // downloads into a temp copy for the system viewer; saving downloads
-        // too when the bytes are not cached yet.
-        // Inline images are part of the body and not listed here.
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.margins: Theme.md
-            Layout.bottomMargin: 0
-            implicitHeight: attachCol.implicitHeight + Theme.sm * 2
-            visible: root.fileAttachments.length > 0
-            radius: Theme.radius
-            color: Theme.bgAlt
-            border.width: 1
-            border.color: Theme.border
-
-            ColumnLayout {
-                id: attachCol
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.margins: Theme.sm
-                spacing: Theme.xs
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: Theme.sm
-                    Label {
-                        text: Icons.attachFile
-                        font.family: Icons.fontFamily
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: qsTr("%n attachment(s)", "", root.fileAttachments.length)
-                        color: Theme.text
-                        font.pixelSize: Theme.fontSmall
-                        font.bold: true
-                        elide: Text.ElideRight
-                    }
-                    AppButton {
-                        text: qsTr("Save all")
-                        visible: root.fileAttachments.length > 1
-                        onClicked: root.saveAll()
-                    }
-                }
-
-                Repeater {
-                    model: root.fileAttachments
-                    RowLayout {
-                        id: fileRow
-                        Layout.fillWidth: true
-                        spacing: Theme.sm
-                        required property var modelData
-                        Label {
-                            Layout.fillWidth: true
-                            text: root.displayName(fileRow.modelData)
-                            color: Theme.text
-                            font.pixelSize: Theme.fontSmall
-                            elide: Text.ElideRight
-                        }
-                        Label {
-                            text: root.formatSize(fileRow.modelData.size)
-                            color: Theme.textMuted
-                            font.pixelSize: Theme.fontTiny
-                        }
-                        AppButton {
-                            text: qsTr("Open")
-                            onClicked: root.openOne(fileRow.modelData)
-                        }
-                        AppButton {
-                            text: qsTr("Save")
-                            onClicked: root.saveOne(fileRow.modelData)
-                        }
-                    }
-                }
-            }
-        }
-
-        // --- body: plain ---------------------------------------------------
-        // Flat Flickable + Text rather than ScrollView + TextEdit: the old
-        // TextEdit had no height inside the ScrollView and rendered nothing
-        // (flaw F2). Text still supports mouse selection via TextEdit-like
-        // selection on the parent Flickable being unnecessary.
+        // --- body: plain -----------------------------------------------
         Flickable {
             id: plainFlick
-            Layout.fillWidth: true
-            Layout.fillHeight: true
+            anchors.fill: parent
             visible: !root.isHtml
-            clip: true
             contentWidth: width
-            contentHeight: plainText.implicitHeight + Theme.lg * 2
+            contentHeight: headerBlock.height + plainText.implicitHeight + Theme.lg * 2
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar {
                 policy: ScrollBar.AsNeeded
@@ -753,7 +418,7 @@ Rectangle {
             TextEdit {
                 id: plainText
                 x: Theme.lg
-                y: Theme.lg
+                y: headerBlock.height + Theme.lg
                 width: plainFlick.width - Theme.lg * 2
                 text: root.plainBody
                 textFormat: TextEdit.PlainText
@@ -767,20 +432,14 @@ Rectangle {
             }
         }
 
-        // --- body: sanitized HTML -----------------------------------------
-        // Item wrapper (not the Loader directly): the right-click MouseArea
-        // overlays the body, and anchored items must not sit directly in a
-        // ColumnLayout.
+        // --- body: sanitized HTML --------------------------------------
         Item {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            clip: true
+            anchors.fill: parent
             visible: root.isHtml
 
             Loader {
                 id: bodyLoader
                 anchors.fill: parent
-                clip: true
                 visible: root.isHtml
                 active: root.message !== undefined && root.isHtml
                 sourceComponent: webComp
@@ -795,12 +454,364 @@ Rectangle {
                 anchors.fill: parent
                 acceptedButtons: Qt.RightButton
                 onPressed: mouse => {
-                    if (mouse.button === Qt.RightButton && root.hoveredLinkUrl !== "") {
-                        linkContextMenu.linkUrl = root.hoveredLinkUrl;
-                        linkContextMenu.popup();
-                        mouse.accepted = true;
-                    } else {
-                        mouse.accepted = false;
+                               if (mouse.button === Qt.RightButton && root.hoveredLinkUrl !== "") {
+                                   linkContextMenu.linkUrl = root.hoveredLinkUrl;
+                                   linkContextMenu.popup();
+                                   mouse.accepted = true;
+                               } else {
+                                   mouse.accepted = false;
+                               }
+                           }
+            }
+        }
+
+        // --- header + attachments (scrolls with the body) --------------
+        // Wheel events over it fall through to the body underneath: nothing
+        // in here takes the wheel.
+        Rectangle {
+            id: headerBlock
+            y: -root.contentScrollY
+            width: parent.width - root.scrollGutter
+            height: headerStack.implicitHeight
+            color: Theme.bg
+            onHeightChanged: root.syncSpacer()
+
+            ColumnLayout {
+                id: headerStack
+                width: parent.width
+                spacing: 0
+
+                // --- header -------------------------------------------------------
+                Rectangle {
+                    Layout.fillWidth: true
+                    implicitHeight: headerCol.implicitHeight + Theme.lg * 2
+                    color: Theme.bg
+
+                    Rectangle {
+                        anchors.bottom: parent.bottom
+                        width: parent.width
+                        height: 1
+                        color: Theme.border
+                    }
+
+                    ColumnLayout {
+                        id: headerCol
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: Theme.lg
+                        spacing: Theme.md
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.sm
+                            IconButton {
+                                visible: root.showBack
+                                text: Icons.arrowBack
+                                iconFont: true
+                                tooltip: qsTr("Back to the list")
+                                onClicked: root.backRequested()
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: root.message ? root.message.subject : ""
+                                color: Theme.text
+                                font.pixelSize: Theme.fontTitle
+                                font.bold: true
+                                wrapMode: Text.Wrap
+                                maximumLineCount: 3
+                                elide: Text.ElideRight
+                            }
+                        }
+
+                        // Sender block: avatar + display name / address + recipient.
+                        // Extra lines (To/Cc/full date) collapse behind the chevron
+                        // on narrow panes; actions live on their own row below.
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.md
+
+                            Avatar {
+                                implicitWidth: Math.round(36 * Theme.uiScale)
+                                implicitHeight: Math.round(36 * Theme.uiScale)
+                                seed: root.sender.name || root.sender.addr || "?"
+                                initials: (root.sender.name || "?").replace(/^[^a-zA-Z0-9]*/, "").substring(0, 1).toUpperCase(
+                                              )
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 0
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Theme.sm
+                                    Label {
+                                        text: root.sender.name || (root.message ? root.message.from : "")
+                                        color: Theme.text
+                                        font.pixelSize: Theme.fontBase
+                                        font.bold: true
+                                        elide: Text.ElideRight
+                                        Layout.fillWidth: true
+                                    }
+                                    Label {
+                                        // `date_key` names the one case whose text is
+                                        // a word; mailcore cannot translate it itself
+                                        // (see feed::ShortDate).
+                                        text: !root.message ? "" : root.message.date_key === "yesterday" ? qsTr(
+                                                                                                               "Yesterday") :
+                                                                                                           root.message.date
+                                        color: Theme.textMuted
+                                        font.pixelSize: Theme.fontSmall
+                                    }
+                                }
+                                Label {
+                                    visible: root.sender.addr !== "" && root.sender.addr !== root.sender.name
+                                    text: root.sender.addr
+                                    color: Theme.textMuted
+                                    font.pixelSize: Theme.fontSmall
+                                    elide: Text.ElideRight
+                                    Layout.fillWidth: true
+                                }
+                                Label {
+                                    visible: !root.headerExpanded && root.toLine !== ""
+                                    text: qsTr("To %1").arg(root.toLine)
+                                    color: Theme.textMuted
+                                    font.pixelSize: Theme.fontSmall
+                                    elide: Text.ElideRight
+                                    Layout.fillWidth: true
+                                }
+                                // A differing Reply-To is shown inline (not just in
+                                // the Headers dialog): replies go there, not to From.
+                                Label {
+                                    visible: root.replyToDiffers
+                                    text: qsTr("Replies go to %1, not to the sender").arg(root.replyToAddr)
+                                    color: Theme.danger
+                                    font.pixelSize: Theme.fontSmall
+                                    elide: Text.ElideRight
+                                    Layout.fillWidth: true
+                                }
+                            }
+
+                            IconButton {
+                                text: root.headerExpanded ? Icons.expandMore : Icons.chevronRight
+                                iconFont: true
+                                fontSize: Theme.fontMedium
+                                tooltip: root.headerExpanded ? qsTr("Hide details") : qsTr("Show details")
+                                onClicked: root.headerExpanded = !root.headerExpanded
+                            }
+                        }
+
+                        // Expanded details: full From/To/Cc/date (same source as the
+                        // Headers dialog, inline so nothing needs copying around).
+                        GridLayout {
+                            Layout.fillWidth: true
+                            visible: root.headerExpanded
+                            columns: 2
+                            columnSpacing: Theme.md
+                            rowSpacing: Theme.xs
+
+                            Label {
+                                text: qsTr("From")
+                                color: Theme.textMuted
+                                font.pixelSize: Theme.fontSmall
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: root.headersInfo.from || root.sender.addr
+                                color: Theme.text
+                                font.pixelSize: Theme.fontSmall
+                                wrapMode: Text.WrapAnywhere
+                                textFormat: Text.PlainText
+                            }
+                            Label {
+                                text: qsTr("To")
+                                color: Theme.textMuted
+                                font.pixelSize: Theme.fontSmall
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: root.toLine
+                                color: Theme.text
+                                font.pixelSize: Theme.fontSmall
+                                wrapMode: Text.WrapAnywhere
+                                textFormat: Text.PlainText
+                            }
+                            Label {
+                                text: qsTr("Cc")
+                                color: Theme.textMuted
+                                font.pixelSize: Theme.fontSmall
+                                visible: root.ccLine !== ""
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: root.ccLine
+                                color: Theme.text
+                                font.pixelSize: Theme.fontSmall
+                                wrapMode: Text.WrapAnywhere
+                                textFormat: Text.PlainText
+                                visible: text !== ""
+                            }
+                            Label {
+                                text: qsTr("Date")
+                                color: Theme.textMuted
+                                font.pixelSize: Theme.fontSmall
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: root.fullDate
+                                color: Theme.text
+                                font.pixelSize: Theme.fontSmall
+                                textFormat: Text.PlainText
+                            }
+                            Label {
+                                text: qsTr("Reply-To")
+                                color: Theme.textMuted
+                                font.pixelSize: Theme.fontSmall
+                                visible: (root.headersInfo.reply_to || "") !== ""
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: root.headersInfo.reply_to || ""
+                                color: root.replyToDiffers ? Theme.danger : Theme.text
+                                font.pixelSize: Theme.fontSmall
+                                wrapMode: Text.WrapAnywhere
+                                textFormat: Text.PlainText
+                                visible: (root.headersInfo.reply_to || "") !== ""
+                            }
+                        }
+
+                        // Actions on their own row (right-aligned, as before).
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.xs
+                            Item {
+                                Layout.fillWidth: true
+                            }
+                            IconButton {
+                                text: Icons.reply
+                                iconFont: true
+                                tooltip: qsTr("Reply (R)")
+                                onClicked: root.replyRequested()
+                            }
+                            IconButton {
+                                text: Icons.forward
+                                iconFont: true
+                                tooltip: qsTr("Forward (F)")
+                                onClicked: root.forwardRequested()
+                            }
+                            IconButton {
+                                text: root.message && root.message.starred ? Icons.star : Icons.starBorder
+                                iconFont: true
+                                contentColor: root.message && root.message.starred ? Theme.star : Theme.text
+                                tooltip: qsTr("Star (S)")
+                                onClicked: root.starRequested()
+                            }
+                            IconButton {
+                                text: Icons.trash
+                                iconFont: true
+                                tooltip: qsTr("Delete (Del)")
+                                contentColor: Theme.danger
+                                onClicked: root.deleteRequested()
+                            }
+                            IconButton {
+                                visible: root.isHtml && root.htmlColored && Theme.dark
+                                text: root.originalColors ? Icons.darkMode : Icons.invertColors
+                                iconFont: true
+                                tooltip: root.originalColors ? qsTr("Darken to match the theme") : qsTr(
+                                                                   "Show original colours")
+                                onClicked: root.originalColors = !root.originalColors
+                            }
+                            IconButton {
+                                text: root.isFullscreen ? Icons.closeFullscreen : Icons.openFullscreen
+                                iconFont: true
+                                tooltip: root.isFullscreen ? qsTr("Exit full screen") : qsTr("Enter full screen")
+                                onClicked: root.fullscreenRequested()
+                            }
+                            IconButton {
+                                text: Icons.moreVert
+                                iconFont: true
+                                tooltip: qsTr("More actions")
+                                onClicked: moreMenu.popup()
+                            }
+                        }
+                    }
+                }
+
+                // --- attachments --------------------------------------------------
+                // Names/sizes sync with the mail; bytes stay on the server until the
+                // user explicitly opens or saves a file (offline-first). Opening
+                // downloads into a temp copy for the system viewer; saving downloads
+                // too when the bytes are not cached yet.
+                // Inline images are part of the body and not listed here.
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.margins: Theme.md
+                    implicitHeight: attachCol.implicitHeight + Theme.sm * 2
+                    visible: root.fileAttachments.length > 0
+                    radius: Theme.radius
+                    color: Theme.bgAlt
+                    border.width: 1
+                    border.color: Theme.border
+
+                    ColumnLayout {
+                        id: attachCol
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: Theme.sm
+                        spacing: Theme.xs
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.sm
+                            Label {
+                                text: Icons.attachFile
+                                font.family: Icons.fontFamily
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: qsTr("%n attachment(s)", "", root.fileAttachments.length)
+                                color: Theme.text
+                                font.pixelSize: Theme.fontSmall
+                                font.bold: true
+                                elide: Text.ElideRight
+                            }
+                            AppButton {
+                                text: qsTr("Save all")
+                                visible: root.fileAttachments.length > 1
+                                onClicked: root.saveAll()
+                            }
+                        }
+
+                        Repeater {
+                            model: root.fileAttachments
+                            RowLayout {
+                                id: fileRow
+                                Layout.fillWidth: true
+                                spacing: Theme.sm
+                                required property var modelData
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: root.displayName(fileRow.modelData)
+                                    color: Theme.text
+                                    font.pixelSize: Theme.fontSmall
+                                    elide: Text.ElideRight
+                                }
+                                Label {
+                                    text: root.formatSize(fileRow.modelData.size)
+                                    color: Theme.textMuted
+                                    font.pixelSize: Theme.fontTiny
+                                }
+                                AppButton {
+                                    text: qsTr("Open")
+                                    onClicked: root.openOne(fileRow.modelData)
+                                }
+                                AppButton {
+                                    text: qsTr("Save")
+                                    onClicked: root.saveOne(fileRow.modelData)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -870,9 +881,13 @@ Rectangle {
             settings.javascriptCanOpenWindows: false
             // `hoveredUrl` is a QUrl: stringify explicitly, "" when the mouse
             // leaves a link (which hides the statusline again).
+            onLoadingChanged: loadingInfo => {
+                                  if (loadingInfo.status === WebEngineLoadingInfo.LoadSucceededStatus)
+                                  root.syncSpacer();
+                              }
             onLinkHovered: hoveredUrl => {
-                root.hoveredLinkUrl = hoveredUrl ? hoveredUrl.toString() : "";
-            }
+                               root.hoveredLinkUrl = hoveredUrl ? hoveredUrl.toString() : "";
+                           }
             // Clicking a link must not navigate the reader away from the
             // mail. The request is blocked FIRST, before any handling below:
             // even if that handling hit an error, the message stays put.
@@ -893,23 +908,23 @@ Rectangle {
             // browser / mail client or land in the examine dialog first
             // (default per `link_click_action`).
             onNavigationRequested: request => {
-                if (request.navigationType === WebEngineNavigationRequest.TypedNavigation) {
-                    request.accept();
-                    return;
-                }
-                request.reject();
-                if (request.navigationType !== WebEngineNavigationRequest.LinkClickedNavigation)
-                    return;
-                root.handleLinkUrl(request.url.toString());
-            }
+                                       if (request.navigationType === WebEngineNavigationRequest.TypedNavigation) {
+                                           request.accept();
+                                           return;
+                                       }
+                                       request.reject();
+                                       if (request.navigationType !== WebEngineNavigationRequest.LinkClickedNavigation)
+                                       return;
+                                       root.handleLinkUrl(request.url.toString());
+                                   }
 
             // Middle-click / Ctrl+click asks for a new window instead of a
             // navigation. Never open one (the mail stays put); treat it like
             // a normal click. Left unhandled the load would just fail, but
             // routing it keeps every click consistent.
             onNewWindowRequested: request => {
-                root.handleLinkUrl(request.requestedUrl.toString());
-            }
+                                      root.handleLinkUrl(request.requestedUrl.toString());
+                                  }
         }
     }
 
@@ -933,11 +948,25 @@ Rectangle {
             label: qsTr("Move to… (M)")
             onTriggered: root.moveRequested()
         }
+        AppMenuItem {
+            glyph: Icons.deleteForever
+            label: qsTr("Delete permanently…")
+            onTriggered: root.purgeRequested()
+        }
         MenuSeparator {}
         AppMenuItem {
             glyph: Icons.info
             label: qsTr("Show headers…")
             onTriggered: root.openHeaders()
+        }
+        // Remote images the sanitizer blocked (tracking protection): shown
+        // once for this message only, on request.
+        AppMenuItem {
+            visible: root.isHtml && root.hasRemote && !root.effectiveAutoLoad()
+            height: visible ? implicitHeight : 0
+            glyph: Icons.imageBlocked
+            label: qsTr("Show remote images")
+            onTriggered: root.showRemoteOnce()
         }
     }
 

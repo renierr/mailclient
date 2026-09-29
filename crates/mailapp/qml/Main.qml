@@ -1225,6 +1225,7 @@ ApplicationWindow {
             onArchiveRequested: root.archiveMessage(root.currentUid)
             onMoveRequested: root.openMove(root.currentUid)
             onDeleteRequested: root.deleteMessage(root.currentUid)
+            onPurgeRequested: root.confirmPurge(root.currentUid)
             onFullscreenRequested: root.toggleReaderFullscreen()
             onStatusMessage: text => root.statusText = text
         }

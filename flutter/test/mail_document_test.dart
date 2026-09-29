@@ -26,8 +26,20 @@ void main() {
         doc.indexOf('Content-Security-Policy'),
         lessThan(doc.indexOf('marker')),
       );
-      expect(doc, contains('<body><p>marker</p></body>'));
+      expect(doc, contains('<p>marker</p></body>'));
       expect(doc, contains('x-dns-prefetch-control" content="off"'));
+    });
+
+    test('a spacer reserves room for the header overlay', () {
+      final doc = mailDocument(
+        '<p>marker</p>',
+        allowRemote: false,
+        topSpace: 120.4,
+      );
+      expect(
+        doc,
+        contains('<body><div id="mc-top" style="height:121px"></div><p>'),
+      );
     });
   });
 }

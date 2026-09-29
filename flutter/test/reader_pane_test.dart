@@ -61,4 +61,43 @@ void main() {
     expect(pane.height, screen.height);
     expect(find.text('Hello plain world'), findsOneWidget);
   });
+
+  // One scrolling page: header and attachments move with the body, and
+  // nothing overflows at phone width.
+  testWidgets('header and attachments scroll with the body on a phone', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final core = _OneMessageCore({
+      'uid': 8,
+      'subject': 'A subject long enough to wrap onto a second line here',
+      'from': 'someone@example.com',
+      'body_text': List.filled(200, 'line of body text').join('\n'),
+      'is_html': false,
+      'attachments': [
+        {'id': 1, 'filename': 'a-rather-long-file-name.pdf', 'size': 2048},
+        {'id': 2, 'filename': 'b.txt', 'size': 4},
+      ],
+    });
+    MailCore.debugInstance = core;
+    final state = MailState(core);
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: state,
+        child: const MaterialApp(home: Scaffold(body: ReaderPane())),
+      ),
+    );
+    await state.openMessage(8);
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('2 attachments'), findsOneWidget);
+    final subject = find.textContaining('A subject long enough');
+    final before = tester.getTopLeft(subject).dy;
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -300));
+    await tester.pump();
+    expect(tester.getTopLeft(subject).dy, lessThan(before - 200));
+  });
 }

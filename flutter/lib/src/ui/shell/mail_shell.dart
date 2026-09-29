@@ -29,10 +29,6 @@ class _MailShellState extends State<MailShell> {
   final _searchFocus = FocusNode();
   final _searchController = TextEditingController();
 
-  /// Layout class of the last build, for the shortcut handlers (which run
-  /// outside the LayoutBuilder that knows the width).
-  bool _wide = true;
-
   void _focusSearch() => _searchFocus.requestFocus();
 
   void _closeSearch(MailState state) {
@@ -101,10 +97,8 @@ class _MailShellState extends State<MailShell> {
         const SingleActivator(LogicalKeyboardKey.escape): () => _escape(state),
         const SingleActivator(LogicalKeyboardKey.keyZ, control: true): () =>
             state.undoLast(),
-        // Fullscreen is a wide-layout mode; narrower ones already give the
-        // reader every pixel and offer no way back out of it.
         const SingleActivator(LogicalKeyboardKey.f11): () {
-          if (_wide && state.openUid >= 0) state.toggleReaderFullscreen();
+          if (state.openUid >= 0) state.toggleReaderFullscreen();
         },
       },
       child: Focus(
@@ -117,15 +111,14 @@ class _MailShellState extends State<MailShell> {
             final width = constraints.maxWidth;
             final effective = width / scale;
             final narrow = effective < Breakpoints.compact;
-            // Plain assignments, not setState: these are derived from what
-            // this very build reads, and everything below uses them.
-            _wide = effective >= Breakpoints.medium;
+            // A plain assignment, not setState: derived from what this very
+            // build reads, and everything below uses it.
             if (narrow) _syncPaneToOpen(openUid);
             final body = effective >= Breakpoints.medium
                 ? _threePane(fullscreen, openUid)
                 : effective >= Breakpoints.compact
                 ? _twoPane(fullscreen, openUid, width)
-                : _onePane();
+                : _onePane(fullscreen);
             // Android system-back must walk the views (reader → list →
             // folders) instead of closing the app from a nested pane. The
             // order mirrors the visible back affordances: fullscreen first,
@@ -144,25 +137,30 @@ class _MailShellState extends State<MailShell> {
                 _systemBack(state, effective);
               },
               child: Scaffold(
-                appBar: ShellTopBar(
-                  showBack:
-                      effective < Breakpoints.compact && _pane != _Pane.folders,
-                  onBack: () => _paneBack(state),
-                  searchFocus: _searchFocus,
-                  searchController: _searchController,
-                  narrow: narrow,
-                  sidebarToggle: effective >= Breakpoints.medium
-                      ? IconButton(
-                          tooltip: _sidebarVisible
-                              ? 'Hide folders'
-                              : 'Show folders',
-                          icon: const Icon(Icons.menu),
-                          onPressed: () => setState(
-                            () => _sidebarVisible = !_sidebarVisible,
-                          ),
-                        )
-                      : null,
-                ),
+                // Full screen gives the reader the toolbar's room too, like
+                // the Qt client; the reader header holds the way back out.
+                appBar: fullscreen && openUid >= 0
+                    ? null
+                    : ShellTopBar(
+                        showBack:
+                            effective < Breakpoints.compact &&
+                            _pane != _Pane.folders,
+                        onBack: () => _paneBack(state),
+                        searchFocus: _searchFocus,
+                        searchController: _searchController,
+                        narrow: narrow,
+                        sidebarToggle: effective >= Breakpoints.medium
+                            ? IconButton(
+                                tooltip: _sidebarVisible
+                                    ? 'Hide folders'
+                                    : 'Show folders',
+                                icon: const Icon(Icons.menu),
+                                onPressed: () => setState(
+                                  () => _sidebarVisible = !_sidebarVisible,
+                                ),
+                              )
+                            : null,
+                      ),
                 body: Column(
                   children: [
                     Expanded(child: body),
@@ -299,10 +297,7 @@ class _MailShellState extends State<MailShell> {
     // The reader takes the list's place rather than squeezing a third column
     // into a width where none of them would be usable.
     final main = openUid >= 0
-        ? ReaderPane(
-            onClose: context.read<MailState>().closeMessage,
-            allowFullscreen: false,
-          )
+        ? ReaderPane(onClose: context.read<MailState>().closeMessage)
         : const MessageListPane();
     if (fullscreen) return main;
     // Keep at least ~300px for the main pane: the sidebar cap follows the
@@ -325,12 +320,15 @@ class _MailShellState extends State<MailShell> {
     );
   }
 
-  Widget _onePane() => switch (_pane) {
+  Widget _onePane(bool fullscreen) => switch (_pane) {
     _Pane.folders => FolderSidebar(onFolderSelected: () => _go(_Pane.list)),
     _Pane.list => MessageListPane(onMessageOpened: () => _go(_Pane.reader)),
     // The app bar's back button leaves the reader here; a second one in
-    // the reader header would just duplicate it.
-    _Pane.reader => const ReaderPane(allowFullscreen: false),
+    // the reader header would just duplicate it — except in full screen,
+    // where the app bar is hidden.
+    _Pane.reader => ReaderPane(
+      onClose: fullscreen ? () => _paneBack(context.read<MailState>()) : null,
+    ),
   };
 
   void _go(_Pane pane) => setState(() => _pane = pane);

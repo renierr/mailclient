@@ -379,71 +379,94 @@ class StatusBar extends StatelessWidget {
     final status = context.select<MailState, String>((s) => s.status);
     final isError = context.select<MailState, bool>((s) => s.statusIsError);
     final email = context.select<MailState, String>(
-      (s) => s.account?.email ?? 'Ready',
+      (s) => s.account?.email ?? '',
     );
     final syncing = context.select<MailState, bool>((s) => s.isSyncing);
     final scheme = Theme.of(context).colorScheme;
-    // Always visible like the Qt footer: an empty status shows the account,
-    // so the bar never pops the layout in and out, and the account is always
-    // one glance away. SafeArea keeps it above the gesture bar — the reported
-    // "slightly cut off" bottom line.
-    final text = status.isEmpty ? email : status;
     final error = status.isNotEmpty && isError;
+    final small = Theme.of(context).textTheme.bodySmall;
+    // Laid out like the Qt footer: a thin bar with the sync indicator, the
+    // status line, a details button while there is a status, and the account
+    // on the right. Always shown, so the layout never jumps. SafeArea keeps
+    // it above the gesture bar.
     return SafeArea(
       top: false,
       left: false,
       right: false,
-      child: Material(
-        color: scheme.surfaceContainerHighest,
-        child: InkWell(
-          onTap: status.isEmpty
-              ? null
-              : () => _showStatusDialog(context, status, error),
-          child: Tooltip(
-            message: status.isEmpty
-                ? email
-                : 'Tap to view full status and copy',
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-              child: Row(
-                children: [
-                  if (error)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: Icon(
-                        Icons.error_outline,
-                        size: 14,
-                        color: scheme.error,
-                      ),
-                    ),
-                  Expanded(
-                    child: Text(
-                      text,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: error ? scheme.error : scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                  if (status.isNotEmpty) ...[
-                    const SizedBox(width: 6),
-                    Icon(
-                      Icons.open_in_full,
-                      size: 13,
+      child: Container(
+        height: 26,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest,
+          border: Border(top: BorderSide(color: scheme.outlineVariant)),
+        ),
+        child: Row(
+          children: [
+            if (syncing) ...[
+              const SizedBox(
+                width: 10,
+                height: 10,
+                child: CircularProgressIndicator(strokeWidth: 1.5),
+              ),
+              const SizedBox(width: 8),
+            ] else if (error) ...[
+              Icon(Icons.error_outline, size: 13, color: scheme.error),
+              const SizedBox(width: 6),
+            ],
+            Expanded(
+              flex: 3,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: status.isEmpty
+                    ? null
+                    : () => _showStatusDialog(context, status, error),
+                child: Tooltip(
+                  message: status,
+                  child: Text(
+                    status,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: small?.copyWith(
+                      fontSize: 12,
                       color: error ? scheme.error : scheme.onSurfaceVariant,
                     ),
-                  ] else if (syncing)
-                    const SizedBox(
-                      width: 12,
-                      height: 12,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                ],
+                  ),
+                ),
               ),
             ),
-          ),
+            if (status.isNotEmpty)
+              IconButton(
+                tooltip: 'View full status message and copy',
+                iconSize: 13,
+                padding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints.tightFor(
+                  width: 24,
+                  height: 24,
+                ),
+                color: error ? scheme.error : scheme.onSurfaceVariant,
+                icon: const Icon(Icons.open_in_new),
+                onPressed: () => _showStatusDialog(context, status, error),
+              ),
+            const SizedBox(width: 8),
+            // Right-aligned, and never more than its share, so a long
+            // address cannot push the status line off a phone screen.
+            Flexible(
+              flex: 2,
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: Text(
+                  email,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: small?.copyWith(
+                    fontSize: 11,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
