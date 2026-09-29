@@ -13,7 +13,7 @@ import "components"
 // stays and auto-sync skips hidden folders). Opening a row jumps to it.
 AppDialog {
     id: root
-    title: qsTr("IMAP folders")
+    title: qsTr("Manage folders")
     preferredWidth: 560
     preferredHeight: 520
     minWidth: 400

@@ -1057,7 +1057,7 @@ ApplicationWindow {
                 visible: !root.compactToolbar
                 text: Icons.folder
                 iconFont: true
-                tooltip: qsTr("Manage IMAP folders")
+                tooltip: qsTr("Manage folders")
                 enabled: backend.account_count > 0
                 onClicked: foldersDialog.open()
             }
@@ -1104,7 +1104,7 @@ ApplicationWindow {
             }
             AppMenuItem {
                 glyph: Icons.folder
-                label: qsTr("Manage IMAP folders")
+                label: qsTr("Manage folders")
                 enabled: backend.account_count > 0
                 onTriggered: foldersDialog.open()
             }
@@ -1159,9 +1159,6 @@ ApplicationWindow {
             currentAccountId: backend.current_account_id
             onFolderSelected: path => root.selectFolder(path)
             onAccountSelected: id => root.selectAccount(id)
-            onAddAccountRequested: accountSetup.openNew()
-            onManageAccountsRequested: accountsDialog.open()
-            onManageFoldersRequested: foldersDialog.open()
         }
 
         MessageList {

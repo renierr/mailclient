@@ -15,10 +15,18 @@ This file is normative for all coding agents (human or AI) working in this repo.
 - Frontends: two, both over `mailcore`, neither authoritative over the other.
   A behaviour change belongs in `mailcore` so both get it; a change made in
   one frontend's adapter alone must be a deliberate, stated choice.
-  - **Qt/QML** (`crates/mailapp/qml/`) — the mature one.
-  - **Flutter** (`flutter/`) — Dart app over `mailffi`, targeting Linux and
-    Windows desktop plus a signed Android APK (`./build.sh --apk`).
-    See `flutter/README.md`.
+  - **Qt/QML** (`crates/mailapp/qml/`) — the desktop client: Linux
+    (primary) and Windows. The mature one.
+  - **Flutter** (`flutter/`) — the Android client (signed APK,
+    `./build.sh --apk`). Its Linux and Windows desktop builds exist so the
+    app is easy to run, develop and check on a desktop; they are not the
+    shipped desktop client. See `flutter/README.md`.
+  - **Features stay comparable; UI may differ.** Every user-facing feature
+    exists in both. Layout, placement of elements and interaction patterns
+    may drift where touch and small screens call for it (e.g. bottom
+    actions, fullscreen forms, swipe/long-press instead of hover or context
+    menus). A UI-only change in one frontend needs no mirror in the other;
+    a feature change does.
 - Qt frontend: **QML (QtQuick + QtQuick.Controls)**, single source in
   `crates/mailapp/qml/`, embedded via the `Mailclient` QML module
   (`CxxQtBuilder::new_qml_module`). HTML mail rendered via `QtWebEngine`.
@@ -53,7 +61,8 @@ This file is normative for all coding agents (human or AI) working in this repo.
 - Do **not** add broad new external dependencies without justification. Prefer: std → small well-scoped crate → large framework. Large additions (new Qt modules, new async runtime, new DB) require user approval.
 - Do **not** put business logic in QML. QML is view-only; logic lives in Rust and is exposed via explicit bridge types.
 - Do **not** invent new top-level directories without updating this file and `PROJECT.md`. Current ones: `crates/`, `flutter/`, `qml` (inside `mailapp`), `resources/`, `scripts/`, `dist/` (gitignored).
-- Do **not** let the two frontends drift. Before copying anything out of
+- Do **not** let the two frontends drift in features or behaviour (UI
+  layout may differ, see §1). Before copying anything out of
   `mailapp` into `mailffi` (or back), check whether it belongs in `mailcore`
   instead. Where a copy already exists it is listed in `flutter/README.md`
   ("Shared code still to promote") — add to that list rather than quietly
@@ -88,7 +97,9 @@ Layout of the Dart app, and the rules that keep it that way. `flutter/README.md`
 
 - A `Row` of text plus buttons overflows at 360px. Use `Wrap`, or put the text in `Expanded`/`Flexible` with `overflow: TextOverflow.ellipsis`. Labels sit *above* inputs on narrow layouts, never beside them.
 - No fixed `SizedBox(width: N)` for content. Clamp with `MailDialog.maxWidth`. Dialog actions are a `Wrap`, never a `Row`.
-- Any flow with a `TextField` routes through `MailDialog.showForm`: fullscreen `Scaffold` page on narrow or short screens (`MailDialog.prefersPage`; the scaffold resizes for the keyboard), dialog otherwise. Pure-choice dialogs stay dialogs. Never pad a dialog by `viewInsets` yourself — Material's `Dialog` already does, and doubling it collapses the content when the keyboard opens.
+- The composer and Settings are always full pages (`MaterialPageRoute`), on every width — never dialogs. Qt keeps them as resizable dialogs; that is a deliberate UI difference (§1).
+- The shell app bar mirrors the Qt toolbar: back (one pane) or sidebar toggle (three panes), Compose, a width-capped search field, then Sync and the tools (Manage folders, Contacts, Accounts, Settings) — labelled Compose, a Folder-scope checkbox and tool icons in two/three panes; Compose icon and an overflow menu (scope toggle + tools) in one pane. No folder name in the bar: the list header already shows it. Two panes: back sits in front of the reader subject, and clicking the current folder closes the reader. The sidebar account chip only switches accounts; adding/managing lives under Accounts. Do not add a second Compose, Manage-folders or Accounts entry.
+- Any other flow with a `TextField` routes through `MailDialog.showForm`: fullscreen `Scaffold` page on narrow or short screens (`MailDialog.prefersPage`; the scaffold resizes for the keyboard), dialog otherwise. Pure-choice dialogs stay dialogs. Never pad a dialog by `viewInsets` yourself — Material's `Dialog` already does, and doubling it collapses the content when the keyboard opens.
 - Short screens (~400px) cannot hold a `NavigationRail` or a tall dialog. Switch via `LayoutBuilder` on height, not only on width.
 - Touch targets: pane dividers keep a ~24px hit area (`PaneDivider`); do not shrink a drag handle to the 1px line. `SafeArea` on every dialog and on the status bar. System back walks the pane stack (`PopScope`: reader → list → folders) and never closes the app from a nested pane.
 - Bottom chrome (status bar, attachment bar, composer actions) must stay above the gesture inset. A hover-only affordance needs a tap equivalent — phones have no hover.

@@ -8,6 +8,7 @@ import '../dialogs/mail_dialog.dart';
 import 'composer_drop_target.dart';
 import 'composer_editor.dart';
 import 'composer_header_row.dart';
+import 'composer_toggle.dart';
 import 'composer_widgets.dart';
 import 'inline_images.dart';
 import 'markdown.dart';
@@ -67,31 +68,23 @@ class ComposerInitial {
 /// exactly as before — plain, with no HTML twin. Quote blocks use `> `
 /// citations, which survive every format.
 class ComposerDialog extends StatefulWidget {
-  const ComposerDialog({
-    super.key,
-    required this.initial,
-    this.fullscreen = false,
-  });
+  const ComposerDialog({super.key, required this.initial});
 
   final ComposerInitial initial;
 
-  /// Fullscreen page instead of a floating dialog — used on phones, where a
-  /// dialog plus the on-screen keyboard leaves no usable room.
-  final bool fullscreen;
-
-  /// Single routing point for every entry: fullscreen page on phones (a
-  /// Scaffold resizes for the keyboard natively), dialog on wide screens.
-  /// `barrierDismissible: false`: a tap outside must never drop a composition;
-  /// closing goes through the dirty guard instead.
+  /// Single routing point for every entry. Always a full page, on every
+  /// width: this frontend is built for phones, where a Scaffold resizes for
+  /// the keyboard natively and a floating dialog leaves no usable room. (The
+  /// Qt desktop client keeps its resizable composer window.)
   static Future<void> _open(
     BuildContext context,
     ComposerInitial initial,
   ) async {
-    await MailDialog.showForm(
-      context,
-      barrierDismissible: false,
-      dialog: (_) => ComposerDialog(initial: initial),
-      page: (_) => ComposerDialog(initial: initial, fullscreen: true),
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => ComposerDialog(initial: initial),
+      ),
     );
   }
 
@@ -374,62 +367,21 @@ class _ComposerDialogState extends State<ComposerDialog> {
       (s) => s.settings.sendFormat,
     );
     _sendFormat = sendFormat;
-    if (widget.fullscreen) return _page();
-    final narrow = MailDialog.isNarrow(context);
-    // Near-fullscreen on phones so the keyboard leaves a usable body field;
-    // a floating 640px box would be covered by it.
-    final maxW = MailDialog.maxWidth(context, 640);
-    final maxH = MailDialog.maxHeight(context, 720);
-    return PopScope(
-      canPop: !_working && !_dirty,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && !_working) {
-          _maybeClose();
-        }
-      },
-      child: Dialog(
-        insetPadding: MailDialog.insets(context),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: maxW, maxHeight: maxH),
-          child: Padding(
-            padding: EdgeInsets.all(narrow ? 12 : 20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(_title, style: Theme.of(context).textTheme.titleLarge),
-                if (widget.initial.replyNotice.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  ComposerNotice(
-                    text: widget.initial.replyNotice,
-                    danger: true,
-                  ),
-                ],
-                const SizedBox(height: 12),
-                // Flexible, not Expanded: a short mail keeps the dialog
-                // short instead of padding it out to the height cap.
-                Flexible(
-                  child: AbsorbPointer(
-                    absorbing: _working,
-                    // No viewInsets padding here: Dialog already pads for
-                    // the keyboard.
-                    child: SingleChildScrollView(child: _fieldsColumn()),
-                  ),
-                ),
-                if (_error != null) _errorLine(),
-                const SizedBox(height: 12),
-                Wrap(
-                  alignment: WrapAlignment.end,
-                  spacing: 8,
-                  children: _dialogActions(),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
+    return _page();
   }
+
+  static String _formatLabel(String format) => switch (format) {
+    'plain' => 'Plain text',
+    'multipart' => 'Multipart',
+    'html' => 'HTML',
+    _ => 'Auto',
+  };
+
+  /// Cc/Bcc/Reply-To rows show while toggled on, and always while they hold
+  /// text — hiding a filled field would send addresses the user cannot see.
+  bool get _ccShown => _showCc || _cc.text.isNotEmpty;
+  bool get _bccShown => _showBcc || _bcc.text.isNotEmpty;
+  bool get _replyToShown => _showReplyTo || _replyToCtrl.text.isNotEmpty;
 
   String get _title => switch (widget.initial.mode) {
     ComposeMode.blank => 'New message',
@@ -439,9 +391,8 @@ class _ComposerDialogState extends State<ComposerDialog> {
     ComposeMode.draft => 'Edit draft',
   };
 
-  /// Fullscreen composer page for phones (see [ComposerDialog.fullscreen]):
-  /// the Scaffold shrinks for the keyboard natively, so every field stays
-  /// reachable while typing.
+  /// The composer page: the Scaffold shrinks for the keyboard natively, so
+  /// every field stays reachable while typing.
   Widget _page() {
     return PopScope(
       canPop: !_working && !_dirty,
@@ -453,25 +404,16 @@ class _ComposerDialogState extends State<ComposerDialog> {
       child: MailFormPage(
         title: _title,
         actions: [
-          OutlinedButton(
-            onPressed: _working ? null : _saveDraft,
-            child: _savingDraft
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Text('Save'),
-          ),
-          FilledButton(
-            onPressed: _working ? null : _send,
-            child: _sending
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Text('Send'),
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.only(right: 16),
+              child: Text(
+                'Send as: ${_formatLabel(_sendFormat)}',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
           ),
         ],
         body: Column(
@@ -493,8 +435,13 @@ class _ComposerDialogState extends State<ComposerDialog> {
             ),
           ),
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          // Qt order, at the bottom where the thumb is and above the
+          // keyboard: Discard, Save draft, Send. Wrap, not Row, so the
+          // buttons stack instead of overflowing a narrow phone.
           child: Wrap(
+            alignment: WrapAlignment.end,
             spacing: 8,
+            runSpacing: 8,
             children: [
               if (widget.initial.draftUid >= 0)
                 TextButton.icon(
@@ -506,6 +453,26 @@ class _ComposerDialogState extends State<ComposerDialog> {
                 onPressed: _working ? null : () => _maybeClose(),
                 child: const Text('Discard'),
               ),
+              OutlinedButton(
+                onPressed: _working ? null : _saveDraft,
+                child: _savingDraft
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Save draft'),
+              ),
+              FilledButton(
+                onPressed: _working ? null : _send,
+                child: _sending
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Send'),
+              ),
             ],
           ),
         ),
@@ -513,7 +480,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
     );
   }
 
-  /// All composer fields, shared by the dialog and the fullscreen page.
+  /// All composer fields.
   Widget _fieldsColumn() {
     return ComposerDropTarget(onFiles: _dropFiles, child: _fields());
   }
@@ -581,6 +548,13 @@ class _ComposerDialogState extends State<ComposerDialog> {
     );
     return ComposerHeaderRow(
       label: 'From',
+      trailing: ComposerToggle(
+        icon: Icons.reply,
+        label: 'Reply-To',
+        tooltip: 'Set Reply-To address',
+        active: _replyToShown,
+        onPressed: () => setState(() => _showReplyTo = !_replyToShown),
+      ),
       child: MailDialog.isNarrow(context)
           ? Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -596,53 +570,37 @@ class _ComposerDialogState extends State<ComposerDialog> {
     );
   }
 
-  /// To, then whichever of Cc/Bcc/Reply-To are open. The To line offers the
-  /// ones still closed.
+  /// To, then whichever of Cc/Bcc/Reply-To are open. Cc and Bcc toggle
+  /// from the To line, like the Qt composer.
   List<Widget> _addressRows() {
-    final offers = [
-      if (!_showCc) ('Cc', () => setState(() => _showCc = true)),
-      if (!_showBcc) ('Bcc', () => setState(() => _showBcc = true)),
-      if (!_showReplyTo)
-        ('Reply-To', () => setState(() => _showReplyTo = true)),
-    ];
-    Widget? trailing;
-    if (offers.isNotEmpty) {
-      trailing = MailDialog.isNarrow(context)
-          ? PopupMenuButton<VoidCallback>(
-              tooltip: 'Add Cc, Bcc or Reply-To',
-              icon: const Icon(Icons.expand_more),
-              onSelected: (open) => open(),
-              itemBuilder: (_) => [
-                for (final (label, open) in offers)
-                  PopupMenuItem(value: open, child: Text(label)),
-              ],
-            )
-          : Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (final (label, open) in offers)
-                  TextButton(
-                    style: TextButton.styleFrom(
-                      visualDensity: VisualDensity.compact,
-                    ),
-                    onPressed: open,
-                    child: Text(label),
-                  ),
-              ],
-            );
-    }
     return [
       ComposerHeaderRow(
         label: 'To',
-        trailing: trailing,
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ComposerToggle(
+              label: 'Cc',
+              tooltip: 'Show Cc field',
+              active: _ccShown,
+              onPressed: () => setState(() => _showCc = !_ccShown),
+            ),
+            ComposerToggle(
+              label: 'Bcc',
+              tooltip: 'Show Bcc field',
+              active: _bccShown,
+              onPressed: () => setState(() => _showBcc = !_bccShown),
+            ),
+          ],
+        ),
         child: RecipientField(controller: _to),
       ),
-      if (_showCc)
+      if (_ccShown)
         ComposerHeaderRow(
           label: 'Cc',
           child: RecipientField(controller: _cc),
         ),
-      if (_showBcc)
+      if (_bccShown)
         ComposerHeaderRow(
           label: 'Bcc',
           child: RecipientField(
@@ -650,7 +608,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
             hint: 'Hidden from the other recipients',
           ),
         ),
-      if (_showReplyTo)
+      if (_replyToShown)
         ComposerHeaderRow(
           label: 'Reply-To',
           child: TextField(
@@ -699,9 +657,8 @@ class _ComposerDialogState extends State<ComposerDialog> {
     }
   }
 
-  /// Send/save failure. Sits outside the scrolling fields — above the action
-  /// row in the dialog, at the top of the page (whose actions are in the
-  /// AppBar) — so it is never scrolled out of sight below a long body.
+  /// Send/save failure, at the top of the page (whose actions are in the
+  /// AppBar), so it is never scrolled out of sight below a long body.
   Widget _errorLine() => Padding(
     padding: const EdgeInsets.only(top: 8),
     child: Text(
@@ -709,43 +666,6 @@ class _ComposerDialogState extends State<ComposerDialog> {
       style: TextStyle(color: Theme.of(context).colorScheme.error),
     ),
   );
-
-  /// Dialog action row buttons, extracted so the dialog body stays readable.
-  /// The fullscreen page spreads the same actions across AppBar + bottomBar.
-  List<Widget> _dialogActions() {
-    return [
-      if (widget.initial.draftUid >= 0)
-        TextButton.icon(
-          icon: const Icon(Icons.delete_outline),
-          label: const Text('Delete draft'),
-          onPressed: _working ? null : _deleteDraft,
-        ),
-      TextButton(
-        onPressed: _working ? null : () => _maybeClose(),
-        child: const Text('Discard'),
-      ),
-      OutlinedButton(
-        onPressed: _working ? null : _saveDraft,
-        child: _savingDraft
-            ? const SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : const Text('Save draft'),
-      ),
-      FilledButton(
-        onPressed: _working ? null : _send,
-        child: _sending
-            ? const SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : const Text('Send'),
-      ),
-    ];
-  }
 
   /// The address as the core will see it: edited local part, locked domain —
   /// or the whole account address when the field is blank.
@@ -771,7 +691,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
       'bcc': _bcc.text,
       'from': _effectiveFrom(_account?.email ?? ''),
       'from_name': _senderName.text,
-      'reply_to': _showReplyTo ? _replyToCtrl.text : '',
+      'reply_to': _replyToShown ? _replyToCtrl.text : '',
       'subject': _subject.text,
       'body': bodyText,
       'body_html': bodyHtml,

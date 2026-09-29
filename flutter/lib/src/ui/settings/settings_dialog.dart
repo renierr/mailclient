@@ -16,20 +16,18 @@ import 'background_check_status.dart';
 /// All preferences, Roundcube-style: sections on the left, the form on the
 /// right. Everything edits a local copy; Save writes it through, Cancel
 /// reverts by writing nothing at all.
+///
+/// Always a full page, never a dialog: this frontend is built for phones.
+/// (The Qt desktop client keeps its resizable settings dialog.)
 class SettingsDialog extends StatefulWidget {
-  const SettingsDialog({super.key, this.fullscreen = false});
-
-  /// Fullscreen page instead of a floating dialog — used on phones, where a
-  /// dialog plus the on-screen keyboard leaves no usable room.
-  final bool fullscreen;
+  const SettingsDialog({super.key});
 
   static Future<void> show(BuildContext context) async {
-    await MailDialog.showForm(
-      context,
-      // A tap outside must not throw away unsaved edits.
-      barrierDismissible: false,
-      dialog: (_) => const SettingsDialog(),
-      page: (_) => const SettingsDialog(fullscreen: true),
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => const SettingsDialog(),
+      ),
     );
   }
 
@@ -74,92 +72,74 @@ class _SettingsDialogState extends State<SettingsDialog> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.fullscreen) return _page();
-    final narrow = MailDialog.isNarrow(context);
-    final maxW = MailDialog.maxWidth(context, 800);
-    final maxH = MailDialog.maxHeight(context, 640);
-    return Dialog(
-      insetPadding: MailDialog.insets(context),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxW, maxHeight: maxH),
+    final scheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Settings'),
+        // The route's close button is Cancel: it pops without writing.
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: FilledButton(
+              onPressed: _saving ? null : _save,
+              child: Text(_saving ? 'Saving…' : 'Save'),
+            ),
+          ),
+        ],
+      ),
+      body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
-            // The rail needs vertical room for six labelled destinations; on
-            // a short screen it overflows the bounded body, so fall back to
-            // the dropdown selector there too — not just on narrow widths.
-            final railMode = !narrow && constraints.maxHeight >= 520;
-            return Padding(
-              padding: EdgeInsets.all(narrow ? 12 : 20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    'Settings',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 12),
-                  if (!railMode) _sectionDropdown(),
-                  Expanded(
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (railMode)
-                          NavigationRail(
-                            selectedIndex: _Section.values.indexOf(_section),
-                            onDestinationSelected: (i) =>
-                                setState(() => _section = _Section.values[i]),
-                            labelType: NavigationRailLabelType.all,
-                            destinations: [
-                              for (final s in _Section.values)
-                                NavigationRailDestination(
-                                  icon: Icon(_icon(s)),
-                                  label: Text(_label(s)),
-                                ),
-                            ],
-                          ),
-                        if (railMode) const VerticalDivider(width: 1),
-                        Expanded(
-                          child: SingleChildScrollView(
-                            // No viewInsets padding here: Dialog already
-                            // pads for the keyboard.
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 4,
-                            ),
-                            child: _body(),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (_error != null)
-                    Text(
-                      _error!,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.error,
-                      ),
-                    ),
-                  const SizedBox(height: 8),
-                  // Wrap, not Row: Cancel + Save stack instead of overflowing
-                  // on a very narrow dialog.
-                  Wrap(
-                    alignment: WrapAlignment.end,
-                    spacing: 8,
+            // The rail needs width beside the form and height for six
+            // labelled destinations; otherwise a selector sits above it.
+            final railMode =
+                constraints.maxWidth >= 600 && constraints.maxHeight >= 480;
+            final form = SingleChildScrollView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              padding: const EdgeInsets.all(16),
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 720),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      TextButton(
-                        onPressed: _saving
-                            ? null
-                            : () => Navigator.of(context).pop(),
-                        child: const Text('Cancel'),
-                      ),
-                      FilledButton(
-                        onPressed: _saving ? null : _save,
-                        child: const Text('Save'),
-                      ),
+                      // Save is in the AppBar, so the error goes to the top
+                      // where it is seen, not below a long scroll.
+                      if (_error != null) ...[
+                        Text(_error!, style: TextStyle(color: scheme.error)),
+                        const SizedBox(height: 8),
+                      ],
+                      if (!railMode) ...[
+                        _sectionDropdown(),
+                        const SizedBox(height: 8),
+                      ],
+                      _body(),
                     ],
                   ),
-                ],
+                ),
               ),
+            );
+            if (!railMode) return form;
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                NavigationRail(
+                  selectedIndex: _Section.values.indexOf(_section),
+                  onDestinationSelected: (i) =>
+                      setState(() => _section = _Section.values[i]),
+                  labelType: NavigationRailLabelType.all,
+                  destinations: [
+                    for (final s in _Section.values)
+                      NavigationRailDestination(
+                        icon: Icon(_icon(s)),
+                        label: Text(_label(s)),
+                      ),
+                  ],
+                ),
+                const VerticalDivider(width: 1),
+                Expanded(child: form),
+              ],
             );
           },
         ),
@@ -192,7 +172,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
         const ['small', 'normal', 'large'],
         (v) => v[0].toUpperCase() + v.substring(1),
         (v) => setState(() => _draft = _draft.copyWith(readerFontSize: v)),
-        help: 'Plain-text messages only.',
       ),
     ],
   );
@@ -220,13 +199,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
         const ['comfortable', 'compact'],
         (v) => v[0].toUpperCase() + v.substring(1),
         (v) => setState(() => _draft = _draft.copyWith(density: v)),
-        help: 'Compact hides the preview line.',
       ),
       _switch(
         'Confirm before moving mail to Trash',
         _draft.confirmDelete,
         (v) => setState(() => _draft = _draft.copyWith(confirmDelete: v)),
-        help: 'Single mails, selections and the Delete key ask first. Permanent deletes always ask.',
       ),
     ],
   );
@@ -246,13 +223,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
         (v) => v == 0 ? 'Immediately' : 'After ${v}s',
         (v) => setState(() => _draft = _draft.copyWith(markReadDelaySecs: v)),
         enabled: _draft.autoMarkRead,
-        help: 'With a delay, closing the message early keeps it unread.',
       ),
       _switch(
         'Load remote images (not recommended)',
         _draft.loadRemoteImages,
         (v) => setState(() => _draft = _draft.copyWith(loadRemoteImages: v)),
-        help: 'Remote images tell the sender you opened the message. Off means the Show-once banner.',
       ),
       _choice<String>(
         'Clicking a link in a message',
@@ -263,7 +238,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
           _ => 'Show safety dialog first (recommended)',
         },
         (v) => setState(() => _draft = _draft.copyWith(linkClickAction: v)),
-        help: "The safety dialog shows the link's real address before anything opens, so disguised links cannot surprise you.",
       ),
     ],
   );
@@ -282,7 +256,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
           'html': 'HTML only',
         }[v]!,
         (v) => setState(() => _draft = _draft.copyWith(sendFormat: v)),
-        help: 'Automatic sends plain text unless the body carries real formatting.',
       ),
       _switch(
         'Always include a plain-text version alongside HTML',
@@ -305,16 +278,12 @@ class _SettingsDialogState extends State<SettingsDialog> {
         controller: _signature,
         maxLines: 3,
         onChanged: (v) => _draft = _draft.copyWith(signatureText: v),
-        decoration: const InputDecoration(
-          labelText: 'Signature',
-          helperText: 'Added after “-- ” to new mail, replies and forwards.',
-        ),
+        decoration: const InputDecoration(labelText: 'Signature'),
       ),
       _switch(
         'Request read receipt',
         _draft.requestMdn,
         (v) => setState(() => _draft = _draft.copyWith(requestMdn: v)),
-        help: 'Adds Disposition-Notification-To. Recipients may ignore it.',
       ),
     ],
   );
@@ -331,7 +300,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
         'Suggest recipients from sent mail',
         _draft.collectContacts,
         (v) => setState(() => _draft = _draft.copyWith(collectContacts: v)),
-        help: 'Addresses from mail you sent power the composer.',
       ),
       _choice<int>(
         'Check for new mail',
@@ -339,10 +307,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
         const [0, 5, 10, 15, 30, 60],
         (v) => v == 0 ? 'Manually' : 'Every ${v}m',
         (v) => setState(() => _draft = _draft.copyWith(syncIntervalMinutes: v)),
-        help:
-            'Also checks in the background while the app is closed. '
-            'The battery-saving method checks at most every 15 minutes; '
-            'the on-time alarm honours shorter intervals.',
+        help: Platform.isAndroid
+            ? 'Battery-saving checks run at most every 15 minutes.'
+            : null,
       ),
       // The scheduler is an Android-only capability: only there Doze
       // defers the battery-saving worker until the phone is unlocked.
@@ -357,17 +324,13 @@ class _SettingsDialogState extends State<SettingsDialog> {
           },
           (v) =>
               setState(() => _draft = _draft.copyWith(backgroundScheduler: v)),
-          help:
-              'Battery-saving may delay checks until you unlock the phone. '
-              'The on-time alarm fires in standby too, but wakes the phone '
-              'for every check.',
+          help: 'The on-time alarm also checks in standby, at more battery.',
         ),
       _switch(
         'Show notifications for new mail',
         _draft.notificationsEnabled,
         (v) =>
             setState(() => _draft = _draft.copyWith(notificationsEnabled: v)),
-        help: 'Sync continues in the background; only the notification is suppressed.',
       ),
       const SizedBox(height: 8),
       OutlinedButton.icon(
@@ -384,7 +347,12 @@ class _SettingsDialogState extends State<SettingsDialog> {
     ],
   );
 
-  Widget _about() {
+  // A Builder, not the State's context: the page body is built inside a
+  // LayoutBuilder callback, where `context.select` on the State's context
+  // asserts. The Builder's own build is a real build.
+  Widget _about() => Builder(builder: _aboutSection);
+
+  Widget _aboutSection(BuildContext context) {
     final accounts = context.select<MailState, List<Account>>(
       (s) => s.accounts,
     );
@@ -604,6 +572,14 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _Section.about => Icons.info_outline,
   };
 
+  /// Secondary hint under a setting: small and muted, so the labels carry
+  /// the page and the hints stay out of the way.
+  Widget _help(String text) => Text(
+    text,
+    style: Theme.of(context).textTheme.bodySmall
+        ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+  );
+
   Widget _switch(
     String title,
     bool value,
@@ -612,7 +588,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
   }) {
     return SwitchListTile(
       title: Text(title),
-      subtitle: help == null ? null : Text(help),
+      subtitle: help == null ? null : _help(help),
       value: value,
       onChanged: onChanged,
       contentPadding: EdgeInsets.zero,
@@ -642,11 +618,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     );
     final labels = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title),
-        if (help != null)
-          Text(help, style: Theme.of(context).textTheme.bodySmall),
-      ],
+      children: [Text(title), if (help != null) _help(help)],
     );
     // Label above the control on narrow/zoomed layouts: label-beside-control
     // rows squeeze the dropdown (or the label) to zero there. Wide screens
@@ -680,8 +652,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     );
   }
 
-  /// Section selector dropdown, shared by the dialog (short screens) and the
-  /// fullscreen page (phones always use it — no room for a rail).
+  /// Section selector for pages too narrow or short for the rail.
   Widget _sectionDropdown() {
     return DropdownButton<_Section>(
       value: _section,
@@ -691,40 +662,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
           DropdownMenuItem(value: s, child: Text(_label(s))),
       ],
       onChanged: (s) => setState(() => _section = s ?? _section),
-    );
-  }
-
-  /// Fullscreen settings page for phones (see [SettingsDialog.fullscreen]).
-  Widget _page() {
-    return MailFormPage(
-      title: 'Settings',
-      actions: [
-        TextButton(
-          onPressed: _saving ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: _saving ? null : _save,
-          child: Text(_saving ? 'Saving…' : 'Save'),
-        ),
-      ],
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Save is in the AppBar, so the error goes to the top where it is
-          // seen, not below a long scroll.
-          if (_error != null) ...[
-            Text(
-              _error!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
-            ),
-            const SizedBox(height: 8),
-          ],
-          _sectionDropdown(),
-          const SizedBox(height: 8),
-          _body(),
-        ],
-      ),
     );
   }
 }

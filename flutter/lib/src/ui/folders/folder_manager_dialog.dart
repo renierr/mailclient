@@ -74,7 +74,7 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                'IMAP folders',
+                'Manage folders',
                 style: Theme.of(context).textTheme.titleLarge,
               ),
               const SizedBox(height: 12),
@@ -246,7 +246,7 @@ class _FolderManagerDialogState extends State<FolderManagerDialog> {
     final openId = context.select<MailState, int>((s) => s.folderId);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('IMAP folders'),
+        title: const Text('Manage folders'),
         actions: [
           OutlinedButton.icon(
             icon: busy

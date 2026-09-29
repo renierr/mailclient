@@ -29,30 +29,16 @@ class _MailShellState extends State<MailShell> {
   final _searchFocus = FocusNode();
   final _searchController = TextEditingController();
 
-  /// Narrow layouts show the search field inline in the AppBar instead of a
-  /// dialog (a dialog plus keyboard leaves no room on a phone).
-  bool _searchOpen = false;
-
   /// Layout class of the last build, for the shortcut handlers (which run
   /// outside the LayoutBuilder that knows the width).
-  bool _narrow = false;
   bool _wide = true;
 
-  void _focusSearch() {
-    // Wide layouts keep a permanent field in the AppBar; only the narrow
-    // ones have an inline field to open (and later to close again).
-    if (_narrow) setState(() => _searchOpen = true);
-    // The inline field may just have appeared; focus it after the frame.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _searchFocus.requestFocus();
-    });
-  }
+  void _focusSearch() => _searchFocus.requestFocus();
 
   void _closeSearch(MailState state) {
     _searchController.clear();
     state.exitSearch();
     _searchFocus.unfocus();
-    setState(() => _searchOpen = false);
   }
 
   /// Pane widths on the wide layout, dragged at the dividers. Plain fields,
@@ -130,12 +116,11 @@ class _MailShellState extends State<MailShell> {
             // fixed-height rows overflow.
             final width = constraints.maxWidth;
             final effective = width / scale;
-            _narrow = effective < Breakpoints.compact;
-            _wide = effective >= Breakpoints.medium;
+            final narrow = effective < Breakpoints.compact;
             // Plain assignments, not setState: these are derived from what
             // this very build reads, and everything below uses them.
-            if (!_narrow) _searchOpen = false;
-            if (_narrow) _syncPaneToOpen(openUid);
+            _wide = effective >= Breakpoints.medium;
+            if (narrow) _syncPaneToOpen(openUid);
             final body = effective >= Breakpoints.medium
                 ? _threePane(fullscreen, openUid)
                 : effective >= Breakpoints.compact
@@ -147,7 +132,6 @@ class _MailShellState extends State<MailShell> {
             // then search/selection, then the pane stack.
             final backBlocksPop =
                 fullscreen ||
-                _searchOpen ||
                 searching ||
                 selectionMode ||
                 (effective < Breakpoints.compact
@@ -166,10 +150,7 @@ class _MailShellState extends State<MailShell> {
                   onBack: () => _paneBack(state),
                   searchFocus: _searchFocus,
                   searchController: _searchController,
-                  narrow: effective < Breakpoints.compact,
-                  searchOpen: _searchOpen,
-                  onOpenSearch: _focusSearch,
-                  onCloseSearch: () => _closeSearch(state),
+                  narrow: narrow,
                   sidebarToggle: effective >= Breakpoints.medium
                       ? IconButton(
                           tooltip: _sidebarVisible
@@ -252,13 +233,9 @@ class _MailShellState extends State<MailShell> {
       state.toggleReaderFullscreen();
       return;
     }
-    // Inline search field first: one back press leaves search entirely.
-    if (_searchOpen) {
-      _closeSearch(state);
-      return;
-    }
+    // One back press leaves search entirely.
     if (state.searching) {
-      state.exitSearch();
+      _closeSearch(state);
       return;
     }
     if (state.selectionMode) {
@@ -322,7 +299,10 @@ class _MailShellState extends State<MailShell> {
     // The reader takes the list's place rather than squeezing a third column
     // into a width where none of them would be usable.
     final main = openUid >= 0
-        ? ReaderPane(onClose: context.read<MailState>().closeMessage)
+        ? ReaderPane(
+            onClose: context.read<MailState>().closeMessage,
+            allowFullscreen: false,
+          )
         : const MessageListPane();
     if (fullscreen) return main;
     // Keep at least ~300px for the main pane: the sidebar cap follows the
@@ -348,9 +328,9 @@ class _MailShellState extends State<MailShell> {
   Widget _onePane() => switch (_pane) {
     _Pane.folders => FolderSidebar(onFolderSelected: () => _go(_Pane.list)),
     _Pane.list => MessageListPane(onMessageOpened: () => _go(_Pane.reader)),
-    _Pane.reader => ReaderPane(
-      onClose: () => _paneBack(context.read<MailState>()),
-    ),
+    // The app bar's back button leaves the reader here; a second one in
+    // the reader header would just duplicate it.
+    _Pane.reader => const ReaderPane(allowFullscreen: false),
   };
 
   void _go(_Pane pane) => setState(() => _pane = pane);

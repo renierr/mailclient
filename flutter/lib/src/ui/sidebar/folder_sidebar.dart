@@ -3,11 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/models.dart';
 import '../../state/mail_state.dart';
-import '../accounts/account_setup_dialog.dart';
-import '../accounts/accounts_dialog.dart';
-import '../composer/composer_dialog.dart';
 import '../dialogs/mail_dialog.dart';
-import '../folders/folder_manager_dialog.dart';
 
 /// Accounts on top, this account's folders below.
 class FolderSidebar extends StatelessWidget {
@@ -27,14 +23,6 @@ class FolderSidebar extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-          child: FilledButton.icon(
-            icon: const Icon(Icons.edit_outlined, size: 18),
-            label: const Text('Compose'),
-            onPressed: () => ComposerDialog.showBlank(context),
-          ),
-        ),
         const AccountPicker(),
         const Divider(height: 1),
         Expanded(
@@ -69,17 +57,14 @@ class FolderSidebar extends StatelessWidget {
                   },
                 ),
         ),
-        const Divider(height: 1),
-        TextButton.icon(
-          icon: const Icon(Icons.folder_open_outlined, size: 16),
-          label: const Text('Manage folders…'),
-          onPressed: () => FolderManagerDialog.show(context),
-        ),
       ],
     );
   }
 }
 
+/// Who you are, like the Qt account chip: avatar and address in a bordered
+/// card. With several accounts it opens a menu to switch between them;
+/// adding and managing accounts live in the toolbar's Accounts entry.
 class AccountPicker extends StatelessWidget {
   const AccountPicker({super.key});
 
@@ -89,100 +74,74 @@ class AccountPicker extends StatelessWidget {
     final accounts = context.select<MailState, List<Account>>(
       (s) => s.accounts,
     );
-    if (account == null) {
-      return const Padding(
-        padding: EdgeInsets.all(12),
-        child: Text('No account'),
-      );
-    }
-    final avatar = CircleAvatar(
-      radius: 18,
-      backgroundColor: avatarColor(context, account.email),
-      foregroundColor: Theme.of(context).colorScheme.onPrimary,
-      child: Text(
-        account.email.isEmpty ? '?' : account.email[0].toUpperCase(),
-        style: const TextStyle(fontWeight: FontWeight.w600),
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final email = account?.email ?? '';
+    final canSwitch = accounts.length > 1;
+    final chip = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        border: Border.all(color: scheme.outlineVariant),
+        borderRadius: BorderRadius.circular(8),
       ),
-    );
-    // One account is the common case and a dropdown around it is just noise.
-    // The chip keeps the Qt account menu (switch / add / manage) in both.
-    Widget title(String name, String? sub) => Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(name, overflow: TextOverflow.ellipsis),
-        if (sub != null)
-          Text(
-            sub,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-      ],
-    );
-    if (accounts.length == 1) {
-      return PopupMenuButton<String>(
-        onSelected: (v) => _menu(context, v),
-        itemBuilder: (context) => [
-          const PopupMenuItem(value: 'add', child: Text('Add account…')),
-          const PopupMenuItem(value: 'manage', child: Text('Manage accounts…')),
-        ],
-        child: ListTile(
-          leading: avatar,
-          title: title(account.displayName, account.email),
-          trailing: accounts.length > 1
-              ? null
-              : const Icon(Icons.expand_more, size: 18),
-        ),
-      );
-    }
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: Row(
         children: [
-          avatar,
-          const SizedBox(width: 8),
-          Expanded(
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<int>(
-                isExpanded: true,
-                value: account.id,
-                items: [
-                  for (final a in accounts)
-                    DropdownMenuItem(
-                      value: a.id,
-                      child: Text(a.email, overflow: TextOverflow.ellipsis),
-                    ),
-                ],
-                onChanged: (id) {
-                  if (id != null) context.read<MailState>().selectAccount(id);
-                },
-              ),
+          CircleAvatar(
+            radius: 14,
+            backgroundColor: avatarColor(context, email),
+            foregroundColor: scheme.onPrimary,
+            child: Text(
+              email.isEmpty ? '?' : email[0].toUpperCase(),
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
             ),
           ),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.expand_more, size: 18),
-            tooltip: 'Account options',
-            onSelected: (v) => _menu(context, v),
-            itemBuilder: (context) => [
-              const PopupMenuItem(value: 'add', child: Text('Add account…')),
-              const PopupMenuItem(
-                value: 'manage',
-                child: Text('Manage accounts…'),
-              ),
-            ],
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  email.isEmpty ? 'No account' : email,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (canSwitch)
+                  Text(
+                    '${accounts.length} accounts — switch',
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+              ],
+            ),
           ),
+          if (canSwitch)
+            Icon(Icons.expand_more, size: 18, color: scheme.onSurfaceVariant),
         ],
       ),
     );
-  }
-
-  void _menu(BuildContext context, String v) {
-    switch (v) {
-      case 'add':
-        AccountSetupDialog.show(context);
-      case 'manage':
-        AccountsDialog.show(context);
-    }
+    return Padding(
+      padding: const EdgeInsets.all(8),
+      child: canSwitch
+          ? PopupMenuButton<int>(
+              tooltip: 'Switch account',
+              onSelected: (id) => context.read<MailState>().selectAccount(id),
+              itemBuilder: (context) => [
+                for (final a in accounts)
+                  CheckedPopupMenuItem(
+                    value: a.id,
+                    checked: a.id == account?.id,
+                    child: Text(a.email, overflow: TextOverflow.ellipsis),
+                  ),
+              ],
+              child: chip,
+            )
+          : chip,
+    );
   }
 }
 

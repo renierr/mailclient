@@ -81,6 +81,10 @@ class PaneDividerState extends State<PaneDivider> {
   }
 }
 
+/// The shell toolbar, laid out like the Qt one: back (one pane) or the
+/// sidebar toggle (three panes), Compose, a width-capped search field, then
+/// Sync and the tool entries — as icons where there is room, behind an
+/// overflow menu where there is not.
 class ShellTopBar extends StatelessWidget implements PreferredSizeWidget {
   const ShellTopBar({
     super.key,
@@ -89,9 +93,6 @@ class ShellTopBar extends StatelessWidget implements PreferredSizeWidget {
     required this.searchFocus,
     required this.searchController,
     required this.narrow,
-    required this.searchOpen,
-    required this.onOpenSearch,
-    required this.onCloseSearch,
     this.sidebarToggle,
   });
 
@@ -99,13 +100,10 @@ class ShellTopBar extends StatelessWidget implements PreferredSizeWidget {
   final VoidCallback onBack;
   final FocusNode searchFocus;
   final TextEditingController searchController;
-  final bool narrow;
 
-  /// Narrow layouts trade the title for an inline search field — no dialog,
-  /// so the keyboard can never break it.
-  final bool searchOpen;
-  final VoidCallback onOpenSearch;
-  final VoidCallback onCloseSearch;
+  /// One-pane layout: Compose shrinks to an icon, the folder-scope toggle
+  /// and the tool entries move into the overflow menu.
+  final bool narrow;
   final Widget? sidebarToggle;
 
   @override
@@ -113,52 +111,66 @@ class ShellTopBar extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Widget build(BuildContext context) {
-    final folderName = context.select<MailState, String>(
-      (s) => s.folder?.leafName ?? 'Mail',
-    );
     final syncing = context.select<MailState, bool>((s) => s.isSyncing);
-    final inlineSearch = narrow && searchOpen;
-    final leading = inlineSearch
-        // While searching, the leading affordance closes the search (and
-        // clears it), not the pane navigation underneath.
-        ? IconButton(icon: const Icon(Icons.close), onPressed: onCloseSearch)
-        : showBack
-        ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: onBack)
+    final folderOnly = context.select<MailState, bool>(
+      (s) => s.searchFolderOnly,
+    );
+    final leading = showBack
+        ? IconButton(
+            tooltip: 'Folders',
+            icon: const Icon(Icons.arrow_back),
+            onPressed: onBack,
+          )
         : sidebarToggle;
+    void compose() => ComposerDialog.showBlank(context);
     return AppBar(
       leading: leading,
-      // With no leading the title sat flush at the screen edge (titleSpacing
-      // 0 + no back button = "INBOX" touching the bezel). Keep 0 only when a
-      // leading icon already provides the inset.
-      titleSpacing: leading == null ? 16 : 0,
-      title: inlineSearch
-          ? ShellInlineSearch(focus: searchFocus, controller: searchController)
-          : narrow
-          // The folders pane has no back button, which is also how we know
-          // it is showing: label it 'Mail', not the selected folder.
-          ? Text(
-              showBack ? folderName : 'Mail',
-              overflow: TextOverflow.ellipsis,
+      titleSpacing: leading == null ? 8 : 0,
+      title: Row(
+        children: [
+          if (narrow)
+            IconButton(
+              tooltip: 'Compose (Ctrl+N)',
+              color: Theme.of(context).colorScheme.primary,
+              icon: const Icon(Icons.edit_outlined),
+              onPressed: compose,
             )
-          : ShellSearchField(focus: searchFocus, controller: searchController),
+          else
+            FilledButton.icon(
+              icon: const Icon(Icons.edit_outlined, size: 18),
+              label: const Text('Compose'),
+              onPressed: compose,
+            ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 460),
+              child: ShellSearchField(
+                focus: searchFocus,
+                controller: searchController,
+                compact: narrow,
+              ),
+            ),
+          ),
+          if (!narrow)
+            Tooltip(
+              message: 'Search only the current folder',
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Checkbox(
+                    value: folderOnly,
+                    onChanged: (_) => _toggleScope(context),
+                  ),
+                  const Text('Folder', style: TextStyle(fontSize: 13)),
+                ],
+              ),
+            ),
+        ],
+      ),
       actions: [
-        // The search icon becomes the inline field; hide it while open.
-        if (narrow && !searchOpen)
-          IconButton(
-            tooltip: 'Search',
-            icon: const Icon(Icons.search),
-            onPressed: onOpenSearch,
-          ),
-        // Wide layouts compose from the sidebar button, like the Qt
-        // toolbar; the narrow panes have no sidebar, so they keep an icon.
-        if (narrow)
-          IconButton(
-            tooltip: 'Compose (Ctrl+N)',
-            icon: const Icon(Icons.edit_outlined),
-            onPressed: () => ComposerDialog.showBlank(context),
-          ),
         IconButton(
-          tooltip: 'Sync (Ctrl+R)',
+          tooltip: 'Sync now (Ctrl+R)',
           // A spinner in place of the icon, rather than a disabled icon: the
           // control that started the work is where the work should be visible.
           icon: syncing
@@ -172,128 +184,82 @@ class ShellTopBar extends StatelessWidget implements PreferredSizeWidget {
               ? null
               : () => context.read<MailState>().syncAccount(),
         ),
-        PopupMenuButton<String>(
-          onSelected: (value) => openShellMenu(context, value),
-          itemBuilder: (context) => const [
-            PopupMenuItem(
-              value: 'add-account',
-              child: MenuRow(
-                icon: Icons.person_add_outlined,
-                text: 'Add account…',
+        if (!narrow) ...[
+          for (final (value, icon, text) in _tools)
+            IconButton(
+              tooltip: text,
+              icon: Icon(icon),
+              onPressed: () => openShellMenu(context, value),
+            ),
+          const SizedBox(width: 4),
+        ] else
+          PopupMenuButton<String>(
+            tooltip: 'More',
+            onSelected: (value) => value == 'scope'
+                ? _toggleScope(context)
+                : openShellMenu(context, value),
+            itemBuilder: (context) => [
+              CheckedPopupMenuItem(
+                value: 'scope',
+                checked: folderOnly,
+                child: const Text('Search only this folder'),
               ),
-            ),
-            PopupMenuItem(
-              value: 'accounts',
-              child: MenuRow(
-                icon: Icons.manage_accounts_outlined,
-                text: 'Manage accounts…',
-              ),
-            ),
-            PopupMenuItem(
-              value: 'folders',
-              child: MenuRow(
-                icon: Icons.create_new_folder_outlined,
-                text: 'Manage IMAP folders…',
-              ),
-            ),
-            PopupMenuItem(
-              value: 'refresh-folders',
-              child: MenuRow(
-                icon: Icons.refresh_outlined,
-                text: 'Refresh folder list',
-              ),
-            ),
-            PopupMenuItem(
-              value: 'contacts',
-              child: MenuRow(icon: Icons.contacts_outlined, text: 'Contacts'),
-            ),
-            PopupMenuItem(
-              value: 'settings',
-              child: MenuRow(icon: Icons.settings_outlined, text: 'Settings…'),
-            ),
-          ],
-        ),
+              for (final (value, icon, text) in _tools)
+                PopupMenuItem(
+                  value: value,
+                  child: MenuRow(icon: icon, text: text),
+                ),
+            ],
+          ),
       ],
     );
   }
+
+  /// The tool entries, in the Qt toolbar's order.
+  static const _tools = [
+    ('folders', Icons.folder_outlined, 'Manage folders'),
+    ('contacts', Icons.contacts_outlined, 'Contacts'),
+    ('accounts', Icons.person_outline, 'Accounts'),
+    ('settings', Icons.settings_outlined, 'Settings'),
+  ];
+
+  void _toggleScope(BuildContext context) {
+    final state = context.read<MailState>();
+    state.runSearch(state.searchQuery, folderOnly: !state.searchFolderOnly);
+  }
 }
 
-/// App-bar overflow menu. Lives here so the bar does not have to watch the
+/// Toolbar tool entry. Lives here so the bar does not have to watch the
 /// whole [MailState] just to route a tap.
 void openShellMenu(BuildContext context, String value) {
-  final state = context.read<MailState>();
   switch (value) {
-    case 'add-account':
-      AccountSetupDialog.show(context);
-    case 'accounts':
-      AccountsDialog.show(context);
     case 'folders':
       FolderManagerDialog.show(context);
-    case 'refresh-folders':
-      state.refreshFolders();
     case 'contacts':
       ContactsDialog.show(context);
+    case 'accounts':
+      AccountsDialog.show(context);
     case 'settings':
       SettingsDialog.show(context);
   }
 }
 
-/// Narrow-layout search field, living inline in the AppBar title slot instead
-/// of a dialog: no route means the keyboard can never break it. The Scaffold
-/// resizes, the list pane underneath shows the hits.
-class ShellInlineSearch extends StatelessWidget {
-  const ShellInlineSearch({
-    super.key,
-    required this.focus,
-    required this.controller,
-  });
-
-  final FocusNode focus;
-  final TextEditingController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final query = context.select<MailState, String>((s) => s.searchQuery);
-    if (controller.text != query && query.isEmpty) {
-      controller.clear();
-    }
-    return TextField(
-      controller: controller,
-      focusNode: focus,
-      autofocus: true,
-      keyboardType: TextInputType.text,
-      textInputAction: TextInputAction.search,
-      decoration: InputDecoration(
-        hintText: 'Search (3+ letters)',
-        border: InputBorder.none,
-        suffixIcon: query.isEmpty
-            ? null
-            : IconButton(
-                icon: const Icon(Icons.clear, size: 20),
-                onPressed: () {
-                  controller.clear();
-                  context.read<MailState>().exitSearch();
-                },
-              ),
-      ),
-      onChanged: (v) => context.read<MailState>().runSearch(v),
-      onSubmitted: (v) => context.read<MailState>().runSearch(v),
-    );
-  }
-}
-
-/// Account-wide FTS from 3+ letters, with an optional folder scope.
-/// Short input keeps the instant folder list — searching the server on every
-/// keystroke would be a very expensive autocomplete.
+/// Account-wide FTS from 3+ letters, or this folder only when the scope
+/// toggle is on. Short input keeps the instant folder list — searching the
+/// server on every keystroke would be a very expensive autocomplete.
 class ShellSearchField extends StatelessWidget {
   const ShellSearchField({
     super.key,
     required this.focus,
     required this.controller,
+    this.compact = false,
   });
 
   final FocusNode focus;
   final TextEditingController controller;
+
+  /// Short placeholder for the one-pane toolbar.
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -304,48 +270,42 @@ class ShellSearchField extends StatelessWidget {
     if (controller.text != query && query.isEmpty) {
       controller.clear();
     }
-    return Row(
-      children: [
-        Expanded(
-          child: TextField(
-            controller: controller,
-            focusNode: focus,
-            decoration: InputDecoration(
-              hintText: 'Search (3+ letters)',
-              prefixIcon: const Icon(Icons.search, size: 18),
-              suffixIcon: query.isEmpty
-                  ? null
-                  : IconButton(
-                      icon: const Icon(Icons.clear, size: 18),
-                      onPressed: () {
-                        controller.clear();
-                        context.read<MailState>().exitSearch();
-                      },
-                    ),
-              border: const OutlineInputBorder(),
-              isDense: true,
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 8,
-                vertical: 8,
-              ),
-            ),
-            onChanged: (v) => context.read<MailState>().runSearch(v),
-            onSubmitted: (v) => context.read<MailState>().runSearch(v),
+    final hint = switch ((compact, folderOnly)) {
+      (true, true) => 'Search folder…',
+      (true, false) => 'Search…',
+      (false, true) => 'Search this folder… (3+ letters)',
+      (false, false) => 'Search mail… (3+ letters)',
+    };
+    void clear() {
+      controller.clear();
+      context.read<MailState>().exitSearch();
+    }
+
+    return CallbackShortcuts(
+      bindings: {const SingleActivator(LogicalKeyboardKey.escape): clear},
+      child: TextField(
+        controller: controller,
+        focusNode: focus,
+        textInputAction: TextInputAction.search,
+        decoration: InputDecoration(
+          hintText: hint,
+          suffixIcon: query.isEmpty
+              ? null
+              : IconButton(
+                  tooltip: 'Clear search',
+                  icon: const Icon(Icons.close, size: 18),
+                  onPressed: clear,
+                ),
+          border: const OutlineInputBorder(),
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 10,
+            vertical: 10,
           ),
         ),
-        Tooltip(
-          message: folderOnly
-              ? 'Searching this folder — click for the whole account'
-              : 'Searching the whole account — click for this folder only',
-          child: TextButton(
-            onPressed: () => context.read<MailState>().runSearch(
-              query,
-              folderOnly: !folderOnly,
-            ),
-            child: Text(folderOnly ? 'Folder' : 'Account'),
-          ),
-        ),
-      ],
+        onChanged: (v) => context.read<MailState>().runSearch(v),
+        onSubmitted: (v) => context.read<MailState>().runSearch(v),
+      ),
     );
   }
 }

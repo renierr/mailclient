@@ -18,10 +18,15 @@ import 'reader_widgets.dart';
 /// remote content is ask the core to re-sanitize with images allowed, and only
 /// because the user pressed the button that says so.
 class ReaderPane extends StatefulWidget {
-  const ReaderPane({super.key, this.onClose});
+  const ReaderPane({super.key, this.onClose, this.allowFullscreen = true});
 
-  /// Shown as a back affordance in the narrow layouts.
+  /// Back affordance in the reader header — the two-pane layout, where the
+  /// app bar has no back button of its own.
   final VoidCallback? onClose;
+
+  /// Only the three-pane layout offers fullscreen; narrower ones already give
+  /// the reader every pixel.
+  final bool allowFullscreen;
 
   @override
   State<ReaderPane> createState() => ReaderPaneState();
@@ -117,6 +122,7 @@ class ReaderPaneState extends State<ReaderPane> {
                 details: _details,
                 onToggleDetails: () => setState(() => _details = !_details),
                 onClose: widget.onClose,
+                allowFullscreen: widget.allowFullscreen,
                 originalColors: _originalColors,
                 onToggleColors: canToggleColors
                     ? () => setState(() => _originalColors = !_originalColors)

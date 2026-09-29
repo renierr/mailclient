@@ -190,7 +190,13 @@ class MailState extends ChangeNotifier {
   /// Open a folder. Cache-only and instant by design — the server fill is a
   /// separate, queued job, so clicking through folders never waits on IMAP.
   Future<void> selectFolder(int id) async {
-    if (id == _folderId) return;
+    // Re-picking the shown folder returns to its list, like Qt: in the
+    // two-pane layout the reader covers the list, and the folder is the way
+    // back to it.
+    if (id == _folderId) {
+      if (_openUid >= 0) closeMessage();
+      return;
+    }
     exitSearch();
     _folderId = id;
     _openUid = -1;
@@ -680,9 +686,7 @@ class MailState extends ChangeNotifier {
   Future<void> rescheduleBackgroundSync() async {
     if (_settings.backgroundScheduler == schedulerAlarm) {
       await cancelBackgroundSync();
-      await scheduleAlarmSync(
-        intervalMinutes: _settings.syncIntervalMinutes,
-      );
+      await scheduleAlarmSync(intervalMinutes: _settings.syncIntervalMinutes);
     } else {
       await cancelAlarmSync();
       await scheduleBackgroundSync(

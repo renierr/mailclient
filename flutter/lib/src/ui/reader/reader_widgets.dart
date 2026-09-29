@@ -26,6 +26,7 @@ class ReaderHeader extends StatelessWidget {
     required this.details,
     required this.onToggleDetails,
     this.onClose,
+    this.allowFullscreen = true,
     this.originalColors = false,
     this.onToggleColors,
   });
@@ -42,6 +43,7 @@ class ReaderHeader extends StatelessWidget {
   final bool details;
   final VoidCallback onToggleDetails;
   final VoidCallback? onClose;
+  final bool allowFullscreen;
 
   @override
   Widget build(BuildContext context) {
@@ -64,20 +66,28 @@ class ReaderHeader extends StatelessWidget {
         children: [
           // Wrap, not Row: five icon buttons plus a long subject overflow a
           // 360px phone. The subject takes a full line; actions wrap under it.
-          Text(
-            message.subject,
-            style: theme.textTheme.titleMedium,
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
+          // Back sits in front of the subject, like the Qt reader title.
+          Row(
+            children: [
+              if (onClose != null)
+                IconButton(
+                  tooltip: 'Back to the list',
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: onClose,
+                ),
+              Expanded(
+                child: Text(
+                  message.subject,
+                  style: theme.textTheme.titleMedium,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
           ),
           Wrap(
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              if (onClose != null)
-                IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: onClose,
-                ),
               IconButton(
                 tooltip: 'Reply',
                 icon: const Icon(Icons.reply_outlined),
@@ -114,9 +124,7 @@ class ReaderHeader extends StatelessWidget {
                   ),
                   onPressed: onToggleColors,
                 ),
-              // Wide layouts only: narrower ones already give the reader
-              // every pixel they have.
-              if (onClose == null)
+              if (allowFullscreen)
                 IconButton(
                   tooltip: fullscreen ? 'Exit fullscreen' : 'Fullscreen',
                   icon: Icon(

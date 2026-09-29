@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../dialogs/mail_dialog.dart';
 
-/// One line of the composer header — From, To, Subject — laid out like a
-/// mail header: a muted label, a borderless field, a divider below.
+/// One line of the composer header — From, To, Subject — laid out like the
+/// Qt composer: a muted label in a fixed column, a boxed field beside it, so
+/// it is obvious where to tap. Tapping the label focuses the field.
 ///
-/// Wide layouts put the labels in a column of their own so the fields line
-/// up; narrow ones put the label above the field, where a side label would
+/// Narrow layouts put the label above the field, where a side label would
 /// squeeze the field unreadably thin.
 class ComposerHeaderRow extends StatelessWidget {
   const ComposerHeaderRow({
@@ -19,26 +19,52 @@ class ComposerHeaderRow extends StatelessWidget {
   final String label;
   final Widget child;
 
-  /// Small actions at the end of the line (the To line's Cc/Bcc).
+  /// Small actions at the end of the line (the To line's Cc/Bcc toggles).
   final Widget? trailing;
 
-  /// Borderless decoration for a field inside a header row.
+  /// Boxed decoration for a field inside a header row.
   static InputDecoration field({String? hint, Widget? suffix}) =>
       InputDecoration(
         hintText: hint,
         suffix: suffix,
-        border: InputBorder.none,
+        border: const OutlineInputBorder(),
         isDense: true,
-        contentPadding: const EdgeInsets.symmetric(vertical: 12),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 10,
+          vertical: 10,
+        ),
       );
+
+  /// Focus the first text field in this row. Walking the element tree keeps
+  /// it working for fields whose focus node lives inside another widget
+  /// (the recipient autocomplete owns its own).
+  static void _focusField(BuildContext context) {
+    EditableText? found;
+    void visit(Element e) {
+      if (found != null) return;
+      final w = e.widget;
+      if (w is EditableText) {
+        found = w;
+        return;
+      }
+      e.visitChildren(visit);
+    }
+
+    context.visitChildElements(visit);
+    found?.focusNode.requestFocus();
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final labelText = Text(
-      label,
-      style: theme.textTheme.bodyMedium?.copyWith(
-        color: theme.colorScheme.onSurfaceVariant,
+    final labelText = GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _focusField(context),
+      child: Text(
+        label,
+        style: theme.textTheme.bodyMedium?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
       ),
     );
     final line = Row(
@@ -48,17 +74,18 @@ class ComposerHeaderRow extends StatelessWidget {
       ],
     );
     final narrow = MailDialog.isNarrow(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: theme.dividerColor)),
-      ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
       child: narrow
-          ? Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [labelText, line],
-              ),
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: labelText,
+                ),
+                line,
+              ],
             )
           : Row(
               children: [

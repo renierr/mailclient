@@ -139,7 +139,14 @@ class MailFormPage extends StatelessWidget {
                 keyboardDismissBehavior:
                     ScrollViewKeyboardDismissBehavior.onDrag,
                 padding: const EdgeInsets.all(16),
-                child: body,
+                // A page is full-width on a desktop window too; cap the form
+                // so lines stay readable instead of spanning the screen.
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 900),
+                    child: SizedBox(width: double.infinity, child: body),
+                  ),
+                ),
               ),
             ),
             if (bottomBar case final Widget bar) bar,

@@ -20,9 +20,6 @@ Rectangle {
 
     signal folderSelected(string path)
     signal accountSelected(int id)
-    signal manageAccountsRequested
-    signal manageFoldersRequested
-    signal addAccountRequested
 
     // Visible subset of `folders` (subscribed !== false). Kept as its own
     // model so hiding a folder never destroys the full feed the manager
@@ -74,13 +71,19 @@ Rectangle {
         anchors.fill: parent
         spacing: 0
 
-        // Account chip: shows who you are, opens the account menu.
+        // Account chip: shows who you are and switches between accounts.
+        // Adding and managing accounts live in the toolbar's Accounts entry.
         ItemDelegate {
             id: accountChip
+            readonly property bool canSwitch: !!root.accounts && root.accounts.count > 1
             Layout.fillWidth: true
             Layout.margins: Theme.sm
             implicitHeight: 48
-            onClicked: accountMenu.popup()
+            hoverEnabled: canSwitch
+            onClicked: {
+                if (canSwitch)
+                    accountMenu.popup();
+            }
 
             background: Rectangle {
                 radius: Theme.radius
@@ -109,9 +112,8 @@ Rectangle {
                         Layout.fillWidth: true
                     }
                     Label {
-                        text: root.accounts && root.accounts.count > 1 ? qsTr("%1 accounts — switch").arg(
-                                                                             root.accounts.count) : qsTr(
-                                                                             "Manage account")
+                        visible: accountChip.canSwitch
+                        text: qsTr("%1 accounts — switch").arg(root.accounts ? root.accounts.count : 0)
                         color: Theme.textMuted
                         font.pixelSize: Theme.fontTiny
                         elide: Text.ElideRight
@@ -119,6 +121,7 @@ Rectangle {
                     }
                 }
                 Label {
+                    visible: accountChip.canSwitch
                     text: Icons.expandMore
                     font.family: Icons.fontFamily
                     color: Theme.textMuted
@@ -136,17 +139,6 @@ Rectangle {
                         onTriggered: root.emitLater(root.accountSelected, model.id)
                     }
                 }
-                MenuSeparator {}
-                AppMenuItem {
-                    glyph: Icons.add
-                    label: qsTr("Add account…")
-                    onTriggered: root.emitLater(root.addAccountRequested)
-                }
-                AppMenuItem {
-                    glyph: Icons.settings
-                    label: qsTr("Manage accounts…")
-                    onTriggered: root.emitLater(root.manageAccountsRequested)
-                }
             }
         }
 
@@ -154,7 +146,7 @@ Rectangle {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.md
             Layout.rightMargin: Theme.sm
-            Layout.topMargin: Theme.xs
+            Layout.topMargin: Theme.sm
             Layout.bottomMargin: Theme.xs
             spacing: Theme.xs
 
@@ -165,13 +157,6 @@ Rectangle {
                 font.pixelSize: Theme.fontTiny
                 font.bold: true
                 font.letterSpacing: 1
-            }
-
-            IconButton {
-                text: Icons.settings
-                iconFont: true
-                tooltip: qsTr("Manage IMAP folders…")
-                onClicked: root.manageFoldersRequested()
             }
         }
 

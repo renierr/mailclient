@@ -50,9 +50,10 @@ END
 // Icon
 //
 
+// The shared app icon (resources/mailclient.ico, also the Qt exe icon).
 // Icon with lowest ID value placed first to ensure application icon
 // remains consistent on all systems.
-IDI_APP_ICON            ICON                    "resources\\app_icon.ico"
+IDI_APP_ICON            ICON                    "..\\..\\..\\resources\\mailclient.ico"
 
 
 /////////////////////////////////////////////////////////////////////////////
