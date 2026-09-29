@@ -461,6 +461,16 @@ class MessageTile extends StatelessWidget {
                     ),
                   ),
                 ),
+                // One line below the date, slimmed to its icon at the
+                // same edge; the whole row stays tappable, so the
+                // smaller hit area costs nothing.
+                PopupMenuButton<String>(
+                  tooltip: 'Message actions',
+                  padding: const EdgeInsets.all(4),
+                  icon: const Icon(Icons.more_vert, size: 18),
+                  onSelected: (v) => runMessageAction(context, message, v),
+                  itemBuilder: (context) => messageActionItems(message),
+                ),
               ],
             ),
             if (!compact && message.snippet.isNotEmpty)
@@ -473,15 +483,6 @@ class MessageTile extends StatelessWidget {
                 ),
               ),
           ],
-        ),
-        // Slimmed to its icon so the subject keeps its room; the whole
-        // row stays tappable, so the smaller hit area costs nothing.
-        trailing: PopupMenuButton<String>(
-          tooltip: 'Message actions',
-          padding: const EdgeInsets.all(4),
-          icon: const Icon(Icons.more_vert, size: 18),
-          onSelected: (v) => runMessageAction(context, message, v),
-          itemBuilder: (context) => messageActionItems(message),
         ),
       ),
     );

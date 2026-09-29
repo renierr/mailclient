@@ -49,15 +49,18 @@ void main() {
     });
   });
 
-  test('a darkened document inverts the body and its images again', () {
+  test('a darkened document needs no runtime filter', () {
     final doc = mailDocument(
-      '<p>x</p>',
+      '<p style="color:#ffffff;">x</p>',
       allowRemote: false,
       darkenedOn: const Color(0xFF16181D),
     );
-    expect(doc, contains('<div id="mail"><p>x</p></div>'));
-    expect(doc, contains('#mail{'));
-    expect(doc, contains('#mail img{filter:$darkInvertCss}'));
-    expect(doc, contains('html,body{background:#16181d;margin:0}'));
+    // The page sits straight on the dark surface: no invert wrapper, no
+    // filter anywhere, images untouched.
+    expect(doc, isNot(contains('id="mail"')));
+    expect(doc, isNot(contains('filter:')));
+    expect(doc, contains('html,body{background:#16181d}'));
+    // …with the sender's colours pre-inverted instead.
+    expect(doc, isNot(contains('color:#ffffff')));
   });
 }

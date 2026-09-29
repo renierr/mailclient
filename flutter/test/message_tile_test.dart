@@ -46,6 +46,7 @@ void main() {
     expect(find.text('12:30'), findsOneWidget);
     expect(find.text('juergen@example.com'), findsNothing);
     expect(find.text('Hello'), findsOneWidget);
+    expect(find.byTooltip('Message actions'), findsOneWidget);
   });
 
   testWidgets('without a name the row falls back to the address', (

@@ -6,6 +6,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
+import 'mail_dark.dart';
 import 'mail_fit.dart';
 import 'mail_paint.dart';
 import 'measure_size.dart';
@@ -110,13 +111,6 @@ class _MailWebViewState extends State<MailWebView> {
   double _pendingY = 0;
   bool _scrollScheduled = false;
 
-  /// Drag distance on the header overlay, flushed to the page as one
-  /// `scrollBy` per frame instead of one platform-channel call per motion
-  /// event.
-  double _pendingDy = 0;
-  bool _dragScheduled = false;
-  Timer? _fling;
-
   @override
   void initState() {
     super.initState();
@@ -162,7 +156,6 @@ class _MailWebViewState extends State<MailWebView> {
   @override
   void dispose() {
     _settle?.cancel();
-    _fling?.cancel();
     _scrollY.dispose();
     super.dispose();
   }
@@ -178,7 +171,6 @@ class _MailWebViewState extends State<MailWebView> {
   void didUpdateWidget(MailWebView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.headerReady != oldWidget.headerReady) _watchHeader();
-    if (widget.html != oldWidget.html) _stopFling();
     _requestSync();
   }
 
@@ -267,48 +259,6 @@ class _MailWebViewState extends State<MailWebView> {
     );
   }
 
-  /// Queue a header drag distance, flushed as one `scrollBy` per frame.
-  void _forwardDrag(double dy) {
-    _stopFling();
-    _pendingDy += dy;
-    if (_dragScheduled) return;
-    _dragScheduled = true;
-    SchedulerBinding.instance.scheduleFrameCallback((_) {
-      _dragScheduled = false;
-      final dy = _pendingDy.truncate();
-      _pendingDy -= dy;
-      if (dy != 0 && mounted) _controller.scrollBy(0, dy);
-    });
-  }
-
-  /// A short decaying fling from a header swipe's release velocity
-  /// (physical pixels per millisecond). Native flings never reach the page
-  /// because the overlay eats the gesture; without this a swipe starting
-  /// on the header stops dead on release.
-  void _flingFrom(double velocity) {
-    _stopFling();
-    if (!mounted || velocity.abs() < 0.5) return;
-    var v = velocity;
-    _fling = Timer.periodic(const Duration(milliseconds: 16), (t) {
-      if (!mounted) {
-        t.cancel();
-        return;
-      }
-      v *= 0.92;
-      if (v.abs() < 0.5) {
-        t.cancel();
-        _fling = null;
-        return;
-      }
-      _controller.scrollBy(0, (v * 16).round());
-    });
-  }
-
-  void _stopFling() {
-    _fling?.cancel();
-    _fling = null;
-  }
-
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -330,7 +280,6 @@ class _MailWebViewState extends State<MailWebView> {
     final header = widget.header;
     final web = WebViewWidget(controller: _controller);
     if (header == null) return web;
-    final dpr = MediaQuery.devicePixelRatioOf(context);
     return Stack(
       children: [
         Positioned.fill(child: web),
@@ -338,30 +287,24 @@ class _MailWebViewState extends State<MailWebView> {
           valueListenable: _scrollY,
           builder: (context, y, child) =>
               Positioned(top: -y, left: 0, right: 0, child: child!),
-          child: GestureDetector(
-            // Dragging on the header scrolls the page underneath, as if
-            // the header were part of it. Motion events are batched into
-            // one `scrollBy` per frame; the release velocity becomes a
-            // short decaying fling, so a swipe off the header keeps moving
-            // like a native one instead of stopping dead.
-            onVerticalDragUpdate: (d) => _forwardDrag(-d.delta.dy * dpr),
-            onVerticalDragEnd: (d) =>
-                _flingFrom(-(d.primaryVelocity ?? 0) * dpr / 1000),
-            onVerticalDragCancel: _stopFling,
-            child: RepaintBoundary(
-              // Its own layer: scrolling only re-composites the header's
-              // bitmap instead of repainting it on every frame.
-              child: MeasureSize(
-                onChange: (size) {
-                  if (!mounted || size.height == _headerHeight) return;
-                  // The spacer only matters at the top of the page, where a
-                  // header change (details expanded) happens anyway; the
-                  // reload that resizes it resets the scroll.
-                  _headerHeight = size.height;
-                  _requestSync();
-                },
-                child: Material(child: header),
-              ),
+          // No gesture handling here on purpose: the header's display
+          // text ignores pointers (see the IgnorePointers inside), so
+          // drags starting on it reach the WebView natively — with its
+          // own fling — instead of a forwarded, fling-less copy. Only
+          // the buttons keep their taps.
+          child: RepaintBoundary(
+            // Its own layer: scrolling only re-composites the header's
+            // bitmap instead of repainting it on every frame.
+            child: MeasureSize(
+              onChange: (size) {
+                if (!mounted || size.height == _headerHeight) return;
+                // The spacer only matters at the top of the page, where a
+                // header change (details expanded) happens anyway; the
+                // reload that resizes it resets the scroll.
+                _headerHeight = size.height;
+                _requestSync();
+              },
+              child: Material(child: header),
             ),
           ),
         ),
@@ -373,8 +316,10 @@ class _MailWebViewState extends State<MailWebView> {
 /// The full document handed to the WebView: CSP first, then the sheet
 /// styling, then the sanitized body.
 ///
-/// With [darkenedOn] set, the body sits in one inverted block on that
-/// colour (see [MailPaint.darkened]); images inside are inverted back.
+/// With [darkenedOn] set, the page sits directly on that dark colour with
+/// pre-inverted defaults and sender colours (see [darkenMailColors]) —
+/// deliberately no runtime `filter`, which would re-render every scrolled
+/// frame. Images keep their real colours without any double inversion.
 ///
 /// Nothing from the mail can reach `<head>` — the sanitizer drops `head`,
 /// `meta` and `style` — and a second CSP could only narrow this one anyway.
@@ -398,23 +343,28 @@ String mailDocument(
     "form-action 'none'",
     "base-uri 'none'",
   ].join('; ');
-  final sheet =
-      'background:${cssHex(palette.paper)};color:${cssHex(palette.ink)};'
+  // A darkened page carries no runtime `filter` (see [darkenMailColors]):
+  // it sits directly on the dark surface with pre-inverted defaults, so
+  // scrolling repaints nothing through a filter. The inverted defaults
+  // use the same matrix as the old filter, hence the same colours.
+  final darkened = darkenedOn != null;
+  final paper = darkened ? darkenedOn : palette.paper;
+  final ink = darkened ? invertColor(palette.ink) : palette.ink;
+  final link = darkened ? invertColor(palette.link) : palette.link;
+  final quote = darkened ? invertColor(palette.quote) : palette.quote;
+  final rule = darkened ? invertColor(palette.rule) : palette.rule;
+  final layout =
+      'html,body{background:${cssHex(paper)}}'
+      'body{margin:0 16px 16px;'
+      'background:${cssHex(paper)};color:${cssHex(ink)};'
       'font-family:sans-serif;font-size:15px;line-height:1.5;'
-      'overflow-wrap:break-word';
-  final layout = darkenedOn == null
-      ? 'html,body{background:${cssHex(palette.paper)}}'
-            'body{margin:0 16px 16px;$sheet}#mc-top{margin-bottom:16px}'
-      : 'html,body{background:${cssHex(darkenedOn)};margin:0}'
-            '#mail{$sheet;padding:16px;min-height:100vh;box-sizing:border-box;'
-            'filter:$darkInvertCss}'
-            '#mail img{filter:$darkInvertCss}';
+      'overflow-wrap:break-word}'
+      '#mc-top{margin-bottom:16px}';
   // Room for the header overlaying the top of the page (see [MailWebView]).
   final spacer = '<div id="mc-top" style="height:${topSpace.ceil()}px"></div>';
   // A layout wider than the page is loosened to fit it (see [fitMailWidths]).
   final shown = fit ? fitMailWidths(body) : body;
-  final content =
-      spacer + (darkenedOn == null ? shown : '<div id="mail">$shown</div>');
+  final content = spacer + (darkened ? darkenMailColors(shown) : shown);
   return '<!DOCTYPE html><html><head><meta charset="utf-8">'
       '<meta http-equiv="Content-Security-Policy" '
       'content="${const HtmlEscape(HtmlEscapeMode.attribute).convert(csp)}">'
@@ -422,7 +372,7 @@ String mailDocument(
       '<meta http-equiv="x-dns-prefetch-control" content="off">'
       '<meta name="viewport" content="width=device-width, initial-scale=1">'
       '<style>$layout'
-      'a{color:${cssHex(palette.link)}}'
+      'a{color:${cssHex(link)}}'
       // Fixed-width newsletter tables and images shrink to the screen
       // instead of scrolling sideways; author CSS beats their attributes.
       'img{max-width:100%!important;height:auto!important}'
@@ -433,7 +383,7 @@ String mailDocument(
       '${fit ? 'div,table{box-sizing:border-box}' : ''}'
       'pre{white-space:pre-wrap}'
       'blockquote{margin:8px 0;padding-left:12px;'
-      'border-left:3px solid ${cssHex(palette.rule)};'
-      'color:${cssHex(palette.quote)}}'
+      'border-left:3px solid ${cssHex(rule)};'
+      'color:${cssHex(quote)}}'
       '</style></head><body>$content</body></html>';
 }

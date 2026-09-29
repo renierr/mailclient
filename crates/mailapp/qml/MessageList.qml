@@ -725,7 +725,7 @@ Rectangle {
                     }
 
                     Column {
-                        width: parent.width - 8 - checkCell.width - Theme.xs * 2 - Theme.xs * 3 - Theme.miniButton
+                        width: parent.width - 8 - checkCell.width - Theme.xs * 4
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 2
 
@@ -778,13 +778,43 @@ Rectangle {
                                 horizontalAlignment: Text.AlignRight
                             }
                         }
-                        Label {
-                            text: row.model.subject
-                            color: row.model.unread ? Theme.text : Theme.textMuted
-                            font.pixelSize: Theme.fontBase
-                            font.bold: row.model.unread
-                            elide: Text.ElideRight
+                        // Subject row: the text yields to the ⋮ menu, which
+                        // sits one line below the date at the same edge.
+                        Row {
                             width: parent.width
+                            spacing: Theme.xs
+                            Label {
+                                text: row.model.subject
+                                color: row.model.unread ? Theme.text : Theme.textMuted
+                                font.pixelSize: Theme.fontBase
+                                font.bold: row.model.unread
+                                elide: Text.ElideRight
+                                width: Math.max(0, parent.width - (moreButton.visible ? Theme.miniButton + Theme.xs :
+                                                                                        0))
+                            }
+                            // Row actions menu (⋮), opening the same menu as
+                            // right-click: mark read/unread, star, archive,
+                            // move, trash, purge (or Open in search mode).
+                            // Shown on hover and on the current/checked row
+                            // so keyboard selection keeps it reachable.
+                            IconButton {
+                                id: moreButton
+                                width: Theme.miniButton
+                                height: Theme.miniButton
+                                fontSize: Theme.fontBase
+                                visible: hoverArea.containsMouse || row.current || row.checked
+                                text: Icons.moreVert
+                                iconFont: true
+                                contentColor: Theme.textMuted
+                                tooltip: qsTr("Message actions")
+                                onClicked: {
+                                    root.menuUid = row.model.uid;
+                                    root.menuFolderPath = row.model.folder;
+                                    root.menuStarred = row.model.starred;
+                                    root.menuUnread = row.model.unread;
+                                    rowMenu.popup();
+                                }
+                            }
                         }
                         Label {
                             visible: root.density !== "compact"
@@ -803,31 +833,6 @@ Rectangle {
                             font.pixelSize: Theme.fontTiny
                             elide: Text.ElideRight
                             width: parent.width
-                        }
-                    }
-
-                    // Row actions menu (⋮), opening the same menu as
-                    // right-click: mark read/unread, star, archive, move,
-                    // trash, purge (or Open in search mode). Shown on hover
-                    // and on the current/checked row so keyboard selection
-                    // keeps it reachable.
-                    IconButton {
-                        id: moreButton
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: Theme.miniButton
-                        height: Theme.miniButton
-                        fontSize: Theme.fontBase
-                        visible: hoverArea.containsMouse || row.current || row.checked
-                        text: Icons.moreVert
-                        iconFont: true
-                        contentColor: Theme.textMuted
-                        tooltip: qsTr("Message actions")
-                        onClicked: {
-                            root.menuUid = row.model.uid;
-                            root.menuFolderPath = row.model.folder;
-                            root.menuStarred = row.model.starred;
-                            root.menuUnread = row.model.unread;
-                            rowMenu.popup();
                         }
                     }
                 }
