@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../ffi/mail_core.dart' show coreErrorText;
 import '../../models/models.dart';
 import '../../state/mail_state.dart';
 import '../accounts/account_setup_dialog.dart';
@@ -152,7 +153,7 @@ class AccountsDialog extends StatelessWidget {
       await state.removeAccount(a.id);
     } catch (e) {
       if (!context.mounted) return;
-      state.showStatus('$e', isError: true);
+      state.showStatus(coreErrorText(e), isError: true);
     }
   }
 }

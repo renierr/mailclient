@@ -9,6 +9,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_rust_bridge/flutter_rust_bridge.dart'
+    show AnyhowException;
 import 'package:path_provider/path_provider.dart';
 
 import '../models/models.dart';
@@ -38,6 +40,18 @@ export 'generated/api/events.dart' show JobEvent, JobPhase;
 export 'generated/api/folders.dart' show FolderCounts;
 export 'generated/api/init.dart' show AppInfo;
 export 'generated/api/mutate.dart' show MoveResult;
+
+/// Status-line text for an error from the core: the message alone, without
+/// the Rust backtrace flutter_rust_bridge appends to an `anyhow` error.
+String coreErrorText(Object e) {
+  final text = switch (e) {
+    AnyhowException(:final message) => message,
+    Exception() => e.toString().replaceFirst('Exception: ', ''),
+    _ => '$e',
+  };
+  final cut = text.indexOf('Stack backtrace:');
+  return (cut < 0 ? text : text.substring(0, cut)).trim();
+}
 
 /// The mail core, in process.
 ///

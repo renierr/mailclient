@@ -60,7 +60,7 @@ Future<void> showHeaders(BuildContext context, MessageBody message) async {
     );
   } catch (e) {
     if (!context.mounted) return;
-    state.showStatus('$e', isError: true);
+    state.showStatus(coreErrorText(e), isError: true);
     return;
   }
   if (!context.mounted) return;

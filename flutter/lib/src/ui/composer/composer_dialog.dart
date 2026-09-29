@@ -723,7 +723,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
       if (!mounted) return;
       setState(() {
         _sending = false;
-        _error = _message(e);
+        _error = coreErrorText(e);
       });
     }
   }
@@ -742,7 +742,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
       if (!mounted) return;
       setState(() {
         _savingDraft = false;
-        _error = _message(e);
+        _error = coreErrorText(e);
       });
     }
   }
@@ -778,7 +778,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
       Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
-      setState(() => _error = _message(e));
+      setState(() => _error = coreErrorText(e));
     }
   }
 
@@ -826,9 +826,6 @@ class _ComposerDialogState extends State<ComposerDialog> {
         await _saveDraft();
     }
   }
-
-  static String _message(Object e) =>
-      e is Exception ? e.toString().replaceFirst('Exception: ', '') : '$e';
 
   /// Wrap the body selection (or insert markers) with [prefix]/[suffix].
   /// Plain-text Markdown toolbar: the Qt WYSIWYG has no Flutter equivalent in

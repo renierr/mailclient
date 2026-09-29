@@ -223,7 +223,16 @@ class MailState extends ChangeNotifier {
     _markReadTimer?.cancel();
     notifyListeners();
 
-    final body = await _core.message(_folderId, uid);
+    final MessageBody body;
+    try {
+      body = await _core.message(_folderId, uid);
+    } catch (_) {
+      // Not in the cache (any more): a notification or search hit can
+      // name mail a sync has since dropped. Back to the list, not a
+      // spinner that never ends.
+      if (_openUid == uid) _openMessageGone();
+      return;
+    }
     // The user may have moved on while the body loaded.
     if (_openUid != uid) return;
     _openMessage = body;
@@ -315,7 +324,7 @@ class MailState extends ChangeNotifier {
       await _reloadMessages();
       await _reloadFolders();
     } catch (e) {
-      showStatus(_message(e), isError: true);
+      showStatus(coreErrorText(e), isError: true);
     }
   }
 
@@ -686,8 +695,30 @@ class MailState extends ChangeNotifier {
         notifyListeners();
       }
     } catch (_) {
-      // The message is gone server-side; the list refresh drops the row and
-      // the reader keeps showing what it has.
+      // A sync dropped it: moved or deleted on another device. Left open,
+      // the reader would show a copy no action can reach any more.
+      if (_openUid == uid) _openMessageGone();
+    }
+  }
+
+  /// The open message left the cache underneath the reader: close it (the
+  /// narrow layout falls back to the list) and say why.
+  void _openMessageGone() {
+    closeMessage();
+    showStatus('The message was moved or deleted elsewhere');
+    unawaited(_reloadMessages());
+    unawaited(_reloadFolders());
+  }
+
+  /// After a refused action on [uids]: if it was the open message and the
+  /// cache no longer has it, the reader goes, like after a sync drops it.
+  Future<void> _closeIfOpenGone(List<int> uids) async {
+    final uid = _openUid;
+    if (uid < 0 || !uids.contains(uid)) return;
+    try {
+      await _core.message(_folderId, uid);
+    } catch (_) {
+      if (_openUid == uid) _openMessageGone();
     }
   }
 
@@ -836,7 +867,8 @@ class MailState extends ChangeNotifier {
       }
       notifyListeners();
     } catch (e) {
-      showStatus(_message(e), isError: true);
+      showStatus(coreErrorText(e), isError: true);
+      await _closeIfOpenGone(closeUid);
     }
   }
 
@@ -873,14 +905,12 @@ class MailState extends ChangeNotifier {
       }
       showStatus(r.label);
     } catch (e) {
-      showStatus(_message(e), isError: true);
+      showStatus(coreErrorText(e), isError: true);
+      await _closeIfOpenGone(uids);
     }
   }
 
   void _ignoreBusy(Object _) {}
-
-  static String _message(Object e) =>
-      e is Exception ? e.toString().replaceFirst('Exception: ', '') : '$e';
 
   @override
   void dispose() {
