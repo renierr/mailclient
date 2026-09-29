@@ -39,9 +39,11 @@ Item {
                                            + "px;line-height:1.55;" + "color:" + Theme.text + ";background:" + Theme.bg
                                            + ";caret-color:" + Theme.accent + "}"
                                            + "#e:empty:before{content:attr(data-placeholder);color:" + Theme.textMuted
-                                           + "}" + "img{max-width:100%;height:auto}" + "blockquote{margin:8px 0;padding-left:12px;border-left:3px solid "
-                                           + Theme.border + ";color:" + Theme.textMuted + "}" + "a{color:" + Theme.accent
-                                           + "}" + "</style></head><body><div id=\"e\" contenteditable=\"true\" "
+                                           + "}" + "img{max-width:100%;height:auto}"
+                                           + "blockquote{margin:8px 0;padding-left:12px;border-left:3px solid "
+                                           + Theme.border + ";color:" + Theme.textMuted + "}" + "a{color:"
+                                           + Theme.accent + "}" + Theme.webScrollbarCss()
+                                           + "</style></head><body><div id=\"e\" contenteditable=\"true\" "
                                            + "data-placeholder=\"" + qsTr("Write your message…") + "\"></div>"
                                            + "<script>"
                                            + "document.execCommand('defaultParagraphSeparator', false, 'p');"
@@ -142,8 +144,7 @@ Item {
         // `WebEngineNavigationRequest` and the verdict is accept()/reject().
         // Only TypedNavigation (our own loadHtml) is accepted.
         onNavigationRequested: request => {
-                                   if (request.navigationType
-                                       === WebEngineNavigationRequest.TypedNavigation)
+                                   if (request.navigationType === WebEngineNavigationRequest.TypedNavigation)
                                    request.accept();
                                    else
                                    request.reject();

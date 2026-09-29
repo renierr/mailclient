@@ -317,20 +317,6 @@ Rectangle {
     // Behind the document, so nothing flashes a different colour first.
     readonly property color docBackground: root.paintMode === "original" ? "#ffffff" : Theme.bg
 
-    // The page's scrollbars are app chrome, not mail: thin and in the app's
-    // colours (as the QML ScrollBars: border handle, muted on hover) in every
-    // paint mode. Chromium honours the standard properties and then ignores
-    // the ::-webkit ones, which remain for older engines.
-    function scrollbarCss() {
-        var handle = Theme.border.toString();
-        var active = Theme.textMuted.toString();
-        return "html{scrollbar-width:thin;scrollbar-color:" + handle + " transparent}"
-                + "::-webkit-scrollbar{width:8px;height:8px;background:transparent}"
-                + "::-webkit-scrollbar-thumb{background:" + handle + ";border-radius:4px}"
-                + "::-webkit-scrollbar-thumb:hover{background:" + active + "}"
-                + "::-webkit-scrollbar-corner{background:transparent}";
-    }
-
     // Trusted wrapper added AFTER Rust sanitizing (so layout CSS is ours).
     // Three paints (see `paintMode`): theme colours for mail without its
     // own; the light sheet a designed mail expects; or that sheet inverted
@@ -368,7 +354,7 @@ Rectangle {
                 // Newsletter tables carry fixed widths: author CSS beats
                 // presentational attributes, so they shrink to the pane
                 // instead of scrolling sideways.
-                "table{max-width:100%!important}td,th{overflow-wrap:anywhere}" + root.scrollbarCss() + "</style>"
+                "table{max-width:100%!important}td,th{overflow-wrap:anywhere}" + Theme.webScrollbarCss() + "</style>"
                 + "</head><body>" + content + "</body></html>";
     }
 

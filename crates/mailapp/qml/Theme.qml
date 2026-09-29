@@ -77,4 +77,18 @@ QtObject {
             h = (h * 31 + s.charCodeAt(i)) % 360;
         return Qt.hsla(h / 360, dark ? 0.42 : 0.5, dark ? 0.46 : 0.52, 1);
     }
+
+    // Scrollbars inside WebEngine pages (reader, composer editor) are app
+    // chrome, not content: thin and in the app's colours (as the QML
+    // ScrollBars: border handle, muted on hover) in every paint mode. Chromium honours the standard properties and then ignores
+    // the ::-webkit ones, which remain for older engines.
+    function webScrollbarCss() {
+        var handle = theme.border.toString();
+        var active = theme.textMuted.toString();
+        return "html{scrollbar-width:thin;scrollbar-color:" + handle + " transparent}"
+                + "::-webkit-scrollbar{width:8px;height:8px;background:transparent}"
+                + "::-webkit-scrollbar-thumb{background:" + handle + ";border-radius:4px}"
+                + "::-webkit-scrollbar-thumb:hover{background:" + active + "}"
+                + "::-webkit-scrollbar-corner{background:transparent}";
+    }
 }
