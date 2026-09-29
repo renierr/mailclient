@@ -6,7 +6,8 @@ import Mailclient
 import "components"
 
 // Message list. Expects `messages` to be an array of plain objects with
-// {uid, subject, from, date, snippet, unread, starred} (Main.qml's feed).
+// {uid, subject, from, from_name, date, snippet, unread, starred}
+// (Main.qml's feed).
 //
 // Selection is keyed on UID, never on the row index (flaw F1). The old code
 // bound `ListView.currentIndex` to a property, then reassigned it from a
@@ -300,11 +301,14 @@ Rectangle {
         if (root.filterText === "")
             return true;
         var q = root.filterText.toLowerCase();
-        return (m.subject || "").toLowerCase().indexOf(q) !== -1 || (m.from || "").toLowerCase().indexOf(q) !== -1 || (
-                    m.snippet || "").toLowerCase().indexOf(q) !== -1;
+        var sender = (m.from_name || "") !== "" ? m.from_name : (m.from || "");
+        return (m.subject || "").toLowerCase().indexOf(q) !== -1 || (m.from || "").toLowerCase().indexOf(q) !== -1
+                || sender.toLowerCase().indexOf(q) !== -1 || (m.snippet || "").toLowerCase().indexOf(q) !== -1;
     }
 
-    // Only the roles a row actually draws. `key` is the ModelSync identity:
+    // Only the roles a row actually draws. `sender` is the sent display
+    // name, falling back to the address for mail without one (and for
+    // search hits, whose feed carries no name). `key` is the ModelSync identity:
     // plain UIDs in folder mode, folder-scoped keys for search hits (the
     // same UID can hit in several folders at once). Always a string: the
     // model is shared between modes and ListModel roles are typed by first
@@ -316,6 +320,7 @@ Rectangle {
             folder: m.folder || "",
             subject: m.subject,
             from: m.from,
+            sender: (m.from_name || "") !== "" ? m.from_name : m.from,
             date: root.displayDate(m),
             snippet: m.snippet,
             unread: m.unread,
@@ -646,13 +651,15 @@ Rectangle {
                                }
                 }
 
+                // Tight at the pane edge so sender and subject keep every
+                // pixel: narrow side margins, small avatar, small gaps.
                 Row {
                     anchors.fill: parent
-                    anchors.leftMargin: Theme.sm
-                    anchors.rightMargin: Theme.sm
-                    anchors.topMargin: Theme.sm
-                    anchors.bottomMargin: Theme.sm
-                    spacing: Theme.sm
+                    anchors.leftMargin: Theme.xs
+                    anchors.rightMargin: Theme.xs
+                    anchors.topMargin: Theme.xs
+                    anchors.bottomMargin: Theme.xs
+                    spacing: Theme.xs
 
                     // Unread marker column.
                     Item {
@@ -674,16 +681,20 @@ Rectangle {
                     // programmatic select-all/clear always reflects (see header).
                     Item {
                         id: checkCell
-                        width: Math.round(34 * Theme.uiScale)
+                        width: Math.round(28 * Theme.uiScale)
                         height: parent.height
                         z: 1
 
                         Avatar {
                             anchors.centerIn: parent
                             visible: !root.selectionMode
+                            implicitWidth: Math.round(26 * Theme.uiScale)
+                            implicitHeight: Math.round(26 * Theme.uiScale)
+                            // Seed stays the address so colours never shift;
+                            // the initial follows the shown sender name.
                             seed: row.model.from || "?"
-                            initials: (row.model.from || "?").replace(/^[^a-zA-Z0-9]*/, "").substring(0, 1).toUpperCase(
-                                          )
+                            initials: (row.model.sender || row.model.from || "?").replace(/^[^a-zA-Z0-9]*/, "").substring(
+                                          0, 1).toUpperCase()
                         }
                         Rectangle {
                             anchors.centerIn: parent
@@ -714,28 +725,31 @@ Rectangle {
                     }
 
                     Column {
-                        width: parent.width - 8 - checkCell.width - Theme.sm * 3 - Theme.miniButton
+                        width: parent.width - 8 - checkCell.width - Theme.xs * 2 - Theme.xs * 3 - Theme.miniButton
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 2
 
                         Row {
                             id: fromRow
                             width: parent.width
-                            spacing: Theme.sm
+                            spacing: Theme.xs
                             // Cue glyphs render at the scaled tiny font, so
                             // their cells scale too; the sender takes exactly
                             // what the visible cells and gaps leave over.
                             readonly property int cueWidth: Math.round(14 * Theme.uiScale)
+                            // The sent display name (address only where the
+                            // mail carries none), always with the compact
+                            // date at the top right.
                             Label {
-                                text: row.model.from || qsTr("(unknown sender)")
+                                text: row.model.sender || row.model.from || qsTr("(unknown sender)")
                                 color: Theme.text
                                 font.pixelSize: Theme.fontBase
                                 font.bold: row.model.unread
                                 elide: Text.ElideRight
-                                width: Math.max(0, parent.width - dateLabel.width - Theme.sm - (row.model.has_attachments
+                                width: Math.max(0, parent.width - dateLabel.width - Theme.xs - (row.model.has_attachments
                                                                                                 ? fromRow.cueWidth
-                                                                                                  + Theme.sm : 0) - (
-                                                    row.model.starred ? fromRow.cueWidth + Theme.sm : 0))
+                                                                                                  + Theme.xs : 0) - (
+                                                    row.model.starred ? fromRow.cueWidth + Theme.xs : 0))
                             }
                             Label {
                                 text: row.model.has_attachments ? Icons.attachFile : ""

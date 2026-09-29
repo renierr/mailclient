@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 15;
+pub const SCHEMA_VERSION: u32 = 16;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -199,12 +199,49 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         // v15: `pending_moves`, the grace-period queue behind Undo.
         conn.execute_batch(SCHEMA_V15)?;
     }
+    if current < 16 {
+        // v16: `messages.from_name` — sender display name for the list rows.
+        // Stored at sync time from now on; existing rows backfill from
+        // their stored headers (empty stays empty = address only).
+        add_columns(conn, &["alter table messages add column from_name text;"])?;
+        if let Err(e) = backfill_from_names(conn) {
+            log::warn!("migration v16: sender-name backfill failed: {e}");
+        }
+    }
     if current != SCHEMA_VERSION {
         conn.execute(
             "update schema_meta set value = ?1 where key = 'version'",
             [SCHEMA_VERSION.to_string()],
         )?;
     }
+    Ok(())
+}
+
+/// Fill `messages.from_name` from stored header blocks (see v16). Rows
+/// without usable headers keep NULL, and the list shows their address.
+fn backfill_from_names(conn: &Connection) -> Result<()> {
+    let rows: Vec<(i64, String)> = {
+        let mut stmt = conn.prepare(
+            "select id, raw_headers from messages
+              where raw_headers is not null and raw_headers != ''
+                and (from_name is null or from_name = '')",
+        )?;
+        let mapped = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        mapped.collect::<std::result::Result<Vec<_>, _>>()?
+    };
+    let mut filled = 0;
+    let tx = conn.unchecked_transaction()?;
+    for (id, raw) in &rows {
+        if let Some(name) = crate::store::messages::display_name_from_headers(raw) {
+            tx.execute(
+                "update messages set from_name = ?1 where id = ?2",
+                rusqlite::params![name, id],
+            )?;
+            filled += 1;
+        }
+    }
+    tx.commit()?;
+    log::info!("migration v16: sender name backfilled for {filled} messages");
     Ok(())
 }
 
@@ -341,6 +378,56 @@ b<c",
         };
         assert_eq!(html(1), None);
         assert_eq!(html(2).as_deref(), Some("<p>a</p>"));
+    }
+
+    #[test]
+    fn v16_migration_backfills_sender_names_decoded() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_FULL).unwrap();
+        conn.execute(
+            "insert into schema_meta (key, value) values ('version', '15')",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch(
+            "alter table messages drop column from_name;
+             insert into accounts (id, name, email_address, imap_host, imap_port,
+                  imap_security, imap_username, smtp_host, smtp_port,
+                  smtp_security, smtp_username, auth_vault_key, created_at, updated_at)
+              values (1, 'n', 'a@example.com', 'h', 993, 'tls', 'u', 'h', 465, 'tls', 'u', 'k', 't', 't');
+             insert into folders (id, account_id, path, delimiter, role, created_at, updated_at)
+              values (1, 1, 'INBOX', '/', 'inbox', 't', 't');",
+        )
+        .unwrap();
+        let add = |uid: i64, raw: &str| {
+            conn.execute(
+                "insert into messages (account_id, folder_id, uid, raw_headers,
+                     created_at, updated_at)
+                  values (1, 1, ?1, ?2, 't', 't')",
+                rusqlite::params![uid, raw],
+            )
+            .unwrap();
+        };
+        add(
+            1,
+            "From: =?UTF-8?Q?J=C3=BCrgen_M=C3=BCller?= <juergen@example.com>\r\nSubject: hi",
+        );
+        add(2, "From: plain@example.com\r\nSubject: hi");
+        add(3, "Subject: no sender");
+
+        ensure_schema(&conn).unwrap();
+
+        let name = |uid: i64| -> Option<String> {
+            conn.query_row(
+                "select from_name from messages where uid = ?1",
+                [uid],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(name(1).as_deref(), Some("Jürgen Müller"));
+        assert_eq!(name(2), None);
+        assert_eq!(name(3), None);
     }
 
     #[test]

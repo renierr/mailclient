@@ -116,6 +116,7 @@ class MessageSummary {
     required this.uid,
     required this.subject,
     required this.from,
+    required this.fromName,
     required this.date,
     required this.snippet,
     required this.unread,
@@ -126,6 +127,13 @@ class MessageSummary {
   final int uid;
   final String subject;
   final String from;
+
+  /// Sender display name from the core (`""` = address only).
+  final String fromName;
+
+  /// What the list row shows: the sent name, or the address when the mail
+  /// carries no name.
+  String get senderName => fromName.isNotEmpty ? fromName : from;
 
   /// Preformatted by the core, which knows the user's locale rules for
   /// "today" and "yesterday" better than a list item does.
@@ -139,6 +147,7 @@ class MessageSummary {
         uid: _int(j['uid']),
         subject: _str(j['subject'], orElse: '(no subject)'),
         from: _str(j['from'], orElse: '?'),
+        fromName: _str(j['from_name']),
         date: _str(j['date']),
         snippet: _str(j['snippet']),
         unread: _bool(j['unread']),
@@ -150,6 +159,7 @@ class MessageSummary {
         uid: uid,
         subject: subject,
         from: from,
+        fromName: fromName,
         date: date,
         snippet: snippet,
         unread: unread ?? this.unread,

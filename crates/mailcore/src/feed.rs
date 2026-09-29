@@ -218,6 +218,7 @@ pub fn messages_list_json_paged(
                     "uid": m.uid,
                     "subject": m.subject.unwrap_or_else(|| "(no subject)".to_string()),
                     "from": m.from_addr.unwrap_or_else(|| "?".to_string()),
+                    "from_name": m.from_name.unwrap_or_default(),
                     "date": date.text,
                     "date_key": date.key,
                     "snippet": m.snippet.unwrap_or_default(),

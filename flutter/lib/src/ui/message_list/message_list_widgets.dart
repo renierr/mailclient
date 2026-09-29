@@ -368,10 +368,16 @@ class MessageTile extends StatelessWidget {
       child: ListTile(
         selected: selected,
         selectedTileColor: theme.colorScheme.secondaryContainer,
+        // Tight all round so the row uses the pane edge to edge: the
+        // sender name and the subject get every pixel left over.
+        contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+        horizontalTitleGap: 8,
+        minLeadingWidth: 0,
+        dense: true,
         leading: selectionMode
             ? Checkbox(value: checked, onChanged: (_) => onToggle())
             : SizedBox(
-                width: 60,
+                width: 40,
                 child: Row(
                   children: [
                     // Unread marker beside the avatar, like the Qt row's dot
@@ -380,21 +386,21 @@ class MessageTile extends StatelessWidget {
                       Container(
                         width: 8,
                         height: 8,
-                        margin: const EdgeInsets.only(right: 6),
+                        margin: const EdgeInsets.only(right: 4),
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           color: theme.colorScheme.primary,
                         ),
                       )
                     else
-                      const SizedBox(width: 14),
+                      const SizedBox(width: 12),
                     CircleAvatar(
-                      radius: 16,
+                      radius: 13,
                       backgroundColor: avatarBg,
                       foregroundColor: theme.colorScheme.onPrimary,
                       child: Text(
                         senderInitial(message.from),
-                        style: const TextStyle(fontSize: 14),
+                        style: const TextStyle(fontSize: 12),
                       ),
                     ),
                   ],
@@ -409,7 +415,7 @@ class MessageTile extends StatelessWidget {
                 children: [
                   Flexible(
                     child: Text(
-                      message.from,
+                      message.senderName,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodyMedium?.copyWith(
                         fontWeight: weight,
@@ -423,7 +429,8 @@ class MessageTile extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(width: 8),
+            // Always top right, kept small so the name keeps its room.
+            const SizedBox(width: 4),
             Text(
               message.date,
               style: theme.textTheme.bodySmall?.copyWith(
@@ -467,8 +474,11 @@ class MessageTile extends StatelessWidget {
               ),
           ],
         ),
+        // Slimmed to its icon so the subject keeps its room; the whole
+        // row stays tappable, so the smaller hit area costs nothing.
         trailing: PopupMenuButton<String>(
           tooltip: 'Message actions',
+          padding: const EdgeInsets.all(4),
           icon: const Icon(Icons.more_vert, size: 18),
           onSelected: (v) => runMessageAction(context, message, v),
           itemBuilder: (context) => messageActionItems(message),

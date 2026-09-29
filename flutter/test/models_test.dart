@@ -79,6 +79,22 @@ void main() {
       expect(m.starred, isFalse);
       expect(m.hasAttachments, isTrue);
     });
+
+    test('prefers the sent display name, falling back to the address', () {
+      final named = MessageSummary.fromJson(
+        jsonDecode(
+          '{"uid": 7, "from": "juergen@example.com", "from_name": "Jürgen Müller"}',
+        ) as Map<String, dynamic>,
+      );
+      expect(named.senderName, 'Jürgen Müller');
+
+      final unnamed = MessageSummary.fromJson(
+        jsonDecode('{"uid": 8, "from": "plain@example.com"}')
+            as Map<String, dynamic>,
+      );
+      expect(unnamed.fromName, '');
+      expect(unnamed.senderName, 'plain@example.com');
+    });
   });
 
   group('MessageBody', () {

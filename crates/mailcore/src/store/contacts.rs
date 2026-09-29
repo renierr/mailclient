@@ -413,6 +413,7 @@ mod tests {
                 thread_id: None,
                 subject: Some("Hi".to_string()),
                 from_addr: Some("bob@example.com".to_string()),
+                from_name: Some("Bob Builder".to_string()),
                 to_addrs: vec!["alice@example.com".to_string()],
                 cc_addrs: Vec::new(),
                 bcc_addrs: Vec::new(),

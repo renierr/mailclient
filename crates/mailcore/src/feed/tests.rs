@@ -51,6 +51,7 @@ fn feeds_shape_matches_qml_roles() {
         serde_json::from_str(&messages_list_json_paged(&db, f, 10, 0).unwrap()).unwrap();
     assert_eq!(rows[0]["uid"], 7);
     assert_eq!(rows[0]["from"], "alice@example.com");
+    assert_eq!(rows[0]["from_name"], "Alice");
     assert!(rows[0]["unread"].as_bool().unwrap());
     assert!(!rows[0]["has_attachments"].as_bool().unwrap());
 
@@ -63,6 +64,19 @@ fn feeds_shape_matches_qml_roles() {
     // No files on this message: flag off, empty list.
     assert!(!reader["has_attachments"].as_bool().unwrap());
     assert_eq!(reader["attachments"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn list_row_without_a_sender_name_falls_back_to_the_address() {
+    let (db, acc, f) = setup();
+    let mut m = msg_store::sample_new(acc, f, 7);
+    m.from_name = None;
+    msg_store::upsert(&db, &m).unwrap();
+
+    let rows: serde_json::Value =
+        serde_json::from_str(&messages_list_json_paged(&db, f, 10, 0).unwrap()).unwrap();
+    assert_eq!(rows[0]["from"], "alice@example.com");
+    assert_eq!(rows[0]["from_name"], "");
 }
 
 #[test]

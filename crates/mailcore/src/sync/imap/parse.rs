@@ -90,6 +90,13 @@ pub(crate) fn parse_to_new(
                         .and_then(|h| h.as_text())
                         .map(str::to_string)
                 }),
+            from_name: parsed
+                .from()
+                .and_then(|a| a.first())
+                .and_then(|a| a.name.as_deref())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
             to_addrs: addr_list(parsed.to()),
             cc_addrs: addr_list(parsed.cc()),
             bcc_addrs: addr_list(parsed.bcc()),
@@ -473,6 +480,22 @@ Content-Type: text/html
         assert!(msg.from_addr.is_none());
         assert_eq!(msg.subject.as_deref(), Some("no sender"));
         assert!(!msg.is_read);
+    }
+
+    #[test]
+    fn from_display_name_is_stored_decoded_next_to_the_address() {
+        let raw = b"From: =?UTF-8?Q?J=C3=BCrgen_M=C3=BCller?= <juergen@example.com>\r\nSubject: hi\r\n\r\nbody";
+        let (msg, _) = parse_to_new(1, 1, 7, &[], raw, false).unwrap();
+        assert_eq!(msg.from_addr.as_deref(), Some("juergen@example.com"));
+        assert_eq!(msg.from_name.as_deref(), Some("Jürgen Müller"));
+    }
+
+    #[test]
+    fn address_only_from_has_no_display_name() {
+        let raw = b"From: a@x.y\r\nSubject: hi\r\n\r\nbody";
+        let (msg, _) = parse_to_new(1, 1, 7, &[], raw, false).unwrap();
+        assert_eq!(msg.from_addr.as_deref(), Some("a@x.y"));
+        assert!(msg.from_name.is_none());
     }
 
     #[test]

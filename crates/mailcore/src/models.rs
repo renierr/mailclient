@@ -127,6 +127,9 @@ pub struct Message {
     pub thread_id: Option<String>,
     pub subject: Option<String>,
     pub from_addr: Option<String>,
+    /// Sender display name for `From:` (`None` = address only). Shown in the
+    /// message list; the reader uses the full headers instead.
+    pub from_name: Option<String>,
     pub to_addrs: Vec<String>,
     pub cc_addrs: Vec<String>,
     pub bcc_addrs: Vec<String>,
@@ -156,6 +159,8 @@ pub struct NewMessage {
     pub thread_id: Option<String>,
     pub subject: Option<String>,
     pub from_addr: Option<String>,
+    /// Sender display name for `From:` (`None` = address only).
+    pub from_name: Option<String>,
     pub to_addrs: Vec<String>,
     pub cc_addrs: Vec<String>,
     pub bcc_addrs: Vec<String>,

@@ -64,6 +64,7 @@ class MessageListPaneState extends State<MessageListPane> {
                 (m) =>
                     m.subject.toLowerCase().contains(q) ||
                     m.from.toLowerCase().contains(q) ||
+                    m.senderName.toLowerCase().contains(q) ||
                     m.snippet.toLowerCase().contains(q),
               )
               .toList(growable: false);

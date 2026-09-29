@@ -57,6 +57,7 @@ pub(super) fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Messag
         keywords: json_vec(&kw).unwrap_or_default(),
         size: row.get::<_, i64>(22)? as u64,
         downloaded_full: opt_bool(row.get::<_, i64>(23)?),
+        from_name: row.get(24)?,
     })
 }
 
@@ -64,7 +65,7 @@ pub(super) fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Messag
 pub(super) const COLS: &str = "id, account_id, folder_id, uid, message_id_header, thread_id,
     subject, from_addr, to_addrs, cc_addrs, bcc_addrs, reply_to, date, snippet,
      body_text, body_html, raw_headers, is_read, keywords, is_starred, is_draft,
-    has_attachments, size, downloaded_full";
+    has_attachments, size, downloaded_full, from_name";
 
 /// Insert a message, or replace it if the same `(account, folder, uid)` exists.
 pub fn upsert(db: &Db, m: &NewMessage) -> Result<i64> {
@@ -73,15 +74,16 @@ pub fn upsert(db: &Db, m: &NewMessage) -> Result<i64> {
         "insert into messages (account_id, folder_id, uid, message_id_header,
             thread_id, subject, from_addr, to_addrs, cc_addrs, bcc_addrs,
              reply_to, date, snippet, body_text, body_html, raw_headers, is_read, keywords,
-            is_starred, is_draft, has_attachments, size, downloaded_full,
+            is_starred, is_draft, has_attachments, size, downloaded_full, from_name,
             created_at, updated_at)
          values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-             ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?24)
+             ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?25)
           on conflict (account_id, folder_id, uid) do update set
             message_id_header = excluded.message_id_header,
             thread_id = excluded.thread_id,
             subject = excluded.subject,
             from_addr = excluded.from_addr,
+            from_name = excluded.from_name,
             to_addrs = excluded.to_addrs,
             cc_addrs = excluded.cc_addrs,
             bcc_addrs = excluded.bcc_addrs,
@@ -123,6 +125,7 @@ pub fn upsert(db: &Db, m: &NewMessage) -> Result<i64> {
             i64::from(m.has_attachments),
             m.size as i64,
             i64::from(m.downloaded_full),
+            m.from_name,
             ts,
         ],
     )?;
@@ -140,6 +143,9 @@ pub struct CompactMessage {
     pub uid: u32,
     pub subject: Option<String>,
     pub from_addr: Option<String>,
+    /// Sender display name (`None` = address only). Selected with the rest
+    /// of the row so the list never parses headers per row.
+    pub from_name: Option<String>,
     pub date: Option<String>,
     pub snippet: Option<String>,
     pub is_read: bool,
@@ -178,7 +184,8 @@ pub fn list_compact_by_folder_sorted(
 ) -> Result<Vec<CompactMessage>> {
     let order = folder_sort_clause(sort_field, descending);
     let mut stmt = db.conn().prepare(&format!(
-        "select uid, subject, from_addr, date, snippet, is_read, is_starred, has_attachments
+        "select uid, subject, from_addr, from_name, date, snippet, is_read, is_starred,
+            has_attachments
          from messages where folder_id = ?1 and {HIDDEN}
          order by {order} limit ?2 offset ?3"
     ))?;
@@ -188,15 +195,36 @@ pub fn list_compact_by_folder_sorted(
                 uid: row.get::<_, i64>(0)? as u32,
                 subject: row.get(1)?,
                 from_addr: row.get(2)?,
-                date: row.get(3)?,
-                snippet: row.get(4)?,
-                is_read: opt_bool(row.get::<_, i64>(5)?),
-                is_starred: opt_bool(row.get::<_, i64>(6)?),
-                has_attachments: opt_bool(row.get::<_, i64>(7)?),
+                from_name: row.get(3)?,
+                date: row.get(4)?,
+                snippet: row.get(5)?,
+                is_read: opt_bool(row.get::<_, i64>(6)?),
+                is_starred: opt_bool(row.get::<_, i64>(7)?),
+                has_attachments: opt_bool(row.get::<_, i64>(8)?),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+/// Sender display name from a stored RFC 5322 header block, decoded
+/// (RFC 2047 included) via the same parser the sync uses. `None` for an
+/// absent, empty or address-only `From:` — the list then shows the address.
+///
+/// Used by the v16 migration to backfill rows synced before `from_name`
+/// was stored; new mail carries the name from [`parse`](crate::sync).
+pub fn display_name_from_headers(raw_headers: &str) -> Option<String> {
+    if raw_headers.trim().is_empty() {
+        return None;
+    }
+    let parsed = mail_parser::MessageParser::default().parse(raw_headers.as_bytes())?;
+    parsed
+        .from()
+        .and_then(|a| a.first())
+        .and_then(|a| a.name.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 /// Paged message list for a folder, newest server arrival first — full rows,
@@ -390,6 +418,7 @@ pub fn sample_new(account_id: i64, folder_id: i64, uid: u32) -> NewMessage {
         thread_id: None,
         subject: Some("Hello".to_string()),
         from_addr: Some("alice@example.com".to_string()),
+        from_name: Some("Alice".to_string()),
         to_addrs: vec!["bob@example.com".to_string()],
         cc_addrs: vec![],
         bcc_addrs: vec![],

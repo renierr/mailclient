@@ -59,6 +59,7 @@ create table if not exists messages (
     thread_id          text,
     subject            text,
     from_addr          text,
+    from_name          text,
     to_addrs           text not null default '[]',
     cc_addrs           text not null default '[]',
     bcc_addrs          text not null default '[]',
