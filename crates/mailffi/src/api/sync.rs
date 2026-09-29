@@ -172,15 +172,17 @@ pub fn refresh_server_capabilities(account_id: i64) -> anyhow::Result<()> {
 /// Takes the cross-process sync lock, syncs every account's inbox over
 /// fresh connections (never the GUI's pooled sessions), and returns the
 /// [`background::BackgroundReport`] as JSON: skipped flag, mail that arrived
-/// since the previous check, cached unread total, errors.
+/// since the previous check, what the notification should list, cached
+/// unread total, errors. `trigger` names the scheduler that ran it
+/// (`worker`, `alarm`) for the run history.
 ///
 /// Background-isolate only: it blocks the calling worker thread for the
 /// whole network run, which is fine with nothing else to serve but would
 /// stall the UI's pool. The lock collision path returns `skipped: true`
 /// rather than failing, so the worker just waits for the next run.
-pub fn background_check_now() -> anyhow::Result<String> {
+pub fn background_check_now(trigger: String) -> anyhow::Result<String> {
     let db = crate::db::shared_db()?;
-    let report = background::background_check_blocking(db, &crate::db::db_path());
+    let report = background::background_check_blocking(db, &crate::db::db_path(), &trigger);
     Ok(serde_json::to_string(&report)?)
 }
 
@@ -194,12 +196,25 @@ pub fn commit_background_marks(marks_json: String) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The last background tick as [`background::LastRun`] JSON, or an empty
-/// string before the first one. Lets Settings show whether Android actually
-/// runs the worker, and whether a run was cut short.
-pub fn background_last_run() -> anyhow::Result<String> {
-    Ok(match background::last_run(crate::db::shared_db()?) {
-        Some(run) => serde_json::to_string(&run)?,
-        None => String::new(),
-    })
+/// Note in the run history what the worker did with the report of the run
+/// that started at `run` (the report's `run` field).
+pub fn background_record_outcome(run: String, outcome: String) -> anyhow::Result<()> {
+    background::record_outcome(crate::db::shared_db()?, &run, &outcome);
+    Ok(())
+}
+
+/// The user has the app open: the inbox cache counts as seen, so the next
+/// background run neither alerts for it nor lists it in the notification.
+pub fn background_mark_seen() -> anyhow::Result<()> {
+    background::mark_inbox_seen(crate::db::shared_db()?);
+    Ok(())
+}
+
+/// The recent background ticks as a JSON array of [`background::LastRun`],
+/// newest first. Lets Settings show whether Android actually runs the
+/// checks, which scheduler did, and whether a run was cut short.
+pub fn background_run_history() -> anyhow::Result<String> {
+    Ok(serde_json::to_string(&background::run_history(
+        crate::db::shared_db()?,
+    ))?)
 }

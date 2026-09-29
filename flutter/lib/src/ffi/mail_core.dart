@@ -290,23 +290,32 @@ class MailCore {
 
   /// Headless new-mail check for the Android background worker: syncs every
   /// account over fresh connections and returns the `BackgroundReport`
-  /// (`skipped`, `new`, `total_unread`, `errors`).
+  /// (`skipped`, `new`, `pending`, `marks`, `run`, `total_unread`,
+  /// `errors`). [trigger] names the scheduler for the run history.
   ///
   /// Background-isolate only — it blocks the calling FRB worker thread for
   /// the whole network run. The UI keeps using the queued `syncAccount`.
-  Future<Map<String, dynamic>> backgroundCheckNow() async =>
-      _decodeMap(await rust_sync.backgroundCheckNow());
+  Future<Map<String, dynamic>> backgroundCheckNow(String trigger) async =>
+      _decodeMap(await rust_sync.backgroundCheckNow(trigger: trigger));
 
   /// Commit a report's `marks` (JSON array) once its mail was notified.
   Future<void> commitBackgroundMarks(String marksJson) =>
       rust_sync.commitBackgroundMarks(marksJson: marksJson);
 
-  /// The last background tick (`started_at`, `finished_at`, `skipped`,
-  /// `new`, `errors`), or null before the first one ran.
-  Future<Map<String, dynamic>?> backgroundLastRun() async {
-    final raw = await rust_sync.backgroundLastRun();
-    return raw.isEmpty ? null : _decodeMap(raw);
-  }
+  /// Note what became of the report of run [run] (its `run` field).
+  Future<void> backgroundRecordOutcome(String run, String outcome) =>
+      rust_sync.backgroundRecordOutcome(run: run, outcome: outcome);
+
+  /// The user has the app open: background checks neither alert for nor
+  /// list what the inbox cache holds now.
+  Future<void> backgroundMarkSeen() => rust_sync.backgroundMarkSeen();
+
+  /// Recent background ticks, newest first (`started_at`, `finished_at`,
+  /// `trigger`, `skipped`, `new`, `errors`, `outcome`).
+  Future<List<Map<String, dynamic>>> backgroundRunHistory() async =>
+      (jsonDecode(await rust_sync.backgroundRunHistory()) as List<dynamic>)
+          .whereType<Map<String, dynamic>>()
+          .toList(growable: false);
 
   // --- search --------------------------------------------------------------
 

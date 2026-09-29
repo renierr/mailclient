@@ -71,14 +71,9 @@ Future<bool> requestUnrestrictedBackground() async {
 
 /// Whether the system lets the app schedule exact alarms (Android 12+,
 /// denied by default since 14). Without it the alarm scheduler still fires
-/// via AllowWhileIdle, just not at the exact minute.
-///
-/// An unreachable channel means "not permitted", not "permitted": the
-/// alarm plugin silently drops an exact one-shot it may not schedule, so
-/// claiming `true` there would end the alarm chain, while `false` falls
-/// back to an inexact shot that still fires. The headless alarm isolate
-/// has no `MainActivity` channel, so its re-arm always takes that safe
-/// fallback.
+/// via AllowWhileIdle, just not at the exact minute (`MailAlarm.kt` checks
+/// the grant itself on every shot; this only feeds the Settings status).
+/// An unreachable channel reads as "not permitted".
 Future<bool> exactAlarmPermitted() async {
   if (!Platform.isAndroid) return true;
   try {
@@ -134,13 +129,46 @@ String describeLastRun(Map<String, dynamic>? run, DateTime now) {
   if (errors.isNotEmpty) {
     return 'Last background check $when failed: ${errors.first}';
   }
+  final outcome = '${run['outcome'] ?? ''}';
+  final tail = outcome.isEmpty ? '' : ', $outcome';
+  return 'Last background check $when: ${_found(run)}$tail.';
+}
+
+String _found(Map<String, dynamic> run) {
   final n = run['new'] is int ? run['new'] as int : 0;
-  final found = switch (n) {
+  return switch (n) {
     0 => 'no new mail',
     1 => '1 new message',
     _ => '$n new messages',
   };
-  return 'Last background check $when: $found.';
+}
+
+/// One compact history line for [run] as of [now]: when, which scheduler,
+/// and what happened ("09:15 (5 min ago) · alarm · 2 new messages ·
+/// notified (2)").
+String describeRun(Map<String, dynamic> run, DateTime now) {
+  final started = DateTime.tryParse('${run['started_at'] ?? ''}');
+  final parts = <String>[
+    started == null ? '?' : _when(started.toLocal(), now),
+    if ('${run['trigger'] ?? ''}'.isNotEmpty) '${run['trigger']}',
+  ];
+  final finished = DateTime.tryParse('${run['finished_at'] ?? ''}');
+  final errors = (run['errors'] as List?)?.whereType<String>().toList() ?? [];
+  if (finished == null) {
+    parts.add(
+      started != null && now.difference(started) < staleRunAfter
+          ? 'running'
+          : 'stopped by Android',
+    );
+  } else if (run['skipped'] == true) {
+    parts.add('skipped, another sync was running');
+  } else {
+    parts.add(_found(run));
+    if (errors.isNotEmpty) parts.add('failed: ${errors.first}');
+  }
+  final outcome = '${run['outcome'] ?? ''}';
+  if (outcome.isNotEmpty) parts.add(outcome);
+  return parts.join(' · ');
 }
 
 String _when(DateTime at, DateTime now) {

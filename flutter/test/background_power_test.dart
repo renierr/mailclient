@@ -52,6 +52,10 @@ void main() {
         endsWith('4 new messages.'),
       );
       expect(
+        describeLastRun(done({'new': 1, 'outcome': 'notified (1)'}), now),
+        endsWith('1 new message, notified (1).'),
+      );
+      expect(
         describeLastRun(done({'skipped': true}), now),
         endsWith('skipped, another sync was running.'),
       );
@@ -72,6 +76,46 @@ void main() {
         'finished_at': at(DateTime(2026, 3, 7, 8, 6)),
       });
       expect(describeLastRun(run, now), contains('7 Mar, 08:05 (3 days ago)'));
+    });
+  });
+
+  group('describeRun', () {
+    Map<String, dynamic> run(Map<String, dynamic> extra) => {
+      'started_at': at(now.subtract(const Duration(minutes: 5))),
+      'finished_at': at(now.subtract(const Duration(minutes: 4))),
+      'trigger': 'alarm',
+      'skipped': false,
+      'new': 0,
+      'errors': <String>[],
+      ...extra,
+    };
+
+    test('names time, scheduler, result and outcome', () {
+      expect(
+        describeRun(run({'new': 2, 'outcome': 'notified (2)'}), now),
+        '11:55 (5 min ago) · alarm · 2 new messages · notified (2)',
+      );
+      expect(
+        describeRun(run({'skipped': true, 'trigger': ''}), now),
+        '11:55 (5 min ago) · skipped, another sync was running',
+      );
+      expect(
+        describeRun(
+          run({
+            'errors': ['dns'],
+          }),
+          now,
+        ),
+        endsWith('no new mail · failed: dns'),
+      );
+    });
+
+    test('an unfinished old run was stopped', () {
+      final r = run({
+        'started_at': at(now.subtract(const Duration(hours: 1))),
+        'finished_at': null,
+      });
+      expect(describeRun(r, now), endsWith('alarm · stopped by Android'));
     });
   });
 

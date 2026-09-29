@@ -156,17 +156,35 @@ see `lib/src/sync/`):
 
 - **Battery-saving (WorkManager, default).** Deferrable by design: in Doze
   it only runs in maintenance windows, so notifications may wait for unlock.
-- **On-time alarm (`android_alarm_manager_plus`, opt-in in Settings →
-  Accounts & sync).** A self-perpetuating exact one-shot
-  (`setExactAndAllowWhileIdle`) that fires in standby and honours 5/10-minute
-  intervals, at the cost of a wakeup per check (a plugin `periodic` alarm
-  cannot do this: it maps to `setRepeating` and ignores `allowWhileIdle`,
-  so Doze defers it like the worker). Needs `SCHEDULE_EXACT_ALARM`
-  (Android 12+; denied by default since 14 — Settings sends the user to
-  "Alarms & reminders"); ungranted the shot is armed inexact via
-  AllowWhileIdle and still fires, just not at the exact minute. The mode is stored in the shared
+- **On-time alarm (opt-in in Settings → Accounts & sync).** A
+  self-rearming exact one-shot (`setExactAndAllowWhileIdle`, `MailAlarm.kt`)
+  that fires in standby and honours 5/10-minute intervals, at the cost of a
+  wakeup per check. Its receiver hands the check to WorkManager as
+  *expedited* work (Android 12+), which Doze does not defer the way it
+  defers plain jobs; the alarm plugin used before ran its callback through a
+  `JobIntentService`, i.e. a plain job, so the check still waited for a
+  maintenance window. The alarm re-arms natively after every shot, a reboot
+  or an app update. Needs `SCHEDULE_EXACT_ALARM` (Android 12+; denied by
+  default since 14 — Settings sends the user to "Alarms & reminders");
+  ungranted, the shot is armed inexact via AllowWhileIdle and still fires,
+  just not at the exact minute. The mode is stored in the shared
   `background_scheduler` Rust setting (default `workmanager`), which Qt
-  never reads or writes — no QML change.
+  never reads or writes.
+
+Either way, the battery-optimisation exemption matters most: without it
+Android withholds network access in Doze. Vendor battery savers (Samsung,
+Xiaomi, …) stop apps on their own terms and need the app set to
+unrestricted there as well.
+
+There is one new-mail notification, replaced on every post. It lists all
+unread inbox mail since the user last had the app open (`pending` in the
+report), alerts only for mail new since the previous check, is updated
+quietly or removed when that mail gets read elsewhere, and is cleared when
+the app comes to the foreground. Opening the app also marks the cache as
+seen (`background_mark_seen`), and resuming it reloads the list and syncs
+unless auto-sync is off or a sync just ran. Settings keeps the last ten
+checks (scheduler, result, what happened to the notification) under
+"Recent checks".
 
 Opening a mail makes no network request. Inline (`cid:`) images are part
 of the message: sync keeps their bytes, and the core embeds them as

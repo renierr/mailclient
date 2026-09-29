@@ -85,6 +85,10 @@ class MailState extends ChangeNotifier {
   Timer? _markReadTimer;
   Timer? _autoSyncTimer;
 
+  /// When the last account sync was asked for, so coming back to the app
+  /// does not sync again right after one.
+  DateTime? _lastSyncRequest;
+
   /// Last capabilities payload per account id, from the `"Capabilities"` job.
   final Map<int, Map<String, dynamic>> _capabilities = {};
 
@@ -338,8 +342,26 @@ class MailState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> syncAccount() =>
-      _queue('Sync', () => _core.syncAccount(_accountId));
+  Future<void> syncAccount() {
+    _lastSyncRequest = DateTime.now();
+    return _queue('Sync', () => _core.syncAccount(_accountId));
+  }
+
+  /// The app is in the foreground again. Android freezes a backgrounded
+  /// app, so the periodic sync did not run meanwhile, while the background
+  /// check may well have pulled new mail into the cache. Show the cache at
+  /// once, then sync unless auto-sync is off or a sync just ran.
+  Future<void> resumed() async {
+    if (_loading || !hasAccounts) return;
+    _rescheduleAutoSync();
+    await _reloadFolders();
+    await _reloadMessages();
+    if (_settings.syncIntervalMinutes > 0 &&
+        !isSyncing &&
+        shouldSyncOnResume(_lastSyncRequest, DateTime.now())) {
+      unawaited(syncAccount());
+    }
+  }
 
   Future<void> loadOlderMessages() {
     // Show the next page of what is already cached immediately; the server
@@ -878,3 +900,12 @@ extension<T> on Iterable<T> {
     return it.moveNext() ? it.current : null;
   }
 }
+
+/// Whether coming back to the app should sync: not when a sync was asked
+/// for within [gap] (switching apps briefly, or the startup sync). Pure, so
+/// it is unit-tested.
+bool shouldSyncOnResume(
+  DateTime? lastSync,
+  DateTime now, {
+  Duration gap = const Duration(minutes: 1),
+}) => lastSync == null || now.difference(lastSync) >= gap;

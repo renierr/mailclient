@@ -3,8 +3,9 @@
 //!
 //! A tick has to fit into Doze's short maintenance windows, so it syncs the
 //! inbox only ([`SyncScope::InboxOnly`]) over the cached folder tree, then
-//! reports mail above per-folder high-water marks. [`LastRun`] records every
-//! tick so the UI can show whether Android actually ran it.
+//! reports mail above per-folder high-water marks. Every tick is kept in a
+//! short [`LastRun`] history so the UI can show whether Android actually ran
+//! it, which scheduler did, and what became of the notification.
 
 use std::path::Path;
 
@@ -48,6 +49,13 @@ pub struct BackgroundReport {
     /// deliberately not, with alerts off). Uncommitted, `new` is reported
     /// again on the next check.
     pub marks: Vec<SeenMark>,
+    /// Everything the notification should list: unread inbox mail that
+    /// arrived since the user last had the app open ([`mark_inbox_seen`]).
+    /// A superset of `new`, so a second arrival does not push the first out
+    /// of a notification the user has not looked at yet.
+    pub pending: Vec<NewMail>,
+    /// `started_at` of this tick's [`LastRun`], for [`record_outcome`].
+    pub run: String,
     /// Cached inbox-unread total across accounts, for the launcher badge.
     pub total_unread: u64,
     pub errors: Vec<String>,
@@ -57,6 +65,11 @@ pub struct BackgroundReport {
 /// a user preference, so deliberately outside the settings allowlist):
 /// `bg_seen_uid_{account_id}_{folder_id}` stores `{uidvalidity}:{max_uid}`.
 pub const BG_SEEN_PREFIX: &str = "bg_seen_uid_";
+
+/// Same shape as [`BG_SEEN_PREFIX`], but moved only while the user has the
+/// app open: the line above which mail is still unseen for the
+/// notification's list.
+pub const BG_SHOWN_PREFIX: &str = "bg_shown_uid_";
 
 /// Per-folder high-water mark from [`collect_new_mail`], stored by
 /// [`commit_seen`]. Crosses to Dart and back unchanged.
@@ -72,31 +85,55 @@ impl SeenMark {
     fn key(&self) -> String {
         format!("{BG_SEEN_PREFIX}{}_{}", self.account_id, self.folder_id)
     }
+
+    fn shown_key(&self) -> String {
+        format!("{BG_SHOWN_PREFIX}{}_{}", self.account_id, self.folder_id)
+    }
+
+    fn value(&self) -> String {
+        format!("{}:{}", self.uid_validity, self.uid)
+    }
 }
 
-/// Settings key holding the [`LastRun`] JSON (internal bookkeeping, not a
-/// user preference, so outside the settings allowlist).
-pub const BG_LAST_RUN: &str = "bg_last_run";
+/// Settings key holding the [`LastRun`] history as a JSON array, newest
+/// first (internal bookkeeping, not a user preference, so outside the
+/// settings allowlist).
+pub const BG_RUN_HISTORY: &str = "bg_run_history";
 
-/// Record of the most recent background tick. `finished_at` stays `None`
-/// while a tick runs — or for good, when Android stopped it mid-run.
+/// Older single-record key, still read while no history exists.
+const BG_LAST_RUN: &str = "bg_last_run";
+
+/// How many ticks the history keeps.
+pub const RUN_HISTORY_LEN: usize = 10;
+
+/// Record of one background tick. `finished_at` stays `None` while a tick
+/// runs — or for good, when Android stopped it mid-run.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LastRun {
     pub started_at: String,
     pub finished_at: Option<String>,
+    /// Which scheduler started the tick (`worker`, `alarm`), as the caller
+    /// named it.
+    #[serde(default)]
+    pub trigger: String,
     pub skipped: bool,
     pub new: usize,
     /// First few errors only; the full list is in the report.
     pub errors: Vec<String>,
+    /// What the caller did with the report (posted, alerts off, post
+    /// failed, …), set by [`record_outcome`].
+    #[serde(default)]
+    pub outcome: Option<String>,
 }
 
 /// How many errors [`LastRun`] keeps.
 const LAST_RUN_ERRORS: usize = 3;
 
 impl LastRun {
-    fn started(at: DateTime<Utc>) -> Self {
+    fn started(at: DateTime<Utc>, trigger: &str) -> Self {
         LastRun {
             started_at: at.to_rfc3339(),
+            trigger: trigger.to_string(),
             ..Default::default()
         }
     }
@@ -115,37 +152,72 @@ impl LastRun {
     }
 }
 
-fn save_last_run(db: &Db, run: &LastRun) {
-    let saved = serde_json::to_string(run)
+/// Store `run` in the history: it replaces the entry of the same tick (same
+/// `started_at`), or goes in front as the newest.
+fn save_run(db: &Db, run: &LastRun) {
+    update_history(db, |history| {
+        match history.iter_mut().find(|r| r.started_at == run.started_at) {
+            Some(slot) => *slot = run.clone(),
+            None => history.insert(0, run.clone()),
+        }
+    });
+}
+
+fn update_history(db: &Db, f: impl FnOnce(&mut Vec<LastRun>)) {
+    let mut history = run_history(db);
+    f(&mut history);
+    history.truncate(RUN_HISTORY_LEN);
+    let saved = serde_json::to_string(&history)
         .map_err(|e| e.to_string())
-        .and_then(|json| settings::set(db, BG_LAST_RUN, &json).map_err(|e| e.to_string()));
+        .and_then(|json| settings::set(db, BG_RUN_HISTORY, &json).map_err(|e| e.to_string()));
     if let Err(e) = saved {
-        log::warn!("background last-run record not saved: {e}");
+        log::warn!("background run history not saved: {e}");
     }
+}
+
+/// The recorded ticks, newest first; empty before the first one ran.
+#[must_use]
+pub fn run_history(db: &Db) -> Vec<LastRun> {
+    let stored = |key| settings::get(db, key).ok().flatten();
+    if let Some(list) = stored(BG_RUN_HISTORY).and_then(|s| serde_json::from_str(&s).ok()) {
+        return list;
+    }
+    stored(BG_LAST_RUN)
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .into_iter()
+        .collect()
 }
 
 /// The last recorded tick, if any ran yet.
 #[must_use]
 pub fn last_run(db: &Db) -> Option<LastRun> {
-    settings::get(db, BG_LAST_RUN)
-        .ok()
-        .flatten()
-        .and_then(|s| serde_json::from_str(&s).ok())
+    run_history(db).into_iter().next()
+}
+
+/// Note what became of the report of the tick that started at `started_at`.
+/// A tick that already fell out of the history is ignored.
+pub fn record_outcome(db: &Db, started_at: &str, outcome: &str) {
+    update_history(db, |history| {
+        if let Some(run) = history.iter_mut().find(|r| r.started_at == started_at) {
+            run.outcome = Some(outcome.to_string());
+        }
+    });
 }
 
 /// One background tick: lock, sync every account's inbox over fresh
 /// connections, and report mail that arrived since the previous tick.
-/// Every tick, skipped or not, leaves a [`LastRun`].
+/// Every tick, skipped or not, leaves a [`LastRun`] tagged with `trigger`.
 ///
 /// The lock turns overlap with a foreground sync (or a second worker) into
 /// a quiet skip rather than a `database is locked` error. Fresh connections
 /// keep this off the GUI's pooled sessions, so a worker run can never steal
 /// or stall the session the user is reading through.
-pub async fn background_check(db: &Db, db_path: &Path) -> BackgroundReport {
-    let run = LastRun::started(Utc::now());
-    save_last_run(db, &run);
-    let report = background_tick(db, db_path).await;
-    save_last_run(db, &run.finish(Utc::now(), &report));
+pub async fn background_check(db: &Db, db_path: &Path, trigger: &str) -> BackgroundReport {
+    let run = LastRun::started(Utc::now(), trigger);
+    save_run(db, &run);
+    let mut report = background_tick(db, db_path).await;
+    report.run = run.started_at.clone();
+    save_run(db, &run.finish(Utc::now(), &report));
     report
 }
 
@@ -175,20 +247,22 @@ async fn background_tick(db: &Db, db_path: &Path) -> BackgroundReport {
         skipped: false,
         new,
         marks,
+        pending: collect_pending(db),
         total_unread: report.total_unread,
         errors: report.errors,
+        run: String::new(),
     }
 }
 
 /// Synchronous wrapper around [`background_check`] for FFI callers, which
 /// cannot await. Same current-thread runtime shape as
 /// [`sync_all_accounts_blocking`].
-pub fn background_check_blocking(db: &Db, db_path: &Path) -> BackgroundReport {
+pub fn background_check_blocking(db: &Db, db_path: &Path, trigger: &str) -> BackgroundReport {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("tokio runtime for background check");
-    rt.block_on(background_check(db, db_path))
+    rt.block_on(background_check(db, db_path, trigger))
 }
 
 /// Unread inbox mail first seen since the marks were last committed.
@@ -206,8 +280,63 @@ pub fn background_check_blocking(db: &Db, db_path: &Path) -> BackgroundReport {
 /// top is taken over every inbox message, read or not, and an empty inbox
 /// baselines at 0, so the first mail into a fully read inbox still counts.
 pub fn collect_new_mail(db: &Db) -> (Vec<NewMail>, Vec<SeenMark>) {
-    let tops: Vec<SeenMark> = db
-        .conn()
+    let tops = inbox_tops(db);
+    let mut out = Vec::new();
+    for top in &tops {
+        // First sighting or UIDVALIDITY reset: baseline only.
+        let Some(mark) = stored_mark(db, &top.key(), top.uid_validity) else {
+            continue;
+        };
+        out.extend(unread_above(db, top, mark));
+    }
+    (out, tops)
+}
+
+/// Unread inbox mail above the "shown" line [`mark_inbox_seen`] draws while
+/// the user has the app open: what the notification lists. [`commit_seen`]
+/// draws a first line where none exists; until then the seen mark stands in,
+/// so this never lists more than [`collect_new_mail`] would have.
+pub fn collect_pending(db: &Db) -> Vec<NewMail> {
+    let mut out = Vec::new();
+    for top in &inbox_tops(db) {
+        let mark = stored_mark(db, &top.shown_key(), top.uid_validity)
+            .or_else(|| stored_mark(db, &top.key(), top.uid_validity));
+        if let Some(mark) = mark {
+            out.extend(unread_above(db, top, mark));
+        }
+    }
+    out
+}
+
+/// The user has the app open: everything in the inbox cache now counts as
+/// seen, for the next alert and for the notification's list. No network.
+pub fn mark_inbox_seen(db: &Db) {
+    for top in &inbox_tops(db) {
+        for key in [top.key(), top.shown_key()] {
+            if let Err(e) = settings::set(db, &key, &top.value()) {
+                log::warn!(
+                    "background mark for folder {} not saved: {e}",
+                    top.folder_id
+                );
+            }
+        }
+    }
+}
+
+/// A stored `{uidvalidity}:{uid}` mark, if present and still under `validity`.
+fn stored_mark(db: &Db, key: &str, validity: i64) -> Option<i64> {
+    let raw = settings::get(db, key).ok().flatten()?;
+    let (v, u) = raw.split_once(':')?;
+    if v.parse::<i64>().ok()? != validity {
+        return None;
+    }
+    u.parse().ok()
+}
+
+/// Each inbox folder's current top: its UIDVALIDITY and highest cached UID,
+/// read or not (0 for an empty inbox).
+fn inbox_tops(db: &Db) -> Vec<SeenMark> {
+    db.conn()
         .prepare(
             "select f.account_id, f.id, coalesce(f.uid_validity, 0),
                         coalesce(max(m.uid), 0)
@@ -227,27 +356,29 @@ pub fn collect_new_mail(db: &Db) -> (Vec<NewMail>, Vec<SeenMark>) {
             })
             .and_then(|mapped| mapped.collect::<rusqlite::Result<Vec<_>>>())
         })
-        .unwrap_or_default();
-
-    let mut out = Vec::new();
-    for top in &tops {
-        let seen: Option<(i64, i64)> = settings::get(db, &top.key()).ok().flatten().and_then(|s| {
-            s.split_once(':')
-                .and_then(|(v, u)| Some((v.parse().ok()?, u.parse().ok()?)))
-        });
-        // First sighting or UIDVALIDITY reset: baseline only.
-        let Some(mark) = seen.filter(|(v, _)| *v == top.uid_validity).map(|(_, u)| u) else {
-            continue;
-        };
-        out.extend(unread_above(db, top, mark));
-    }
-    (out, tops)
+        .unwrap_or_default()
 }
 
 /// Record marks from [`collect_new_mail`] as seen.
+///
+/// A folder without a valid shown line gets one here, at the seen mark this
+/// commit moves past (or the baseline on a first sighting): from then on the
+/// notification's list starts where alerts started, until the app is opened.
 pub fn commit_seen(db: &Db, marks: &[SeenMark]) {
     for m in marks {
-        if let Err(e) = settings::set(db, &m.key(), &format!("{}:{}", m.uid_validity, m.uid)) {
+        if stored_mark(db, &m.shown_key(), m.uid_validity).is_none() {
+            let line = SeenMark {
+                uid: stored_mark(db, &m.key(), m.uid_validity).unwrap_or(m.uid),
+                ..m.clone()
+            };
+            if let Err(e) = settings::set(db, &m.shown_key(), &line.value()) {
+                log::warn!(
+                    "background shown line for folder {} not saved: {e}",
+                    m.folder_id
+                );
+            }
+        }
+        if let Err(e) = settings::set(db, &m.key(), &m.value()) {
             log::warn!("background mark for folder {} not saved: {e}", m.folder_id);
         }
     }
@@ -397,11 +528,13 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         let dir = tempfile::tempdir().unwrap();
         assert!(last_run(&db).is_none());
-        let report = background_check_blocking(&db, &dir.path().join("db.sqlite"));
+        let report = background_check_blocking(&db, &dir.path().join("db.sqlite"), "worker");
         let run = last_run(&db).unwrap();
         assert!(!run.skipped);
         assert!(run.finished_at.is_some());
         assert_eq!(run.new, report.new.len());
+        assert_eq!(run.trigger, "worker");
+        assert_eq!(report.run, run.started_at);
     }
 
     #[test]
@@ -410,7 +543,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db.sqlite");
         let _held = acquire_sync_lock(&path).unwrap().unwrap();
-        assert!(background_check_blocking(&db, &path).skipped);
+        assert!(background_check_blocking(&db, &path, "alarm").skipped);
         let run = last_run(&db).unwrap();
         assert!(run.skipped);
         assert!(run.finished_at.is_some());
@@ -422,7 +555,75 @@ mod tests {
             errors: (0..10).map(|i| format!("e{i}")).collect(),
             ..Default::default()
         };
-        let run = LastRun::started(Utc::now()).finish(Utc::now(), &report);
+        let run = LastRun::started(Utc::now(), "worker").finish(Utc::now(), &report);
         assert_eq!(run.errors, ["e0", "e1", "e2"]);
+    }
+
+    fn unread(db: &Db, acc: i64, inbox: i64, uid: u32) {
+        let mut m = messages::sample_new(acc, inbox, uid);
+        m.is_read = false;
+        messages::upsert(db, &m).unwrap();
+    }
+
+    #[test]
+    fn pending_keeps_unseen_mail_until_the_app_is_opened() {
+        let (db, acc, inbox, _) = setup_db();
+        assert!(check(&db).is_empty());
+        unread(&db, acc, inbox, 1);
+        assert_eq!(check(&db).len(), 1);
+        unread(&db, acc, inbox, 2);
+        // Only the second arrival alerts, but the notification lists both.
+        let (new, marks) = collect_new_mail(&db);
+        commit_seen(&db, &marks);
+        assert_eq!(new.iter().map(|m| m.uid).collect::<Vec<_>>(), [2]);
+        let pending: Vec<u32> = collect_pending(&db).iter().map(|m| m.uid).collect();
+        assert_eq!(pending, [1, 2]);
+        // Opening the app clears both.
+        mark_inbox_seen(&db);
+        assert!(collect_pending(&db).is_empty());
+        assert!(check(&db).is_empty());
+    }
+
+    #[test]
+    fn mail_seen_in_the_app_does_not_alert_later() {
+        let (db, acc, inbox, _) = setup_db();
+        assert!(check(&db).is_empty());
+        // Synced by the foreground while the user had the app open.
+        unread(&db, acc, inbox, 1);
+        mark_inbox_seen(&db);
+        assert!(check(&db).is_empty());
+        assert!(collect_pending(&db).is_empty());
+    }
+
+    #[test]
+    fn history_keeps_the_newest_runs_with_their_outcome() {
+        let db = Db::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db.sqlite");
+        let mut runs = Vec::new();
+        for _ in 0..RUN_HISTORY_LEN + 2 {
+            runs.push(background_check_blocking(&db, &path, "alarm").run);
+        }
+        let history = run_history(&db);
+        assert_eq!(history.len(), RUN_HISTORY_LEN);
+        let last = runs.last().unwrap();
+        assert_eq!(&history[0].started_at, last);
+        record_outcome(&db, last, "posted 2");
+        assert_eq!(last_run(&db).unwrap().outcome.as_deref(), Some("posted 2"));
+        assert_eq!(run_history(&db).len(), RUN_HISTORY_LEN);
+    }
+
+    #[test]
+    fn history_falls_back_to_the_old_single_record() {
+        let db = Db::open_in_memory().unwrap();
+        settings::set(
+            &db,
+            BG_LAST_RUN,
+            r#"{"started_at":"2020-01-01T00:00:00Z","finished_at":null,"skipped":false,"new":0,"errors":[]}"#,
+        )
+        .unwrap();
+        let run = last_run(&db).unwrap();
+        assert_eq!(run.started_at, "2020-01-01T00:00:00Z");
+        assert_eq!(run.trigger, "");
     }
 }

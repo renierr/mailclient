@@ -42,37 +42,68 @@ void main() {
     });
   });
 
-  group('notifyDecision', () {
-    Future<bool> yes() async => true;
-    Future<bool> no() async => false;
+  group('notifyAction', () {
+    NotifyAction act({
+      bool hasNew = false,
+      bool alertsOn = true,
+      bool permitted = true,
+      String? shown,
+      String? wanted,
+    }) => notifyAction(
+      hasNew: hasNew,
+      alertsOn: alertsOn,
+      permitted: permitted,
+      shown: shown,
+      wanted: wanted,
+    );
 
-    test('nothing new commits the baseline without asking', () async {
-      var asked = false;
-      final d = await notifyDecision(
-        hasNew: false,
-        alertsOn: true,
-        permitted: () async => asked = true,
-      );
-      expect(d, NotifyDecision.commit);
-      expect(asked, isFalse);
+    test('new mail alerts, unless alerts are off or blocked', () {
+      expect(act(hasNew: true, wanted: 'a'), NotifyAction.alert);
+      expect(act(hasNew: true, shown: 'a', wanted: 'a'), NotifyAction.alert);
+      expect(act(hasNew: true, alertsOn: false), NotifyAction.alertsOff);
+      expect(act(hasNew: true, permitted: false), NotifyAction.blocked);
     });
 
-    test('alerts off or not permitted commit without posting', () async {
-      expect(
-        await notifyDecision(hasNew: true, alertsOn: false, permitted: yes),
-        NotifyDecision.commit,
-      );
-      expect(
-        await notifyDecision(hasNew: true, alertsOn: true, permitted: no),
-        NotifyDecision.commit,
-      );
+    test('nothing new leaves a dismissed notification alone', () {
+      expect(act(wanted: 'a'), NotifyAction.none);
+      expect(act(), NotifyAction.none);
     });
 
-    test('new mail with alerts on and permitted posts', () async {
-      expect(
-        await notifyDecision(hasNew: true, alertsOn: true, permitted: yes),
-        NotifyDecision.post,
-      );
+    test('nothing new keeps a visible notification in step', () {
+      expect(act(shown: 'a', wanted: 'a'), NotifyAction.none);
+      expect(act(shown: 'a', wanted: 'b'), NotifyAction.update);
+      expect(act(shown: 'a'), NotifyAction.clear);
+    });
+  });
+
+  group('notificationText', () {
+    Map<String, dynamic> mail(int uid, String from) => {
+      'uid': uid,
+      'from': from,
+      'subject': 'subject $uid',
+    };
+
+    test('one mail names its sender and subject', () {
+      final t = notificationText([mail(1, 'a@example.com')]);
+      expect(t.title, 'a@example.com');
+      expect(t.body, 'subject 1');
+      expect(t.lines, isEmpty);
+    });
+
+    test('several mails count, newest first, capped at five lines', () {
+      final t = notificationText([
+        for (var i = 1; i <= 7; i++) mail(i, 's$i@example.com'),
+      ]);
+      expect(t.title, '7 new messages');
+      expect(t.body, 's7@example.com — subject 7');
+      expect(t.lines.length, 5);
+      expect(t.lines.first, startsWith('s7@'));
+      expect(t.summary, '+2 more');
+    });
+
+    test('the signature matches what the posted notification reads back', () {
+      final t = notificationText([mail(1, 'a@example.com'), mail(2, 'b')]);
+      expect(NotificationText.signatureOf(t.title, t.body), t.signature);
     });
   });
 

@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:workmanager/workmanager.dart';
 
@@ -17,10 +16,9 @@ import 'src/sync/background_sync.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   if (Platform.isAndroid) {
+    // Also serves the exact-alarm scheduler: its native receiver enqueues
+    // the check through the same dispatcher.
     await Workmanager().initialize(backgroundSyncDispatcher);
-    // Needed only for the exact-alarm scheduler, but harmless otherwise:
-    // without it the alarm mode cannot schedule anything.
-    await AndroidAlarmManager.initialize();
   }
   try {
     final core = await MailCore.load();

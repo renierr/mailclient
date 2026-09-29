@@ -24,6 +24,14 @@ class MainActivity : FlutterActivity() {
                     "requestUnrestricted" -> result.success(requestUnrestricted())
                     "exactAlarmStatus" -> result.success(canScheduleExactAlarms())
                     "requestExactAlarm" -> result.success(requestExactAlarm())
+                    "armAlarm" -> {
+                        MailAlarm.arm(this, (call.arguments as? Int) ?: 0)
+                        result.success(true)
+                    }
+                    "cancelAlarm" -> {
+                        MailAlarm.cancel(this)
+                        result.success(true)
+                    }
                     else -> result.notImplemented()
                 }
             }

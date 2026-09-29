@@ -60,6 +60,8 @@ class _MailAppState extends State<MailApp> with WidgetsBindingObserver {
       await Future.delayed(const Duration(milliseconds: 200));
     }
     if (!mounted) return;
+    await clearMailNotification();
+    await _markSeen();
     if (_state.settings.syncIntervalMinutes > 0) {
       await requestNotificationPermission();
     }
@@ -83,6 +85,33 @@ class _MailAppState extends State<MailApp> with WidgetsBindingObserver {
     // than on its own timeout; missing it costs nothing worse than that.
     if (lifecycle == AppLifecycleState.detached) {
       widget.core.shutdown();
+    }
+    if (!Platform.isAndroid) return;
+    switch (lifecycle) {
+      case AppLifecycleState.resumed:
+        unawaited(_backInForeground());
+      case AppLifecycleState.paused:
+        // Mail the foreground synced while the user had the app open was
+        // on screen: the background check must not alert for it later.
+        unawaited(_markSeen());
+      default:
+        break;
+    }
+  }
+
+  /// Back from the background: the user is looking at the mailbox, so the
+  /// notification has done its job, and the list catches up.
+  Future<void> _backInForeground() async {
+    await clearMailNotification();
+    await _markSeen();
+    await _state.resumed();
+  }
+
+  Future<void> _markSeen() async {
+    try {
+      await widget.core.backgroundMarkSeen();
+    } catch (_) {
+      // Only costs a duplicate alert later.
     }
   }
 

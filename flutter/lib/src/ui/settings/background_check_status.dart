@@ -5,8 +5,8 @@ import '../../sync/background_alarm.dart';
 import '../../sync/background_power.dart';
 
 /// Android-only Settings block: whether the background worker may run on
-/// time (battery-optimisation exemption, standby bucket) and what the last
-/// run did. Re-reads on resume, so returning from the system prompt shows
+/// time (battery-optimisation exemption, standby bucket), what the last
+/// run did, and the recent runs for diagnosing missed notifications. Re-reads on resume, so returning from the system prompt shows
 /// the new state without reopening Settings.
 class BackgroundCheckStatus extends StatefulWidget {
   const BackgroundCheckStatus({super.key});
@@ -18,7 +18,7 @@ class BackgroundCheckStatus extends StatefulWidget {
 class _BackgroundCheckStatusState extends State<BackgroundCheckStatus>
     with WidgetsBindingObserver {
   PowerStatus? _power;
-  Map<String, dynamic>? _lastRun;
+  List<Map<String, dynamic>> _runs = const [];
   String _scheduler = schedulerWorkmanager;
   bool _exactAlarm = true;
   bool _loaded = false;
@@ -43,20 +43,20 @@ class _BackgroundCheckStatusState extends State<BackgroundCheckStatus>
 
   Future<void> _load() async {
     final power = await backgroundPowerStatus();
-    Map<String, dynamic>? lastRun;
+    var runs = const <Map<String, dynamic>>[];
     var scheduler = schedulerWorkmanager;
     var exactAlarm = true;
     try {
-      lastRun = await MailCore.instance.backgroundLastRun();
+      runs = await MailCore.instance.backgroundRunHistory();
       scheduler = (await MailCore.instance.settings()).backgroundScheduler;
       exactAlarm = await exactAlarmPermitted();
     } catch (_) {
-      lastRun = null;
+      runs = const [];
     }
     if (!mounted) return;
     setState(() {
       _power = power;
-      _lastRun = lastRun;
+      _runs = runs;
       _scheduler = scheduler;
       _exactAlarm = exactAlarm;
       _loaded = true;
@@ -136,8 +136,33 @@ class _BackgroundCheckStatusState extends State<BackgroundCheckStatus>
         _line(
           context,
           Icons.history_outlined,
-          describeLastRun(_lastRun, DateTime.now()),
+          describeLastRun(_runs.firstOrNull, DateTime.now()),
         ),
+        if (_runs.length > 1) _history(context),
+      ],
+    );
+  }
+
+  /// The recent runs, collapsed: when a notification went missing, this
+  /// shows whether a check ran at all, which scheduler ran it, and what it
+  /// did with the result.
+  Widget _history(BuildContext context) {
+    final theme = Theme.of(context);
+    final muted = theme.textTheme.bodySmall?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
+    final now = DateTime.now();
+    return ExpansionTile(
+      tilePadding: EdgeInsets.zero,
+      childrenPadding: const EdgeInsets.only(left: 26, bottom: 8),
+      expandedCrossAxisAlignment: CrossAxisAlignment.start,
+      title: Text('Recent checks', style: theme.textTheme.bodyMedium),
+      children: [
+        for (final run in _runs)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Text(describeRun(run, now), style: muted),
+          ),
       ],
     );
   }

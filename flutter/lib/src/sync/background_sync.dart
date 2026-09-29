@@ -102,12 +102,22 @@ Future<void> cancelBackgroundSync() async {
   await Workmanager().cancelByUniqueName(backgroundSyncTask);
 }
 
+/// WorkManager name of the check the native exact alarm enqueues
+/// (`MailAlarmReceiver.kt`); runs through [backgroundSyncDispatcher] like
+/// the periodic task, so only the run history can tell them apart.
+const alarmCheckTask = 'mail-alarm-check';
+
 @pragma('vm:entry-point')
 void backgroundSyncDispatcher() {
   Workmanager().executeTask((task, _) async {
-    if (task != backgroundSyncTask) return true;
+    final trigger = switch (task) {
+      backgroundSyncTask => 'worker',
+      alarmCheckTask => 'alarm',
+      _ => null,
+    };
+    if (trigger == null) return true;
     try {
-      await runBackgroundCheck();
+      await runBackgroundCheck(trigger: trigger);
       return true;
     } catch (_) {
       return false;
@@ -115,46 +125,110 @@ void backgroundSyncDispatcher() {
   });
 }
 
-Future<void> runBackgroundCheck() async {
+Future<void> runBackgroundCheck({required String trigger}) async {
   final core = await MailCore.load();
-  final report = await core.backgroundCheckNow();
+  final report = await core.backgroundCheckNow(trigger);
   if (report['skipped'] == true) return;
-  final items = (report['new'] as List<dynamic>? ?? const [])
-      .whereType<Map<String, dynamic>>()
-      .toList(growable: false);
-  final marks = jsonEncode(report['marks'] ?? const []);
-  switch (await notifyDecision(
-    hasNew: items.isNotEmpty,
-    alertsOn: (await core.settings()).notificationsEnabled,
-    permitted: () => notificationsPermitted(),
-  )) {
-    case NotifyDecision.commit:
-      // Nothing to show, or alerts off / not allowed: record what this run
-      // saw so enabling them later does not ding for the gap.
-      await core.commitBackgroundMarks(marks);
-    case NotifyDecision.post:
-      try {
-        await showNewMailNotification(items);
-      } catch (_) {
-        // Marks stay uncommitted, so the next run reports this mail again.
-        return;
-      }
-      await core.commitBackgroundMarks(marks);
+  final run = '${report['run'] ?? ''}';
+  Future<void> note(String outcome) async {
+    if (run.isEmpty) return;
+    try {
+      await core.backgroundRecordOutcome(run, outcome);
+    } catch (_) {
+      // Diagnostics only.
+    }
   }
+
+  final fresh = _mailList(report['new']);
+  final pending = _mailList(report['pending']);
+  // Pending covers fresh; the fallback only guards an older core.
+  final listed = pending.isEmpty ? fresh : pending;
+  final marks = jsonEncode(report['marks'] ?? const []);
+  final plugin = await _initializedPlugin();
+  final action = notifyAction(
+    hasNew: fresh.isNotEmpty,
+    alertsOn: (await core.settings()).notificationsEnabled,
+    permitted: await notificationsPermitted(),
+    shown: await _shownText(plugin),
+    wanted: listed.isEmpty ? null : notificationText(listed).signature,
+  );
+  try {
+    switch (action) {
+      case NotifyAction.alert:
+        await showNewMailNotification(listed, plugin: plugin);
+      case NotifyAction.update:
+        await showNewMailNotification(listed, plugin: plugin, silent: true);
+      case NotifyAction.clear:
+        await plugin.cancel(id: newMailNotificationId);
+      case NotifyAction.alertsOff:
+      case NotifyAction.blocked:
+      case NotifyAction.none:
+        break;
+    }
+  } catch (e) {
+    // Marks stay uncommitted, so the next run reports this mail again.
+    await note('notification failed: $e');
+    return;
+  }
+  await core.commitBackgroundMarks(marks);
+  final outcome = switch (action) {
+    NotifyAction.alert => 'notified (${listed.length})',
+    NotifyAction.update => 'notification updated',
+    NotifyAction.clear => 'notification cleared',
+    NotifyAction.alertsOff => 'new mail, alerts are off',
+    NotifyAction.blocked => 'new mail, notifications blocked',
+    NotifyAction.none => null,
+  };
+  if (outcome != null) await note(outcome);
 }
 
-/// What a background run does with its report.
-enum NotifyDecision { post, commit }
+List<Map<String, dynamic>> _mailList(Object? raw) =>
+    (raw as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .toList(growable: false);
 
-/// Pure decision for [runBackgroundCheck], so it is unit-tested. Permission
-/// is only asked when there is something to post.
-Future<NotifyDecision> notifyDecision({
+/// What a background run does with the notification.
+enum NotifyAction {
+  /// New mail: post (or replace) the notification and make a sound.
+  alert,
+
+  /// Nothing new, but the visible notification lists mail that has been
+  /// read meanwhile: repost it quietly.
+  update,
+
+  /// Everything the visible notification listed has been read: remove it.
+  clear,
+
+  /// New mail, but the user turned alerts off.
+  alertsOff,
+
+  /// New mail, but Android does not let the app notify.
+  blocked,
+
+  /// Nothing to do.
+  none,
+}
+
+/// Pure decision for [runBackgroundCheck], so it is unit-tested.
+///
+/// [shown] is the signature of the notification on screen (null when there
+/// is none — never posted, or swiped away) and [wanted] that of what it
+/// should list now (null when nothing is unseen). A swiped-away notification
+/// only comes back for new mail.
+NotifyAction notifyAction({
   required bool hasNew,
   required bool alertsOn,
-  required Future<bool> Function() permitted,
-}) async {
-  if (!hasNew || !alertsOn) return NotifyDecision.commit;
-  return await permitted() ? NotifyDecision.post : NotifyDecision.commit;
+  required bool permitted,
+  required String? shown,
+  required String? wanted,
+}) {
+  if (hasNew) {
+    if (!alertsOn) return NotifyAction.alertsOff;
+    return permitted ? NotifyAction.alert : NotifyAction.blocked;
+  }
+  if (shown == null) return NotifyAction.none;
+  if (wanted == null) return NotifyAction.clear;
+  return shown == wanted ? NotifyAction.none : NotifyAction.update;
 }
 
 /// Whether the OS will actually show a notification. `show()` does not
@@ -166,6 +240,46 @@ Future<bool> notificationsPermitted() async {
         AndroidFlutterLocalNotificationsPlugin
       >();
   return await android?.areNotificationsEnabled() ?? true;
+}
+
+/// The one new-mail notification: every post replaces it.
+const newMailNotificationId = 0;
+
+/// Remove the new-mail notification: the user opened the app and sees the
+/// list itself.
+Future<void> clearMailNotification() async {
+  if (!Platform.isAndroid) return;
+  try {
+    await FlutterLocalNotificationsPlugin().cancel(id: newMailNotificationId);
+  } catch (_) {
+    // Nothing shown, or the plugin is not ready: nothing to clear.
+  }
+}
+
+Future<FlutterLocalNotificationsPlugin> _initializedPlugin() async {
+  final plugin = FlutterLocalNotificationsPlugin();
+  await plugin.initialize(
+    settings: const InitializationSettings(
+      android: AndroidInitializationSettings(notificationIcon),
+    ),
+  );
+  return plugin;
+}
+
+/// Signature of the new-mail notification on screen, or null.
+Future<String?> _shownText(FlutterLocalNotificationsPlugin plugin) async {
+  try {
+    final active = await plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
+        ?.getActiveNotifications();
+    final mine = active?.where((n) => n.id == newMailNotificationId);
+    if (mine == null || mine.isEmpty) return null;
+    return NotificationText.signatureOf(mine.first.title, mine.first.body);
+  } catch (_) {
+    return null;
+  }
 }
 
 /// Post a mock notification with all display options, for testing from
@@ -185,55 +299,70 @@ Future<void> showTestNotification() async {
   ]);
 }
 
-/// Post the system notification for [items] (never empty when called).
-/// One mail notifies directly; several collapse into a single inbox-style
-/// summary whose tap opens the newest — a ding per message would be spam.
+/// Title, body and inbox lines of the notification for some mail.
+class NotificationText {
+  const NotificationText({
+    required this.title,
+    required this.body,
+    required this.lines,
+    this.summary,
+  });
+
+  final String title;
+  final String body;
+  final List<String> lines;
+  final String? summary;
+
+  /// What [signatureOf] reads back from the posted notification.
+  String get signature => signatureOf(title, body);
+
+  static String signatureOf(String? title, String? body) =>
+      '${title ?? ''}\n${body ?? ''}';
+}
+
+/// Pure layout of the notification for [items] (never empty), newest first
+/// or oldest first as the report orders them: the title names the sender
+/// of the last one, or the count when there are several. Unit-tested.
+NotificationText notificationText(List<Map<String, dynamic>> items) {
+  final newest = items.last;
+  if (items.length == 1) {
+    return NotificationText(
+      title: _titleOf(newest),
+      body: _bodyOf(newest),
+      lines: const [],
+    );
+  }
+  final recent = items.reversed.take(5).toList(growable: false);
+  return NotificationText(
+    title: '${items.length} new messages',
+    body: '${_titleOf(newest)} — ${_bodyOf(newest)}',
+    lines: [for (final m in recent) '${_titleOf(m)} — ${_bodyOf(m)}'],
+    summary: items.length > 5 ? '+${items.length - 5} more' : null,
+  );
+}
+
+/// Post the system notification for [items] (never empty when called):
+/// one notification, replaced on every post. Several mails show as an
+/// inbox-style list whose tap opens the newest. A lone group summary is
+/// avoided on purpose: many Android versions do not show a summary without
+/// child notifications. [silent] reposts without sound or vibration.
 Future<void> showNewMailNotification(
   List<Map<String, dynamic>> items, {
   FlutterLocalNotificationsPlugin? plugin,
+  bool silent = false,
 }) async {
-  final notifications = plugin ?? FlutterLocalNotificationsPlugin();
-  if (plugin == null) {
-    await notifications.initialize(
-      settings: const InitializationSettings(
-        android: AndroidInitializationSettings(notificationIcon),
-      ),
-    );
-  }
-  final newest = items.first;
+  final notifications = plugin ?? await _initializedPlugin();
+  final newest = items.last;
   final payload = encodeOpenPayload(
     accountId: _asInt(newest['account_id']),
     folderId: _asInt(newest['folder_id']),
     uid: _asInt(newest['uid']),
   );
-  if (items.length == 1) {
-    await notifications.show(
-      id: 0,
-      title: _titleOf(newest),
-      body: _bodyOf(newest),
-      notificationDetails: const NotificationDetails(
-        android: AndroidNotificationDetails(
-          newMailChannelId,
-          newMailChannelName,
-          channelDescription:
-              'Alerts for mail that arrived while the app was closed',
-          importance: Importance.high,
-          priority: Priority.high,
-          groupKey: newMailChannelId,
-        ),
-      ),
-      payload: payload,
-    );
-    return;
-  }
-  final lines = items
-      .take(5)
-      .map((m) => '${_titleOf(m)} — ${_bodyOf(m)}')
-      .toList(growable: false);
+  final text = notificationText(items);
   await notifications.show(
-    id: 0,
-    title: '${items.length} new messages',
-    body: '${_titleOf(newest)} — ${_bodyOf(newest)}',
+    id: newMailNotificationId,
+    title: text.title,
+    body: text.body,
     notificationDetails: NotificationDetails(
       android: AndroidNotificationDetails(
         newMailChannelId,
@@ -242,13 +371,15 @@ Future<void> showNewMailNotification(
             'Alerts for mail that arrived while the app was closed',
         importance: Importance.high,
         priority: Priority.high,
-        styleInformation: InboxStyleInformation(
-          lines,
-          contentTitle: '${items.length} new messages',
-          summaryText: items.length > 5 ? '+${items.length - 5} more' : null,
-        ),
-        groupKey: newMailChannelId,
-        setAsGroupSummary: true,
+        silent: silent,
+        number: items.length,
+        styleInformation: text.lines.isEmpty
+            ? null
+            : InboxStyleInformation(
+                text.lines,
+                contentTitle: text.title,
+                summaryText: text.summary,
+              ),
       ),
     ),
     payload: payload,
