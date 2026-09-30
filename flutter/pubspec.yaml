@@ -20,7 +20,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # ([workspace.package]); this versionName mirrors it. The +N build number is
 # Android-only (versionCode): bump it on every shipped APK/AAB, independently
 # of the versionName (see AGENT.md §5).
-version: 0.7.0+2
+version: 0.8.0+3
 
 environment:
   sdk: ^3.13.3
