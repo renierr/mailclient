@@ -25,6 +25,11 @@ import 'measure_size.dart';
 /// follows its scroll position, and the document starts with a spacer of the
 /// header's height. The WebView keeps its own scroller — sizing it to the
 /// whole mail would make one enormous platform surface for a long newsletter.
+///
+/// The WebView is a real Android view (Hybrid Composition), not a texture
+/// Flutter composites: as a texture every scrolled WebView frame is copied
+/// into Flutter's next frame, and on a high-refresh phone that hand-over
+/// drops and doubles frames — flings judder however light the page is.
 class MailWebView extends StatefulWidget {
   const MailWebView({
     super.key,
@@ -69,7 +74,8 @@ class MailWebView extends StatefulWidget {
   State<MailWebView> createState() => _MailWebViewState();
 }
 
-class _MailWebViewState extends State<MailWebView> {
+class _MailWebViewState extends State<MailWebView>
+    with SingleTickerProviderStateMixin {
   late final WebViewController _controller;
 
   /// Inputs of the loaded document. Compared instead of the document
@@ -116,7 +122,12 @@ class _MailWebViewState extends State<MailWebView> {
   /// event.
   double _pendingDy = 0;
   bool _dragScheduled = false;
-  Timer? _fling;
+
+  /// Header-started fling, stepped once per vsync along Android's own
+  /// fling curve, so it moves at the display rate like a native one.
+  late final Ticker _fling = createTicker(_flingTick);
+  Simulation? _flingSim;
+  double _flingDone = 0;
 
   @override
   void initState() {
@@ -163,7 +174,7 @@ class _MailWebViewState extends State<MailWebView> {
   @override
   void dispose() {
     _settle?.cancel();
-    _fling?.cancel();
+    _fling.dispose();
     _scrollY.dispose();
     super.dispose();
   }
@@ -282,32 +293,33 @@ class _MailWebViewState extends State<MailWebView> {
     });
   }
 
-  /// A short decaying fling from a header swipe's release velocity
-  /// (physical pixels per millisecond). Native flings never reach the page
-  /// because the overlay eats the gesture; without this a swipe starting
-  /// on the header stops dead on release.
+  /// A fling from a header swipe's release velocity (physical pixels per
+  /// second). Native flings never reach the page because the overlay eats
+  /// the gesture; without this a swipe starting on the header stops dead
+  /// on release.
   void _flingFrom(double velocity) {
     _stopFling();
-    if (!mounted || velocity.abs() < 0.5) return;
-    var v = velocity;
-    _fling = Timer.periodic(const Duration(milliseconds: 16), (t) {
-      if (!mounted) {
-        t.cancel();
-        return;
-      }
-      v *= 0.92;
-      if (v.abs() < 0.5) {
-        t.cancel();
-        _fling = null;
-        return;
-      }
-      _controller.scrollBy(0, (v * 16).round());
-    });
+    if (!mounted || velocity.abs() < 50) return;
+    _flingSim = ClampingScrollSimulation(position: 0, velocity: velocity);
+    _flingDone = 0;
+    _fling.start();
+  }
+
+  void _flingTick(Duration elapsed) {
+    final sim = _flingSim;
+    if (sim == null || !mounted) return;
+    final t = elapsed.inMicroseconds / Duration.microsecondsPerSecond;
+    final dy = (sim.x(t) - _flingDone).truncate();
+    if (dy != 0) {
+      _flingDone += dy;
+      _controller.scrollBy(0, dy);
+    }
+    if (sim.isDone(t)) _stopFling();
   }
 
   void _stopFling() {
-    _fling?.cancel();
-    _fling = null;
+    if (_fling.isActive) _fling.stop();
+    _flingSim = null;
   }
 
   @override
@@ -329,7 +341,12 @@ class _MailWebViewState extends State<MailWebView> {
 
   Widget _page(BuildContext context) {
     final header = widget.header;
-    final web = WebViewWidget(controller: _controller);
+    final web = WebViewWidget.fromPlatformCreationParams(
+      params: AndroidWebViewWidgetCreationParams(
+        controller: _controller.platform,
+        displayWithHybridComposition: true,
+      ),
+    );
     if (header == null) return web;
     final dpr = MediaQuery.devicePixelRatioOf(context);
     return Stack(
@@ -343,11 +360,11 @@ class _MailWebViewState extends State<MailWebView> {
             // Dragging on the header scrolls the page underneath, as if
             // the header were part of it. Motion events are batched into
             // one `scrollBy` per frame; the release velocity becomes a
-            // short decaying fling, so a swipe off the header keeps moving
-            // like a native one instead of stopping dead.
+            // fling on Android's curve, so a swipe off the header keeps
+            // moving like a native one instead of stopping dead.
             onVerticalDragUpdate: (d) => _forwardDrag(-d.delta.dy * dpr),
             onVerticalDragEnd: (d) =>
-                _flingFrom(-(d.primaryVelocity ?? 0) * dpr / 1000),
+                _flingFrom(-(d.primaryVelocity ?? 0) * dpr),
             onVerticalDragCancel: _stopFling,
             child: RepaintBoundary(
               // Its own layer: scrolling only re-composites the header's
