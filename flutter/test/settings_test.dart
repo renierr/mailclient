@@ -29,7 +29,7 @@ void main() {
       expect(s.markReadDelaySecs, 5);
       expect(s.confirmDelete, isFalse);
       expect(s.isCompact, isTrue);
-      expect(s.readerScale, 1.2);
+      expect(s.readerScale, 18 / 14);
       expect(s.linkClickAction, 'browser');
       expect(s.syncIntervalMinutes, 15);
       expect(s.backgroundScheduler, 'workmanager');

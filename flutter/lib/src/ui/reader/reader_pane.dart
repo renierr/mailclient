@@ -156,11 +156,15 @@ class ReaderPaneState extends State<ReaderPane> {
               SliverToBoxAdapter(child: header),
               SliverPadding(
                 padding: const EdgeInsets.all(16),
+                // The size setting multiplies the font, on top of the
+                // interface scale the app already applies as text scaling.
                 sliver: SliverToBoxAdapter(
-                  child: MediaQuery(
-                    data: MediaQuery.of(context)
-                        .copyWith(textScaler: TextScaler.linear(scale)),
-                    child: SelectableText(message.bodyText),
+                  child: SelectableText(
+                    message.bodyText,
+                    style: TextStyle(
+                      fontSize:
+                          (theme.textTheme.bodyMedium?.fontSize ?? 14) * scale,
+                    ),
                   ),
                 ),
               ),

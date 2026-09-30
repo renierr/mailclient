@@ -176,11 +176,11 @@ class AppSettings {
         sortDescending: sortDescending ?? this.sortDescending,
       );
 
-  /// Plain-text size multiplier for the reader. HTML mail brings its own
-  /// sizes; this only affects the plain-text view.
+  /// Reader text size multiplier, on top of the interface scale. The same
+  /// steps as the Qt reader's 12 / 14 / 18 px.
   double get readerScale => switch (readerFontSize) {
-        'small' => 0.85,
-        'large' => 1.2,
+        'small' => 12 / 14,
+        'large' => 18 / 14,
         _ => 1.0,
       };
 
