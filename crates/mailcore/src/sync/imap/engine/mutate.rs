@@ -106,6 +106,7 @@ impl ImapSync {
         }
         session.uid_move(&clean, dest_path).await?;
         let count = messages::delete_many_by_uids(db, src_folder_id, &clean)?;
+        folders::note_removed_on_server(db, src_folder_id, count)?;
         Ok(count)
     }
 
@@ -121,6 +122,7 @@ impl ImapSync {
             .await?;
         session.uid_expunge(uids).await?;
         let count = messages::delete_many_by_uids(db, folder_id, uids)?;
+        folders::note_removed_on_server(db, folder_id, count)?;
         Ok(count)
     }
 

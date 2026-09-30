@@ -32,7 +32,9 @@ pub(crate) async fn search_recent_uids(
 const SEARCH_PAGES: u32 = 8;
 
 /// SEARCH UID space backwards from `top`, paging down until `want` UIDs are
-/// known or UID 1 is reached.
+/// known or UID 1 is reached. Returns the hits and the lowest UID actually
+/// searched: the caller expunges local rows at or above it that the server
+/// did not return, so it must never name a page that was not asked about.
 async fn search_paged(
     session: &mut ImapSession,
     top: u32,
@@ -43,6 +45,7 @@ async fn search_paged(
     let mut found = HashSet::new();
     let mut hi = top;
     let mut lo = hi.saturating_sub(span.saturating_sub(1)).max(1);
+    let mut searched_lo = top.max(1);
     for _ in 0..SEARCH_PAGES {
         let seq_str = format!("{lo}:{hi}");
         let seq = SequenceSet::try_from(seq_str.as_str()).map_err(|e| {
@@ -50,6 +53,7 @@ async fn search_paged(
         })?;
         let uids = session.uid_search(vec1![SearchKey::Uid(seq)]).await?;
         found.extend(uids);
+        searched_lo = lo;
         if found.len() >= want || lo <= 1 {
             break;
         }
@@ -59,7 +63,7 @@ async fn search_paged(
         }
         lo = hi.saturating_sub(span.saturating_sub(1)).max(1);
     }
-    Ok((found, lo))
+    Ok((found, searched_lo))
 }
 
 #[cfg(test)]

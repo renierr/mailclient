@@ -336,16 +336,20 @@ impl ImapSync {
             }
         }
 
+        // Only the count is refreshed. UIDNEXT and the modseq mark how far the
+        // window sync has seen: this backfill looked at neither new mail nor
+        // flag changes nor expunges, and recording the server's current values
+        // would make the next window sync take its unchanged fast path (or
+        // ask QRESYNC for changes since *now*) and silently skip them.
         let validity = mb.uid_validity.unwrap_or(folder.uid_validity.unwrap_or(0));
-        let uid_next = mb.uid_next.unwrap_or(folder.uid_next.unwrap_or(0));
-        let modseq = mb.highest_modseq.unwrap_or(folder.highest_modseq);
+        let uid_next = folder.uid_next.or(mb.uid_next).unwrap_or(0);
         folders::set_sync_state(
             db,
             folder_id,
             validity,
             uid_next,
             u64::from(mb.exists),
-            modseq,
+            folder.highest_modseq,
         )?;
 
         Ok(SyncReport {

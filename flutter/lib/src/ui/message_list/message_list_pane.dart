@@ -95,6 +95,12 @@ class MessageListPaneState extends State<MessageListPane> {
                   text: syncing ? 'Syncing…' : 'Nothing here',
                 )
               : ListView.separated(
+                  // The pane is rebuilt from scratch whenever the reader
+                  // takes its place (one and two panes), and an unkeyed
+                  // scrollable shares its PageStorage slot with every other
+                  // one on the route. A per-folder key brings the list back
+                  // where it was, and each folder keeps its own position.
+                  key: PageStorageKey<String>('message-list-$folderId'),
                   itemCount: shown.length + 1,
                   separatorBuilder: (_, _) => const Divider(height: 1),
                   itemBuilder: (context, i) {

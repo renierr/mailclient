@@ -267,6 +267,99 @@ async fn sync_older_backfills_below_local_min() {
 }
 
 #[tokio::test]
+async fn sync_older_leaves_the_delta_state_to_the_window_sync() {
+    let server = MockImapServer::start("IMAP4rev1", |tag, rest| {
+        let upper = rest.to_ascii_uppercase();
+        if upper.starts_with("SELECT") {
+            let mut r = select_ok(tag, 6, 1, 11);
+            r.insert(0, "* OK [HIGHESTMODSEQ 200] Ok\r\n".to_string());
+            r
+        } else if upper.starts_with("UID SEARCH") {
+            vec![
+                "* SEARCH 4\r\n".to_string(),
+                format!("{tag} OK UID SEARCH completed\r\n"),
+            ]
+        } else if upper.starts_with("UID FETCH") {
+            vec![
+                fetch_literal(4, 1, RAW6),
+                format!("{tag} OK UID FETCH completed\r\n"),
+            ]
+        } else {
+            vec![format!("{tag} OK completed\r\n")]
+        }
+    })
+    .await;
+
+    let db = Db::open_in_memory().unwrap();
+    let account = test_mock_account(server.port);
+    let account_id = test_account_row(&db, &account);
+    let inbox_id = folders::upsert(&db, account_id, "INBOX", "/", FolderRole::Inbox).unwrap();
+    messages::upsert(&db, &messages::sample_new(account_id, inbox_id, 8)).unwrap();
+    folders::set_sync_state(&db, inbox_id, 1, 9, 5, 100).unwrap();
+
+    let mut sync = ImapSync::new(&account);
+    sync.connect("secret").await.unwrap();
+    sync.sync_older(&db, inbox_id, 10).await.unwrap();
+
+    // New mail (UIDNEXT 9 -> 11) and changes since modseq 100 are the window
+    // sync's to pick up; recording the server's current values here would
+    // let its unchanged fast path skip them.
+    let folder = folders::get(&db, inbox_id).unwrap();
+    assert_eq!(folder.uid_next, Some(9));
+    assert_eq!(folder.highest_modseq, 100);
+    assert_eq!(folder.server_total, Some(6));
+}
+
+#[tokio::test]
+async fn sparse_window_sync_keeps_older_cached_mail() {
+    // UIDNEXT 10001 with only one recent mail: eight 400-UID search pages
+    // (6801:10000) find fewer than the window wants. Nothing below them was
+    // searched, so backfilled mail down there must stay cached.
+    let server = MockImapServer::start("IMAP4rev1", |tag, rest| {
+        let upper = rest.to_ascii_uppercase();
+        if upper.starts_with("SELECT") {
+            select_ok(tag, 2, 1, 10001)
+        } else if upper.starts_with("UID SEARCH") {
+            let hits = if upper.contains("9601:10000") {
+                " 9995"
+            } else {
+                ""
+            };
+            vec![
+                format!("* SEARCH{hits}\r\n"),
+                format!("{tag} OK UID SEARCH completed\r\n"),
+            ]
+        } else {
+            vec![format!("{tag} OK completed\r\n")]
+        }
+    })
+    .await;
+
+    let db = Db::open_in_memory().unwrap();
+    let account = test_mock_account(server.port);
+    let account_id = test_account_row(&db, &account);
+    let trash_id = folders::upsert(&db, account_id, "Trash", "/", FolderRole::Trash).unwrap();
+    for uid in [6500u32, 9995] {
+        messages::upsert(&db, &messages::sample_new(account_id, trash_id, uid)).unwrap();
+    }
+
+    let mut sync = ImapSync::new(&account);
+    sync.connect("secret").await.unwrap();
+    let report = sync
+        .sync_folder_window(&db, trash_id, Some(crate::sync::imap::QUICK_SYNC_WINDOW))
+        .await
+        .unwrap();
+
+    assert_eq!(report.expunged, 0);
+    let uids = messages::list_uids(&db, trash_id).unwrap();
+    assert!(
+        uids.contains(&6500),
+        "unsearched older mail must stay cached"
+    );
+    assert!(uids.contains(&9995));
+}
+
+#[tokio::test]
 async fn server_search_backfills_missing_uids() {
     const RAW9: &str =
         "From: a@x.y\r\nSubject: hello world\r\nContent-Type: text/plain\r\n\r\nhello";

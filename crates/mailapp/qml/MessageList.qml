@@ -354,7 +354,59 @@ Rectangle {
         }
         // In place: clearing the model destroyed and rebuilt every delegate on
         // every click, including the one whose mouse handler was still running.
+        // The row shuffle scrolls the view as a side effect; it must not
+        // overwrite the remembered position it is about to restore.
+        root.scrollRestoring = true;
         ModelSync.sync(filtered, rows, "uid");
+        root.scrollRestoring = false;
+        root.restoreScroll();
+    }
+
+    // Scroll memory per folder: the top visible row (by UID) and how far past
+    // its top the view sits. The list comes back where it was after the
+    // reader took its place (medium/narrow layouts hide the list), after a
+    // feed rebuild (delete, mark read, new mail, load older) and on returning
+    // to a folder. Anchored on a UID rather than a pixel offset, so rows that
+    // appear above or vanish do not shift what the user was looking at; a
+    // deleted anchor falls back to the row now at its index. A list resting
+    // at the very top stays there, so new mail shows.
+    property var scrollMemory: ({})
+    property bool scrollRestoring: false
+
+    function rememberScroll() {
+        if (root.scrollRestoring || !root.visible || root.searching || root.folderName === "" || filtered.count === 0)
+            return;
+        var idx = list.indexAt(0, list.contentY);
+        if (idx < 0)
+            return;
+        var item = list.itemAtIndex(idx);
+        root.scrollMemory[root.folderName] = {
+            uid: filtered.get(idx).uid,
+            index: idx,
+            offset: item ? list.contentY - item.y : 0,
+            atTop: list.atYBeginning
+        };
+    }
+
+    function restoreScroll() {
+        if (root.searching || filtered.count === 0)
+            return;
+        var mem = root.scrollMemory[root.folderName];
+        root.scrollRestoring = true;
+        if (mem === undefined || mem.atTop) {
+            list.positionViewAtBeginning();
+        } else {
+            var idx = root.indexOfUid(mem.uid);
+            var offset = mem.offset;
+            if (idx < 0) {
+                idx = Math.min(mem.index, filtered.count - 1);
+                offset = 0;
+            }
+            list.positionViewAtIndex(idx, ListView.Beginning);
+            var maxY = list.originY + Math.max(0, list.contentHeight - list.height);
+            list.contentY = Math.min(list.contentY + offset, maxY);
+        }
+        root.scrollRestoring = false;
     }
 
     function indexOfUid(uid) {
@@ -400,6 +452,10 @@ Rectangle {
     }
     onFilterTextChanged: root.scheduleRebuild()
     onSearchRowsChanged: root.scheduleRebuild()
+    onVisibleChanged: {
+        if (root.visible)
+            Qt.callLater(root.restoreScroll);
+    }
     onSearchingChanged: {
         // Search results are navigation-only: a stale checkbox set must
         // never act on foreign-folder UIDs afterwards.
@@ -573,6 +629,7 @@ Rectangle {
             clip: true
             model: filtered
             boundsBehavior: Flickable.StopAtBounds
+            onContentYChanged: root.rememberScroll()
             ScrollBar.vertical: ScrollBar {
                 policy: ScrollBar.AsNeeded
             }

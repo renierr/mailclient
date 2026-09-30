@@ -372,11 +372,15 @@ class MailState extends ChangeNotifier {
     }
   }
 
-  Future<void> loadOlderMessages() {
+  Future<void> loadOlderMessages() async {
     // Show the next page of what is already cached immediately; the server
-    // batch lands through the job event and extends it further.
+    // batch lands through the job event and extends it further. Mail
+    // already cached (an earlier "load older", or a folder reopened at the
+    // first page) is shown without asking the server for more.
+    final hadHidden = _cachedCount > _messages.length;
     _messageLimit += _pageSize;
-    unawaited(_reloadMessages());
+    await _reloadMessages();
+    if (hadHidden) return;
     return _queue('Sync', () => _core.loadOlderMessages(_accountId, _folderId));
   }
 

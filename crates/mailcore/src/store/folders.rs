@@ -152,6 +152,18 @@ pub fn set_sync_state(
     Ok(())
 }
 
+/// Lower the cached server count by `removed` after our own expunge or move
+/// out of the folder, so "Cached X of Y" is right before the next sync
+/// re-reads EXISTS. Leaves an unknown count unknown.
+pub fn note_removed_on_server(db: &Db, id: i64, removed: u64) -> Result<()> {
+    db.conn().execute(
+        "update folders set server_total = max(server_total - ?1, 0), updated_at = ?2
+         where id = ?3 and server_total is not null",
+        params![removed as i64, now(), id],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +208,20 @@ mod tests {
         assert_eq!(f.server_total, Some(12));
         assert_eq!(f.highest_modseq, 789);
         assert!(f.last_sync_at.is_some());
+    }
+
+    #[test]
+    fn removal_lowers_a_known_server_count_only() {
+        let db = Db::open_in_memory().unwrap();
+        let acc = mk_account(&db);
+        let trash = upsert(&db, acc, "Trash", "/", FolderRole::Trash).unwrap();
+        note_removed_on_server(&db, trash, 3).unwrap();
+        assert_eq!(get(&db, trash).unwrap().server_total, None);
+        set_sync_state(&db, trash, 1, 10, 5, 0).unwrap();
+        note_removed_on_server(&db, trash, 3).unwrap();
+        assert_eq!(get(&db, trash).unwrap().server_total, Some(2));
+        note_removed_on_server(&db, trash, 9).unwrap();
+        assert_eq!(get(&db, trash).unwrap().server_total, Some(0));
     }
 
     #[test]
