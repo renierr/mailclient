@@ -146,7 +146,8 @@ cover storage (`rusqlite`, bundled), errors (`thiserror`), serialisation
 `mail-parser`, `keyring`, `directories`, `tempfile`, the Qt bridge (`cxx`,
 `cxx-qt`, `cxx-qt-lib`, `cxx-qt-build`) and `winresource` for the Windows
 executable resources. The Flutter bridge adds
-`flutter_rust_bridge` (pinned with `=`), `anyhow` and `android_logger`.
+`flutter_rust_bridge` (pinned with `=`), `anyhow` and `android_logger`, plus
+`jni` for the Kotlin entry points on Android (`mailffi/src/android.rs`).
 
 The `=` pin on `flutter_rust_bridge` is deliberate: the codegen tool, the Rust
 crate and the Dart package must be the same version, so a range would let
@@ -159,8 +160,9 @@ bridge (`flutter_rust_bridge`), state (`provider`), platform paths and files
 (`path_provider`, `file_picker`, `open_filex`, `url_launcher`, and
 `desktop_drop` for files dropped onto the composer), formatting and
 HTML (`intl`, `flutter_widget_from_html_core`, and `webview_flutter` for the
-Android reader), and Android background mail (`workmanager`,
-`flutter_local_notifications`), plus the
+Android reader), and the notification permission prompt
+(`flutter_local_notifications`; background checks themselves are native
+Kotlin over `androidx.work`), plus the
 dev-only `flutter_launcher_icons`. Anything else → ask.
 
 Anything else (new crypto, a second async runtime, new Qt modules beyond

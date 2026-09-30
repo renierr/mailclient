@@ -5,5 +5,6 @@ pub mod background;
 pub mod headless;
 pub mod imap;
 pub mod pool;
+pub mod push;
 pub mod sender;
 pub mod traits;

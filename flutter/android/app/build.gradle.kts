@@ -83,9 +83,8 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
-    // Compile access for MailAlarm.kt, which enqueues the workmanager
-    // plugin's worker. Not a new library: the plugin already ships it, and
-    // this pins the plugin's own version (bump with the plugin).
+    // WorkManager for the native background checks (MailCheckWorker.kt,
+    // enqueued by the periodic schedule and every alarm shot).
     implementation("androidx.work:work-runtime:2.11.2")
 }
 

@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:provider/provider.dart';
 
 import 'ffi/mail_core.dart';
@@ -38,24 +37,6 @@ class _MailAppState extends State<MailApp> with WidgetsBindingObserver {
   /// cold-start tap lands on a loaded list rather than an empty shell.
   Future<void> _wireNotifications() async {
     if (!Platform.isAndroid) return;
-    final plugin = FlutterLocalNotificationsPlugin();
-    await plugin.initialize(
-      settings: const InitializationSettings(
-        android: AndroidInitializationSettings(notificationIcon),
-      ),
-      // Fires for taps while the app is alive; cold-start taps arrive via
-      // the launch details below.
-      onDidReceiveNotificationResponse: (response) async {
-        final target = parseOpenPayload(response.payload);
-        if (target != null) {
-          await _state.openMail(
-            accountId: target.accountId,
-            folderId: target.folderId,
-            uid: target.uid,
-          );
-        }
-      },
-    );
     for (var i = 0; i < 150 && _state.loading && mounted; i++) {
       await Future.delayed(const Duration(milliseconds: 200));
     }
@@ -65,17 +46,18 @@ class _MailAppState extends State<MailApp> with WidgetsBindingObserver {
     if (_state.settings.syncIntervalMinutes > 0) {
       await requestNotificationPermission();
     }
-    final launch = await plugin.getNotificationAppLaunchDetails();
-    if (launch?.didNotificationLaunchApp == true) {
-      final target = parseOpenPayload(launch?.notificationResponse?.payload);
-      if (target != null && _state.hasAccounts) {
+    await listenForBackgroundEvents(
+      onOpen: (payload) async {
+        final target = parseOpenPayload(payload);
+        if (target == null || !_state.hasAccounts) return;
         await _state.openMail(
           accountId: target.accountId,
           folderId: target.folderId,
           uid: target.uid,
         );
-      }
-    }
+      },
+      onMailChanged: _state.reloadFromCache,
+    );
   }
 
   @override

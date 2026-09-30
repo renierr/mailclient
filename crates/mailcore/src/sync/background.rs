@@ -6,6 +6,12 @@
 //! reports mail above per-folder high-water marks. Every tick is kept in a
 //! short [`LastRun`] history so the UI can show whether Android actually ran
 //! it, which scheduler did, and what became of the notification.
+//!
+//! [`push_check`] is the same check for one account over the connection the
+//! IDLE monitor (`sync::push`) already holds; [`notify`] turns a report into
+//! what the notification should do.
+
+pub mod notify;
 
 use std::path::Path;
 
@@ -13,13 +19,18 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::db::Db;
+use crate::models::Account;
 use crate::store::settings;
-use crate::sync::headless::{self, acquire_sync_lock, sync_all_accounts, SyncScope};
+use crate::sync::headless::{
+    self, acquire_sync_lock, sync_account, sync_all_accounts, SyncLock, SyncScope,
+};
+use crate::sync::imap::ImapSync;
 
 /// One mail the background check has never reported before. Carries the ids
 /// the UI needs to open it (`account_id`/`folder_id`/`uid`), plus the
 /// metadata a notification shows. Bodies never cross here.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct NewMail {
     pub account_id: i64,
     pub account_email: String,
@@ -36,7 +47,9 @@ pub struct NewMail {
 }
 
 /// Outcome of [`background_check`]: what arrived since the previous check.
-#[derive(Debug, Clone, Default, Serialize)]
+/// Crosses to the Android host as JSON and back into [`notify::plan`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct BackgroundReport {
     /// Another sync held the lock, so this run did nothing. Not an error —
     /// the next scheduled run picks it up.
@@ -194,6 +207,18 @@ pub fn last_run(db: &Db) -> Option<LastRun> {
     run_history(db).into_iter().next()
 }
 
+/// Record a check that could not even start (the push monitor failed to
+/// connect), so the history shows why no checks are running.
+pub fn record_failed_run(db: &Db, trigger: &str, error: &str) {
+    let now = Utc::now();
+    let run = LastRun {
+        finished_at: Some(now.to_rfc3339()),
+        errors: vec![error.to_string()],
+        ..LastRun::started(now, trigger)
+    };
+    save_run(db, &run);
+}
+
 /// Note what became of the report of the tick that started at `started_at`.
 /// A tick that already fell out of the history is ignored.
 pub fn record_outcome(db: &Db, started_at: &str, outcome: &str) {
@@ -252,6 +277,74 @@ async fn background_tick(db: &Db, db_path: &Path) -> BackgroundReport {
         errors: report.errors,
         run: String::new(),
     }
+}
+
+/// How often [`push_check`] retries for the sync lock, and how long it waits
+/// between tries. Only a scheduled check or the headless CLI holds the lock,
+/// and neither runs for long.
+const PUSH_LOCK_TRIES: u32 = 4;
+const PUSH_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The check the IDLE monitor runs when the server announced a change to
+/// `account`'s inbox: sync that inbox over `imap` (the monitor's open
+/// session, so no reconnect), then report like [`background_check`]. Logged
+/// in the run history as trigger `push`.
+///
+/// Leaves the inbox selected, which is what the next IDLE needs. Errors in
+/// the report usually mean the session broke; the caller reconnects then.
+pub async fn push_check(
+    db: &Db,
+    db_path: &Path,
+    account: &Account,
+    imap: &mut ImapSync,
+) -> BackgroundReport {
+    let run = LastRun::started(Utc::now(), "push");
+    save_run(db, &run);
+    let mut report = match push_lock(db_path).await {
+        Ok(Some(_lock)) => {
+            let result = sync_account(db, account, imap, SyncScope::InboxOnly, None).await;
+            let (new, marks) = collect_new_mail(db);
+            BackgroundReport {
+                skipped: false,
+                new,
+                marks,
+                pending: collect_pending(db),
+                total_unread: cached_total_unread(db),
+                errors: result
+                    .errors
+                    .iter()
+                    .map(|e| format!("{}: {e}", account.email_address))
+                    .collect(),
+                run: String::new(),
+            }
+        }
+        Ok(None) => BackgroundReport {
+            skipped: true,
+            total_unread: cached_total_unread(db),
+            ..Default::default()
+        },
+        Err(e) => BackgroundReport {
+            skipped: true,
+            total_unread: cached_total_unread(db),
+            errors: vec![format!("sync lock: {e}")],
+            ..Default::default()
+        },
+    };
+    report.run = run.started_at.clone();
+    save_run(db, &run.finish(Utc::now(), &report));
+    report
+}
+
+async fn push_lock(db_path: &Path) -> crate::error::Result<Option<SyncLock>> {
+    for attempt in 1..=PUSH_LOCK_TRIES {
+        if let Some(lock) = acquire_sync_lock(db_path)? {
+            return Ok(Some(lock));
+        }
+        if attempt < PUSH_LOCK_TRIES {
+            tokio::time::sleep(PUSH_LOCK_WAIT).await;
+        }
+    }
+    Ok(None)
 }
 
 /// Synchronous wrapper around [`background_check`] for FFI callers, which

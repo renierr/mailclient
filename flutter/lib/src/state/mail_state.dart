@@ -6,7 +6,6 @@ import 'package:flutter/foundation.dart';
 import '../ffi/mail_core.dart';
 import '../models/models.dart';
 import '../models/settings.dart';
-import '../sync/background_alarm.dart';
 import '../sync/background_sync.dart';
 
 /// What the app is showing, and how it reacts to the core changing underneath.
@@ -736,20 +735,22 @@ class MailState extends ChangeNotifier {
   }
 
   /// Re-register the Android background check from the current settings.
-  /// Called after startup and on every interval or scheduler change;
-  /// disabling (0) cancels both schedulers, and switching the mode stops the
-  /// inactive one so WorkManager and the exact alarm never run side by side.
-  /// Off Android this is a no-op.
-  Future<void> rescheduleBackgroundSync() async {
-    if (_settings.backgroundScheduler == schedulerAlarm) {
-      await cancelBackgroundSync();
-      await scheduleAlarmSync(intervalMinutes: _settings.syncIntervalMinutes);
-    } else {
-      await cancelAlarmSync();
-      await scheduleBackgroundSync(
-        intervalMinutes: _settings.syncIntervalMinutes,
-      );
-    }
+  /// Called after startup and on every interval or scheduler change; the
+  /// platform runs exactly the chosen mechanism (worker, alarm or push) and
+  /// stops the others, and an interval of 0 stops all of them. Off Android
+  /// this is a no-op.
+  Future<void> rescheduleBackgroundSync() => scheduleBackgroundChecks(
+    scheduler: _settings.backgroundScheduler,
+    intervalMinutes: _settings.syncIntervalMinutes,
+  );
+
+  /// A background check (push, while the app is open) stored new mail: show
+  /// it from the cache, no network.
+  Future<void> reloadFromCache() async {
+    if (_loading || !hasAccounts) return;
+    await _reloadFolders();
+    await _reloadMessages();
+    notifyListeners();
   }
 
   /// Open a specific message from a notification tap, switching account

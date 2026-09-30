@@ -118,6 +118,61 @@ async fn sync_window_fetches_refreshes_and_expunges() {
 }
 
 #[tokio::test]
+async fn a_synced_folder_refreshes_only_flags_changed_since_its_modseq() {
+    let server = MockImapServer::start("IMAP4rev1 CONDSTORE", |tag, rest| {
+        let upper = rest.to_ascii_uppercase();
+        if upper.starts_with("SELECT") {
+            let mut out = select_ok(tag, 2, 1, 8);
+            out.insert(0, "* OK [HIGHESTMODSEQ 120] Ok\r\n".to_string());
+            out
+        } else if upper.starts_with("UID SEARCH") {
+            vec![
+                "* SEARCH 5 6\r\n".to_string(),
+                format!("{tag} OK UID SEARCH completed\r\n"),
+            ]
+        } else if upper.starts_with("UID FETCH") && upper.contains("CHANGEDSINCE 100") {
+            vec![
+                "* 1 FETCH (UID 5 MODSEQ (110) FLAGS (\\Seen))\r\n".to_string(),
+                format!("{tag} OK UID FETCH completed\r\n"),
+            ]
+        } else if upper.starts_with("UID FETCH") {
+            vec![format!("{tag} BAD expected CHANGEDSINCE\r\n")]
+        } else {
+            vec![format!("{tag} OK completed\r\n")]
+        }
+    })
+    .await;
+
+    let db = Db::open_in_memory().unwrap();
+    let account = test_mock_account(server.port);
+    let account_id = test_account_row(&db, &account);
+    let inbox_id = folders::upsert(&db, account_id, "INBOX", "/", FolderRole::Inbox).unwrap();
+    folders::set_sync_state(&db, inbox_id, 1, 7, 2, 100).unwrap();
+    for uid in [5, 6] {
+        let mut m = messages::sample_new(account_id, inbox_id, uid);
+        m.is_read = false;
+        messages::upsert(&db, &m).unwrap();
+    }
+
+    let mut sync = ImapSync::new(&account);
+    sync.connect("secret").await.unwrap();
+    sync.sync_folder_window(&db, inbox_id, Some(FULL_SYNC_WINDOW))
+        .await
+        .unwrap();
+
+    assert!(messages::get_by_uid(&db, inbox_id, 5).unwrap().is_read);
+    assert!(!messages::get_by_uid(&db, inbox_id, 6).unwrap().is_read);
+    let sent = server.received.lock().await;
+    assert!(
+        sent.iter()
+            .filter(|c| c.to_ascii_uppercase().contains("UID FETCH"))
+            .all(|c| c.to_ascii_uppercase().contains("CHANGEDSINCE 100")),
+        "every flag refresh asks only for changes: {sent:?}"
+    );
+    assert_eq!(folders::get(&db, inbox_id).unwrap().highest_modseq, 120);
+}
+
+#[tokio::test]
 async fn uidvalidity_change_drops_local_cache() {
     let server = MockImapServer::start("IMAP4rev1", |tag, rest| {
         let upper = rest.to_ascii_uppercase();

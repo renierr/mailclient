@@ -2,9 +2,14 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <!-- Runtime-prompted on API 33+ when background mail checks are enabled;
-         install-time granted below that. No exact alarms, no foreground
-         service: the checker is a plain WorkManager periodic task. -->
+         install-time granted below that. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Push mail (Settings option): MailPushService holds the IMAP IDLE
+         connections in a foreground service, the only way Android lets a
+         closed app keep them. Type specialUse: dataSync is capped at a few
+         hours a day on recent Android, a mail monitor runs all day. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
     <!-- Lets Settings ask for the battery-optimisation exemption. Without
          it, Doze and App Standby defer the periodic worker by hours while
          the phone sleeps. Play restricts this permission; the APK is
@@ -16,8 +21,9 @@
          to the "Alarms & reminders" screen to allow it. Without the grant
          the alarm still fires via AllowWhileIdle, just not exact. -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
-    <!-- Needed by the alarm scheduler: WorkManager keeps the CPU awake for
-         the short inbox check, and the alarm is re-armed after a reboot. -->
+    <!-- Needed by the alarm scheduler and push: WorkManager and the push
+         service keep the CPU awake while a check runs, and alarms and the
+         push service come back after a reboot. -->
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
@@ -61,7 +67,8 @@
             android:value="false" />
         <!-- On-time background mail check (MailAlarm.kt): exact alarm shots,
              re-armed after a reboot or an app update. Only armed when
-             Settings picks the alarm scheduler; otherwise it stays idle. -->
+             Settings picks the alarm scheduler; otherwise it stays idle.
+             Also restarts push mail after a reboot or update. -->
         <receiver
             android:name=".MailAlarmReceiver"
             android:exported="false">
@@ -70,6 +77,19 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
             </intent-filter>
         </receiver>
+        <!-- Push mail: the IMAP IDLE monitor (MailPushService.kt) and its
+             keep-alive alarm (MailPush.kt). Idle unless Settings picks push. -->
+        <service
+            android:name=".MailPushService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps IMAP IDLE connections to the user's mail servers open so new mail is announced by the server as it arrives, instead of polling." />
+        </service>
+        <receiver
+            android:name=".MailPushReceiver"
+            android:exported="false" />
         <meta-data
             android:name="android.webkit.WebView.MetricsOptOut"
             android:value="true" />

@@ -25,8 +25,11 @@
 //! it is actually showing. That removes the stale-selection reconciliation
 //! `mailapp`'s worker has to do, and it fits Flutter's state model.
 
+#[cfg(target_os = "android")]
+mod android;
 mod db;
 mod net;
+mod startup;
 
 pub mod api;
 

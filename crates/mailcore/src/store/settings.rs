@@ -391,12 +391,14 @@ pub fn set_sync_interval(db: &Db, value: i64) -> Result<()> {
     )
 }
 
-/// Validated background scheduler: `alarm` | `workmanager` (default).
-/// Unknown/empty values fall back to `workmanager`, so a hand-edited row or
-/// a frontend that never heard of the alarm mode keeps the safe default.
+/// Validated background scheduler: `push` (IMAP IDLE) | `alarm` |
+/// `workmanager` (default). Unknown/empty values fall back to
+/// `workmanager`, so a hand-edited row or a frontend that never heard of a
+/// newer mode keeps the safe default.
 #[must_use]
 pub fn normalize_background_scheduler(raw: &str) -> &'static str {
     match raw.trim().to_ascii_lowercase().as_str() {
+        "push" | "idle" => "push",
         "alarm" | "exact" | "alarmmanager" => "alarm",
         _ => "workmanager",
     }
@@ -623,6 +625,7 @@ mod tests {
         assert_eq!(get_background_scheduler(&db), "workmanager");
         assert_eq!(normalize_background_scheduler("alarm"), "alarm");
         assert_eq!(normalize_background_scheduler(" ALARM "), "alarm");
+        assert_eq!(normalize_background_scheduler("Push"), "push");
         assert_eq!(normalize_background_scheduler("workmanager"), "workmanager");
         assert_eq!(normalize_background_scheduler(""), "workmanager");
         assert_eq!(normalize_background_scheduler("nonsense"), "workmanager");

@@ -5,12 +5,16 @@
 //!
 //! This file owns the connection itself -- tags, the command loop, login and
 //! capability negotiation. The verbs built on top are grouped by what they
-//! are for: [`mailbox`] reads a mailbox, [`mutate`] changes one, and
-//! [`discovery`] asks what exists.
+//! are for: [`mailbox`] reads a mailbox, [`mutate`] changes one,
+//! [`discovery`] asks what exists, and [`idle`] waits for the server to
+//! announce a change.
 
 mod discovery;
+mod idle;
 mod mailbox;
 mod mutate;
+
+pub use idle::IdleEnd;
 
 use core::num::{NonZeroU32, NonZeroU64};
 

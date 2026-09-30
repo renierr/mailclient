@@ -292,10 +292,10 @@ String _str(Object? v, {String orElse = ''}) => switch (v) {
       _ => v.toString(),
     };
 
-/// Scheduler for the Android background check: `alarm` or `workmanager`.
-/// Anything else falls back to WorkManager, the default — mirrors
-/// `mailcore::store::settings::normalize_background_scheduler`.
+/// Scheduler for the Android background check: `push`, `alarm` or
+/// `workmanager`. Anything else falls back to WorkManager, the default —
+/// mirrors `mailcore::store::settings::normalize_background_scheduler`.
 String _scheduler(Object? v) {
   final s = '${v ?? ''}'.trim().toLowerCase();
-  return s == 'alarm' ? 'alarm' : 'workmanager';
+  return s == 'alarm' || s == 'push' ? s : 'workmanager';
 }

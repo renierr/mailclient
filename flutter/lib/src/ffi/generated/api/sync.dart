@@ -54,41 +54,6 @@ Future<void> refreshServerCapabilities({required PlatformInt64 accountId}) =>
       accountId: accountId,
     );
 
-/// Headless new-mail check for the Android background worker.
-///
-/// Takes the cross-process sync lock, syncs every account's inbox over
-/// fresh connections (never the GUI's pooled sessions), and returns the
-/// [`background::BackgroundReport`] as JSON: skipped flag, mail that arrived
-/// since the previous check, what the notification should list, cached
-/// unread total, errors. `trigger` names the scheduler that ran it
-/// (`worker`, `alarm`) for the run history.
-///
-/// Background-isolate only: it blocks the calling worker thread for the
-/// whole network run, which is fine with nothing else to serve but would
-/// stall the UI's pool. The lock collision path returns `skipped: true`
-/// rather than failing, so the worker just waits for the next run.
-Future<String> backgroundCheckNow({required String trigger}) =>
-    MailCoreApi.instance.api.crateApiSyncBackgroundCheckNow(trigger: trigger);
-
-/// Record the marks from a [`background_check_now`] report as seen. The
-/// worker calls this only once the notification was posted (or alerts are
-/// off), so a failed post reports the same mail again on the next run.
-/// `marks_json` is the report's `marks` array, passed back unchanged.
-Future<void> commitBackgroundMarks({required String marksJson}) => MailCoreApi
-    .instance
-    .api
-    .crateApiSyncCommitBackgroundMarks(marksJson: marksJson);
-
-/// Note in the run history what the worker did with the report of the run
-/// that started at `run` (the report's `run` field).
-Future<void> backgroundRecordOutcome({
-  required String run,
-  required String outcome,
-}) => MailCoreApi.instance.api.crateApiSyncBackgroundRecordOutcome(
-  run: run,
-  outcome: outcome,
-);
-
 /// The user has the app open: the inbox cache counts as seen, so the next
 /// background run neither alerts for it nor lists it in the notification.
 Future<void> backgroundMarkSeen() =>

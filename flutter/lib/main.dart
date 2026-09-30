@@ -1,11 +1,7 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
-import 'package:workmanager/workmanager.dart';
 
 import 'src/app.dart';
 import 'src/ffi/mail_core.dart';
-import 'src/sync/background_sync.dart';
 
 /// Load the Rust core, then start the UI.
 ///
@@ -15,11 +11,6 @@ import 'src/sync/background_sync.dart';
 /// therefore shown as its own screen rather than swallowed.
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  if (Platform.isAndroid) {
-    // Also serves the exact-alarm scheduler: its native receiver enqueues
-    // the check through the same dispatcher.
-    await Workmanager().initialize(backgroundSyncDispatcher);
-  }
   try {
     final core = await MailCore.load();
     runApp(MailApp(core: core));

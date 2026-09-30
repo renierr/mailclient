@@ -151,25 +151,53 @@ The renderer depends on the platform:
 
 ### Background checks on Android
 
-Two schedulers run the same Rust inbox check (`mailcore::sync::background`,
-see `lib/src/sync/`):
+Three schedulers, chosen in Settings → Accounts & sync and stored in the
+shared `background_scheduler` Rust setting (default `workmanager`, which Qt
+never reads or writes). Exactly one runs at a time (`MailSchedule.kt`); an
+interval of Manually stops all of them.
 
-- **Battery-saving (WorkManager, default).** Deferrable by design: in Doze
-  it only runs in maintenance windows, so notifications may wait for unlock.
-- **On-time alarm (opt-in in Settings → Accounts & sync).** A
-  self-rearming exact one-shot (`setExactAndAllowWhileIdle`, `MailAlarm.kt`)
-  that fires in standby and honours 5/10-minute intervals, at the cost of a
-  wakeup per check. Its receiver hands the check to WorkManager as
-  *expedited* work (Android 12+), which Doze does not defer the way it
-  defers plain jobs; the alarm plugin used before ran its callback through a
-  `JobIntentService`, i.e. a plain job, so the check still waited for a
-  maintenance window. The alarm re-arms natively after every shot, a reboot
-  or an app update. Needs `SCHEDULE_EXACT_ALARM` (Android 12+; denied by
-  default since 14 — Settings sends the user to "Alarms & reminders");
-  ungranted, the shot is armed inexact via AllowWhileIdle and still fires,
-  just not at the exact minute. The mode is stored in the shared
-  `background_scheduler` Rust setting (default `workmanager`), which Qt
-  never reads or writes.
+- **Battery-saving (WorkManager, default).** A periodic worker, deferrable
+  by design: in Doze it only runs in maintenance windows, so notifications
+  may wait for unlock.
+- **On-time alarm.** A self-rearming exact one-shot
+  (`setExactAndAllowWhileIdle`, `MailAlarm.kt`) that fires in standby and
+  honours 5/10-minute intervals, at the cost of a wakeup per check. Its
+  receiver hands the check to WorkManager as *expedited* work (Android
+  12+), which Doze does not defer the way it defers plain jobs. The alarm
+  re-arms natively after every shot, a reboot or an app update.
+- **Push (IMAP IDLE).** `MailPushService.kt` keeps `mailcore::sync::push`
+  running in a foreground service (type `specialUse`: `dataSync` is capped
+  at a few hours a day on recent Android). One connection per account
+  waits in IDLE on the inbox; when the server announces a change, that
+  account syncs its inbox over the same session — no reconnect, no TLS
+  handshake — and the notification goes out within seconds. Between
+  arrivals the CPU sleeps: the service holds a wake lock only while the
+  monitor reports busy. Tokio's timers stand still in suspend, so a
+  keep-alive alarm (`MailPush.kt`, every 15 minutes) re-issues each IDLE,
+  keeping the connection and the carrier's NAT mapping alive, retries
+  accounts that are backing off, and restarts the service if Android
+  killed it. A change of the default network reconnects every account at
+  once. A server without IDLE gets its check on every keep-alive instead.
+  Android requires a notification for a foreground service; it sits in its
+  own "Mail monitor" channel at minimum importance (no status-bar icon, no
+  sound), and switching that channel off in the system settings hides it
+  without stopping push.
+
+The alarm scheduler and the push keep-alive need `SCHEDULE_EXACT_ALARM`
+(Android 12+; denied by default since 14 — Settings sends the user to
+"Alarms & reminders"); ungranted, they are armed inexact via
+AllowWhileIdle and still fire, just not at the exact minute.
+
+None of the three starts a Flutter engine. The worker, the alarm and the
+push service call the Rust core directly over JNI (`MailNative.kt` ↔
+`crates/mailffi/src/android.rs`, the same `libmailffi.so` and database the
+Dart side uses). What the notification says and does is decided in
+`mailcore::sync::background::notify`; `MailNotifier.kt` only reads back
+what is on screen, posts the plan and commits it. Taps reach Dart through
+the `mailclient/background_power` channel (`openPayload`,
+`takeLaunchPayload`), and new mail found while the app is open reloads the
+list (`mailChanged`) instead of alerting. Release builds keep the
+JNI-only callbacks through `android/app/proguard-rules.pro`.
 
 Either way, the battery-optimisation exemption matters most: without it
 Android withholds network access in Doze. Vendor battery savers (Samsung,

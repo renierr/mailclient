@@ -8,29 +8,25 @@ import android.content.Intent
 import android.os.Build
 import android.os.SystemClock
 import androidx.work.Constraints
-import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequest
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
-import dev.fluttercommunity.workmanager.BackgroundWorker
-import dev.fluttercommunity.workmanager.UNIQUE_NAME_KEY
 
 // The on-time background mail check: a self-rearming exact one-shot alarm
 // (setExactAndAllowWhileIdle, so it fires in Doze) whose receiver hands the
-// check to WorkManager as expedited work. The Dart side runs it through the
-// same dispatcher as the periodic task (task name CHECK_TASK).
+// check to WorkManager as expedited work, run by MailCheckWorker (trigger
+// "alarm") straight in the Rust core.
 //
-// Why native: an alarm plugin that runs its Dart callback through a
-// JobIntentService queues a plain job, and Doze defers plain jobs to its
-// maintenance windows, so the check ran late however exactly the alarm
-// fired. Expedited work is exempt from that deferral, within a quota; out of
-// quota it still runs as ordinary work. Below Android 12 expedited work
-// needs a foreground notification the plugin's worker does not provide, so
-// there it is ordinary work.
+// Why a worker at all: a receiver gets seconds, a check can take longer.
+// Doze defers plain jobs to its maintenance windows, so the check would run
+// late however exactly the alarm fired; expedited work is exempt from that
+// deferral, within a quota, and out of quota it still runs as ordinary
+// work. Below Android 12 expedited work needs a foreground notification,
+// so there it is ordinary work.
 object MailAlarm {
-    // Must match `alarmCheckTask` in background_sync.dart.
+    // WorkManager unique name of a pending alarm check.
     private const val CHECK_TASK = "mail-alarm-check"
     const val ACTION_FIRE = "de.renier.mailclient.MAIL_ALARM"
     private const val PREFS = "mailclient_alarm"
@@ -55,12 +51,8 @@ object MailAlarm {
     }
 
     fun enqueueCheck(context: Context) {
-        val input = Data.Builder()
-            .putString(BackgroundWorker.DART_TASK_KEY, CHECK_TASK)
-            .putString(UNIQUE_NAME_KEY, CHECK_TASK)
-            .build()
-        val request = OneTimeWorkRequest.Builder(BackgroundWorker::class.java)
-            .setInputData(input)
+        val request = OneTimeWorkRequest.Builder(MailCheckWorker::class.java)
+            .setInputData(MailCheckWorker.input("alarm"))
             .setConstraints(
                 Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),
             )
@@ -103,7 +95,7 @@ object MailAlarm {
 }
 
 // Alarm shots, plus re-arming after a reboot or an app update (both drop
-// pending alarms or may).
+// pending alarms or may) — and restarting the push service, if it was on.
 class MailAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
@@ -111,7 +103,10 @@ class MailAlarmReceiver : BroadcastReceiver() {
                 MailAlarm.enqueueCheck(context)
                 MailAlarm.rearm(context)
             }
-            Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED -> MailAlarm.rearm(context)
+            Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED -> {
+                MailAlarm.rearm(context)
+                MailPush.restore(context)
+            }
         }
     }
 }

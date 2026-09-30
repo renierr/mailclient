@@ -308,7 +308,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
         (v) => v == 0 ? 'Manually' : 'Every ${v}m',
         (v) => setState(() => _draft = _draft.copyWith(syncIntervalMinutes: v)),
         help: Platform.isAndroid
-            ? 'Battery-saving checks run at most every 15 minutes.'
+            ? 'Battery-saving checks run at most every 15 minutes. With '
+                  'push, any interval but Manually turns it on.'
             : null,
       ),
       // The scheduler is an Android-only capability: only there Doze
@@ -317,14 +318,17 @@ class _SettingsDialogState extends State<SettingsDialog> {
         _choice<String>(
           'Background check method',
           _draft.backgroundScheduler,
-          const [schedulerWorkmanager, schedulerAlarm],
+          const [schedulerWorkmanager, schedulerAlarm, schedulerPush],
           (v) => switch (v) {
             schedulerAlarm => 'On-time alarm',
+            schedulerPush => 'Push (IMAP IDLE)',
             _ => 'Battery-saving (recommended)',
           },
           (v) =>
               setState(() => _draft = _draft.copyWith(backgroundScheduler: v)),
-          help: 'The on-time alarm also checks in standby, at more battery.',
+          help:
+              'Push: the server announces new mail as it arrives. The '
+              'on-time alarm checks at the interval, in standby too.',
         ),
       _switch(
         'Show notifications for new mail',
@@ -507,10 +511,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
           await requestUnrestrictedBackground();
         }
       }
-      // Switching to the alarm scheduler needs the exact-alarm grant on
-      // Android 14+; without it the alarm still fires, just not exact.
-      if (d.backgroundScheduler == schedulerAlarm &&
-          before.backgroundScheduler != schedulerAlarm &&
+      // The alarm scheduler and push's keep-alive need the exact-alarm
+      // grant on Android 14+; without it they still fire, just not exact.
+      if (d.backgroundScheduler != schedulerWorkmanager &&
+          d.backgroundScheduler != before.backgroundScheduler &&
           d.syncIntervalMinutes > 0) {
         if (!await exactAlarmPermitted()) {
           await requestExactAlarm();

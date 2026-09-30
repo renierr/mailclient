@@ -145,14 +145,24 @@ impl ImapSync {
 
         // 2. Flag refresh for messages we already have within the window.
         // This guarantees that whatever messages are currently in view have 100%
-        // accurate flags and unread counts matching the server.
+        // accurate flags and unread counts matching the server. With CONDSTORE
+        // and the modseq of the last window sync, only messages changed since
+        // then can differ, so the server sends just those instead of the flags
+        // of the whole window on every sync that is not a no-op.
+        let flags_since = if session.condstore_enabled && !validity_changed {
+            folder.highest_modseq
+        } else {
+            0
+        };
         let existing: Vec<u32> = server_uids
             .intersection(&local_uids)
             .copied()
             .filter(in_window)
             .collect();
         for chunk in existing.chunks(FETCH_CHUNK) {
-            let changed = session.uid_fetch_flags_changesince(chunk, 0).await?;
+            let changed = session
+                .uid_fetch_flags_changesince(chunk, flags_since)
+                .await?;
             for (uid, flags, _) in changed {
                 let (read, starred, draft) = flag_state(&flags);
                 let read = read || is_trash;

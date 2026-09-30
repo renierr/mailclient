@@ -32,16 +32,9 @@ pub fn init_frb() {
 /// re-reads and returns the same answer. It fails only if `data_dir` tries to
 /// move the database after it has already been opened.
 pub fn init_app(data_dir: Option<String>) -> anyhow::Result<AppInfo> {
-    init_logging();
+    crate::startup::init_logging();
     if let Some(dir) = data_dir {
-        let dir = std::path::PathBuf::from(dir);
-        #[cfg(target_os = "android")]
-        mailcore::auth::set_vault_dir(dir.clone());
-        // Re-setting the same directory is what a hot restart does; only a
-        // genuine move is an error.
-        if crate::db::db_path().parent() != Some(dir.as_path()) {
-            crate::db::set_db_dir(dir)?;
-        }
+        crate::startup::use_data_dir(std::path::PathBuf::from(dir))?;
     }
     // Opening runs the migrations, so a failure here is the one worth
     // surfacing before the UI paints anything.
@@ -61,23 +54,4 @@ pub fn init_app(data_dir: Option<String>) -> anyhow::Result<AppInfo> {
 /// missing it costs nothing worse than a server-side session timing out.
 pub fn shutdown() {
     mailcore::sync::pool::drop_all_sessions();
-}
-
-fn init_logging() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        #[cfg(target_os = "android")]
-        android_logger::init_once(
-            android_logger::Config::default()
-                .with_max_level(log::LevelFilter::Info)
-                .with_tag("mailclient"),
-        );
-        #[cfg(not(target_os = "android"))]
-        {
-            // Same knob as mailapp: RUST_LOG tunes it, default is quiet.
-            let _ =
-                env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
-                    .try_init();
-        }
-    });
 }

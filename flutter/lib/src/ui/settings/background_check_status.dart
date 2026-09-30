@@ -78,23 +78,34 @@ class _BackgroundCheckStatusState extends State<BackgroundCheckStatus>
         const SizedBox(height: 8),
         _line(
           context,
-          _scheduler == schedulerAlarm
-              ? Icons.alarm_outlined
-              : Icons.battery_saver_outlined,
-          _scheduler == schedulerAlarm
-              ? 'On-time alarm: checks fire in standby too.'
-              : 'Battery-saving worker: standby may delay checks until '
-                    'the phone is unlocked.',
+          switch (_scheduler) {
+            schedulerAlarm => Icons.alarm_outlined,
+            schedulerPush => Icons.bolt_outlined,
+            _ => Icons.battery_saver_outlined,
+          },
+          switch (_scheduler) {
+            schedulerAlarm => 'On-time alarm: checks fire in standby too.',
+            schedulerPush =>
+              'Push: the server announces new mail as it arrives. The '
+                  '"Mail monitor" notification Android requires for it can '
+                  'be turned off in the system notification settings.',
+            _ =>
+              'Battery-saving worker: standby may delay checks until '
+                  'the phone is unlocked.',
+          },
         ),
-        if (_scheduler == schedulerAlarm && !_exactAlarm)
+        if (_scheduler != schedulerWorkmanager && !_exactAlarm)
           _line(
             context,
             Icons.notification_important_outlined,
-            'Exact alarms are not allowed: the alarm still fires in '
-            'standby, just not at the exact minute.',
+            _scheduler == schedulerPush
+                ? 'Exact alarms are not allowed: in standby the push '
+                      'keep-alive may run late and connections drop.'
+                : 'Exact alarms are not allowed: the alarm still fires in '
+                      'standby, just not at the exact minute.',
             error: true,
           ),
-        if (_scheduler == schedulerAlarm && !_exactAlarm)
+        if (_scheduler != schedulerWorkmanager && !_exactAlarm)
           Padding(
             padding: const EdgeInsets.only(top: 4, bottom: 4),
             child: FilledButton.tonalIcon(

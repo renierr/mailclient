@@ -15,27 +15,82 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    private var channel: MethodChannel? = null
+
+    // A notification tap that started or re-used the activity and that Dart
+    // has not picked up yet.
+    private var launchPayload: String? = null
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, POWER_CHANNEL)
-            .setMethodCallHandler { call, result ->
-                when (call.method) {
-                    "status" -> result.success(powerStatus())
-                    "requestUnrestricted" -> result.success(requestUnrestricted())
-                    "exactAlarmStatus" -> result.success(canScheduleExactAlarms())
-                    "requestExactAlarm" -> result.success(requestExactAlarm())
-                    "armAlarm" -> {
-                        MailAlarm.arm(this, (call.arguments as? Int) ?: 0)
-                        result.success(true)
-                    }
-                    "cancelAlarm" -> {
-                        MailAlarm.cancel(this)
-                        result.success(true)
-                    }
-                    else -> result.notImplemented()
+        launchPayload = payloadOf(intent)
+        val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, POWER_CHANNEL)
+        this.channel = channel
+        channel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "status" -> result.success(powerStatus())
+                "requestUnrestricted" -> result.success(requestUnrestricted())
+                "exactAlarmStatus" -> result.success(canScheduleExactAlarms())
+                "requestExactAlarm" -> result.success(requestExactAlarm())
+                "schedule" -> {
+                    MailSchedule.apply(
+                        this,
+                        call.argument<String>("mode") ?: "workmanager",
+                        call.argument<Int>("minutes") ?: 0,
+                    )
+                    result.success(true)
                 }
+                "showTestNotification" -> {
+                    MailNotifier.showTest(this)
+                    result.success(true)
+                }
+                "clearNotification" -> {
+                    MailNotifier.clear(this)
+                    result.success(true)
+                }
+                "takeLaunchPayload" -> {
+                    result.success(launchPayload)
+                    launchPayload = null
+                }
+                else -> result.notImplemented()
             }
+        }
+        MailNotifier.onMailChanged = {
+            runOnUiThread { this.channel?.invokeMethod("mailChanged", null) }
+        }
     }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        MailNotifier.onMailChanged = null
+        channel = null
+        super.cleanUpFlutterEngine(flutterEngine)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val payload = payloadOf(intent) ?: return
+        val channel = channel
+        if (channel == null) {
+            launchPayload = payload
+        } else {
+            channel.invokeMethod("openPayload", payload)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        MailNotifier.foreground = true
+    }
+
+    override fun onPause() {
+        MailNotifier.foreground = false
+        super.onPause()
+    }
+
+    private fun payloadOf(intent: Intent?): String? =
+        intent?.takeIf { it.action == MailNotifier.ACTION_OPEN }
+            ?.getStringExtra(MailNotifier.EXTRA_PAYLOAD)
+            ?.takeIf { it.isNotEmpty() }
 
     // Whether Doze and App Standby may defer the background worker: the
     // battery-optimisation exemption plus the standby bucket Android put
