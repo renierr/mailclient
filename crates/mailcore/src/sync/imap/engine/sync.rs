@@ -63,7 +63,7 @@ impl ImapSync {
 
         let qresync_param = folder.uid_validity.map(|v| (v, folder.highest_modseq));
         let mb = session.select(&folder.path, qresync_param).await?;
-        log::info!(
+        log::debug!(
             "imap: SELECT {} ({} mails, uid_next {:?}, modseq {:?}, vanished: {})",
             folder.path,
             mb.exists,

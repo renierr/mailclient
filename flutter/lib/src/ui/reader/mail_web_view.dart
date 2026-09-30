@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -117,6 +118,11 @@ class _MailWebViewState extends State<MailWebView>
   double _pendingY = 0;
   bool _scrollScheduled = false;
 
+  /// Page scroll in physical pixels as last reported, advanced by our own
+  /// `scrollBy`s: a forwarded header drag must not scroll above the top,
+  /// which the WebView does not stop.
+  double _pagePx = 0;
+
   /// Drag distance on the header overlay, flushed to the page as one
   /// `scrollBy` per frame instead of one platform-channel call per motion
   /// event.
@@ -141,7 +147,14 @@ class _MailWebViewState extends State<MailWebView>
     // Android reports the View's scroll in physical pixels.
     _controller.setOnScrollPositionChange((change) {
       if (!mounted) return;
-      final y = change.y / (_dpr ?? MediaQuery.devicePixelRatioOf(context));
+      _pagePx = change.y;
+      if (change.y < 0) {
+        _stopFling();
+        _controller.scrollTo(0, 0);
+      }
+      final y =
+          (change.y < 0 ? 0.0 : change.y) /
+          (_dpr ?? MediaQuery.devicePixelRatioOf(context));
       // Once the header is off the top it stays put: the notifier holds
       // one value and nothing rebuilds while the mail scrolls.
       final gone = (_headerHeight ?? 0) + 1;
@@ -267,6 +280,7 @@ class _MailWebViewState extends State<MailWebView>
     _shown = true;
     if (key == _loaded) return;
     _loaded = key;
+    _pagePx = 0;
     _controller.loadHtmlString(
       mailDocument(
         widget.html,
@@ -289,8 +303,19 @@ class _MailWebViewState extends State<MailWebView>
       _dragScheduled = false;
       final dy = _pendingDy.truncate();
       _pendingDy -= dy;
-      if (dy != 0 && mounted) _controller.scrollBy(0, dy);
+      if (mounted && _scrollPage(dy) != dy) _pendingDy = 0;
     });
+  }
+
+  /// Scroll the page by [dy] physical pixels, never above its top; returns
+  /// the distance actually scrolled.
+  int _scrollPage(int dy) {
+    final applied = max(dy, -_pagePx.floor());
+    if (applied != 0) {
+      _pagePx += applied;
+      _controller.scrollBy(0, applied);
+    }
+    return applied;
   }
 
   /// A fling from a header swipe's release velocity (physical pixels per
@@ -312,7 +337,7 @@ class _MailWebViewState extends State<MailWebView>
     final dy = (sim.x(t) - _flingDone).truncate();
     if (dy != 0) {
       _flingDone += dy;
-      _controller.scrollBy(0, dy);
+      if (_scrollPage(dy) != dy) return _stopFling();
     }
     if (sim.isDone(t)) _stopFling();
   }

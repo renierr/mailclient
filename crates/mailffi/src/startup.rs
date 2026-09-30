@@ -10,6 +10,11 @@ pub(crate) fn init_logging() {
         android_logger::init_once(
             android_logger::Config::default()
                 .with_max_level(log::LevelFilter::Info)
+                .with_filter(
+                    android_logger::FilterBuilder::new()
+                        .parse("warn,mailcore=info,mailffi=info")
+                        .build(),
+                )
                 .with_tag("mailclient"),
         );
         #[cfg(not(target_os = "android"))]

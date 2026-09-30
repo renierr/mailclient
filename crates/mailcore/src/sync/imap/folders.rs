@@ -219,7 +219,7 @@ pub(crate) async fn discover_folders_quick(
             continue;
         }
         if seen.insert(n.name.clone()) {
-            log::info!(
+            log::debug!(
                 "imap: [LIST] [{}] delim={:?} {} -> {}",
                 attr_text(&n.attributes),
                 n.delimiter,

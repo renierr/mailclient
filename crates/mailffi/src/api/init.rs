@@ -17,7 +17,10 @@ pub struct AppInfo {
 /// Called by flutter_rust_bridge once, before any other function.
 #[frb(init)]
 pub fn init_frb() {
-    flutter_rust_bridge::setup_default_user_utils();
+    // Not `setup_default_user_utils`: its Trace-level logger would win the
+    // race and log every JNI value conversion.
+    crate::startup::init_logging();
+    flutter_rust_bridge::setup_backtrace();
 }
 
 /// Open the database, run migrations, and start logging.

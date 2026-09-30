@@ -154,7 +154,7 @@ pub async fn checkout_session(account: &Account) -> Result<SessionLease, String>
     let session = match existing {
         Some(mut s) => {
             if s.is_healthy().await {
-                log::info!("imap: reusing pooled session for account {id}");
+                log::debug!("imap: reusing pooled session for account {id}");
                 s
             } else {
                 log::info!("imap: pooled session for account {id} went stale, reconnecting");
