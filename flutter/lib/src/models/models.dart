@@ -218,18 +218,32 @@ class MessageBody {
     this.htmlColored = false,
     required this.attachments,
     this.badge = SenderBadge.none,
+    this.fromName = '',
+    this.replyTarget = '',
+    this.replyToDiffers = false,
   });
 
   final int uid;
   final String subject;
   final String from;
   final SenderBadge badge;
+
+  /// Sender display name from the core (`""` = address only).
+  final String fromName;
+
+  /// What the reader shows as the sender: the name, else the address.
+  String get senderName => fromName.isNotEmpty ? fromName : from;
   final String to;
   final String cc;
 
   /// Set when replies should go somewhere other than [from]. The reader shows
   /// it, because answering the wrong address is not recoverable.
   final String replyTo;
+
+  /// Where a reply goes (Reply-To, else From) and whether that is not the
+  /// sender — decided by `mailcore::compose::reply_address`, as in Qt.
+  final String replyTarget;
+  final bool replyToDiffers;
   final String date;
   final String bodyText;
 
@@ -269,6 +283,9 @@ class MessageBody {
         .map(AttachmentInfo.fromJson)
         .toList(growable: false),
     badge: SenderBadge.fromJson(j),
+    fromName: _str(j['from_name']),
+    replyTarget: _str(j['reply_target']),
+    replyToDiffers: _bool(j['reply_to_differs']),
   );
 }
 

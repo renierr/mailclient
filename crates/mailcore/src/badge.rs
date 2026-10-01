@@ -42,20 +42,27 @@ impl SenderBadge {
     }
 }
 
-/// Badge for a sender. The colour follows the address alone (case and
-/// surrounding blanks ignored), so it never shifts when the display name
-/// does; without an address it follows the name.
+/// Badge for a sender. The colour follows the display name together with
+/// the address (case and surrounding blanks ignored): one address sending
+/// under several names (a shared or catch-all mailbox) gets a colour per
+/// name, and mail without a name colours by the address alone.
 pub fn sender_badge(name: &str, address: &str) -> SenderBadge {
-    let seed = if address.trim().is_empty() {
-        name
-    } else {
-        address
-    };
-    let (hue, tone, vivid) = color_spec(seed);
+    let (hue, tone, vivid) = color_spec(&color_seed(name, address));
     SenderBadge {
         initials: initials(name, address),
         avatar_light: hsl_hex(hue, LIGHT_SATURATION[vivid], LIGHT_LIGHTNESS[tone]),
         avatar_dark: hsl_hex(hue, DARK_SATURATION[vivid], DARK_LIGHTNESS[tone]),
+    }
+}
+
+fn color_seed(name: &str, address: &str) -> String {
+    match (name.trim(), address.trim()) {
+        ("", addr) => addr.to_string(),
+        (name, "") => name.to_string(),
+        (name, addr) => format!(
+            "{name}
+{addr}"
+        ),
     }
 }
 
@@ -160,12 +167,25 @@ mod tests {
     }
 
     #[test]
-    fn colour_follows_the_address_not_the_name() {
+    fn one_sender_keeps_one_colour_across_case_and_blanks() {
         let a = sender_badge("Alice", "alice@example.com");
-        let b = sender_badge("Liddell", " Alice@Example.COM ");
+        let b = sender_badge(" alice ", " Alice@Example.COM ");
         assert_eq!(a.avatar_light, b.avatar_light);
         assert_eq!(a.avatar_dark, b.avatar_dark);
-        assert_ne!(a.initials, b.initials);
+    }
+
+    #[test]
+    fn names_on_one_address_get_their_own_colours() {
+        // A shared mailbox sending as several names, plus without a name.
+        let colours: Vec<_> = ["", "Team Dev", "Coolio", "Carl"]
+            .into_iter()
+            .map(|n| color_spec(&color_seed(n, "info@example.com")))
+            .collect();
+        for (i, a) in colours.iter().enumerate() {
+            for b in &colours[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
     }
 
     #[test]
@@ -178,10 +198,12 @@ mod tests {
     }
 
     #[test]
-    fn without_address_the_name_is_the_seed() {
+    fn either_part_alone_is_the_seed() {
+        assert_eq!(color_seed("Alice", ""), "Alice");
+        assert_eq!(color_seed(" ", "a@example.com"), "a@example.com");
         assert_eq!(
-            sender_badge("Alice", "").avatar_dark,
-            sender_badge("x", "alice").avatar_dark
+            sender_badge("", "alice").avatar_dark,
+            sender_badge("alice", "").avatar_dark
         );
         assert_eq!(sender_badge("", "").initials, "?");
     }

@@ -239,31 +239,14 @@ Rectangle {
         root.headersInfo = FeedJson.parse(root.backend.message_headers_json(root.messageUid), ({}));
     }
 
-    // "Name <addr>" -> {name, addr}; a bare address yields both identical.
-    function splitAddr(full) {
-        var s = (full || "").trim();
-        var lt = s.indexOf("<");
-        var gt = s.lastIndexOf(">");
-        if (lt >= 0 && gt > lt) {
-            var name = s.substring(0, lt).trim().replace(/^["']|["']$/g, "");
-            var addr = s.substring(lt + 1, gt).trim();
-            return {
-                "name": name !== "" ? name : addr,
-                "addr": addr
-            };
-        }
-        return {
-            "name": s,
-            "addr": s
-        };
-    }
-
-    readonly property var sender: root.splitAddr(root.headersInfo.from || (root.message ? root.message.from : ""))
-    // Reply-To pointing elsewhere than the sender: answering goes there,
-    // not to From. Compared on the bare address, case-insensitively.
-    readonly property string replyToAddr: (root.headersInfo.reply_to || "").trim()
-    readonly property bool replyToDiffers: root.replyToAddr !== "" && root.replyToAddr.toLowerCase()
-                                           !== root.sender.addr.trim().toLowerCase()
+    // Sender parts and the Reply-To decision come parsed from the reader
+    // payload (mailcore feed::message_json), shared with Flutter.
+    readonly property var sender: ({
+            "name": root.message ? (root.message.from_name || root.message.from || "") : "",
+            "addr": root.message ? (root.message.from || "") : ""
+        })
+    readonly property string replyToAddr: root.message ? (root.message.reply_to || "") : ""
+    readonly property bool replyToDiffers: !!root.message && root.message.reply_to_differs === true
     readonly property string toLine: root.joinAddrs(root.headersInfo.to)
     readonly property string ccLine: root.joinAddrs(root.headersInfo.cc)
     readonly property string fullDate: (root.headersInfo.date || "") !== "" ? root.headersInfo.date : (root.message
@@ -530,7 +513,7 @@ Rectangle {
                                     Layout.fillWidth: true
                                     spacing: Theme.sm
                                     Label {
-                                        text: root.sender.name || (root.message ? root.message.from : "")
+                                        text: root.sender.name
                                         color: Theme.text
                                         font.pixelSize: Theme.fontBase
                                         font.bold: true

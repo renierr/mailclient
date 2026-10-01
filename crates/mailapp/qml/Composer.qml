@@ -313,14 +313,13 @@ Dialog {
         root.sourceMode = false;
         root.resetHeaders();
         if (message !== undefined) {
-            // Replies go to Reply-To when the sender set one, else From —
-            // and when the two differ the banner below says so out loud.
+            // Where the reply goes is mailcore's call (reply_target,
+            // reply_to_differs); when it is not the sender the banner below
+            // says so out loud. A list row has neither and answers From.
             var from = message.from || "";
-            var rt = (message.reply_to || "").trim();
-            var differs = rt !== "" && rt.toLowerCase() !== from.trim().toLowerCase();
-            toField.text = differs ? rt : from;
-            if (differs) {
-                root.replyNoticeAddr = rt;
+            toField.text = message.reply_target || from;
+            if (message.reply_to_differs === true) {
+                root.replyNoticeAddr = message.reply_target;
                 root.replyNoticeSender = from;
             }
             subjectField.text = "Re: " + (message.subject || "");

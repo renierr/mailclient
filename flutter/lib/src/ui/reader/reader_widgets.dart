@@ -121,23 +121,6 @@ Future<void> showHeaders(BuildContext context, MessageBody message) async {
   );
 }
 
-/// `"Name <addr>"` split apart; a bare address yields both identical.
-({String name, String addr}) splitAddr(String full) {
-  final s = full.trim();
-  final lt = s.indexOf('<');
-  final gt = s.lastIndexOf('>');
-  if (lt >= 0 && gt > lt) {
-    var name = s
-        .substring(0, lt)
-        .trim()
-        .replaceAll(RegExp('^["\']|["\']\$'), '');
-    final addr = s.substring(lt + 1, gt).trim();
-    if (name.isEmpty) name = addr;
-    return (name: name, addr: addr);
-  }
-  return (name: s, addr: s);
-}
-
 class ReaderPlaceholder extends StatelessWidget {
   const ReaderPlaceholder({super.key, required this.text});
 

@@ -73,20 +73,16 @@ class ReaderHeader extends StatelessWidget {
           future: headersFuture,
           builder: (context, snap) {
             final h = snap.data;
-            // The list feed only carries the bare address; the full headers
-            // have the display name, like the Qt reader.
+            // Sender and the Reply-To decision come parsed from the core,
+            // as in Qt; the full headers add To/Cc and the long date.
             String pick(String? full, String fallback) =>
                 (full?.isNotEmpty ?? false) ? full! : fallback;
             final from = pick(h?.from, message.from);
             final to = pick(h?.to, message.to);
             final cc = pick(h?.cc, message.cc);
             final date = pick(h?.date, message.date);
-            final replyTo = pick(h?.replyTo, message.replyTo);
-            final sender = splitAddr(from);
-            final replyToDiffers =
-                replyTo.isNotEmpty &&
-                splitAddr(replyTo).addr.toLowerCase() !=
-                    sender.addr.toLowerCase();
+            final replyTo = message.replyTo;
+            final replyToDiffers = message.replyToDiffers;
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -124,7 +120,7 @@ class ReaderHeader extends StatelessWidget {
                             children: [
                               Expanded(
                                 child: Text(
-                                  sender.name,
+                                  message.senderName,
                                   overflow: TextOverflow.ellipsis,
                                   style: theme.textTheme.bodyMedium?.copyWith(
                                     fontWeight: FontWeight.w700,
@@ -135,9 +131,9 @@ class ReaderHeader extends StatelessWidget {
                               Text(message.date, style: muted),
                             ],
                           ),
-                          if (sender.addr != sender.name)
+                          if (message.fromName.isNotEmpty)
                             Text(
-                              sender.addr,
+                              message.from,
                               overflow: TextOverflow.ellipsis,
                               style: muted,
                             ),

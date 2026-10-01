@@ -170,4 +170,22 @@ void main() {
       expect(m.badge.dark, '');
     });
   });
+
+  test('reader payload carries the parsed sender and reply decision', () {
+    final b = MessageBody.fromJson({
+      'uid': 1,
+      'from': 'alice@example.com',
+      'from_name': 'Alice',
+      'reply_to': 'list@example.org',
+      'reply_target': 'list@example.org',
+      'reply_to_differs': true,
+    });
+    expect(b.senderName, 'Alice');
+    expect(b.replyTarget, 'list@example.org');
+    expect(b.replyToDiffers, isTrue);
+    expect(
+      MessageBody.fromJson({'from': 'a@example.com'}).senderName,
+      'a@example.com',
+    );
+  });
 }

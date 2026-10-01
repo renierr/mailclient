@@ -105,13 +105,12 @@ class ComposerDialog extends StatefulWidget {
   }) async {
     final state = context.read<MailState>();
     final settings = state.settings;
-    final answerTo = message.replyTo.isNotEmpty
-        ? message.replyTo
+    // Where the reply goes is the core's call, as in Qt.
+    final answerTo = message.replyTarget.isNotEmpty
+        ? message.replyTarget
         : message.from;
     final quote = _quote(message, settings.replyBelowQuote);
-    final notice =
-        message.replyTo.isNotEmpty &&
-            !_sameAddress(message.replyTo, message.from)
+    final notice = message.replyToDiffers
         ? 'Replies to this mail go to ${message.replyTo} — not to the sender (${message.from}).'
         : '';
     await _open(
@@ -224,15 +223,6 @@ class ComposerDialog extends StatefulWidget {
     final html = '${form['body_html'] ?? ''}';
     final text = '${form['body'] ?? ''}';
     return text.isNotEmpty ? text : html;
-  }
-
-  static bool _sameAddress(String a, String b) {
-    String bare(String s) {
-      final m = RegExp(r'<([^>]+)>').firstMatch(s);
-      return (m?.group(1) ?? s).trim().toLowerCase();
-    }
-
-    return bare(a) == bare(b);
   }
 
   @override

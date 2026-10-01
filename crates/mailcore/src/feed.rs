@@ -242,6 +242,9 @@ pub fn messages_list_json_paged(
 }
 
 /// Full reader payload for one message, produced on demand after selection.
+/// Carries the sender as parsed parts (`from` address, `from_name`), its
+/// badge, and where a reply goes (`reply_target`, `reply_to_differs`, see
+/// [`crate::compose::reply_address`]) so no frontend re-parses headers.
 pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
     let allow_remote = settings::get_bool(db, settings::LOAD_REMOTE_IMAGES).unwrap_or(false);
     let m = messages::get_by_uid(db, folder_id, uid)?;
@@ -272,12 +275,15 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
     let date = short_date(m.date.as_deref());
     let from = m.from_addr.as_deref().unwrap_or("?");
     let from_name = m.from_name.as_deref().unwrap_or("");
+    let reply = crate::compose::reply_address(from, m.reply_to.as_deref().unwrap_or(""));
     let mut out = json!({
         "uid": m.uid,
         "subject": m.subject.as_deref().unwrap_or("(no subject)"),
         "from": from,
         "from_name": from_name,
         "reply_to": m.reply_to.as_deref().unwrap_or(""),
+        "reply_target": reply.target,
+        "reply_to_differs": reply.differs,
         "date": date.text,
         "date_key": date.key,
         "snippet": m.snippet.as_deref().unwrap_or(""),
@@ -389,7 +395,7 @@ pub fn search_json(
     let mut stmt = db.conn().prepare(
         "select m.uid, m.folder_id, f.path, m.subject, m.from_addr, m.date,
                 snippet(messages_fts, 2, '', '', '…', 12),
-                m.is_read, m.is_starred, m.has_attachments
+                m.is_read, m.is_starred, m.has_attachments, m.from_name
          from messages_fts
          join messages m on m.id = messages_fts.rowid
          join folders f on f.id = m.folder_id
@@ -406,13 +412,16 @@ pub fn search_json(
             let from = row
                 .get::<_, Option<String>>(4)?
                 .unwrap_or_else(|| "?".to_string());
-            let badge = sender_badge("", &from);
+            // Named like the list row, so a hit keeps the row's badge.
+            let from_name = row.get::<_, Option<String>>(10)?.unwrap_or_default();
+            let badge = sender_badge(&from_name, &from);
             let mut hit = json!({
                 "uid": row.get::<_, u32>(0)?,
                 "folder_id": row.get::<_, i64>(1)?,
                 "folder": row.get::<_, String>(2)?,
                 "subject": row.get::<_, Option<String>>(3)?.unwrap_or_else(|| "(no subject)".to_string()),
                 "from": from,
+                "from_name": from_name,
                 "date": date.text,
                 "date_key": date.key,
                 "snippet": one_line(&row.get::<_, String>(6)?),

@@ -156,6 +156,8 @@ fn every_sender_row_carries_one_badge() {
         assert_eq!(row["avatar_dark"], want.avatar_dark.as_str());
     }
     assert_eq!(reader["from_name"], "Alice");
+    assert_eq!(reader["reply_target"], "alice@example.com");
+    assert_eq!(reader["reply_to_differs"], false);
 
     let accounts: serde_json::Value = serde_json::from_str(&accounts_json(&db).unwrap()).unwrap();
     assert_eq!(accounts[0]["initials"].as_str().unwrap().len(), 2);
@@ -346,6 +348,17 @@ fn search_rows_carry_folder_and_plain_snippet() {
     assert_eq!(hits.as_array().unwrap().len(), 1);
     assert_eq!(hits[0]["uid"], 81);
     assert_eq!(hits[0]["folder"], "INBOX");
+    // A hit wears the same badge as its list row.
+    let rows: serde_json::Value =
+        serde_json::from_str(&messages_list_json_paged(&db, f, 10, 0).unwrap()).unwrap();
+    let row = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["uid"] == 81)
+        .unwrap();
+    assert_eq!(hits[0]["avatar_dark"], row["avatar_dark"]);
+    assert_eq!(hits[0]["initials"], row["initials"]);
     // Plain match context: no highlight tags leak into list rows.
     let snippet = hits[0]["snippet"].as_str().unwrap();
     assert!(snippet.contains("invoice"));

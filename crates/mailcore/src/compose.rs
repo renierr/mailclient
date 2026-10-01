@@ -8,10 +8,12 @@
 
 mod drafts;
 mod form;
+mod reply;
 mod send;
 
 pub use drafts::{delete_draft, draft_html, drafts_folder, open_draft, save_draft, DraftSaved};
 pub use form::ComposeForm;
+pub use reply::{reply_address, ReplyAddress};
 pub use send::{deliver, prepare_send, PreparedSend, SendOutcome};
 
 /// Inline images: an editor shows an inserted image as a `data:` URL, which
