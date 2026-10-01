@@ -7,7 +7,8 @@ Flutter): Rust backend + SQLite cache, QML and Flutter frontends.
 - HTML + text mail, rich-text composer, attachments, drafts
 - Offline-first SQLite cache with full-text search
 
-Details: [`PROJECT.md`](PROJECT.md) (goal, architecture, roadmap) and
+Details: [`PROJECT.md`](PROJECT.md) (goal, architecture, roadmap),
+[`SYNC.md`](SYNC.md) (when and how mail is synced, push and polling) and
 [`AGENT.md`](AGENT.md) (agent rules, dependency policy, Definition of Done).
 
 ## Quick start
