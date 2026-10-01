@@ -15,10 +15,29 @@ class _NoCore implements MailCore {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+const _blank = ComposerInitial(
+  mode: ComposeMode.blank,
+  to: 'someone@example.com',
+  subject: 'Hello',
+  body: 'Some **text** and ![logo.png](inline:1)',
+);
+
+const _reply = ComposerInitial(
+  mode: ComposeMode.reply,
+  to: 'someone@example.com',
+  subject: 'Re: Hello',
+  body: 'Thanks',
+  quoteHtml:
+      '<p>On 2026-09-12 13:50, someone@example.com wrote:</p>'
+      '<blockquote><p>A rather long original line that has to wrap at '
+      'phone width instead of pushing the card off screen.</p></blockquote>',
+);
+
 Future<void> _pumpComposer(
   WidgetTester tester, {
   required Size size,
   double textScale = 1.0,
+  ComposerInitial initial = _blank,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1.0;
@@ -32,16 +51,7 @@ Future<void> _pumpComposer(
             size: size,
             textScaler: TextScaler.linear(textScale),
           ),
-          child: Scaffold(
-            body: ComposerDialog(
-              initial: const ComposerInitial(
-                mode: ComposeMode.blank,
-                to: 'someone@example.com',
-                subject: 'Hello',
-                body: 'Some **text** and ![logo.png](inline:1)',
-              ),
-            ),
-          ),
+          child: Scaffold(body: ComposerDialog(initial: initial)),
         ),
       ),
     ),
@@ -65,6 +75,34 @@ void main() {
       expect(find.text('Subject'), findsOneWidget);
     });
   }
+
+  for (final (name, size, scale) in [
+    ('phone', const Size(360, 640), 1.0),
+    ('phone at 150%', const Size(360, 640), 1.5),
+  ]) {
+    testWidgets('a reply quote opens without overflow ($name)', (tester) async {
+      await _pumpComposer(
+        tester,
+        size: size,
+        textScale: scale,
+        initial: _reply,
+      );
+      await tester.ensureVisible(find.text('Quoted original'));
+      await tester.tap(find.text('Quoted original'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.textContaining('wrote:', findRichText: true), findsOneWidget);
+    });
+  }
+
+  testWidgets('a quote can be left out', (tester) async {
+    await _pumpComposer(tester, size: const Size(1000, 800), initial: _reply);
+    expect(find.text('Quoted original'), findsOneWidget);
+    await tester.ensureVisible(find.byTooltip('Leave out'));
+    await tester.tap(find.byTooltip('Leave out'));
+    await tester.pump();
+    expect(find.text('Quoted original'), findsNothing);
+  });
 
   testWidgets('tapping a header label focuses its field', (tester) async {
     await _pumpComposer(tester, size: const Size(1000, 800));

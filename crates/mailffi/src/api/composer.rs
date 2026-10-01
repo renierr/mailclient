@@ -122,3 +122,21 @@ pub fn delete_draft(account_id: i64, uid: u32) -> anyhow::Result<()> {
         ))
     })
 }
+
+/// Reply/forward draft for one message as JSON
+/// (`mailcore::compose::AnswerDraft`); `mode` is `reply`, `reply_all` or
+/// `forward`. A local SQLite read, no network.
+pub fn answer_draft(folder_id: i64, uid: u32, mode: String) -> anyhow::Result<String> {
+    Ok(compose::answer_draft_json(
+        shared_db()?,
+        folder_id,
+        uid,
+        &mode,
+    )?)
+}
+
+/// New-mail draft (just the signature) as JSON, same shape as
+/// [`answer_draft`].
+pub fn blank_draft() -> anyhow::Result<String> {
+    Ok(compose::blank_draft_json(shared_db()?)?)
+}

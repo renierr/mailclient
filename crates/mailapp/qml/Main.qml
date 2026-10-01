@@ -212,15 +212,6 @@ ApplicationWindow {
         return undefined;
     }
 
-    // Full reader payload when the mail is open (it carries reply_to and
-    // bodies the compact list rows omit), else the list row itself — so
-    // reply/forward from anywhere see the same recipient and quote.
-    function messageForAnswer(uid) {
-        if (root.currentMessage && root.currentMessage.uid === uid)
-            return root.currentMessage;
-        return root.messageByUid(uid);
-    }
-
     function showResult(okMessage, result) {
         root.statusText = result === "" ? okMessage : result;
     }
@@ -1014,12 +1005,12 @@ ApplicationWindow {
     Shortcut {
         sequences: ["R"]
         onActivated: if (root.currentUid >= 0)
-                         composer.openForReply(root.messageForAnswer(root.currentUid))
+                         composer.openForAnswer(root.currentUid, "reply")
     }
     Shortcut {
         sequences: ["F"]
         onActivated: if (root.currentUid >= 0)
-                         composer.openForForward(root.messageForAnswer(root.currentUid))
+                         composer.openForAnswer(root.currentUid, "forward")
     }
     Shortcut {
         sequences: ["F11"]
@@ -1325,9 +1316,9 @@ ApplicationWindow {
             linkClickAction: appSettings.link_click_action
             backend: backend
             message: root.currentMessage
-            onReplyRequested: composer.openForReply(root.currentMessage)
-            onReplyAllRequested: composer.openForReply(root.currentMessage)
-            onForwardRequested: composer.openForForward(root.currentMessage)
+            onReplyRequested: composer.openForAnswer(root.currentUid, "reply")
+            onReplyAllRequested: composer.openForAnswer(root.currentUid, "reply_all")
+            onForwardRequested: composer.openForAnswer(root.currentUid, "forward")
             onStarRequested: root.toggleStar(root.currentUid)
             onArchiveRequested: root.archiveMessage(root.currentUid)
             onMoveRequested: root.openMove(root.currentUid)
@@ -1453,9 +1444,6 @@ ApplicationWindow {
         sendFormat: appSettings.compose_send_format
         backend: backend
         collectContacts: appSettings.collect_sent_contacts
-        signatureEnabled: appSettings.signature_enabled
-        signatureText: appSettings.signature_text
-        replyBelowQuote: appSettings.reply_below_quote
         onStatusMessage: text => root.statusText = text
         onSendRequested: payload => {
             root.statusText = qsTr("Sending…");

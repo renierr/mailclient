@@ -8,6 +8,7 @@ import '../dialogs/mail_dialog.dart';
 import 'composer_drop_target.dart';
 import 'composer_editor.dart';
 import 'composer_header_row.dart';
+import 'composer_quote.dart';
 import 'composer_toggle.dart';
 import 'composer_widgets.dart';
 import 'inline_images.dart';
@@ -33,6 +34,8 @@ class ComposerInitial {
     this.showBcc = false,
     this.serverAttachments = const [],
     this.replyNotice = '',
+    this.quoteHtml = '',
+    this.quoteFirst = false,
   });
 
   final ComposeMode mode;
@@ -57,6 +60,13 @@ class ComposerInitial {
 
   /// Shown when answering mail whose replies go somewhere unexpected.
   final String replyNotice;
+
+  /// The quoted original (reply/forward), carried beside the text box and
+  /// appended to `body_html` on send — see [ComposerQuote].
+  final String quoteHtml;
+
+  /// The quote goes above the user's text (bottom-posting).
+  final bool quoteFirst;
 }
 
 /// Compose, reply, forward and draft editing.
@@ -65,8 +75,9 @@ class ComposerInitial {
 /// the selection in `**bold**` / `*italic*` / `> quote` syntax and
 /// [MarkdownMail] converts it to `body_html`, so marked-up text arrives
 /// formatted (auto send format goes multipart). Unformatted text sends
-/// exactly as before — plain, with no HTML twin. Quote blocks use `> `
-/// citations, which survive every format.
+/// exactly as before — plain, with no HTML twin. The quoted original of a
+/// reply or forward is not in the text box: the core prepares it as HTML
+/// and [ComposerQuote] carries it beside the editor until send.
 class ComposerDialog extends StatefulWidget {
   const ComposerDialog({super.key, required this.initial});
 
@@ -90,62 +101,81 @@ class ComposerDialog extends StatefulWidget {
 
   /// Blank message with the signature applied.
   static Future<void> showBlank(BuildContext context) async {
-    final state = context.read<MailState>();
+    final draft = await _draft(() => MailCore.instance.blankDraft());
+    if (!context.mounted) return;
     await _open(
       context,
-      ComposerInitial(mode: ComposeMode.blank, body: _signatureBlock(state)),
+      ComposerInitial(mode: ComposeMode.blank, body: _bodyFor(draft)),
     );
   }
 
-  /// Reply (or reply-all) quoting the open message as `> ` citations.
+  /// Reply or reply-all. Recipients, subject, quote and signature come
+  /// prepared by the core (`mailcore::compose::answer`), as in Qt.
   static Future<void> showReply(
     BuildContext context,
     MessageBody message, {
     bool replyAll = false,
-  }) async {
+  }) => _showAnswer(
+    context,
+    message,
+    replyAll ? ComposeMode.replyAll : ComposeMode.reply,
+  );
+
+  /// Forward with a `— Forwarded message —` header and the quoted body.
+  static Future<void> showForward(BuildContext context, MessageBody message) =>
+      _showAnswer(context, message, ComposeMode.forward);
+
+  static Future<void> _showAnswer(
+    BuildContext context,
+    MessageBody message,
+    ComposeMode mode,
+  ) async {
     final state = context.read<MailState>();
-    final settings = state.settings;
-    // Where the reply goes is the core's call, as in Qt.
-    final answerTo = message.replyTarget.isNotEmpty
-        ? message.replyTarget
-        : message.from;
-    final quote = _quote(message, settings.replyBelowQuote);
-    final notice = message.replyToDiffers
-        ? 'Replies to this mail go to ${message.replyTo} — not to the sender (${message.from}).'
-        : '';
+    final wire = switch (mode) {
+      ComposeMode.replyAll => 'reply_all',
+      ComposeMode.forward => 'forward',
+      _ => 'reply',
+    };
+    final draft = await _draft(
+      () => MailCore.instance.answerDraft(state.folderId, message.uid, wire),
+    );
+    if (!context.mounted) return;
+    if (draft == null) {
+      state.showStatus('This message is no longer available', isError: true);
+      return;
+    }
     await _open(
       context,
       ComposerInitial(
-        mode: replyAll ? ComposeMode.replyAll : ComposeMode.reply,
-        to: answerTo,
-        cc: replyAll ? message.cc : '',
-        subject: _subjectPrefix(message.subject, 'Re:'),
-        body: quote + _signatureBlock(state),
-        showCc: replyAll && message.cc.isNotEmpty,
-        replyNotice: notice,
+        mode: mode,
+        to: draft.to,
+        cc: draft.cc,
+        subject: draft.subject,
+        body: _bodyFor(draft),
+        showCc: draft.cc.isNotEmpty,
+        replyNotice: draft.noticeAddr.isEmpty
+            ? ''
+            : 'Replies to this mail go to ${draft.noticeAddr} — not to the sender (${draft.noticeSender}).',
+        quoteHtml: draft.quoteHtml,
+        quoteFirst: draft.quoteFirst,
       ),
     );
   }
 
-  /// Forward with a `— Forwarded message —` header and the quoted body.
-  static Future<void> showForward(
-    BuildContext context,
-    MessageBody message,
+  static Future<AnswerDraft?> _draft(
+    Future<AnswerDraft> Function() load,
   ) async {
-    final state = context.read<MailState>();
-    final header =
-        '— Forwarded message —\n'
-        'From: ${message.from}\n'
-        'Date: ${message.date}\n'
-        'Subject: ${message.subject}\n\n';
-    await _open(
-      context,
-      ComposerInitial(
-        mode: ComposeMode.forward,
-        subject: _subjectPrefix(message.subject, 'Fwd:'),
-        body: header + _quoteBody(message) + _signatureBlock(state),
-      ),
-    );
+    try {
+      return await load();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// The text box starts with room to type, then the signature.
+  static String _bodyFor(AnswerDraft? draft) {
+    final sig = draft?.signatureText ?? '';
+    return sig.isEmpty ? '' : '\n\n$sig';
   }
 
   /// Continue a stored draft. Attachments come back as metadata; saving
@@ -187,38 +217,6 @@ class ComposerDialog extends StatefulWidget {
     }
   }
 
-  static String _subjectPrefix(String subject, String prefix) =>
-      subject.toLowerCase().startsWith(prefix.toLowerCase())
-      ? subject
-      : '$prefix $subject';
-
-  static String _quote(MessageBody message, bool below) {
-    final cited =
-        'On ${message.date}, ${message.from} wrote:\n'
-        '${_quoteBody(message)}\n';
-    return below ? '\n\n$cited' : '$cited\n';
-  }
-
-  static String _quoteBody(MessageBody message) {
-    final text = message.bodyText.isNotEmpty
-        ? message.bodyText
-        : _stripTags(message.bodyHtml);
-    return text.split('\n').map((l) => '> $l').join('\n');
-  }
-
-  /// Last resort for a quote when the core stored no plain twin: drop the
-  /// tags, keep the words. The reader never renders this — it only quotes.
-  static String _stripTags(String html) => html
-      .replaceAll(RegExp(r'<[^>]*>'), ' ')
-      .replaceAll(RegExp(r'\s+'), ' ')
-      .trim();
-
-  static String _signatureBlock(MailState state) {
-    final s = state.settings;
-    if (!s.signatureEnabled || s.signatureText.isEmpty) return '';
-    return '\n\n-- \n${s.signatureText}';
-  }
-
   static String _draftText(Map<String, dynamic> form) {
     final html = '${form['body_html'] ?? ''}';
     final text = '${form['body'] ?? ''}';
@@ -255,6 +253,9 @@ class _ComposerDialogState extends State<ComposerDialog> {
   /// The send-format setting, as last built (see [ComposerEditor]).
   String _sendFormat = 'auto';
   bool _dirty = false;
+
+  /// The quoted original still goes out (see [ComposerQuote]).
+  bool _keepQuote = true;
   bool _sending = false;
   bool _savingDraft = false;
   bool get _working => _sending || _savingDraft;
@@ -490,6 +491,10 @@ class _ComposerDialogState extends State<ComposerDialog> {
           ),
         ),
         const SizedBox(height: 12),
+        if (_quoteShown && widget.initial.quoteFirst) ...[
+          _quoteCard(),
+          const SizedBox(height: 8),
+        ],
         ComposerEditor(
           controller: _body,
           images: () => _images.urls,
@@ -501,6 +506,10 @@ class _ComposerDialogState extends State<ComposerDialog> {
           onImage: _insertImages,
           onAttach: _pickFiles,
         ),
+        if (_quoteShown && !widget.initial.quoteFirst) ...[
+          const SizedBox(height: 8),
+          _quoteCard(),
+        ],
         ..._extras(),
       ],
     );
@@ -666,15 +675,33 @@ class _ComposerDialogState extends State<ComposerDialog> {
     return '$local$_domain';
   }
 
+  bool get _quoteShown => _keepQuote && widget.initial.quoteHtml.isNotEmpty;
+
+  Widget _quoteCard() => ComposerQuote(
+    html: widget.initial.quoteHtml,
+    forward: widget.initial.mode == ComposeMode.forward,
+    onRemove: () => setState(() {
+      _keepQuote = false;
+      _dirty = true;
+    }),
+  );
+
   Map<String, dynamic> _form() {
     final bodyText = _body.text;
+    final quote = _quoteShown ? widget.initial.quoteHtml : '';
     // Markdown renders to the HTML twin only when the text carries real
-    // formatting; otherwise body_html stays empty and the mail goes out
-    // exactly as before — plain, with no HTML part. The core sanitizes the
-    // HTML again and picks multipart under `auto`.
-    final bodyHtml = MarkdownMail.hasFormatting(bodyText)
+    // formatting or a quote rides along; otherwise body_html stays empty and
+    // the mail goes out plain, with no HTML part. With a quote the core
+    // derives the plain part from the HTML (a plain original's `> ` quote
+    // keeps an Auto send text/plain), sanitizes it again and picks the shape.
+    final own = MarkdownMail.hasFormatting(bodyText) || quote.isNotEmpty
         ? MarkdownMail.toHtml(bodyText, images: _images.urls)
         : '';
+    final bodyHtml = quote.isEmpty
+        ? own
+        : widget.initial.quoteFirst
+        ? '$quote$own'
+        : '$own$quote';
     return {
       'to': _to.text,
       'cc': _cc.text,

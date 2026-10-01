@@ -70,3 +70,21 @@ Future<void> deleteDraft({
   accountId: accountId,
   uid: uid,
 );
+
+/// Reply/forward draft for one message as JSON
+/// (`mailcore::compose::AnswerDraft`); `mode` is `reply`, `reply_all` or
+/// `forward`. A local SQLite read, no network.
+Future<String> answerDraft({
+  required PlatformInt64 folderId,
+  required int uid,
+  required String mode,
+}) => MailCoreApi.instance.api.crateApiComposerAnswerDraft(
+  folderId: folderId,
+  uid: uid,
+  mode: mode,
+);
+
+/// New-mail draft (just the signature) as JSON, same shape as
+/// [`answer_draft`].
+Future<String> blankDraft() =>
+    MailCoreApi.instance.api.crateApiComposerBlankDraft();

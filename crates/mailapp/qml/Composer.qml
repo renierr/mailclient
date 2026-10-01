@@ -92,10 +92,6 @@ Dialog {
     property string sendFormat: "auto"
     property var backend
     property bool collectContacts: true
-    // Signature + reply placement, bound to settings via Main.
-    property bool signatureEnabled: false
-    property string signatureText: ""
-    property bool replyBelowQuote: false
     property bool sourceMode: false
     // UID of the server draft being edited; -1 means a new draft.
     property int draftUid: -1
@@ -231,50 +227,6 @@ Dialog {
             root.close();
     }
 
-    function escapeHtml(t) {
-        return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    }
-
-    // Plain-text quote as `>` citations: renders in every client and keeps
-    // Auto sends as text/plain unless the user adds real formatting.
-    function plainToHtmlQuote(t) {
-        var lines = root.escapeHtml(t).split("\n");
-        for (var i = 0; i < lines.length; i++)
-            lines[i] = "&gt; " + lines[i];
-        return "<p>" + lines.join("<br>") + "</p>";
-    }
-
-    // Quote in the format the original arrived in: HTML mail gets a styled
-    // <blockquote> of its HTML body, plain mail gets `>` citations of its
-    // text. The toolbar Quote button still inserts a styled blockquote on
-    // explicit request. Bodies come pre-sanitized from the Rust feed and are
-    // sanitized again on send. Gapless: callers add the spacing that fits
-    // the reply placement (above vs below the quote).
-    function quoteCore(message, headerText) {
-        var wasHtml = message.is_html === true;
-        var html = message.body_html !== undefined ? message.body_html : "";
-        if (wasHtml && html !== "")
-            return "<p>" + root.escapeHtml(headerText) + "</p><blockquote>" + html + "</blockquote>";
-        var q = message.body_text !== undefined ? message.body_text : (message.snippet || "");
-        return root.plainToHtmlQuote(headerText + "\n" + q);
-    }
-
-    // Signature block with the standard `-- ` separator, or "" when the
-    // setting is off/blank. Plain text with <br> so it survives both the
-    // rich editor and plain-text sends.
-    function signatureHtml() {
-        if (!root.signatureEnabled)
-            return "";
-        var lines = root.signatureText.split("\n");
-        while (lines.length > 0 && lines[lines.length - 1].trim() === "")
-            lines.pop();
-        while (lines.length > 0 && lines[0].trim() === "")
-            lines.shift();
-        if (lines.length === 0)
-            return "";
-        return "<p>-- <br>" + root.escapeHtml(lines.join("\n")).split("\n").join("<br>") + "</p>";
-    }
-
     function resetHeaders() {
         fromLocal.text = root.accountLocalPart;
         fromName.text = root.accountFromName;
@@ -297,63 +249,40 @@ Dialog {
         sourceArea.text = html;
     }
 
+    // New mail and answers come prepared by mailcore (compose::answer):
+    // recipients, subject, quote and signature in their placement. The
+    // composer only fills its fields.
     function openBlank() {
         if (!root.readyForNew())
             return;
         root.sourceMode = false;
         root.resetHeaders();
-        root.setBody(root.signatureHtml());
+        var draft = root.backend ? FeedJson.parse(root.backend.blank_draft_json(), ({})) : ({});
+        root.setBody(draft.body_html || "");
         root.markClean();
         open();
     }
 
-    function openForReply(message) {
+    // `mode` is "reply", "reply_all" or "forward"; `uid` is in the current
+    // folder.
+    function openForAnswer(uid, mode) {
         if (!root.readyForNew())
             return;
-        root.sourceMode = false;
-        root.resetHeaders();
-        if (message !== undefined) {
-            // Where the reply goes is mailcore's call (reply_target,
-            // reply_to_differs); when it is not the sender the banner below
-            // says so out loud. A list row has neither and answers From.
-            var from = message.from || "";
-            toField.text = message.reply_target || from;
-            if (message.reply_to_differs === true) {
-                root.replyNoticeAddr = message.reply_target;
-                root.replyNoticeSender = from;
-            }
-            subjectField.text = "Re: " + (message.subject || "");
-            var core = root.quoteCore(message, "On " + (message.date || "") + ", " + (message.from || "") + " wrote:");
-            if (root.replyBelowQuote)
-                root.setBody(core + "<p></p>" + root.signatureHtml());
-            else
-                root.setBody("<p></p>" + root.signatureHtml() + core);
-        }
-        root.markClean();
-        open();
-    }
-
-    function openForForward(message) {
-        if (!root.readyForNew())
+        var draft = root.backend && uid >= 0 ? FeedJson.parse(root.backend.answer_draft_json(uid, mode), ({})) : ({});
+        if (draft.body_html === undefined) {
+            root.statusMessage(qsTr("This message is no longer available"));
             return;
+        }
         root.sourceMode = false;
         root.resetHeaders();
-        if (message !== undefined) {
-            subjectField.text = "Fwd: " + (message.subject || "");
-            var lead = root.signatureHtml() + "<p></p>";
-            var wasHtml = message.is_html === true;
-            var html = message.body_html !== undefined ? message.body_html : "";
-            if (wasHtml && html !== "") {
-                root.setBody(lead + "<p>— Forwarded message —<br>From: " + root.escapeHtml(message.from || "")
-                             + "<br>Date: " + root.escapeHtml(message.date || "") + "<br>Subject: " + root.escapeHtml(
-                                 message.subject || "") + "</p><blockquote>" + html + "</blockquote>");
-            } else {
-                var q = message.body_text !== undefined ? message.body_text : (message.snippet || "");
-                root.setBody(lead + root.plainToHtmlQuote("— Forwarded message —\nFrom: " + (message.from || "")
-                                                          + "\nDate: " + (message.date || "") + "\nSubject: " + (
-                                                              message.subject || "") + "\n\n" + q));
-            }
-        }
+        toField.text = draft.to || "";
+        ccField.text = draft.cc || "";
+        root.showCc = ccField.text !== "";
+        subjectField.text = draft.subject || "";
+        // Reply-To elsewhere than the sender: the banner says so out loud.
+        root.replyNoticeAddr = draft.notice_addr || "";
+        root.replyNoticeSender = draft.notice_sender || "";
+        root.setBody(draft.body_html);
         root.markClean();
         open();
     }

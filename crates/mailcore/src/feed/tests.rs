@@ -431,3 +431,26 @@ fn short_date_renders_local_clock_not_the_senders_offset() {
         }
     }
 }
+
+#[test]
+fn answer_draft_json_reads_the_stored_message_and_settings() {
+    let (db, acc, f) = setup();
+    msg_store::upsert(&db, &msg_store::sample_new(acc, f, 5)).unwrap();
+    settings::set(&db, settings::SIGNATURE_ENABLED, "1").unwrap();
+    settings::set(&db, settings::SIGNATURE_TEXT, "Bob").unwrap();
+
+    let d: serde_json::Value =
+        serde_json::from_str(&crate::compose::answer_draft_json(&db, f, 5, "reply_all").unwrap())
+            .unwrap();
+    assert_eq!(d["to"], "alice@example.com");
+    assert_eq!(d["cc"], "bob@example.com");
+    assert_eq!(d["subject"], "Re: Hello");
+    assert_eq!(d["signature_text"], "-- \nBob");
+    let quote = d["quote_html"].as_str().unwrap();
+    assert!(quote.contains("Alice &lt;alice@example.com&gt; wrote:"));
+    assert!(quote.contains("&gt; Hello Bob, how are you?"));
+    // The attribution carries a full date, never the list's short form.
+    assert!(quote.contains(&full_local_date(Some("2026-09-07T10:00:00+00:00"))));
+
+    assert!(crate::compose::answer_draft_json(&db, f, 5, "bogus").is_err());
+}

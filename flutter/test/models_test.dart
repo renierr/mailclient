@@ -188,4 +188,22 @@ void main() {
       'a@example.com',
     );
   });
+
+  test('answer drafts parse the core fields', () {
+    final d = AnswerDraft.fromJson({
+      'to': 'list@example.org',
+      'cc': 'bob@example.com',
+      'subject': 'Re: Plans',
+      'notice_addr': 'list@example.org',
+      'notice_sender': 'alice@example.com',
+      'signature_text': '-- \nMe',
+      'quote_html': '<blockquote>x</blockquote>',
+      'quote_first': true,
+    });
+    expect(d.to, 'list@example.org');
+    expect(d.noticeSender, 'alice@example.com');
+    expect(d.signatureText, '-- \nMe');
+    expect(d.quoteFirst, isTrue);
+    expect(AnswerDraft.fromJson({}).quoteHtml, '');
+  });
 }

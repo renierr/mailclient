@@ -114,6 +114,25 @@ impl qobject::Bridge {
             .map_or_else(|_| qstring("{}"), |j| qstring(&j))
     }
 
+    pub fn answer_draft_json(&self, uid: i32, mode: &QString) -> QString {
+        let Ok(db) = shared_db() else {
+            return qstring("{}");
+        };
+        let folder_id = *self.current_folder_id();
+        if folder_id < 0 || uid < 0 {
+            return qstring("{}");
+        }
+        mailcore::compose::answer_draft_json(db, folder_id, uid as u32, &mode.to_string())
+            .map_or_else(|_| qstring("{}"), |j| qstring(&j))
+    }
+
+    pub fn blank_draft_json(&self) -> QString {
+        let Ok(db) = shared_db() else {
+            return qstring("{}");
+        };
+        mailcore::compose::blank_draft_json(db).map_or_else(|_| qstring("{}"), |j| qstring(&j))
+    }
+
     /// FTS search for the toolbar (up to 50 hits, rank order). `folder`
     /// scopes to one folder path (empty = whole account). Local SQLite
     /// read, no network — safe to call per keystroke.

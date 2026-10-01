@@ -1,4 +1,5 @@
-//! The composer's backend: sending and drafts, shared by both frontends.
+//! The composer's backend: sending, drafts and reply/forward drafts, shared
+//! by both frontends.
 //!
 //! A frontend hands over the composer's JSON form and gets a result back;
 //! everything that decides *what happens* — validation, the send settings,
@@ -6,11 +7,16 @@
 //! here so a fix lands in both. What stays in the adapters is only how a job
 //! is started and how its result is phrased and shown.
 
+mod answer;
 mod drafts;
 mod form;
 mod reply;
 mod send;
 
+pub use answer::{
+    answer_draft, answer_draft_json, blank_draft, blank_draft_json, AnswerDraft, AnswerMode,
+    AnswerOptions, AnswerSource,
+};
 pub use drafts::{delete_draft, draft_html, drafts_folder, open_draft, save_draft, DraftSaved};
 pub use form::ComposeForm;
 pub use reply::{reply_address, ReplyAddress};

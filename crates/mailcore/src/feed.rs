@@ -171,7 +171,7 @@ pub fn message_html(db: &Db, folder_id: i64, uid: u32, allow_remote: bool) -> Re
 /// Resolve `cid:` images from the message's stored parts. Reads SQLite
 /// only — a part without stored bytes turns into its alt text and is
 /// counted, so the reader can offer an explicit download.
-fn with_inline_images(db: &Db, message_id: i64, body_html: &str) -> (String, usize) {
+pub(crate) fn with_inline_images(db: &Db, message_id: i64, body_html: &str) -> (String, usize) {
     let images = messages::inline_images(db, message_id).unwrap_or_else(|e| {
         log::warn!("inline images for message {message_id}: {e}");
         Vec::new()
@@ -321,13 +321,10 @@ pub fn attachments_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
     Ok(serde_json::to_string(&files)?)
 }
 
-/// Header details for one message (the reader's "Headers" dialog):
-/// `{from, to, cc, date, subject, message_id, reply_to}`. `date` is the full
-/// local timestamp (`2026-09-12 13:50`), falling back to the stored raw value
-/// when unparseable. Empty/absent fields become `""`/`[]` for QML.
-pub fn headers_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
-    let m = messages::get_by_uid(db, folder_id, uid)?;
-    let date = match m.date.as_deref() {
+/// A stored RFC 3339 date as local `2026-09-12 13:50`; the raw value when
+/// unparseable, `""` when absent.
+pub(crate) fn full_local_date(raw: Option<&str>) -> String {
+    match raw {
         Some(raw) => match chrono::DateTime::parse_from_rfc3339(raw) {
             Ok(dt) => dt
                 .with_timezone(&chrono::Local)
@@ -336,7 +333,16 @@ pub fn headers_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
             Err(_) => raw.to_string(),
         },
         None => String::new(),
-    };
+    }
+}
+
+/// Header details for one message (the reader's "Headers" dialog):
+/// `{from, to, cc, date, subject, message_id, reply_to}`. `date` is the full
+/// local timestamp (`2026-09-12 13:50`), falling back to the stored raw value
+/// when unparseable. Empty/absent fields become `""`/`[]` for QML.
+pub fn headers_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
+    let m = messages::get_by_uid(db, folder_id, uid)?;
+    let date = full_local_date(m.date.as_deref());
     Ok(serde_json::to_string(&json!({
         "from": rfc_header(&m.raw_headers, "From").unwrap_or_else(|| m.from_addr.unwrap_or_default()),
         "to": rfc_header(&m.raw_headers, "To").unwrap_or_else(|| m.to_addrs.join(", ")),

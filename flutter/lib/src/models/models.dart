@@ -289,6 +289,49 @@ class MessageBody {
   );
 }
 
+/// A new, reply or forward draft prepared by `mailcore::compose::answer`,
+/// the same one the Qt composer fills its fields from.
+class AnswerDraft {
+  const AnswerDraft({
+    this.to = '',
+    this.cc = '',
+    this.subject = '',
+    this.noticeAddr = '',
+    this.noticeSender = '',
+    this.signatureText = '',
+    this.quoteHtml = '',
+    this.quoteFirst = false,
+  });
+
+  final String to;
+  final String cc;
+  final String subject;
+
+  /// Set when the reply goes to a Reply-To other than the sender.
+  final String noticeAddr;
+  final String noticeSender;
+
+  /// The `-- ` signature block, or `""` without a signature.
+  final String signatureText;
+
+  /// Attribution or forward header plus the quoted original, as HTML.
+  final String quoteHtml;
+
+  /// Bottom-posting: the quote goes above the user's text.
+  final bool quoteFirst;
+
+  factory AnswerDraft.fromJson(Map<String, dynamic> j) => AnswerDraft(
+    to: _str(j['to']),
+    cc: _str(j['cc']),
+    subject: _str(j['subject']),
+    noticeAddr: _str(j['notice_addr']),
+    noticeSender: _str(j['notice_sender']),
+    signatureText: _str(j['signature_text']),
+    quoteHtml: _str(j['quote_html']),
+    quoteFirst: _bool(j['quote_first']),
+  );
+}
+
 /// An attachment's metadata. Bytes are never in a feed — they are fetched on
 /// explicit request and cached in SQLite.
 class AttachmentInfo {

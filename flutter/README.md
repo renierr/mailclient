@@ -300,11 +300,7 @@ the same SQLite file in that directory.
 The composer (send, drafts) lives once in `mailcore::compose`, account
 saving in `mailcore::store::account_form`, the IMAP session pool, the lease
 and the panic guard in `mailcore::sync::pool`, sender avatars (letters and
-colour) in `mailcore::badge`, and where a reply goes in
-`mailcore::compose::reply_address`. Add an entry here before making any new
+colour) in `mailcore::badge`, where a reply goes in
+`mailcore::compose::reply_address`, and new/reply/forward drafts in
+`mailcore::compose::answer`. Nothing else known. Add an entry here before making any new
 copy between `mailapp` and `mailffi`, or between QML and Dart (AGENTS.md §1).
-
-- Reply/forward drafts: both composers build the quote, the attribution
-  line and the `Re:`/`Fwd:` subject themselves, and they already differ
-  (Flutter does not stack `Re: Re:`, Qt does). A `mailcore::compose`
-  builder could return the draft fields.

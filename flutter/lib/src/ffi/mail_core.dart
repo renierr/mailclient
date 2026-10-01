@@ -368,6 +368,22 @@ class MailCore {
   /// Whether a file would be offered as an inline image (by type).
   bool isInlineImage(String path) => rust_composer.isInlineImage(path: path);
 
+  /// Reply (`reply`, `reply_all`) or `forward` draft for one message.
+  Future<AnswerDraft> answerDraft(int folderId, int uid, String mode) async =>
+      AnswerDraft.fromJson(
+        await _decodeMap(
+          await rust_composer.answerDraft(
+            folderId: folderId,
+            uid: uid,
+            mode: mode,
+          ),
+        ),
+      );
+
+  /// New-mail draft: the signature alone.
+  Future<AnswerDraft> blankDraft() async =>
+      AnswerDraft.fromJson(await _decodeMap(await rust_composer.blankDraft()));
+
   Future<Map<String, dynamic>> draftForm(int accountId, int uid) async =>
       _decodeMap(await rust_composer.draftForm(accountId: accountId, uid: uid));
 

@@ -183,6 +183,17 @@ pub mod qobject {
         #[qinvokable]
         fn message_headers_json(&self, uid: i32) -> QString;
 
+        /// Reply/forward draft for one message in the current folder as JSON
+        /// (`mailcore::compose::AnswerDraft`); `mode` is `reply`,
+        /// `reply_all` or `forward`. Returns `"{}"` if unknown.
+        #[qinvokable]
+        fn answer_draft_json(&self, uid: i32, mode: &QString) -> QString;
+
+        /// New-mail draft (just the signature) as JSON, same shape as
+        /// `answer_draft_json`.
+        #[qinvokable]
+        fn blank_draft_json(&self) -> QString;
+
         /// FTS search over subject/from/body (`[{uid, folder_id, folder,
         /// subject, from, date, snippet, unread, starred, has_attachments}]`,
         /// FTS rank order). `folder` scopes to one folder path (empty = whole
