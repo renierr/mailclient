@@ -105,29 +105,31 @@ class AppSettings {
   );
 
   factory AppSettings.fromJson(Map<String, dynamic> j) => AppSettings(
-        sentCopy: _flag(j[SettingKeys.sentCopy], orElse: true),
-        loadRemoteImages: _flag(j[SettingKeys.loadRemoteImages]),
-        sendFormat: _str(j[SettingKeys.sendFormat], orElse: 'auto'),
-        includePlain: _flag(j[SettingKeys.includePlain], orElse: true),
-        autoMarkRead: _flag(j[SettingKeys.autoMarkRead], orElse: true),
-        markReadDelaySecs: _int(j[SettingKeys.markReadDelay]),
-        collectContacts: _flag(j[SettingKeys.collectContacts], orElse: true),
-        confirmDelete: _flag(j[SettingKeys.confirmDelete], orElse: true),
-        density: _str(j[SettingKeys.listDensity], orElse: 'comfortable'),
-        readerFontSize: _str(j[SettingKeys.readerFontSize], orElse: 'normal'),
-        linkClickAction:
-            _str(j[SettingKeys.linkClickAction], orElse: 'examine'),
-        syncIntervalMinutes: _int(j[SettingKeys.syncInterval]),
-        backgroundScheduler: _scheduler(j[SettingKeys.backgroundScheduler]),
-        notificationsEnabled: _flag(j[SettingKeys.notificationsEnabled], orElse: true),
-        signatureEnabled: _flag(j[SettingKeys.signatureEnabled]),
-        signatureText: _str(j[SettingKeys.signatureText]),
-        replyBelowQuote: _flag(j[SettingKeys.replyBelowQuote]),
-        requestMdn: _flag(j[SettingKeys.requestMdn]),
-        uiScale: _dbl(j[SettingKeys.uiScale], orElse: 1.0),
-        sortField: _str(j[SettingKeys.sortField], orElse: 'date'),
-        sortDescending: _flag(j[SettingKeys.sortDescending], orElse: true),
-      );
+    sentCopy: _flag(j[SettingKeys.sentCopy], orElse: true),
+    loadRemoteImages: _flag(j[SettingKeys.loadRemoteImages]),
+    sendFormat: _str(j[SettingKeys.sendFormat], orElse: 'auto'),
+    includePlain: _flag(j[SettingKeys.includePlain], orElse: true),
+    autoMarkRead: _flag(j[SettingKeys.autoMarkRead], orElse: true),
+    markReadDelaySecs: _int(j[SettingKeys.markReadDelay]),
+    collectContacts: _flag(j[SettingKeys.collectContacts], orElse: true),
+    confirmDelete: _flag(j[SettingKeys.confirmDelete], orElse: true),
+    density: _str(j[SettingKeys.listDensity], orElse: 'comfortable'),
+    readerFontSize: _str(j[SettingKeys.readerFontSize], orElse: 'normal'),
+    linkClickAction: _str(j[SettingKeys.linkClickAction], orElse: 'examine'),
+    syncIntervalMinutes: _int(j[SettingKeys.syncInterval]),
+    backgroundScheduler: _scheduler(j[SettingKeys.backgroundScheduler]),
+    notificationsEnabled: _flag(
+      j[SettingKeys.notificationsEnabled],
+      orElse: true,
+    ),
+    signatureEnabled: _flag(j[SettingKeys.signatureEnabled]),
+    signatureText: _str(j[SettingKeys.signatureText]),
+    replyBelowQuote: _flag(j[SettingKeys.replyBelowQuote]),
+    requestMdn: _flag(j[SettingKeys.requestMdn]),
+    uiScale: _dbl(j[SettingKeys.uiScale], orElse: 1.0),
+    sortField: _str(j[SettingKeys.sortField], orElse: 'date'),
+    sortDescending: _flag(j[SettingKeys.sortDescending], orElse: true),
+  );
 
   AppSettings copyWith({
     bool? sentCopy,
@@ -151,38 +153,37 @@ class AppSettings {
     double? uiScale,
     String? sortField,
     bool? sortDescending,
-  }) =>
-      AppSettings(
-        sentCopy: sentCopy ?? this.sentCopy,
-        loadRemoteImages: loadRemoteImages ?? this.loadRemoteImages,
-        sendFormat: sendFormat ?? this.sendFormat,
-        includePlain: includePlain ?? this.includePlain,
-        autoMarkRead: autoMarkRead ?? this.autoMarkRead,
-        markReadDelaySecs: markReadDelaySecs ?? this.markReadDelaySecs,
-        collectContacts: collectContacts ?? this.collectContacts,
-        confirmDelete: confirmDelete ?? this.confirmDelete,
-        density: density ?? this.density,
-        readerFontSize: readerFontSize ?? this.readerFontSize,
-        linkClickAction: linkClickAction ?? this.linkClickAction,
-        syncIntervalMinutes: syncIntervalMinutes ?? this.syncIntervalMinutes,
-        backgroundScheduler: backgroundScheduler ?? this.backgroundScheduler,
-        notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
-        signatureEnabled: signatureEnabled ?? this.signatureEnabled,
-        signatureText: signatureText ?? this.signatureText,
-        replyBelowQuote: replyBelowQuote ?? this.replyBelowQuote,
-        requestMdn: requestMdn ?? this.requestMdn,
-        uiScale: uiScale ?? this.uiScale,
-        sortField: sortField ?? this.sortField,
-        sortDescending: sortDescending ?? this.sortDescending,
-      );
+  }) => AppSettings(
+    sentCopy: sentCopy ?? this.sentCopy,
+    loadRemoteImages: loadRemoteImages ?? this.loadRemoteImages,
+    sendFormat: sendFormat ?? this.sendFormat,
+    includePlain: includePlain ?? this.includePlain,
+    autoMarkRead: autoMarkRead ?? this.autoMarkRead,
+    markReadDelaySecs: markReadDelaySecs ?? this.markReadDelaySecs,
+    collectContacts: collectContacts ?? this.collectContacts,
+    confirmDelete: confirmDelete ?? this.confirmDelete,
+    density: density ?? this.density,
+    readerFontSize: readerFontSize ?? this.readerFontSize,
+    linkClickAction: linkClickAction ?? this.linkClickAction,
+    syncIntervalMinutes: syncIntervalMinutes ?? this.syncIntervalMinutes,
+    backgroundScheduler: backgroundScheduler ?? this.backgroundScheduler,
+    notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
+    signatureEnabled: signatureEnabled ?? this.signatureEnabled,
+    signatureText: signatureText ?? this.signatureText,
+    replyBelowQuote: replyBelowQuote ?? this.replyBelowQuote,
+    requestMdn: requestMdn ?? this.requestMdn,
+    uiScale: uiScale ?? this.uiScale,
+    sortField: sortField ?? this.sortField,
+    sortDescending: sortDescending ?? this.sortDescending,
+  );
 
   /// Reader text size multiplier, on top of the interface scale. The same
   /// steps as the Qt reader's 12 / 14 / 18 px.
   double get readerScale => switch (readerFontSize) {
-        'small' => 12 / 14,
-        'large' => 18 / 14,
-        _ => 1.0,
-      };
+    'small' => 12 / 14,
+    'large' => 18 / 14,
+    _ => 1.0,
+  };
 
   /// Compact rows drop the snippet line, like the Qt frontend's density.
   bool get isCompact => density == 'compact';
@@ -220,17 +221,17 @@ class SearchHit {
   HitKey get key => (folder: folder, uid: uid);
 
   factory SearchHit.fromJson(Map<String, dynamic> j) => SearchHit(
-        uid: _int(j['uid']),
-        folderId: _int(j['folder_id']),
-        folder: _str(j['folder']),
-        subject: _str(j['subject'], orElse: '(no subject)'),
-        from: _str(j['from'], orElse: '?'),
-        date: _str(j['date']),
-        snippet: _str(j['snippet']),
-        unread: _truthy(j['unread']),
-        starred: _truthy(j['starred']),
-        hasAttachments: _truthy(j['has_attachments']),
-      );
+    uid: _int(j['uid']),
+    folderId: _int(j['folder_id']),
+    folder: _str(j['folder']),
+    subject: _str(j['subject'], orElse: '(no subject)'),
+    from: _str(j['from'], orElse: '?'),
+    date: _str(j['date']),
+    snippet: _str(j['snippet']),
+    unread: _truthy(j['unread']),
+    starred: _truthy(j['starred']),
+    hasAttachments: _truthy(j['has_attachments']),
+  );
 }
 
 /// The reader's "Headers" dialog payload.
@@ -256,46 +257,46 @@ class MessageHeaders {
   final String raw;
 
   factory MessageHeaders.fromJson(Map<String, dynamic> j) => MessageHeaders(
-        from: _str(j['from']),
-        to: _str(j['to']),
-        cc: _str(j['cc']),
-        date: _str(j['date']),
-        subject: _str(j['subject']),
-        messageId: _str(j['message_id']),
-        replyTo: _str(j['reply_to']),
-        raw: _str(j['raw']),
-      );
+    from: _str(j['from']),
+    to: _str(j['to']),
+    cc: _str(j['cc']),
+    date: _str(j['date']),
+    subject: _str(j['subject']),
+    messageId: _str(j['message_id']),
+    replyTo: _str(j['reply_to']),
+    raw: _str(j['raw']),
+  );
 }
 
 bool _flag(Object? v, {bool orElse = false}) => switch (v) {
-      bool b => b,
-      num n => n != 0,
-      'true' || '1' => true,
-      'false' || '0' => false,
-      _ => orElse,
-    };
+  bool b => b,
+  num n => n != 0,
+  'true' || '1' => true,
+  'false' || '0' => false,
+  _ => orElse,
+};
 
 bool _truthy(Object? v) => _flag(v);
 
 int _int(Object? v) => switch (v) {
-      int n => n,
-      num n => n.toInt(),
-      String s => int.tryParse(s) ?? 0,
-      _ => 0,
-    };
+  int n => n,
+  num n => n.toInt(),
+  String s => int.tryParse(s) ?? 0,
+  _ => 0,
+};
 
 double _dbl(Object? v, {double orElse = 0}) => switch (v) {
-      double d => d,
-      num n => n.toDouble(),
-      String s => double.tryParse(s) ?? orElse,
-      _ => orElse,
-    };
+  double d => d,
+  num n => n.toDouble(),
+  String s => double.tryParse(s) ?? orElse,
+  _ => orElse,
+};
 
 String _str(Object? v, {String orElse = ''}) => switch (v) {
-      String s when s.isNotEmpty => s,
-      null || '' => orElse,
-      _ => v.toString(),
-    };
+  String s when s.isNotEmpty => s,
+  null || '' => orElse,
+  _ => v.toString(),
+};
 
 /// Scheduler for the Android background check: `push`, `alarm` or
 /// `workmanager`. Anything else falls back to WorkManager, the default —

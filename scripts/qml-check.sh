@@ -5,6 +5,8 @@
 #      the dead WebEngine navigation guard).
 #   2. Headless qmltestrunner unit tests (offscreen, stub Mailclient module
 #      generated from the real singleton sources so nothing drifts).
+#   3. Formatting, via scripts/qml-format.sh --check -- only with the pinned
+#      qmlformat version; another version skips the step instead of failing.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -67,3 +69,14 @@ echo "lint ok"
 echo "==> qmltestrunner (offscreen)"
 QT_QPA_PLATFORM=offscreen "$RUNNER" -input crates/mailapp/qml/tests
 echo "qml tests ok"
+
+echo "==> qmlformat (pinned version)"
+set +e
+QT_BIN_DIR="$QT_BIN" scripts/qml-format.sh --check
+fmt_status=$?
+set -e
+case "$fmt_status" in
+0) echo "format ok" ;;
+2) echo "format check skipped (see above)" ;;
+*) echo "run scripts/qml-format.sh to format" >&2; exit 1 ;;
+esac

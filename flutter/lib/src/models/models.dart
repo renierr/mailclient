@@ -33,13 +33,13 @@ class Account {
   final String smtpHost;
 
   factory Account.fromJson(Map<String, dynamic> j) => Account(
-        id: _int(j['id']),
-        name: _str(j['name']),
-        email: _str(j['email']),
-        fromName: _str(j['from_name']),
-        imapHost: _str(j['imap_host']),
-        smtpHost: _str(j['smtp_host']),
-      );
+    id: _int(j['id']),
+    name: _str(j['name']),
+    email: _str(j['email']),
+    fromName: _str(j['from_name']),
+    imapHost: _str(j['imap_host']),
+    smtpHost: _str(j['smtp_host']),
+  );
 
   /// What to show when an account has no name of its own.
   String get displayName => name.isNotEmpty ? name : email;
@@ -60,9 +60,9 @@ enum FolderRole {
   custom;
 
   static FolderRole parse(String raw) => FolderRole.values.firstWhere(
-        (r) => r.name == raw,
-        orElse: () => FolderRole.custom,
-      );
+    (r) => r.name == raw,
+    orElse: () => FolderRole.custom,
+  );
 }
 
 /// One folder of one account.
@@ -94,19 +94,18 @@ class Folder {
   final String delimiter;
 
   factory Folder.fromJson(Map<String, dynamic> j) => Folder(
-        id: _int(j['id']),
-        path: _str(j['name']),
-        role: FolderRole.parse(_str(j['role'])),
-        unread: _int(j['unread']),
-        total: _int(j['count']),
-        subscribed: _bool(j['subscribed'], orElse: true),
-        delimiter: _str(j['delimiter'], orElse: '/'),
-      );
+    id: _int(j['id']),
+    path: _str(j['name']),
+    role: FolderRole.parse(_str(j['role'])),
+    unread: _int(j['unread']),
+    total: _int(j['count']),
+    subscribed: _bool(j['subscribed'], orElse: true),
+    delimiter: _str(j['delimiter'], orElse: '/'),
+  );
 
   int get depth => delimiter.isEmpty ? 0 : path.split(delimiter).length - 1;
 
-  String get leafName =>
-      delimiter.isEmpty ? path : path.split(delimiter).last;
+  String get leafName => delimiter.isEmpty ? path : path.split(delimiter).last;
 }
 
 /// One row of the message list. Deliberately without a body: opening a folder
@@ -144,28 +143,28 @@ class MessageSummary {
   final bool hasAttachments;
 
   factory MessageSummary.fromJson(Map<String, dynamic> j) => MessageSummary(
-        uid: _int(j['uid']),
-        subject: _str(j['subject'], orElse: '(no subject)'),
-        from: _str(j['from'], orElse: '?'),
-        fromName: _str(j['from_name']),
-        date: _str(j['date']),
-        snippet: _str(j['snippet']),
-        unread: _bool(j['unread']),
-        starred: _bool(j['starred']),
-        hasAttachments: _bool(j['has_attachments']),
-      );
+    uid: _int(j['uid']),
+    subject: _str(j['subject'], orElse: '(no subject)'),
+    from: _str(j['from'], orElse: '?'),
+    fromName: _str(j['from_name']),
+    date: _str(j['date']),
+    snippet: _str(j['snippet']),
+    unread: _bool(j['unread']),
+    starred: _bool(j['starred']),
+    hasAttachments: _bool(j['has_attachments']),
+  );
 
   MessageSummary copyWith({bool? unread, bool? starred}) => MessageSummary(
-        uid: uid,
-        subject: subject,
-        from: from,
-        fromName: fromName,
-        date: date,
-        snippet: snippet,
-        unread: unread ?? this.unread,
-        starred: starred ?? this.starred,
-        hasAttachments: hasAttachments,
-      );
+    uid: uid,
+    subject: subject,
+    from: from,
+    fromName: fromName,
+    date: date,
+    snippet: snippet,
+    unread: unread ?? this.unread,
+    starred: starred ?? this.starred,
+    hasAttachments: hasAttachments,
+  );
 }
 
 /// The full payload for the message the reader is showing.
@@ -218,23 +217,23 @@ class MessageBody {
   final List<AttachmentInfo> attachments;
 
   factory MessageBody.fromJson(Map<String, dynamic> j) => MessageBody(
-        uid: _int(j['uid']),
-        subject: _str(j['subject'], orElse: '(no subject)'),
-        from: _str(j['from']),
-        to: _str(j['to']),
-        cc: _str(j['cc']),
-        replyTo: _str(j['reply_to']),
-        date: _str(j['date']),
-        bodyText: _str(j['body_text']),
-        bodyHtml: _str(j['body_html']),
-        isHtml: _bool(j['is_html']),
-        hasRemoteImages: _bool(j['has_remote_images']),
-        missingInlineImages: _int(j['missing_inline_images']),
-        htmlColored: _bool(j['html_colored']),
-        attachments: _list(j['attachments'])
-            .map(AttachmentInfo.fromJson)
-            .toList(growable: false),
-      );
+    uid: _int(j['uid']),
+    subject: _str(j['subject'], orElse: '(no subject)'),
+    from: _str(j['from']),
+    to: _str(j['to']),
+    cc: _str(j['cc']),
+    replyTo: _str(j['reply_to']),
+    date: _str(j['date']),
+    bodyText: _str(j['body_text']),
+    bodyHtml: _str(j['body_html']),
+    isHtml: _bool(j['is_html']),
+    hasRemoteImages: _bool(j['has_remote_images']),
+    missingInlineImages: _int(j['missing_inline_images']),
+    htmlColored: _bool(j['html_colored']),
+    attachments: _list(j['attachments'])
+        .map(AttachmentInfo.fromJson)
+        .toList(growable: false),
+  );
 }
 
 /// An attachment's metadata. Bytes are never in a feed — they are fetched on
@@ -258,12 +257,12 @@ class AttachmentInfo {
   final bool isInline;
 
   factory AttachmentInfo.fromJson(Map<String, dynamic> j) => AttachmentInfo(
-        id: _int(j['id']),
-        filename: _str(j['filename'], orElse: 'attachment'),
-        mimeType: _str(j['mime_type'], orElse: 'application/octet-stream'),
-        size: _int(j['size']),
-        isInline: _bool(j['is_inline']),
-      );
+    id: _int(j['id']),
+    filename: _str(j['filename'], orElse: 'attachment'),
+    mimeType: _str(j['mime_type'], orElse: 'application/octet-stream'),
+    size: _int(j['size']),
+    isInline: _bool(j['is_inline']),
+  );
 }
 
 /// A known recipient, for composer autocomplete.
@@ -285,11 +284,11 @@ class Contact {
   final int timesSeen;
 
   factory Contact.fromJson(Map<String, dynamic> j) => Contact(
-        address: _str(j['address']),
-        name: _str(j['name']),
-        alias: _str(j['alias']),
-        timesSeen: _int(j['times_seen']),
-      );
+    address: _str(j['address']),
+    name: _str(j['name']),
+    alias: _str(j['alias']),
+    timesSeen: _int(j['times_seen']),
+  );
 
   String get displayName =>
       alias.isNotEmpty ? alias : (name.isNotEmpty ? name : address);
@@ -301,27 +300,27 @@ class Contact {
 // whole list, so each of these falls back rather than throwing.
 
 int _int(Object? v) => switch (v) {
-      int n => n,
-      num n => n.toInt(),
-      String s => int.tryParse(s) ?? 0,
-      _ => 0,
-    };
+  int n => n,
+  num n => n.toInt(),
+  String s => int.tryParse(s) ?? 0,
+  _ => 0,
+};
 
 String _str(Object? v, {String orElse = ''}) => switch (v) {
-      String s when s.isNotEmpty => s,
-      null || '' => orElse,
-      _ => v.toString(),
-    };
+  String s when s.isNotEmpty => s,
+  null || '' => orElse,
+  _ => v.toString(),
+};
 
 bool _bool(Object? v, {bool orElse = false}) => switch (v) {
-      bool b => b,
-      num n => n != 0,
-      'true' || '1' => true,
-      'false' || '0' => false,
-      _ => orElse,
-    };
+  bool b => b,
+  num n => n != 0,
+  'true' || '1' => true,
+  'false' || '0' => false,
+  _ => orElse,
+};
 
 List<Map<String, dynamic>> _list(Object? v) => switch (v) {
-      List<dynamic> items => items.whereType<Map<String, dynamic>>().toList(),
-      _ => const [],
-    };
+  List<dynamic> items => items.whereType<Map<String, dynamic>>().toList(),
+  _ => const [],
+};

@@ -54,15 +54,14 @@ void main() {
 
     test('converts the colour inside border shorthands', () {
       expect(
-        darkenMailColors(
-          '<td style="border:1px solid #dddddd;">x</td>',
-        ),
+        darkenMailColors('<td style="border:1px solid #dddddd;">x</td>'),
         '<td style="border:1px solid ${inverted('#dddddd')};">x</td>',
       );
     });
 
     test('leaves the rest of the mail alone', () {
-      const html = '<table width="600">'
+      const html =
+          '<table width="600">'
           '<tr><td style="padding:4px;width:600px;">'
           'width="600" and plain text'
           '<img src="data:image/png;base64,Zm9v" width="600">'
@@ -74,7 +73,10 @@ void main() {
       expect(out, contains('width="600"'));
       expect(out, contains('width:600px'));
       expect(out, contains('and plain text'));
-      expect(out, contains('<img src="data:image/png;base64,Zm9v" width="600">'));
+      expect(
+        out,
+        contains('<img src="data:image/png;base64,Zm9v" width="600">'),
+      );
       expect(out, contains('linear-gradient(#fff,#000)'));
       expect(out, contains('color:transparent'));
     });

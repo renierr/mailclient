@@ -45,9 +45,7 @@ final _borderDecl = RegExp(
 );
 
 /// One colour token inside a shorthand (hex, `rgb()`/`rgba()`, keyword).
-final _token = RegExp(
-  r'#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)|\b[a-zA-Z]+\b',
-);
+final _token = RegExp(r'#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)|\b[a-zA-Z]+\b');
 
 final _hex = RegExp(r'^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$');
 final _rgb = RegExp(
@@ -110,12 +108,7 @@ Color? _parseColor(String value) {
 
 Color _colorFromHex(String hex) {
   final rgb = int.parse(hex.substring(1), radix: 16);
-  return Color.fromARGB(
-    255,
-    (rgb >> 16) & 0xFF,
-    (rgb >> 8) & 0xFF,
-    rgb & 0xFF,
-  );
+  return Color.fromARGB(255, (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
 }
 
 /// A [Color] back to CSS: opaque as `#rrggbb`, translucent as `rgba(...)`.
@@ -162,7 +155,8 @@ String darkenMailColors(String html) => html.replaceAllMapped(_tag, (m) {
       final converted = d[3]!.replaceAllMapped(_token, (t) {
         final word = t[0]!;
         final lower = word.toLowerCase();
-        final isColor = word.startsWith('#') ||
+        final isColor =
+            word.startsWith('#') ||
             word.toLowerCase().startsWith('rgb') ||
             _isKeyword(word);
         if (!isColor || lower == 'transparent' || lower == 'currentcolor') {
