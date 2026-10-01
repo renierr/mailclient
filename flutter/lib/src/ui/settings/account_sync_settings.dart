@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../models/account_settings.dart';
 import '../../models/settings.dart';
 import '../../sync/background_alarm.dart';
+import 'heartbeat_warning.dart';
 import 'setting_choice.dart';
 
 /// One account's sync settings: every row offers "Default (…)", which
@@ -17,6 +18,7 @@ class AccountSyncSettings extends StatelessWidget {
     required this.overrides,
     required this.onChanged,
     required this.showPush,
+    this.frequentHeartbeatSecs,
   });
 
   final AppSettings defaults;
@@ -25,6 +27,11 @@ class AccountSyncSettings extends StatelessWidget {
 
   /// Push is an Android background mechanism; elsewhere the row is hidden.
   final bool showPush;
+
+  /// The server's observed IDLE heartbeat gap when it is frequent (see
+  /// [AccountSettings.frequentHeartbeatSecs]); shown as a hint while the
+  /// account uses push.
+  final int? frequentHeartbeatSecs;
 
   static const _intervals = ['', '0', '5', '10', '15', '30', '60'];
 
@@ -49,6 +56,9 @@ class AccountSyncSettings extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pushByDefault = defaults.backgroundScheduler == schedulerPush;
+    final pushOverride = overrides[AccountSettingKeys.pushEnabled] ?? '';
+    final usesPush = pushOverride.isEmpty ? pushByDefault : pushOverride == '1';
+    final heartbeat = frequentHeartbeatSecs;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -77,6 +87,8 @@ class AccountSyncSettings extends StatelessWidget {
                 'Servers that send "still here" every few minutes wake the '
                 'phone each time; checking at the interval saves battery.',
           ),
+        if (showPush && usesPush && heartbeat != null)
+          HeartbeatWarning(seconds: heartbeat),
         _flag(
           'Save a copy of sent mail in Sent',
           SettingKeys.sentCopy,

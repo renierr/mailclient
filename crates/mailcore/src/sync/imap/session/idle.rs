@@ -2,6 +2,7 @@
 //! reports a change or the caller wants the connection back.
 
 use std::future::Future;
+use std::time::{Duration, SystemTime};
 
 use super::*;
 
@@ -16,6 +17,33 @@ pub enum IdleEnd {
     Woken,
 }
 
+/// What the server sent while the last IDLE waited, measured on the wall
+/// clock: the monotonic clock stops while the phone sleeps, and a heartbeat
+/// that wakes it would then look closer to the last one than it was.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IdleStats {
+    /// Untagged `OK` heartbeats (`* OK Still here`) received.
+    pub heartbeats: u32,
+    /// Average gap between heartbeats, counted from the start of the IDLE.
+    /// `None` without heartbeats.
+    pub heartbeat_every: Option<Duration>,
+    /// How long the IDLE waited in total.
+    pub idled: Duration,
+}
+
+impl IdleStats {
+    fn measure(start: SystemTime, last_heartbeat: Option<SystemTime>, heartbeats: u32) -> Self {
+        let since = |t: SystemTime| t.duration_since(start).unwrap_or_default();
+        Self {
+            heartbeats,
+            heartbeat_every: last_heartbeat
+                .filter(|_| heartbeats > 0)
+                .map(|t| since(t) / heartbeats),
+            idled: since(SystemTime::now()),
+        }
+    }
+}
+
 impl ImapSession {
     /// IDLE on the selected mailbox until the server reports a change or
     /// `wake` resolves, then end it with `DONE` and wait for the tagged OK.
@@ -23,7 +51,8 @@ impl ImapSession {
     /// Waiting is unbounded on purpose; only the entry and exit handshakes
     /// are bounded by [`COMMAND_TIMEOUT`]. The caller bounds the wait through
     /// `wake` (keep-alive tick, network change, stop). Server heartbeats
-    /// (`* OK Still here`) are ignored, `BYE` is an error.
+    /// (`* OK Still here`) do not end it but are counted in
+    /// [`ImapSession::last_idle`]; `BYE` is an error.
     pub async fn idle(&mut self, wake: impl Future<Output = ()>) -> Result<IdleEnd> {
         let tag = self.next_tag();
         let cmd = Command::new(tag.clone(), CommandBody::Idle)
@@ -45,6 +74,9 @@ impl ImapSession {
         }
 
         // Idling: the only phase without a timeout.
+        let start = SystemTime::now();
+        let mut heartbeats = 0u32;
+        let mut last_heartbeat = None;
         tokio::pin!(wake);
         let end = loop {
             tokio::select! {
@@ -59,11 +91,18 @@ impl ImapSession {
                         Event::StatusReceived { status: Status::Bye(bye) } => {
                             return Err(bye_error(&bye.text));
                         }
+                        Event::StatusReceived {
+                            status: Status::Untagged(body),
+                        } if body.kind == StatusKind::Ok => {
+                            heartbeats += 1;
+                            last_heartbeat = Some(SystemTime::now());
+                        }
                         event => log::debug!("imap: ignoring event while idling: {event:?}"),
                     }
                 }
             }
         };
+        self.last_idle = IdleStats::measure(start, last_heartbeat, heartbeats);
 
         // Exit: DONE, then the tagged completion of the IDLE command.
         if self.client.set_idle_done().is_none() {
@@ -90,6 +129,11 @@ impl ImapSession {
                 _ => {}
             }
         }
+    }
+
+    /// Heartbeats seen during the most recent [`ImapSession::idle`].
+    pub fn last_idle(&self) -> IdleStats {
+        self.last_idle
     }
 
     /// One protocol event, bounded by [`COMMAND_TIMEOUT`].

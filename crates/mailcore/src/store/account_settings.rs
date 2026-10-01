@@ -20,6 +20,17 @@ use crate::store::{now, settings};
 /// background method is `push`.
 pub const PUSH_ENABLED: &str = "push_enabled";
 
+/// Prefix for the heartbeat interval last observed while the account idled
+/// for push (seconds; `0` = none seen): `idle_heartbeat_secs_{account_id}`.
+/// Observed state, not a preference, so it lives in `settings` and is never
+/// an override.
+pub const IDLE_HEARTBEAT_PREFIX: &str = "idle_heartbeat_secs_";
+
+/// Heartbeats more frequent than this wake the phone more often than the
+/// push service's own keep-alive alarm does (Android `MailPush`), so they
+/// are worth a hint in the account's settings.
+pub const FREQUENT_HEARTBEAT_SECS: i64 = 15 * 60;
+
 /// The settings an account can override.
 pub const KEYS: [&str; 5] = [
     settings::SYNC_INTERVAL_MINUTES,
@@ -142,12 +153,51 @@ pub fn get_bool(db: &Db, account_id: i64, key: &str) -> bool {
     }
 }
 
+/// The server heartbeat interval (`* OK Still here`) last seen while
+/// `account_id` idled for push, in seconds. `None` when it never idled or
+/// the server stayed quiet.
+pub fn idle_heartbeat_secs(db: &Db, account_id: i64) -> Option<i64> {
+    settings::get(db, &format!("{IDLE_HEARTBEAT_PREFIX}{account_id}"))
+        .ok()
+        .flatten()
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .filter(|secs| *secs > 0)
+}
+
+/// Record what one IDLE saw: the average heartbeat gap when the server sent
+/// any, or `0` once it stayed quiet for [`FREQUENT_HEARTBEAT_SECS`]. A
+/// shorter quiet IDLE (woken early) proves nothing and changes nothing.
+pub fn record_idle_heartbeats(
+    db: &Db,
+    account_id: i64,
+    heartbeats: u32,
+    every_secs: Option<i64>,
+    idled_secs: i64,
+) {
+    let value = match every_secs {
+        Some(secs) if heartbeats > 0 => secs.max(1),
+        _ if idled_secs >= FREQUENT_HEARTBEAT_SECS => 0,
+        _ => return,
+    };
+    let key = format!("{IDLE_HEARTBEAT_PREFIX}{account_id}");
+    if settings::get(db, &key).ok().flatten().as_deref() == Some(value.to_string().as_str()) {
+        return;
+    }
+    if let Err(e) = settings::set(db, &key, &value.to_string()) {
+        log::warn!("idle heartbeat for account {account_id} not saved: {e}");
+    }
+}
+
 /// One account's settings for a settings form: what it sets itself and what
 /// applies to it, both keyed like [`KEYS`] with stored string values.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AccountSettingsView {
     pub overrides: BTreeMap<String, String>,
     pub effective: BTreeMap<String, String>,
+    /// Set when the server's IDLE heartbeats come more often than
+    /// [`FREQUENT_HEARTBEAT_SECS`]: the observed gap in seconds, so the form
+    /// can suggest polling this account instead of push.
+    pub frequent_heartbeat_secs: Option<i64>,
 }
 
 /// [`overrides`] and [`effective`] for `account_id` together.
@@ -155,6 +205,8 @@ pub fn view(db: &Db, account_id: i64) -> Result<AccountSettingsView> {
     Ok(AccountSettingsView {
         overrides: overrides(db, account_id)?,
         effective: effective(db, account_id),
+        frequent_heartbeat_secs: idle_heartbeat_secs(db, account_id)
+            .filter(|secs| *secs < FREQUENT_HEARTBEAT_SECS),
     })
 }
 
@@ -265,5 +317,29 @@ mod tests {
         assert_eq!(sync_interval(&db, a), 1440);
         accounts::delete(&db, a).unwrap();
         assert!(overrides(&db, a).unwrap().is_empty());
+    }
+
+    #[test]
+    fn frequent_idle_heartbeats_show_until_the_server_stays_quiet() {
+        let (db, a, b) = setup();
+        assert_eq!(view(&db, a).unwrap().frequent_heartbeat_secs, None);
+
+        record_idle_heartbeats(&db, a, 3, Some(120), 400);
+        assert_eq!(view(&db, a).unwrap().frequent_heartbeat_secs, Some(120));
+        assert_eq!(view(&db, b).unwrap().frequent_heartbeat_secs, None);
+
+        // Woken early without a heartbeat: inconclusive, the hint stays.
+        record_idle_heartbeats(&db, a, 0, None, 60);
+        assert_eq!(view(&db, a).unwrap().frequent_heartbeat_secs, Some(120));
+
+        // Rare heartbeats are remembered but not worth a hint.
+        record_idle_heartbeats(&db, a, 1, Some(1200), 1500);
+        assert_eq!(idle_heartbeat_secs(&db, a), Some(1200));
+        assert_eq!(view(&db, a).unwrap().frequent_heartbeat_secs, None);
+
+        record_idle_heartbeats(&db, a, 2, Some(90), 200);
+        record_idle_heartbeats(&db, a, 0, None, FREQUENT_HEARTBEAT_SECS);
+        assert_eq!(idle_heartbeat_secs(&db, a), None);
+        assert_eq!(view(&db, a).unwrap().frequent_heartbeat_secs, None);
     }
 }

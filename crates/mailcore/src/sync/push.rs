@@ -32,7 +32,7 @@ use crate::auth;
 use crate::db::Db;
 use crate::error::{Result, StoreError};
 use crate::models::Account;
-use crate::store::accounts;
+use crate::store::{account_settings, accounts};
 use crate::sync::background::{self, schedule, BackgroundReport};
 use crate::sync::imap::{IdleEnd, ImapSync};
 
@@ -318,6 +318,16 @@ async fn serve_session(
         };
         busy.set(true);
         let end = end?;
+        if idle {
+            let stats = imap.session()?.last_idle();
+            account_settings::record_idle_heartbeats(
+                &ctx.db,
+                account.id,
+                stats.heartbeats,
+                stats.heartbeat_every.map(|d| d.as_secs() as i64),
+                stats.idled.as_secs() as i64,
+            );
+        }
         if rx.has_changed().is_err() {
             return Ok(Exit::Stop);
         }

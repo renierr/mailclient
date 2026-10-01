@@ -30,7 +30,7 @@ mod tests;
 pub use engine::ImapSync;
 pub(crate) use folders::full_discovery_due;
 pub use roles::{attr_text, is_selectable, map_folder_role, normalize_folder_path, role_from_name};
-pub use session::{IdleEnd, ImapSession};
+pub use session::{IdleEnd, IdleStats, ImapSession};
 pub(crate) use types::vec1;
 pub use types::{
     endpoint_for, DiscoveredFolder, ImapEndpoint, SelectResult, ServerSearchReport,

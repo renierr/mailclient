@@ -127,6 +127,18 @@ void main() {
       expect(AccountSettings.empty.syncIntervalMinutes, 0);
     });
 
+    test('decodes a frequent IDLE heartbeat', () {
+      final s = AccountSettings.fromJson({
+        'overrides': {},
+        'effective': {},
+        'frequent_heartbeat_secs': 120,
+      });
+      expect(s.frequentHeartbeatSecs, 120);
+      expect(AccountSettings.empty.frequentHeartbeatSecs, isNull);
+      expect(AccountSettings.describeGap(120), 'every 2 minutes');
+      expect(AccountSettings.describeGap(45), 'every 45 seconds');
+    });
+
     test('a plan runs something only when an account checks', () {
       final off = BackgroundPlan.fromJson({
         'push': false,

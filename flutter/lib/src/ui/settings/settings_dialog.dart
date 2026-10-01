@@ -337,6 +337,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       defaults: _draft,
       overrides: draft,
       showPush: Platform.isAndroid,
+      frequentHeartbeatSecs: _accountSaved[accountId]?.frequentHeartbeatSecs,
       onChanged: (key, value) => setState(() => draft[key] = value),
     );
   }

@@ -163,7 +163,11 @@ account is not checked at a 15-minute one's cadence. `MailSchedule.kt`
 starts what the plan names and stops the others; with every account on
 Manually nothing runs. Per-account push is the way out for servers that
 send IDLE heartbeats (`* OK Still here`) every few minutes: each one wakes
-the radio and CPU, so such an account is cheaper polled.
+the radio and CPU, so such an account is cheaper polled. The IDLE loop
+measures the heartbeat gap (`IdleStats`, wall clock) and stores it per
+account (`account_settings::record_idle_heartbeats`); when it is shorter
+than the keep-alive alarm, the account's push setting shows a hint
+suggesting polling.
 
 - **Battery-saving (WorkManager, default).** A periodic worker, deferrable
   by design: in Doze it only runs in maintenance windows, so notifications

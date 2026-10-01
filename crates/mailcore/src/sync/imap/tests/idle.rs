@@ -54,8 +54,12 @@ async fn heartbeats_do_not_end_the_idle_but_the_wake_does() {
     sync.connect("secret").await.unwrap();
 
     let wake = tokio::time::sleep(Duration::from_millis(100));
-    let end = sync.session().unwrap().idle(wake).await.unwrap();
+    let session = sync.session().unwrap();
+    let end = session.idle(wake).await.unwrap();
     assert_eq!(end, IdleEnd::Woken);
+    let stats = session.last_idle();
+    assert_eq!(stats.heartbeats, 1);
+    assert!(stats.heartbeat_every.is_some());
     assert!(sync.is_healthy().await);
 }
 

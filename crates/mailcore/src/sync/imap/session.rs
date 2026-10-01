@@ -14,7 +14,7 @@ mod idle;
 mod mailbox;
 mod mutate;
 
-pub use idle::IdleEnd;
+pub use idle::{IdleEnd, IdleStats};
 
 use core::num::{NonZeroU32, NonZeroU64};
 
@@ -48,6 +48,7 @@ pub struct ImapSession {
     pub(crate) capabilities: Vec<String>,
     pub(crate) condstore_enabled: bool,
     pub(crate) qresync_enabled: bool,
+    pub(crate) last_idle: IdleStats,
 }
 
 impl ImapSession {
@@ -61,6 +62,7 @@ impl ImapSession {
             capabilities: Vec::new(),
             condstore_enabled: false,
             qresync_enabled: false,
+            last_idle: IdleStats::default(),
         }
     }
 
