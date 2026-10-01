@@ -11,3 +11,12 @@ members = [
 # (see AGENT.md §5). Bump here, never per-crate.
 [workspace.package]
 version = "0.9.0"
+
+# Whole-program optimisation for release builds: the Android `libmailffi.so`
+# comes out about a quarter smaller and the Qt binary shrinks alike. Costs a
+# longer release link on every rebuild; debug builds are unaffected. Leave
+# `panic` at unwind: mailffi's net thread and flutter_rust_bridge both catch
+# panics, which `abort` would turn into crashes.
+[profile.release]
+lto = "fat"
+codegen-units = 1
