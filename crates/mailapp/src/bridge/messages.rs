@@ -12,6 +12,7 @@ use crate::bridge::{push_feeds, qstring, shared_db, MAX_MESSAGE_LIMIT};
 mod attachments;
 mod bulk;
 mod files;
+mod maintenance;
 
 pub(crate) use attachments::{draft_attachment_path, ensure_attachment_data};
 pub(crate) use files::file_url;

@@ -23,6 +23,7 @@ import 'generated/api/contacts.dart' as rust_contacts;
 import 'generated/api/events.dart' as rust_events;
 import 'generated/api/folders.dart' as rust_folders;
 import 'generated/api/init.dart' as rust_init;
+import 'generated/api/maintenance.dart' as rust_maintenance;
 import 'generated/api/messages.dart' as rust_messages;
 import 'generated/api/mutate.dart' as rust_mutate;
 import 'generated/api/search.dart' as rust_search;
@@ -460,6 +461,40 @@ class MailCore {
         uid: uid,
         dir: dir,
       )).toInt();
+
+  // --- maintenance ---------------------------------------------------------
+
+  /// Local storage statistics (database/message/cached/temp sizes).
+  Future<Map<String, dynamic>> storageStats(
+    String dbPath,
+    String tempDir,
+  ) async => _decodeMap(
+    await rust_maintenance.storageStatsJson(dbPath: dbPath, tempDir: tempDir),
+  );
+
+  /// Delete every staged viewer copy plus stale draft dirs.
+  /// Returns what went away, including the status line to show.
+  Future<Map<String, dynamic>> cleanupTempFiles(String tempDir) async =>
+      _decodeMap(await rust_maintenance.cleanupTempFilesJson(tempDir: tempDir));
+
+  /// Delete cached messages past the newest N per folder (local-only).
+  /// Returns how many rows went away.
+  Future<int> trimLocalCache() async =>
+      (await rust_maintenance.trimLocalCache()).toInt();
+
+  /// Status line for a trim count, worded once in the core.
+  Future<String> trimStatus(int removed) =>
+      rust_maintenance.trimStatus(removed: BigInt.from(removed));
+
+  /// Drop cached attachment bytes, keeping names and sizes.
+  /// Returns what went away, including the status line to show.
+  Future<Map<String, dynamic>> evictCachedAttachments() async =>
+      _decodeMap(await rust_maintenance.evictCachedAttachmentsJson());
+
+  /// Write a consistent snapshot of the database into `dir`.
+  /// Returns where it went.
+  Future<String> exportDatabaseTo(String dir) =>
+      rust_maintenance.exportDatabaseTo(path: dir);
 
   // --- contacts ------------------------------------------------------------
 

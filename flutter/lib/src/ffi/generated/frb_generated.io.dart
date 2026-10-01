@@ -10,6 +10,7 @@ import 'api/contacts.dart';
 import 'api/events.dart';
 import 'api/folders.dart';
 import 'api/init.dart';
+import 'api/maintenance.dart';
 import 'api/messages.dart';
 import 'api/mutate.dart';
 import 'api/search.dart';

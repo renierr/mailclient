@@ -14,6 +14,7 @@ import '../../sync/background_sync.dart';
 import '../dialogs/mail_dialog.dart';
 import 'account_sync_settings.dart';
 import 'background_check_status.dart';
+import 'maintenance_section.dart';
 import 'setting_choice.dart';
 
 /// All preferences, Roundcube-style: sections on the left, the form on the
@@ -38,7 +39,15 @@ class SettingsDialog extends StatefulWidget {
   State<SettingsDialog> createState() => _SettingsDialogState();
 }
 
-enum _Section { interface, mailbox, reading, composing, sync, about }
+enum _Section {
+  interface,
+  mailbox,
+  reading,
+  composing,
+  sync,
+  maintenance,
+  about,
+}
 
 class _SettingsDialogState extends State<SettingsDialog> {
   _Section _section = _Section.interface;
@@ -98,7 +107,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
-            // The rail needs width beside the form and height for six
+            // The rail needs width beside the form and height for seven
             // labelled destinations; otherwise a selector sits above it.
             final railMode =
                 constraints.maxWidth >= 600 && constraints.maxHeight >= 480;
@@ -161,6 +170,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _Section.reading => _reading(),
     _Section.composing => _composing(),
     _Section.sync => _sync(),
+    _Section.maintenance => const MaintenanceSection(),
     _Section.about => _about(),
   };
 
@@ -648,6 +658,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _Section.reading => 'Reading',
     _Section.composing => 'Composing',
     _Section.sync => 'Accounts & sync',
+    _Section.maintenance => 'Maintenance',
     _Section.about => 'About',
   };
 
@@ -657,6 +668,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _Section.reading => Icons.mark_email_read_outlined,
     _Section.composing => Icons.edit_outlined,
     _Section.sync => Icons.sync_outlined,
+    _Section.maintenance => Icons.cleaning_services_outlined,
     _Section.about => Icons.info_outline,
   };
 

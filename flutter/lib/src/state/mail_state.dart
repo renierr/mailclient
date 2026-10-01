@@ -828,6 +828,55 @@ class MailState extends ChangeNotifier {
   Future<void> refreshCapabilities(int accountId) =>
       _queue('Capabilities', () => _core.refreshServerCapabilities(accountId));
 
+  // --- maintenance ---------------------------------------------------------
+  //
+  // Local-only storage actions for the Maintenance settings section. No
+  // network, no job events: the calls run on the bridge worker pool and
+  // answer directly. Errors go to the status line, like refused queues.
+
+  Future<Map<String, dynamic>> storageStats(String tempDir) =>
+      _core.storageStats(_core.info.dbPath, tempDir);
+
+  Future<void> exportDatabase(String dir) async {
+    try {
+      final path = await _core.exportDatabaseTo(dir);
+      showStatus('Database exported to $path');
+    } catch (e) {
+      showStatus(coreErrorText(e), isError: true);
+    }
+  }
+
+  Future<void> cleanupTempFiles(String tempDir) async {
+    try {
+      final done = await _core.cleanupTempFiles(tempDir);
+      showStatus('${done['status']}');
+    } catch (e) {
+      showStatus(coreErrorText(e), isError: true);
+    }
+  }
+
+  /// Delete cached messages past the newest N per folder, then re-read the
+  /// lists: trimmed rows are gone from what is showing.
+  Future<void> trimLocalCache() async {
+    try {
+      final removed = await _core.trimLocalCache();
+      showStatus(await _core.trimStatus(removed));
+      await _reloadMessages();
+      await _reloadFolders();
+    } catch (e) {
+      showStatus(coreErrorText(e), isError: true);
+    }
+  }
+
+  Future<void> evictCachedAttachments() async {
+    try {
+      final evicted = await _core.evictCachedAttachments();
+      showStatus('${evicted['status']}');
+    } catch (e) {
+      showStatus(coreErrorText(e), isError: true);
+    }
+  }
+
   void showStatus(String message, {bool isError = false}) {
     _status = message;
     _statusIsError = isError;

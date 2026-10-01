@@ -26,6 +26,7 @@ pub mod contacts;
 pub mod events;
 pub mod folders;
 pub mod init;
+pub mod maintenance;
 pub mod messages;
 pub mod mutate;
 pub mod search;

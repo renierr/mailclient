@@ -255,6 +255,36 @@ pub mod qobject {
         #[qinvokable]
         fn save_all_attachments(self: Pin<&mut Self>, uid: i32, dir: &QString) -> QString;
 
+        /// Local storage statistics for the Maintenance settings section, as
+        /// JSON (`db_bytes`, `message_count`, cached/temp sizes, …). Local
+        /// SQLite read, no network.
+        #[qinvokable]
+        fn maintenance_json(&self) -> QString;
+
+        /// Write a consistent snapshot of the database to `path` (plain path
+        /// or `file://` URL from a save dialog). Local-only copy on the net
+        /// thread: returns `""` when queued (completion arrives via
+        /// `job_finished` with kind `"Maintenance"`), or a busy message.
+        #[qinvokable]
+        fn export_database(self: Pin<&mut Self>, path: &QString) -> QString;
+
+        /// Delete every staged viewer copy plus stale draft staging dirs.
+        /// Local-only; returns what was removed.
+        #[qinvokable]
+        fn cleanup_temp(&self) -> QString;
+
+        /// Delete cached messages past the newest 200 per folder. Local-only:
+        /// the server is never contacted, guarded rows (drafts, unpushed
+        /// changes, pending undos, queued sends) are kept, and trimmed mail
+        /// returns with the next sync. Returns what was removed.
+        #[qinvokable]
+        fn trim_cache(self: Pin<&mut Self>) -> QString;
+
+        /// Drop cached attachment bytes, keeping names and sizes. Local-only;
+        /// files download again on the next open. Returns what was removed.
+        #[qinvokable]
+        fn evict_attachments(&self) -> QString;
+
         /// Select a folder by path and refresh the message feed.
         #[qinvokable]
         fn select_folder(self: Pin<&mut Self>, path: &QString) -> QString;

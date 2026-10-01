@@ -1,6 +1,8 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
+import QtCore
 
 import Mailclient
 import "components"
@@ -55,6 +57,17 @@ AppDialog {
     property var accountDrafts: ({})
     // Bumped on every draft edit: bindings cannot see a var mutated in place.
     property int draftRevision: 0
+
+    // Maintenance view: local storage stats (a live read, not an edit copy)
+    // plus one-shot actions. The actions apply immediately — Save/Cancel
+    // below only concern the preference copies above.
+    property var maintStats: ({})
+    // Pending destructive maintenance action, so the confirm dialog knows
+    // what it is confirming ("cleanup_temp", "evict_attachments", "trim_cache").
+    property string pendingMaintAction: ""
+    property string pendingMaintTitle: ""
+    property string pendingMaintText: ""
+    property string pendingMaintConfirm: ""
 
     // About view: live IMAP CAPABILITY list per account (refreshed on demand
     // over the pooled session; the JSON arrives via `job_finished`).
@@ -271,6 +284,43 @@ AppDialog {
         return out;
     }
 
+    // Re-read the storage stats (on open, and after every maintenance
+    // action completes — the export job reports back via `job_finished`).
+    function refreshMaintStats() {
+        if (!root.backend || !root.backend.maintenance_json)
+            return;
+        root.maintStats = FeedJson.parse(root.backend.maintenance_json(), ({}));
+    }
+
+    // Run a synchronous maintenance action, report it, re-read the stats.
+    function runMaint(action) {
+        if (!root.backend || !root.backend[action])
+            return;
+        root.statusMessage(root.backend[action]());
+        root.refreshMaintStats();
+    }
+
+    // Deleting cached data is recoverable (sync / re-download brings it
+    // back), but it still asks first and says exactly what will happen.
+    function askMaint(action, title, text, confirm) {
+        root.pendingMaintAction = action;
+        root.pendingMaintTitle = title;
+        root.pendingMaintText = text;
+        root.pendingMaintConfirm = confirm;
+        confirmMaint.open();
+    }
+
+    function exportDatabase() {
+        if (!root.backend || !root.backend.export_database)
+            return;
+        var base = StandardPaths.writableLocation(StandardPaths.DownloadLocation);
+        var s = base.toString().replace(/\\/g, "/");
+        if (s.indexOf("file:") !== 0)
+            s = "file://" + s;
+        exportDialog.selectedFile = s.replace(/\/+$/, "") + "/mailclient-backup.sqlite";
+        exportDialog.open();
+    }
+
     function refreshCaps() {
         if (!root.backend || !root.backend.refresh_server_capabilities)
             return;
@@ -318,6 +368,7 @@ AppDialog {
         root.serverCaps = [];
         root.capsError = "";
         root.refreshCaps();
+        root.refreshMaintStats();
     }
 
     // The bridge exposes its signal under the Rust name, so the handler is
@@ -325,6 +376,11 @@ AppDialog {
     Connections {
         target: root.backend
         function onJob_finished(kind, status) {
+            if (kind === "Maintenance") {
+                root.refreshMaintStats();
+                root.statusMessage(status);
+                return;
+            }
             if (kind !== "Capabilities")
                 return;
             try {
@@ -385,6 +441,10 @@ AppDialog {
                 ListElement {
                     icon: "☁️"
                     label: qsTr("Accounts & sync")
+                }
+                ListElement {
+                    icon: "Db"
+                    label: qsTr("Maintenance")
                 }
                 ListElement {
                     icon: "ℹ️"
@@ -855,6 +915,97 @@ AppDialog {
                 }
             }
 
+            // Maintenance: storage stats plus one-shot local actions. The
+            // actions apply immediately (they are not part of Save); every
+            // one is local-only and never touches the mail server.
+            ScrollView {
+                id: maintenanceScroll
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                contentWidth: availableWidth
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                ColumnLayout {
+                    width: maintenanceScroll.availableWidth
+                    spacing: Theme.sm
+
+                    SectionCaption {
+                        text: qsTr("STORAGE")
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: qsTr("Database: %1").arg(root.maintStats.db_display || "")
+                        color: Theme.text
+                        font.pixelSize: Theme.fontBase
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: qsTr("%n message(s) cached", "", root.maintStats.message_count || 0)
+                        color: Theme.text
+                        font.pixelSize: Theme.fontBase
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: qsTr("Downloaded files: %1").arg(root.maintStats.cached_display || "")
+                        color: Theme.text
+                        font.pixelSize: Theme.fontBase
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: qsTr("Temporary files: %1").arg(root.maintStats.temp_display || "")
+                        color: Theme.text
+                        font.pixelSize: Theme.fontBase
+                    }
+                    HintLabel {
+                        text: root.maintStats.db_path || ""
+                    }
+                    AppButton {
+                        text: qsTr("Refresh")
+                        onClicked: root.refreshMaintStats()
+                    }
+
+                    SectionCaption {
+                        text: qsTr("DATABASE BACKUP")
+                    }
+
+                    HintLabel {
+                        text: qsTr("Saves a consistent copy of the local mail database. Your mail stays where it is.")
+                    }
+                    AppButton {
+                        text: qsTr("Export database…")
+                        onClicked: root.exportDatabase()
+                    }
+
+                    SectionCaption {
+                        text: qsTr("CACHE")
+                    }
+
+                    HintLabel {
+                        text: qsTr("Frees local space only — nothing here touches the mail server. Trimmed messages return with the next sync; removed files download again when opened.")
+                    }
+                    Flow {
+                        Layout.fillWidth: true
+                        spacing: Theme.sm
+                        AppButton {
+                            text: qsTr("Clean temporary files")
+                            onClicked: root.askMaint("cleanup_temp", qsTr("Clean temporary files?"), qsTr("Delete staged viewer copies? They are re-created the next time an attachment is opened. Mail on the server is untouched."), qsTr("Clean"))
+                        }
+                        AppButton {
+                            text: qsTr("Remove downloaded files")
+                            onClicked: root.askMaint("evict_attachments", qsTr("Remove downloaded files?"), qsTr("Delete downloaded attachment files from this device? Names and sizes stay, and files download again when opened. Mail on the server is untouched."), qsTr("Remove"))
+                        }
+                        AppButton {
+                            text: qsTr("Trim old messages")
+                            onClicked: {
+                                var keep = root.maintStats.keep_per_folder || 200;
+                                root.askMaint("trim_cache", qsTr("Trim old messages?"), qsTr("Delete cached messages past the newest %n per folder from this device? Drafts and unsent mail are kept, and trimmed mail returns with the next sync. Mail on the server is untouched.", "", keep), qsTr("Trim"));
+                            }
+                        }
+                    }
+                }
+            }
+
             // About: version + licence + per-account server capabilities.
             ScrollView {
                 id: aboutScroll
@@ -980,6 +1131,72 @@ AppDialog {
                                                                    "No capabilities loaded yet — press Refresh.")
                     }
                 }
+            }
+        }
+    }
+
+    // Confirm for the destructive maintenance actions (see Accounts.qml:
+    // explicit footer instead of standardButtons, so it matches the theme).
+    Dialog {
+        id: confirmMaint
+        title: root.pendingMaintTitle
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(440, root.width - 2 * Theme.lg)
+        padding: Theme.lg
+
+        background: Rectangle {
+            color: Theme.bg
+            radius: Theme.radiusLg
+            border.width: 1
+            border.color: Theme.border
+        }
+
+        footer: RowLayout {
+            spacing: Theme.sm
+            Item {
+                Layout.fillWidth: true
+            }
+            AppButton {
+                text: qsTr("Cancel")
+                onClicked: confirmMaint.close()
+            }
+            AppButton {
+                Layout.rightMargin: Theme.lg
+                Layout.bottomMargin: Theme.md
+                Layout.topMargin: Theme.sm
+                text: root.pendingMaintConfirm
+                intent: "danger"
+                onClicked: {
+                    root.runMaint(root.pendingMaintAction);
+                    root.pendingMaintAction = "";
+                    confirmMaint.close();
+                }
+            }
+        }
+
+        Label {
+            width: parent.width
+            wrapMode: Text.Wrap
+            color: Theme.text
+            font.pixelSize: Theme.fontBase
+            text: root.pendingMaintText
+        }
+    }
+
+    FileDialog {
+        id: exportDialog
+        title: qsTr("Export database")
+        fileMode: FileDialog.SaveFile
+        nameFilters: ["SQLite (*.sqlite)", "All files (*)"]
+        onAccepted: {
+            if (root.backend && root.backend.export_database) {
+                root.statusMessage(qsTr("Exporting…"));
+                var r = root.backend.export_database(selectedFile.toString());
+                // Queued jobs report back via job_finished; a refusal (e.g.
+                // busy) answers here.
+                if (r !== "")
+                    root.statusMessage(r);
             }
         }
     }
