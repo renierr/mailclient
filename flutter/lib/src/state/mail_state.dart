@@ -67,6 +67,14 @@ class MailState extends ChangeNotifier {
   bool _selectionMode = false;
   final Set<int> _selectedUids = {};
 
+  /// The checkbox set while searching. Hits span folders, and a UID is only
+  /// unique within one, so they are keyed on the folder too.
+  final Set<HitKey> _selectedHits = {};
+
+  /// Undo offers collected while one bulk action runs folder by folder,
+  /// merged into a single offer when it is done. Null outside such a run.
+  List<({String batch, String label})>? _collectedUndo;
+
   /// The reader takes the whole window, like the Qt fullscreen view. Only
   /// the wide layout uses it — narrower ones already give the reader every
   /// pixel they have.
@@ -141,11 +149,35 @@ class MailState extends ChangeNotifier {
 
   bool get selectionMode => _selectionMode;
   Set<int> get selectedUids => _selectedUids;
-  int get selectedCount => _selectedUids.length;
+  Set<HitKey> get selectedHits => _selectedHits;
 
-  bool get allSelected =>
-      _selectedUids.isNotEmpty &&
-      _messages.every((m) => _selectedUids.contains(m.uid));
+  /// The checkbox set of whichever list is showing.
+  int get selectedCount =>
+      searching ? _selectedHits.length : _selectedUids.length;
+
+  /// Every selected row is starred (the bulk bar offers Unstar then).
+  bool get selectionAllStarred {
+    if (searching) {
+      return _selectedHits.isNotEmpty &&
+          _searchHits
+              .where((h) => _selectedHits.contains(h.key))
+              .every((h) => h.starred);
+    }
+    return _selectedUids.isNotEmpty &&
+        _selectedUids.every(
+          (u) =>
+              _messages.where((m) => m.uid == u).firstOrNull?.starred ?? false,
+        );
+  }
+
+  /// Whether a bulk delete destroys: in search mode, when any selected
+  /// hit's folder would.
+  bool get selectionDeleteIsPermanent {
+    if (!searching) return deleteIsPermanent;
+    return _selectedHits.any(
+      (k) => deleteIsPermanentIn(_folderIdByPath(k.folder) ?? -1),
+    );
+  }
 
   // --- list --------------------------------------------------------------
 
@@ -359,7 +391,11 @@ class MailState extends ChangeNotifier {
   /// Take back a queued action (Undo on the snackbar, Ctrl+Z).
   Future<void> undo(String batch) async {
     try {
-      showStatus(await _core.undoMove(batch));
+      var said = '';
+      for (final part in batch.split(_batchSeparator)) {
+        said = await _core.undoMove(part);
+      }
+      showStatus(said);
       if (_undoOffer?.batch == batch) _undoOffer = null;
       await _reloadMessages();
       await _reloadFolders();
@@ -375,22 +411,109 @@ class MailState extends ChangeNotifier {
     if (offer != null) await undo(offer.batch);
   }
 
-  Future<void> markReadMany(List<int> uids, bool read) async {
-    await _core.markReadMany(_accountId, _folderId, uids, read);
-    for (final uid in uids) {
-      _patchRow(uid, (m) => m.copyWith(unread: !read));
+  Future<void> markReadMany(List<int> uids, bool read, {int? folderId}) async {
+    final fid = folderId ?? _folderId;
+    await _core.markReadMany(_accountId, fid, uids, read);
+    if (fid == _folderId) {
+      for (final uid in uids) {
+        _patchRow(uid, (m) => m.copyWith(unread: !read));
+      }
     }
+    await _refreshHits();
     notifyListeners();
     unawaited(_reloadFolders());
   }
 
-  Future<void> setStarMany(List<int> uids, bool starred) async {
-    await _core.setStarMany(_accountId, _folderId, uids, starred);
-    for (final uid in uids) {
-      _patchRow(uid, (m) => m.copyWith(starred: starred));
+  Future<void> setStarMany(
+    List<int> uids,
+    bool starred, {
+    int? folderId,
+  }) async {
+    final fid = folderId ?? _folderId;
+    await _core.setStarMany(_accountId, fid, uids, starred);
+    if (fid == _folderId) {
+      for (final uid in uids) {
+        _patchRow(uid, (m) => m.copyWith(starred: starred));
+      }
     }
+    await _refreshHits();
     notifyListeners();
   }
+
+  // --- bulk actions on the checkbox set ------------------------------------
+  //
+  // Folder mode acts on the shown folder in one call; search mode once per
+  // folder the selected hits live in.
+
+  Future<void> bulkMarkRead(bool read) => _forSelection(
+    (fid, uids) => markReadMany(uids, read, folderId: fid),
+    keepSelection: true,
+  );
+
+  Future<void> bulkStar(bool starred) => _forSelection(
+    (fid, uids) => setStarMany(uids, starred, folderId: fid),
+    keepSelection: true,
+  );
+
+  Future<void> bulkArchive() =>
+      _forSelection((fid, uids) => archiveMessages(uids, folderId: fid));
+
+  Future<void> bulkMove(String destPath) =>
+      _forSelection((fid, uids) => moveMessages(uids, destPath, folderId: fid));
+
+  Future<void> bulkDelete() =>
+      _forSelection((fid, uids) => deleteMessages(uids, folderId: fid));
+
+  Future<void> bulkPurge() =>
+      _forSelection((fid, uids) => purgeMessages(uids, folderId: fid));
+
+  Future<void> _forSelection(
+    Future<void> Function(int folderId, List<int> uids) action, {
+    bool keepSelection = false,
+  }) async {
+    if (!searching) {
+      if (_selectedUids.isEmpty) return;
+      return action(_folderId, _selectedUids.toList(growable: false));
+    }
+    final groups = <String, List<int>>{};
+    for (final k in _selectedHits) {
+      (groups[k.folder] ??= []).add(k.uid);
+    }
+    if (groups.isEmpty) return;
+    _collectedUndo = [];
+    try {
+      for (final g in groups.entries) {
+        final fid =
+            _folderIdByPath(g.key) ??
+            await _core.folderIdForPath(_accountId, g.key);
+        await action(fid, g.value);
+      }
+    } finally {
+      final offers = _collectedUndo!;
+      _collectedUndo = null;
+      if (offers.isNotEmpty) {
+        final label = offers.map((o) => o.label).join(' · ');
+        _undoOffer = (
+          batch: offers.map((o) => o.batch).join(_batchSeparator),
+          label: label,
+          seq: ++_undoSeq,
+        );
+        showStatus(label);
+      }
+      if (!keepSelection) {
+        _selectedHits.clear();
+        _selectionMode = false;
+      }
+      notifyListeners();
+    }
+  }
+
+  /// Joins the batches of one bulk action that ran per folder (uuids, so
+  /// the separator cannot clash).
+  static const _batchSeparator = ',';
+
+  int? _folderIdByPath(String path) =>
+      _folders.where((f) => f.path == path).firstOrNull?.id;
 
   Future<void> syncAccount() {
     _lastSyncRequest = DateTime.now();
@@ -447,7 +570,10 @@ class MailState extends ChangeNotifier {
   /// Run the local FTS index. At 3+ letters a thin result also schedules a
   /// debounced server backfill; the `"Search"` job re-runs this when done.
   Future<void> runSearch(String query, {bool? folderOnly}) async {
+    final wasSearching = searching;
     _searchQuery = query;
+    // A checkbox set belongs to the list it was made in.
+    if (wasSearching != searching) _dropSelection();
     if (folderOnly != null) _searchFolderOnly = folderOnly;
     _searchBackfillTimer?.cancel();
     if (!searching) {
@@ -474,10 +600,17 @@ class MailState extends ChangeNotifier {
   void exitSearch() {
     if (_searchQuery.isEmpty && _searchHits.isEmpty) return;
     _searchBackfillTimer?.cancel();
+    if (searching) _dropSelection();
     _searchQuery = '';
     _searchHits = const [];
     _serverSearchPending = false;
     notifyListeners();
+  }
+
+  void _dropSelection() {
+    _selectionMode = false;
+    _selectedUids.clear();
+    _selectedHits.clear();
   }
 
   /// Open a search hit: switch to its folder underneath and open the
@@ -502,8 +635,13 @@ class MailState extends ChangeNotifier {
   }
 
   void exitSelectionMode() {
-    _selectionMode = false;
-    _selectedUids.clear();
+    _dropSelection();
+    notifyListeners();
+  }
+
+  void toggleSelectHit(SearchHit hit) {
+    if (!_selectedHits.remove(hit.key)) _selectedHits.add(hit.key);
+    _selectionMode = _selectedHits.isNotEmpty;
     notifyListeners();
   }
 
@@ -533,31 +671,44 @@ class MailState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void selectAllVisible() {
-    _selectedUids.addAll(_messages.map((m) => m.uid));
-    _selectionMode = true;
-    notifyListeners();
-  }
+  // The select-menu entries act on whichever list is showing.
 
-  void selectUnread() {
-    _selectedUids.addAll(_messages.where((m) => m.unread).map((m) => m.uid));
-    _selectionMode = _selectedUids.isNotEmpty;
-    notifyListeners();
-  }
+  void selectAllVisible() => _selectWhere((_) => true, (_) => true);
 
-  void selectStarred() {
-    _selectedUids.addAll(_messages.where((m) => m.starred).map((m) => m.uid));
-    _selectionMode = _selectedUids.isNotEmpty;
+  void selectUnread() => _selectWhere((m) => m.unread, (h) => h.unread);
+
+  void selectStarred() => _selectWhere((m) => m.starred, (h) => h.starred);
+
+  void _selectWhere(
+    bool Function(MessageSummary) row,
+    bool Function(SearchHit) hit,
+  ) {
+    if (searching) {
+      _selectedHits.addAll(_searchHits.where(hit).map((h) => h.key));
+    } else {
+      _selectedUids.addAll(_messages.where(row).map((m) => m.uid));
+    }
+    _selectionMode = selectedCount > 0;
     notifyListeners();
   }
 
   void invertSelection() {
-    final all = _messages.map((m) => m.uid).toSet();
-    final inverted = all.difference(_selectedUids);
-    _selectedUids
-      ..clear()
-      ..addAll(inverted);
-    _selectionMode = _selectedUids.isNotEmpty;
+    if (searching) {
+      final inverted = _searchHits
+          .map((h) => h.key)
+          .toSet()
+          .difference(_selectedHits);
+      _selectedHits
+        ..clear()
+        ..addAll(inverted);
+    } else {
+      final all = _messages.map((m) => m.uid).toSet();
+      final inverted = all.difference(_selectedUids);
+      _selectedUids
+        ..clear()
+        ..addAll(inverted);
+    }
+    _selectionMode = selectedCount > 0;
     notifyListeners();
   }
 
@@ -748,6 +899,11 @@ class MailState extends ChangeNotifier {
   Future<void> _rerunSearch() async {
     final scope = _searchFolderOnly ? (folder?.path ?? '') : '';
     _searchHits = await _core.search(_accountId, _searchQuery, folder: scope);
+    // Hits that left the results (moved, deleted) leave the selection too.
+    if (_selectedHits.isNotEmpty) {
+      _selectedHits.retainAll(_searchHits.map((h) => h.key));
+      if (_selectedHits.isEmpty) _selectionMode = false;
+    }
     notifyListeners();
   }
 
@@ -999,12 +1155,17 @@ class MailState extends ChangeNotifier {
       }
       if (r.batch.isNotEmpty) {
         if (shown.contains(_openUid)) closeMessage();
-        _undoOffer = (batch: r.batch, label: r.label, seq: ++_undoSeq);
+        final collect = _collectedUndo;
+        if (collect != null) {
+          collect.add((batch: r.batch, label: r.label));
+        } else {
+          _undoOffer = (batch: r.batch, label: r.label, seq: ++_undoSeq);
+        }
         await _reloadMessages();
         await _reloadFolders();
         await _refreshHits();
       }
-      showStatus(r.label);
+      if (_collectedUndo == null || r.batch.isEmpty) showStatus(r.label);
     } catch (e) {
       showStatus(coreErrorText(e), isError: true);
       await _closeIfOpenGone(shown);

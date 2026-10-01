@@ -403,17 +403,30 @@ ApplicationWindow {
     // Goes through the delete-confirm gate first (setting `confirm_delete`).
     // Whether delete destroys mirrors the backend `trash_message` rules:
     // source folder Junk or Trash, or no Trash folder at all.
-    function deleteIsPermanent() {
+    function deleteIsPermanent(path) {
+        var folder = path !== undefined ? path : root.currentFolder;
         var role = "";
         var hasTrash = false;
         for (var i = 0; i < folderModel.count; i++) {
             var r = folderModel.get(i).role;
             if (r === "trash")
                 hasTrash = true;
-            if (folderModel.get(i).name === root.currentFolder)
+            if (folderModel.get(i).name === folder)
                 role = r;
         }
         return role === "junk" || role === "trash" || !hasTrash;
+    }
+
+    // A bulk delete destroys when any target's folder would (search
+    // selections can span folders).
+    function bulkDeleteIsPermanent(targets) {
+        if (!root.isSearchTargets(targets))
+            return root.deleteIsPermanent();
+        for (var i = 0; i < targets.length; i++) {
+            if (root.deleteIsPermanent(targets[i].folder))
+                return true;
+        }
+        return false;
     }
 
     function deleteMessage(uid) {
@@ -508,70 +521,128 @@ ApplicationWindow {
 
     // --- bulk selection actions (Roundcube-style, one backend call) --------
 
+    // Bulk targets are plain UIDs from a folder list, or {folder, uid} from
+    // search results. Bridge calls act on the selected folder, so search
+    // targets run once per folder with that folder selected; the Undo
+    // offers of those runs merge into one toast.
+    property var collectedUndo: null
+
+    function isSearchTargets(targets) {
+        return targets.length > 0 && typeof targets[0] === "object";
+    }
+
+    function runGrouped(targets, fn) {
+        if (!targets || targets.length === 0)
+            return;
+        if (!root.isSearchTargets(targets)) {
+            fn(targets);
+            return;
+        }
+        var order = [];
+        var groups = {};
+        for (var i = 0; i < targets.length; i++) {
+            var t = targets[i];
+            if (groups[t.folder] === undefined) {
+                groups[t.folder] = [];
+                order.push(t.folder);
+            }
+            groups[t.folder].push(t.uid);
+        }
+        root.collectedUndo = [];
+        for (var j = 0; j < order.length; j++) {
+            root.useSearchFolder(order[j]);
+            if (root.currentFolder === order[j])
+                fn(groups[order[j]]);
+        }
+        var offers = root.collectedUndo;
+        root.collectedUndo = null;
+        if (offers.length > 0) {
+            var batches = [];
+            var labels = [];
+            for (var k = 0; k < offers.length; k++) {
+                batches.push(offers[k].batch);
+                labels.push(offers[k].label);
+            }
+            undoToast.show(batches.join(","), labels.join(" · "));
+            root.statusText = labels.join(" · ");
+        }
+        root.updateSearch(false);
+    }
+
     function dropPreviewIfGone(uids) {
         if (root.currentUid >= 0 && uids.indexOf(root.currentUid) !== -1)
             root.currentUid = -1;
     }
 
-    function bulkMarkRead(uids, read) {
-        if (!uids || uids.length === 0)
-            return;
-        var r = backend.mark_read_many(JSON.stringify(uids), read);
-        reloadFolders();
-        reloadMessages();
-        root.statusText = r;
-    }
-
-    function bulkStar(uids, starred) {
-        if (!uids || uids.length === 0)
-            return;
-        var r = backend.set_star_many(JSON.stringify(uids), starred);
-        reloadMessages();
-        root.statusText = r;
-    }
-
-    function bulkArchive(uids) {
-        if (!uids || uids.length === 0)
-            return;
-        root.dropPreviewIfGone(uids);
-        root.statusText = qsTr("Archiving…");
-        var r = backend.archive_many(JSON.stringify(uids));
-        if (r !== "")
+    function bulkMarkRead(targets, read) {
+        root.runGrouped(targets, function (uids) {
+            var r = backend.mark_read_many(JSON.stringify(uids), read);
+            reloadFolders();
+            reloadMessages();
             root.statusText = r;
+        });
     }
 
-    function bulkDelete(uids) {
-        if (!uids || uids.length === 0)
+    function bulkStar(targets, starred) {
+        root.runGrouped(targets, function (uids) {
+            var r = backend.set_star_many(JSON.stringify(uids), starred);
+            reloadMessages();
+            root.statusText = r;
+        });
+    }
+
+    function bulkArchive(targets) {
+        root.runGrouped(targets, function (uids) {
+            root.dropPreviewIfGone(uids);
+            root.statusText = qsTr("Archiving…");
+            var r = backend.archive_many(JSON.stringify(uids));
+            if (r !== "")
+                root.statusText = r;
+        });
+    }
+
+    function bulkMoveTo(targets, path) {
+        root.runGrouped(targets, function (uids) {
+            root.dropPreviewIfGone(uids);
+            root.statusText = qsTr("Moving…");
+            var r = backend.move_many(JSON.stringify(uids), path);
+            if (r !== "")
+                root.statusText = r;
+        });
+    }
+
+    function bulkDelete(targets) {
+        if (!targets || targets.length === 0)
             return;
         if (!appSettings.confirm_delete) {
-            root.doBulkDelete(uids);
+            root.doBulkDelete(targets);
             return;
         }
         deleteConfirm.uid = -1;
-        deleteConfirm.uids = uids.slice();
+        deleteConfirm.uids = targets.slice();
         deleteConfirm.subject = "";
-        deleteConfirm.permanent = root.deleteIsPermanent();
+        deleteConfirm.permanent = root.bulkDeleteIsPermanent(targets);
         deleteConfirm.open();
     }
 
-    function doBulkDelete(uids) {
-        if (!uids || uids.length === 0)
-            return;
-        root.dropPreviewIfGone(uids);
-        root.statusText = qsTr("Deleting…");
-        var r = backend.delete_many(JSON.stringify(uids));
-        if (r !== "")
-            root.statusText = r;
+    function doBulkDelete(targets) {
+        root.runGrouped(targets, function (uids) {
+            root.dropPreviewIfGone(uids);
+            root.statusText = qsTr("Deleting…");
+            var r = backend.delete_many(JSON.stringify(uids));
+            if (r !== "")
+                root.statusText = r;
+        });
     }
 
-    function bulkPurge(uids) {
-        if (!uids || uids.length === 0)
-            return;
-        root.dropPreviewIfGone(uids);
-        root.statusText = qsTr("Deleting…");
-        var r = backend.purge_many(JSON.stringify(uids));
-        if (r !== "")
-            root.statusText = r;
+    function bulkPurge(targets) {
+        root.runGrouped(targets, function (uids) {
+            root.dropPreviewIfGone(uids);
+            root.statusText = qsTr("Deleting…");
+            var r = backend.purge_many(JSON.stringify(uids));
+            if (r !== "")
+                root.statusText = r;
+        });
     }
 
     function changeSort(field, descending) {
@@ -721,6 +792,14 @@ ApplicationWindow {
         function onUndo_available(batch, label) {
             reloadFolders();
             reloadMessages();
+            if (root.collectedUndo !== null) {
+                // Part of a per-folder bulk run: shown once it is done.
+                root.collectedUndo.push({
+                    batch: batch,
+                    label: label
+                });
+                return;
+            }
             if (root.searching)
                 root.updateSearch(false);
             undoToast.show(batch, label);
@@ -1259,10 +1338,16 @@ ApplicationWindow {
         }
     }
 
+    // A bulk action over search results undoes as one: its batches arrive
+    // joined (uuids, so the comma cannot clash).
     function undoMove(batch) {
-        root.statusText = backend.undo_move(batch);
+        var parts = batch.split(",");
+        for (var i = 0; i < parts.length; i++)
+            root.statusText = backend.undo_move(parts[i]);
         reloadFolders();
         reloadMessages();
+        if (root.searching)
+            root.updateSearch(false);
     }
 
     // Floats above the status bar; hidden until an undoable action runs.
@@ -1479,8 +1564,8 @@ ApplicationWindow {
                 var r;
                 root.statusText = qsTr("Moving…");
                 if (targets.length > 1 || (moveDialog.uids && moveDialog.uids.length > 0)) {
-                    root.dropPreviewIfGone(targets);
-                    r = backend.move_many(JSON.stringify(targets), path);
+                    root.bulkMoveTo(targets, path);
+                    return;
                 } else {
                     var target = targets[0];
                     if (root.currentUid === target)

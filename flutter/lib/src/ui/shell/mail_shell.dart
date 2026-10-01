@@ -179,11 +179,16 @@ class _MailShellState extends State<MailShell> {
   /// message — through the same confirm as the buttons, so the setting and
   /// the always-ask rule for permanent deletes hold for the keyboard too.
   void _deleteShortcut(MailState state, {required bool purge}) {
-    final uids = state.selectionMode && state.selectedUids.isNotEmpty
-        ? state.selectedUids.toList(growable: false)
-        : state.openUid >= 0
-        ? [state.openUid]
-        : const <int>[];
+    if (state.selectionMode && state.selectedCount > 0) {
+      confirmSelectionDelete(
+        context,
+        state,
+        permanent: purge || state.selectionDeleteIsPermanent,
+        purge: purge,
+      );
+      return;
+    }
+    final uids = state.openUid >= 0 ? [state.openUid] : const <int>[];
     if (uids.isEmpty) return;
     confirmDelete(
       context,

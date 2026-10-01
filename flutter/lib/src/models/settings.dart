@@ -188,6 +188,9 @@ class AppSettings {
   bool get isCompact => density == 'compact';
 }
 
+/// A search hit's identity: a UID is only unique within its folder.
+typedef HitKey = ({String folder, int uid});
+
 /// One account-wide FTS hit, in rank order.
 class SearchHit {
   const SearchHit({
@@ -213,6 +216,8 @@ class SearchHit {
   final bool unread;
   final bool starred;
   final bool hasAttachments;
+
+  HitKey get key => (folder: folder, uid: uid);
 
   factory SearchHit.fromJson(Map<String, dynamic> j) => SearchHit(
         uid: _int(j['uid']),

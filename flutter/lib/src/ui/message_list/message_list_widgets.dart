@@ -14,10 +14,16 @@ class MessageListHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final searching = context.select<MailState, bool>((s) => s.searching);
+    final folderOnly = context.select<MailState, bool>(
+      (s) => s.searchFolderOnly,
+    );
     final title = context.select<MailState, String>(
       (s) => s.folder?.leafName ?? 'Messages',
     );
-    final count = context.select<MailState, int>((s) => s.messages.length);
+    final count = context.select<MailState, int>(
+      (s) => s.searching ? s.searchHits.length : s.messages.length,
+    );
     final selectionMode = context.select<MailState, bool>(
       (s) => s.selectionMode,
     );
@@ -51,7 +57,9 @@ class MessageListHeader extends StatelessWidget {
           ),
           Expanded(
             child: Text(
-              '$title · $count',
+              searching
+                  ? '$count result(s) in ${folderOnly ? title : 'this account'}'
+                  : '$title · $count',
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.titleSmall,
             ),
@@ -110,39 +118,42 @@ class MessageListHeader extends StatelessWidget {
                 ),
               ],
             ),
-          PopupMenuButton<String>(
-            tooltip: 'Sort',
-            icon: const Icon(Icons.sort),
-            onSelected: (v) {
-              final parts = v.split(':');
-              context.read<MailState>().setSort(parts[0], parts[1] == 'desc');
-            },
-            itemBuilder: (context) {
-              PopupMenuItem<String> item(
-                String value,
-                IconData icon,
-                String text,
-              ) => PopupMenuItem(
-                value: value,
-                child: MenuRow(
-                  icon: icon,
-                  text:
-                      (sortField == value.split(':')[0] &&
-                          sortDescending == value.endsWith(':desc'))
-                      ? '✓ $text'
-                      : text,
-                ),
-              );
-              return [
-                item('date:desc', Icons.schedule, 'Date, newest first'),
-                item('date:asc', Icons.schedule, 'Date, oldest first'),
-                item('from:asc', Icons.person_outline, 'From A–Z'),
-                item('from:desc', Icons.person_outline, 'From Z–A'),
-                item('subject:asc', Icons.subject, 'Subject A–Z'),
-                item('subject:desc', Icons.subject, 'Subject Z–A'),
-              ];
-            },
-          ),
+          // Hits come in rank order (grouped by folder); sorting them is
+          // not offered.
+          if (!searching)
+            PopupMenuButton<String>(
+              tooltip: 'Sort',
+              icon: const Icon(Icons.sort),
+              onSelected: (v) {
+                final parts = v.split(':');
+                context.read<MailState>().setSort(parts[0], parts[1] == 'desc');
+              },
+              itemBuilder: (context) {
+                PopupMenuItem<String> item(
+                  String value,
+                  IconData icon,
+                  String text,
+                ) => PopupMenuItem(
+                  value: value,
+                  child: MenuRow(
+                    icon: icon,
+                    text:
+                        (sortField == value.split(':')[0] &&
+                            sortDescending == value.endsWith(':desc'))
+                        ? '✓ $text'
+                        : text,
+                  ),
+                );
+                return [
+                  item('date:desc', Icons.schedule, 'Date, newest first'),
+                  item('date:asc', Icons.schedule, 'Date, oldest first'),
+                  item('from:asc', Icons.person_outline, 'From A–Z'),
+                  item('from:desc', Icons.person_outline, 'From Z–A'),
+                  item('subject:asc', Icons.subject, 'Subject A–Z'),
+                  item('subject:desc', Icons.subject, 'Subject Z–A'),
+                ];
+              },
+            ),
         ],
       ),
     );
@@ -157,18 +168,12 @@ class BulkActionBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final uids = context.select<MailState, List<int>>(
-      (s) => s.selectedUids.toList(growable: false),
+    final count = context.select<MailState, int>((s) => s.selectedCount);
+    final starred = context.select<MailState, bool>(
+      (s) => s.selectionAllStarred,
     );
-    final starred = context.select<MailState, bool>((s) {
-      if (s.selectedUids.isEmpty) return false;
-      return s.selectedUids.every(
-        (u) =>
-            s.messages.where((m) => m.uid == u).firstOrNull?.starred ?? false,
-      );
-    });
     final permanent = context.select<MailState, bool>(
-      (s) => s.deleteIsPermanent,
+      (s) => s.selectionDeleteIsPermanent,
     );
     return Container(
       color: Theme.of(context).colorScheme.secondaryContainer,
@@ -185,48 +190,44 @@ class BulkActionBar extends StatelessWidget {
               onPressed: () => context.read<MailState>().exitSelectionMode(),
             ),
             Text(
-              '${uids.length} selected',
+              '$count selected',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(width: 8),
             IconButton(
               tooltip: 'Mark read',
               icon: const Icon(Icons.mark_email_read_outlined, size: 18),
-              onPressed: () =>
-                  context.read<MailState>().markReadMany(uids, true),
+              onPressed: () => context.read<MailState>().bulkMarkRead(true),
             ),
             IconButton(
               tooltip: 'Mark unread',
               icon: const Icon(Icons.mark_email_unread_outlined, size: 18),
-              onPressed: () =>
-                  context.read<MailState>().markReadMany(uids, false),
+              onPressed: () => context.read<MailState>().bulkMarkRead(false),
             ),
             IconButton(
               tooltip: starred ? 'Unstar' : 'Star',
               icon: Icon(starred ? Icons.star : Icons.star_border, size: 18),
-              onPressed: () =>
-                  context.read<MailState>().setStarMany(uids, !starred),
+              onPressed: () => context.read<MailState>().bulkStar(!starred),
             ),
             IconButton(
               tooltip: 'Archive',
               icon: const Icon(Icons.archive_outlined, size: 18),
               onPressed: () {
-                context.read<MailState>().archiveMessages(uids);
+                context.read<MailState>().bulkArchive();
                 onAction();
               },
             ),
             IconButton(
               tooltip: 'Move to…',
               icon: const Icon(Icons.drive_file_move_outlined, size: 18),
-              onPressed: () => MoveToDialog.show(context, uids: uids),
+              onPressed: () => MoveToDialog.showForSelection(context),
             ),
             IconButton(
               tooltip: 'Move to Trash',
               icon: const Icon(Icons.delete_outline, size: 18),
-              onPressed: () => confirmDelete(
+              onPressed: () => confirmSelectionDelete(
                 context,
                 context.read<MailState>(),
-                uids: uids,
                 permanent: permanent,
               ),
             ),
@@ -236,10 +237,9 @@ class BulkActionBar extends StatelessWidget {
                 final state = context.read<MailState>();
                 switch (v) {
                   case 'purge':
-                    confirmDelete(
+                    confirmSelectionDelete(
                       context,
                       state,
-                      uids: uids,
                       permanent: true,
                       purge: true,
                     );
@@ -292,14 +292,23 @@ Future<void> confirmDelete(
   bool purge = false,
   String? subject,
   int? folderId,
+  int? count,
+  Future<void> Function()? perform,
 }) async {
+  Future<void> run() async {
+    if (perform != null) return perform();
+    if (purge) return state.purgeMessages(uids, folderId: folderId);
+    return state.deleteMessages(uids, folderId: folderId);
+  }
+
   if (!purge && !permanent && !state.settings.confirmDelete) {
-    await state.deleteMessages(uids, folderId: folderId);
+    await run();
     return;
   }
+  final n = count ?? uids.length;
   final title = purge || permanent ? 'Delete permanently?' : 'Move to Trash?';
-  final what = uids.length > 1
-      ? '${uids.length} messages'
+  final what = n > 1 || uids.isEmpty
+      ? '$n message${n == 1 ? '' : 's'}'
       : '“${subject ?? subjectOf(state, uids.first)}”';
   final how = purge || permanent
       ? 'will be destroyed on the server. This cannot be undone.'
@@ -331,12 +340,24 @@ Future<void> confirmDelete(
       ) ??
       false;
   if (!confirmed || !context.mounted) return;
-  if (purge) {
-    await state.purgeMessages(uids, folderId: folderId);
-  } else {
-    await state.deleteMessages(uids, folderId: folderId);
-  }
+  await run();
 }
+
+/// [confirmDelete] for the checkbox set of whichever list is showing.
+Future<void> confirmSelectionDelete(
+  BuildContext context,
+  MailState state, {
+  required bool permanent,
+  bool purge = false,
+}) => confirmDelete(
+  context,
+  state,
+  uids: const [],
+  count: state.selectedCount,
+  permanent: permanent,
+  purge: purge,
+  perform: purge ? state.bulkPurge : state.bulkDelete,
+);
 
 String subjectOf(MailState state, int uid) =>
     state.messages.where((m) => m.uid == uid).firstOrNull?.subject ?? '';
@@ -618,9 +639,17 @@ Future<void> runMessageAction(
 /// One search hit. Tapping opens it; the ⋮ / right-click menu offers the
 /// folder row's actions, aimed at the folder the hit lives in.
 class SearchHitTile extends StatelessWidget {
-  const SearchHitTile({super.key, required this.hit, this.onOpened});
+  const SearchHitTile({
+    super.key,
+    required this.hit,
+    required this.checked,
+    required this.selectionMode,
+    this.onOpened,
+  });
 
   final SearchHit hit;
+  final bool checked;
+  final bool selectionMode;
   final VoidCallback? onOpened;
 
   @override
@@ -664,8 +693,14 @@ class SearchHitTile extends StatelessWidget {
           ],
         ],
       ),
+      leading: selectionMode
+          ? Checkbox(
+              value: checked,
+              onChanged: (_) => context.read<MailState>().toggleSelectHit(hit),
+            )
+          : null,
       subtitle: Text(
-        '${hit.from} · ${hit.folder}\n${hit.snippet}',
+        '${hit.from}\n${hit.snippet}',
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
       ),
@@ -691,7 +726,9 @@ class SearchHitTile extends StatelessWidget {
           ),
         ],
       ),
-      onTap: open,
+      onTap: selectionMode
+          ? () => context.read<MailState>().toggleSelectHit(hit)
+          : open,
     );
     return GestureDetector(
       // Desktop parity with folder rows: right-click opens the same menu.
@@ -711,6 +748,42 @@ class SearchHitTile extends StatelessWidget {
       child: tile,
     );
   }
+}
+
+/// Heads one folder's hits in account-wide results.
+class SearchFolderHeader extends StatelessWidget {
+  const SearchFolderHeader({super.key, required this.folder});
+
+  final String folder;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      width: double.infinity,
+      color: theme.colorScheme.surfaceContainerHighest,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: Text(
+        folder,
+        overflow: TextOverflow.ellipsis,
+        style: theme.textTheme.labelMedium?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+}
+
+/// Account-wide hits grouped by folder: folders in the order of their best
+/// hit, rank order kept inside each. Strings are the folder headers.
+List<Object> groupHitsByFolder(List<SearchHit> hits) {
+  final groups = <String, List<SearchHit>>{};
+  for (final h in hits) {
+    (groups[h.folder] ??= []).add(h);
+  }
+  return [
+    for (final g in groups.entries) ...[g.key, ...g.value],
+  ];
 }
 
 class LoadOlderTile extends StatelessWidget {

@@ -18,9 +18,10 @@ import "components"
 // cannot move the selection.
 //
 // Multi-select (Roundcube-style) lives alongside the preview selection:
-// checkboxes fill `selectedUids` (also UID-keyed, pruned when the feed
-// drops rows), the header box selects the visible page, and the bulk bar
-// acts on the whole checkbox set in one backend call.
+// checkboxes fill `selectedKeys` (row keys: the UID in a folder, folder id
+// plus UID for search hits; pruned when the feed drops rows), the header
+// box selects the visible page, and the bulk bar acts on the whole checkbox
+// set — one backend call per folder it spans.
 Rectangle {
     id: root
 
@@ -48,9 +49,9 @@ Rectangle {
     // persisted `message_sort_*` settings via Main). Checkboxes stay hidden
     // until `selectionMode` is toggled in the header, so the list reads
     // clean until a bulk action is actually wanted.
-    property var selectedUids: []
+    property var selectedKeys: []
     property int selectionVersion: 0
-    property int lastClickedUid: -1
+    property string lastClickedKey: ""
     property bool selectionMode: false
     property string sortField: "date"
     property bool sortDescending: true
@@ -114,28 +115,28 @@ Rectangle {
 
     // --- selection ------------------------------------------------------
 
-    function isSelected(uid) {
-        return root.selectedUids.indexOf(uid) !== -1;
+    function isSelected(key) {
+        return root.selectedKeys.indexOf(key) !== -1;
     }
 
-    function setSelection(uids) {
-        root.selectedUids = (uids || []).slice();
+    function setSelection(keys) {
+        root.selectedKeys = (keys || []).slice();
         root.selectionVersion++;
     }
 
-    function toggleSelection(uid) {
-        var a = root.selectedUids.slice();
-        var i = a.indexOf(uid);
+    function toggleSelection(key) {
+        var a = root.selectedKeys.slice();
+        var i = a.indexOf(key);
         if (i === -1)
-            a.push(uid);
+            a.push(key);
         else
             a.splice(i, 1);
-        root.lastClickedUid = uid;
+        root.lastClickedKey = key;
         root.setSelection(a);
     }
 
     function clearSelection() {
-        if (root.selectedUids.length === 0)
+        if (root.selectedKeys.length === 0)
             return;
         root.setSelection([]);
     }
@@ -147,21 +148,24 @@ Rectangle {
             return;
         root.selectionMode = on;
         if (!on) {
-            root.lastClickedUid = -1;
-            if (root.selectedUids.length > 0)
+            root.lastClickedKey = "";
+            if (root.selectedKeys.length > 0)
                 root.setSelection([]);
         }
     }
 
-    function visibleUids() {
+    function keysWhere(pred) {
         var out = [];
-        for (var i = 0; i < filtered.count; i++)
-            out.push(filtered.get(i).uid);
+        for (var i = 0; i < filtered.count; i++) {
+            var r = filtered.get(i);
+            if (pred(r))
+                out.push(r.key);
+        }
         return out;
     }
 
     function selectAll() {
-        root.setSelection(root.visibleUids());
+        root.setSelection(root.keysWhere(r => true));
     }
 
     function selectNone() {
@@ -169,59 +173,44 @@ Rectangle {
     }
 
     function selectUnread() {
-        var out = [];
-        for (var i = 0; i < filtered.count; i++) {
-            var r = filtered.get(i);
-            if (r.unread)
-                out.push(r.uid);
-        }
-        root.setSelection(out);
+        root.setSelection(root.keysWhere(r => r.unread));
     }
 
     function selectStarred() {
-        var out = [];
-        for (var i = 0; i < filtered.count; i++) {
-            var r = filtered.get(i);
-            if (r.starred)
-                out.push(r.uid);
-        }
-        root.setSelection(out);
+        root.setSelection(root.keysWhere(r => r.starred));
     }
 
     function invertSelection() {
-        var sel = {};
-        for (var i = 0; i < root.selectedUids.length; i++)
-            sel[root.selectedUids[i]] = true;
-        var out = [];
-        for (var j = 0; j < filtered.count; j++) {
-            var uid = filtered.get(j).uid;
-            if (!sel[uid])
-                out.push(uid);
-        }
-        root.setSelection(out);
+        root.setSelection(root.keysWhere(r => !root.isSelected(r.key)));
     }
 
-    // Shift-click range from the last clicked row to `toUid` (visible order).
-    function selectRange(toUid) {
+    function indexOfKey(key) {
+        for (var i = 0; i < filtered.count; i++) {
+            if (filtered.get(i).key === key)
+                return i;
+        }
+        return -1;
+    }
+
+    // Shift-click range from the last clicked row to `toKey` (visible order).
+    function selectRange(toKey) {
         if (filtered.count === 0)
             return;
-        var from = root.indexOfUid(root.lastClickedUid);
-        var to = root.indexOfUid(toUid);
+        var from = root.indexOfKey(root.lastClickedKey);
+        var to = root.indexOfKey(toKey);
         if (from < 0 || to < 0) {
-            root.toggleSelection(toUid);
+            root.toggleSelection(toKey);
             return;
         }
         var lo = Math.min(from, to);
         var hi = Math.max(from, to);
-        var sel = {};
-        for (var i = 0; i < root.selectedUids.length; i++)
-            sel[root.selectedUids[i]] = true;
-        for (var j = lo; j <= hi; j++)
-            sel[filtered.get(j).uid] = true;
-        var out = [];
-        for (var k in sel)
-            out.push(parseInt(k, 10));
-        root.lastClickedUid = toUid;
+        var out = root.selectedKeys.slice();
+        for (var j = lo; j <= hi; j++) {
+            var k = filtered.get(j).key;
+            if (out.indexOf(k) === -1)
+                out.push(k);
+        }
+        root.lastClickedKey = toKey;
         root.setSelection(out);
     }
 
@@ -239,7 +228,7 @@ Rectangle {
         if (root.selectionVersion < 0)
             return false;
         for (var i = 0; i < filtered.count; i++) {
-            if (!root.isSelected(filtered.get(i).uid))
+            if (!root.isSelected(filtered.get(i).key))
                 return false;
         }
         return true;
@@ -248,43 +237,65 @@ Rectangle {
     function isNoneSelected() {
         if (root.selectionVersion < 0)
             return true;
-        return root.selectedUids.length === 0;
+        return root.selectedKeys.length === 0;
     }
 
     function isPartialSelected() {
         return !root.isNoneSelected() && !root.isAllSelected();
     }
 
-    // Drop checkbox UIDs the feed no longer carries (folder switch, delete,
+    // The rows the checkbox set is drawn from, keyed like `displayRow`.
+    function sourceByKey() {
+        var out = {};
+        if (root.searching) {
+            var hits = root.searchRows || [];
+            for (var i = 0; i < hits.length; i++)
+                out[hits[i].folder_id + ":" + hits[i].uid] = hits[i];
+        } else {
+            var src = root.messages || [];
+            for (var j = 0; j < src.length; j++)
+                out[String(src[j].uid)] = src[j];
+        }
+        return out;
+    }
+
+    // Drop checkbox keys the feed no longer carries (folder switch, delete,
     // move, sync expunge). Kept rows stay selected so mark/star can chain.
     function pruneSelection() {
-        if (root.selectedUids.length === 0)
+        if (root.selectedKeys.length === 0)
             return;
-        var live = {};
-        var src = root.messages || [];
-        for (var i = 0; i < src.length; i++)
-            live[src[i].uid] = true;
-        var kept = [];
-        for (var j = 0; j < root.selectedUids.length; j++) {
-            if (live[root.selectedUids[j]])
-                kept.push(root.selectedUids[j]);
-        }
-        if (kept.length !== root.selectedUids.length)
+        var live = root.sourceByKey();
+        var kept = root.selectedKeys.filter(k => live[k] !== undefined);
+        if (kept.length !== root.selectedKeys.length)
             root.setSelection(kept);
+    }
+
+    // What the bulk signals carry: plain UIDs in a folder, {folder, uid}
+    // for search hits (Main runs those folder by folder).
+    function selectionTargets() {
+        var byKey = root.sourceByKey();
+        var out = [];
+        for (var i = 0; i < root.selectedKeys.length; i++) {
+            var m = byKey[root.selectedKeys[i]];
+            if (m === undefined)
+                continue;
+            out.push(root.searching ? {
+                                          folder: m.folder,
+                                          uid: m.uid
+                                      } : m.uid);
+        }
+        return out;
     }
 
     // True when every selected row is starred (drives the Star/Unstar label).
     function selectionAllStarred() {
-        if (root.selectedUids.length === 0)
+        if (root.selectedKeys.length === 0)
             return false;
         if (root.selectionVersion < 0)
             return false;
-        var byUid = {};
-        var src = root.messages || [];
-        for (var i = 0; i < src.length; i++)
-            byUid[src[i].uid] = src[i];
-        for (var j = 0; j < root.selectedUids.length; j++) {
-            var m = byUid[root.selectedUids[j]];
+        var byKey = root.sourceByKey();
+        for (var j = 0; j < root.selectedKeys.length; j++) {
+            var m = byKey[root.selectedKeys[j]];
             if (m === undefined || !m.starred)
                 return false;
         }
@@ -349,11 +360,22 @@ Rectangle {
     function rebuildFiltered() {
         var rows = [];
         if (root.searching) {
+            // Grouped by folder for the section headers: folders in the
+            // order of their best hit, rank order kept inside each.
             var hits = root.searchRows || [];
+            var order = [];
+            var groups = {};
             for (var i = 0; i < hits.length; i++) {
                 hits[i].key = hits[i].folder_id + ":" + hits[i].uid;
-                rows.push(root.displayRow(hits[i]));
+                var f = hits[i].folder || "";
+                if (groups[f] === undefined) {
+                    groups[f] = [];
+                    order.push(f);
+                }
+                groups[f].push(root.displayRow(hits[i]));
             }
+            for (var g = 0; g < order.length; g++)
+                rows = rows.concat(groups[order[g]]);
             ModelSync.sync(filtered, rows, "key");
             return;
         }
@@ -461,16 +483,18 @@ Rectangle {
         root.scheduleRebuild();
     }
     onFilterTextChanged: root.scheduleRebuild()
-    onSearchRowsChanged: root.scheduleRebuild()
+    onSearchRowsChanged: {
+        root.pruneSelection();
+        root.scheduleRebuild();
+    }
     onVisibleChanged: {
         if (root.visible)
             Qt.callLater(root.restoreScroll);
     }
     onSearchingChanged: {
-        // Search results have no bulk selection: a stale checkbox set must
-        // never act on foreign-folder UIDs afterwards.
-        if (root.searching)
-            root.setSelectionMode(false);
+        // A checkbox set belongs to the list it was made in: carried across,
+        // its keys would point at the wrong rows.
+        root.setSelectionMode(false);
         root.scheduleRebuild();
     }
 
@@ -487,7 +511,7 @@ Rectangle {
         Rectangle {
             id: headerBar
             width: parent.width
-            implicitHeight: 38 + ((root.selectionMode && root.selectedUids.length > 0) ? 40 : 0)
+            implicitHeight: 38 + ((root.selectionMode && root.selectedKeys.length > 0) ? 40 : 0)
             color: Theme.bgAlt
             Rectangle {
                 anchors.bottom: parent.bottom
@@ -505,10 +529,8 @@ Rectangle {
                     spacing: 2
 
                     // Selection-mode toggle: checkboxes stay out of the way
-                    // until bulk actions are actually wanted. Hidden while
-                    // searching (bulk actions stay folder-scoped).
+                    // until bulk actions are actually wanted.
                     IconButton {
-                        visible: !root.searching
                         Layout.leftMargin: Theme.xs
                         text: root.selectionMode ? Icons.checkBox : Icons.checkBoxBlank
                         iconFont: true
@@ -595,7 +617,7 @@ Rectangle {
                     }
                     IconButton {
                         Layout.rightMargin: Theme.sm
-                        visible: root.selectionMode && !root.searching
+                        visible: root.selectionMode
                         text: Icons.expandMore
                         iconFont: true
                         fontSize: Theme.fontSmall
@@ -606,25 +628,25 @@ Rectangle {
 
                 // Bulk bar: Roundcube-style actions for the checkbox set.
                 BulkActionBar {
-                    visible: root.selectionMode && root.selectedUids.length > 0
+                    visible: root.selectionMode && root.selectedKeys.length > 0
                     width: parent.width
-                    selectedCount: root.selectedUids.length
+                    selectedCount: root.selectedKeys.length
                     allStarred: root.selectionAllStarred()
                     onClearRequested: root.clearSelection()
-                    onMarkReadRequested: root.emitLater2(root.bulkMarkReadRequested, root.selectedUids.slice(), true)
-                    onMarkUnreadRequested: root.emitLater2(root.bulkMarkReadRequested, root.selectedUids.slice(), false)
-                    onToggleStarRequested: root.emitLater2(root.bulkStarRequested, root.selectedUids.slice(),
+                    onMarkReadRequested: root.emitLater2(root.bulkMarkReadRequested, root.selectionTargets(), true)
+                    onMarkUnreadRequested: root.emitLater2(root.bulkMarkReadRequested, root.selectionTargets(), false)
+                    onToggleStarRequested: root.emitLater2(root.bulkStarRequested, root.selectionTargets(),
                                                            !root.selectionAllStarred())
                     onArchiveRequested: {
-                        var uids = root.selectedUids.slice();
+                        var uids = root.selectionTargets();
                         Qt.callLater(root.bulkArchiveRequested, uids);
                     }
                     onMoveRequested: {
-                        var uids = root.selectedUids.slice();
+                        var uids = root.selectionTargets();
                         Qt.callLater(root.bulkMoveRequested, uids);
                     }
                     onDeleteRequested: {
-                        var uids = root.selectedUids.slice();
+                        var uids = root.selectionTargets();
                         Qt.callLater(root.bulkDeleteRequested, uids);
                     }
                     onMoreRequested: bulkMenu.popup()
@@ -640,6 +662,25 @@ Rectangle {
             model: filtered
             boundsBehavior: Flickable.StopAtBounds
             onContentYChanged: root.rememberScroll()
+            // Search hits live in many folders: one header per folder.
+            section.property: root.searching ? "folder" : ""
+            section.delegate: Rectangle {
+                required property string section
+                width: list.width
+                height: Math.round(24 * Theme.uiScale)
+                color: Theme.bgAlt
+                Label {
+                    anchors.fill: parent
+                    anchors.leftMargin: Theme.sm
+                    anchors.rightMargin: Theme.sm
+                    verticalAlignment: Text.AlignVCenter
+                    text: parent.section
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.fontSmall
+                    font.bold: true
+                    elide: Text.ElideRight
+                }
+            }
             ScrollBar.vertical: ScrollBar {
                 policy: ScrollBar.AsNeeded
             }
@@ -647,8 +688,7 @@ Rectangle {
             delegate: Item {
                 id: row
                 width: list.width
-                height: (root.density === "compact" ? Math.round(58 * Theme.uiScale) : Theme.listItemHeight) + (
-                            root.searching ? Math.round(18 * Theme.uiScale) : 0)
+                height: root.density === "compact" ? Math.round(58 * Theme.uiScale) : Theme.listItemHeight
 
                 required property int index
                 required property var model
@@ -657,7 +697,7 @@ Rectangle {
                 readonly property bool current: row.model.uid === root.currentUid && (!root.searching
                                                                                       || row.model.folder
                                                                                       === root.folderName)
-                readonly property bool checked: root.selectionVersion >= 0 && root.isSelected(row.model.uid)
+                readonly property bool checked: root.selectionVersion >= 0 && root.isSelected(row.model.key)
 
                 Rectangle {
                     anchors.fill: parent
@@ -694,19 +734,21 @@ Rectangle {
                                        root.menuStarred = row.model.starred;
                                        root.menuUnread = row.model.unread;
                                        rowMenu.popup();
-                                   } else if (root.searching) {
-                                       root.emitLater2(root.searchJump, row.model.folder, row.model.uid);
                                    } else if (mouse.modifiers & Qt.ControlModifier) {
                                        if (!root.selectionMode)
                                        root.setSelectionMode(true);
-                                       root.toggleSelection(row.model.uid);
+                                       root.toggleSelection(row.model.key);
                                    } else if (mouse.modifiers & Qt.ShiftModifier) {
                                        if (!root.selectionMode)
                                        root.setSelectionMode(true);
-                                       root.selectRange(row.model.uid);
+                                       root.selectRange(row.model.key);
+                                       if (!root.searching)
                                        root.emitLater(root.messageSelected, row.model.uid);
+                                   } else if (root.searching) {
+                                       root.lastClickedKey = row.model.key;
+                                       root.emitLater2(root.searchJump, row.model.folder, row.model.uid);
                                    } else {
-                                       root.lastClickedUid = row.model.uid;
+                                       root.lastClickedKey = row.model.key;
                                        root.emitLater(root.messageSelected, row.model.uid);
                                    }
                                }
@@ -781,7 +823,7 @@ Rectangle {
                         MouseArea {
                             anchors.fill: parent
                             enabled: root.selectionMode
-                            onClicked: root.toggleSelection(row.model.uid)
+                            onClicked: root.toggleSelection(row.model.key)
                         }
                     }
 
@@ -884,15 +926,6 @@ Rectangle {
                             font.pixelSize: Theme.fontSmall
                             elide: Text.ElideRight
                             maximumLineCount: 1
-                            width: parent.width
-                        }
-                        // Search hits live in foreign folders: say which one.
-                        Label {
-                            visible: root.searching
-                            text: row.model.folder || ""
-                            color: Theme.textMuted
-                            font.pixelSize: Theme.fontTiny
-                            elide: Text.ElideRight
                             width: parent.width
                         }
                     }
@@ -1073,23 +1106,23 @@ Rectangle {
         AppMenuItem {
             glyph: Icons.markRead
             label: qsTr("Mark selected as read")
-            onTriggered: root.emitLater2(root.bulkMarkReadRequested, root.selectedUids.slice(), true)
+            onTriggered: root.emitLater2(root.bulkMarkReadRequested, root.selectionTargets(), true)
         }
         AppMenuItem {
             glyph: Icons.markUnread
             label: qsTr("Mark selected as unread")
-            onTriggered: root.emitLater2(root.bulkMarkReadRequested, root.selectedUids.slice(), false)
+            onTriggered: root.emitLater2(root.bulkMarkReadRequested, root.selectionTargets(), false)
         }
         AppMenuItem {
             glyph: root.selectionAllStarred() ? Icons.starBorder : Icons.star
             label: root.selectionAllStarred() ? qsTr("Remove star from selected") : qsTr("Star selected")
-            onTriggered: root.emitLater2(root.bulkStarRequested, root.selectedUids.slice(), !root.selectionAllStarred())
+            onTriggered: root.emitLater2(root.bulkStarRequested, root.selectionTargets(), !root.selectionAllStarred())
         }
         AppMenuItem {
             glyph: Icons.archive
             label: qsTr("Archive selected")
             onTriggered: {
-                var uids = root.selectedUids.slice();
+                var uids = root.selectionTargets();
                 Qt.callLater(root.bulkArchiveRequested, uids);
             }
         }
@@ -1097,7 +1130,7 @@ Rectangle {
             glyph: Icons.driveFileMove
             label: qsTr("Move selected to…")
             onTriggered: {
-                var uids = root.selectedUids.slice();
+                var uids = root.selectionTargets();
                 Qt.callLater(root.bulkMoveRequested, uids);
             }
         }
@@ -1105,7 +1138,7 @@ Rectangle {
             glyph: Icons.trash
             label: qsTr("Move selected to Trash")
             onTriggered: {
-                var uids = root.selectedUids.slice();
+                var uids = root.selectionTargets();
                 Qt.callLater(root.bulkDeleteRequested, uids);
             }
         }
@@ -1130,7 +1163,7 @@ Rectangle {
             glyph: Icons.deleteForever
             label: qsTr("Delete permanently…")
             onTriggered: {
-                var uids = root.selectedUids.slice();
+                var uids = root.selectionTargets();
                 Qt.callLater(root.bulkPurgeRequested, uids);
             }
         }

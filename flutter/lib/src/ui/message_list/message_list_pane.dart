@@ -8,7 +8,7 @@ import '../../state/mail_state.dart';
 import '../composer/composer_dialog.dart';
 import 'message_list_widgets.dart';
 
-export 'message_list_widgets.dart' show confirmDelete;
+export 'message_list_widgets.dart' show confirmDelete, confirmSelectionDelete;
 
 /// The message list for the selected folder — or account-wide search hits.
 ///
@@ -166,16 +166,19 @@ class MessageListPaneState extends State<MessageListPane> {
     );
     final query = context.select<MailState, String>((s) => s.searchQuery);
     final busy = context.select<MailState, bool>((s) => s.isBusy);
+    final selected = context.select<MailState, Set<HitKey>>(
+      (s) => Set<HitKey>.of(s.selectedHits),
+    );
+    final selectionMode = context.select<MailState, bool>(
+      (s) => s.selectionMode,
+    );
+    // A folder-scoped search is all one folder: no headers needed.
+    final rows = folderOnly ? List<Object>.of(hits) : groupHitsByFolder(hits);
     return Column(
       children: [
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Text(
-            '${hits.length} result(s) across ${folderOnly ? 'this folder' : 'this account'}',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ),
+        const MessageListHeader(),
+        if (selectionMode && selected.isNotEmpty)
+          BulkActionBar(onAction: () {}),
         const Divider(height: 1),
         Expanded(
           child: hits.isEmpty
@@ -189,12 +192,19 @@ class MessageListPaneState extends State<MessageListPane> {
                   // Back from a hit's reader rebuilds this pane; the key
                   // brings the results back where they were.
                   key: const PageStorageKey<String>('search-results'),
-                  itemCount: hits.length,
+                  itemCount: rows.length,
                   separatorBuilder: (_, _) => const Divider(height: 1),
-                  itemBuilder: (context, i) => SearchHitTile(
-                    hit: hits[i],
-                    onOpened: widget.onMessageOpened,
-                  ),
+                  itemBuilder: (context, i) => switch (rows[i]) {
+                    final SearchHit hit => SearchHitTile(
+                      hit: hit,
+                      checked: selected.contains(hit.key),
+                      selectionMode: selectionMode,
+                      onOpened: widget.onMessageOpened,
+                    ),
+                    final Object folder => SearchFolderHeader(
+                      folder: folder as String,
+                    ),
+                  },
                 ),
         ),
       ],
