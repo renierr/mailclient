@@ -33,3 +33,12 @@ linter:
 
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options
+
+# `dart format` settings, committed so every machine formats alike. The style
+# is versioned by the package's language version (the lower bound of
+# `environment: sdk` in pubspec.yaml), so a newer Flutter keeps formatting
+# this code the same until that bound is raised -- like rustfmt's
+# style_edition. No SDK pin needed.
+formatter:
+  page_width: 80
+  trailing_commas: automate

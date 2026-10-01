@@ -70,7 +70,8 @@ This file is normative for all coding agents (human or AI) working in this repo.
 
 ## 3. Code Style
 
-- Rust: `rustfmt` defaults, `clippy` clean, `thiserror` for errors, `serde` for JSON fields, `chrono` (UTC/RFC3339) for times, `log` + `env_logger` for logging.
+- Formatting is pinned in committed config so Linux and Windows produce the same bytes: `rustfmt.toml` (style edition), `flutter/analysis_options.yaml` `formatter:` (the style follows the language version, i.e. the `environment: sdk` lower bound in `flutter/pubspec.yaml`, not the installed Flutter), and the qmlformat version in `scripts/qml-format.sh`. Only qmlformat has no such style versioning, hence its version pin (a machine without it skips formatting). Raise a style version or the pin on purpose and reformat once.
+- Rust: `rustfmt` defaults (style edition pinned), `clippy` clean, `thiserror` for errors, `serde` for JSON fields, `chrono` (UTC/RFC3339) for times, `log` + `env_logger` for logging.
 - Networking is async and never runs on the Qt GUI thread. `mailapp` owns one
   dedicated `mailclient-net` thread holding a current-thread Tokio runtime, and
   every IMAP/SMTP job is queued onto it; the GUI hears back through

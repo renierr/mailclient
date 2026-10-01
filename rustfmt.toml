@@ -1,0 +1,5 @@
+# Formatting is pinned here rather than left to whichever toolchain runs it:
+# the style edition fixes rustfmt's output on Linux and Windows and across
+# Rust versions (a newer toolchain keeps formatting 2021-style until this
+# line changes). Everything else stays rustfmt's default.
+style_edition = "2021"
