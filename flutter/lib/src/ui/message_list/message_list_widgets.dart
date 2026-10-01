@@ -388,125 +388,158 @@ class MessageTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final weight = message.unread ? FontWeight.w700 : FontWeight.normal;
+    // Same paperclip the Qt row shows under its avatar (Material
+    // attach_file, U+E226 like QML `Icons.attachFile`), kept below the
+    // avatar instead of inline before the text. Generous on purpose: the
+    // avatar and the glyph dwarf a tight gap, and downscaled screenshots
+    // swallow it entirely.
+    final attach = message.hasAttachments
+        ? Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Icon(
+              Icons.attach_file,
+              size: 14,
+              color: theme.colorScheme.outline,
+            ),
+          )
+        : const SizedBox.shrink();
     return GestureDetector(
       // Desktop parity: right-click opens the same row menu as ⋮.
       onSecondaryTapDown: (d) =>
           showMessageContextMenu(context, message, d.globalPosition),
-      child: ListTile(
-        selected: selected,
-        selectedTileColor: theme.colorScheme.secondaryContainer,
-        // Tight all round so the row uses the pane edge to edge: the
-        // sender name and the subject get every pixel left over.
-        contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-        horizontalTitleGap: 8,
-        minLeadingWidth: 0,
-        dense: true,
-        leading: selectionMode
-            ? Checkbox(value: checked, onChanged: (_) => onToggle())
-            : SizedBox(
-                width: 30,
-                // Unread marker as a badge on the avatar's corner, like the
-                // Qt row — bold text alone is too easy to miss, and a column
-                // of its own would cost the row its left edge.
-                child: Badge(
-                  isLabelVisible: message.unread,
-                  smallSize: 10,
-                  alignment: AlignmentDirectional.topStart,
-                  offset: const Offset(-2, -2),
-                  backgroundColor: theme.colorScheme.primary,
-                  child: SenderAvatar(
-                    badge: message.badge,
-                    radius: 13,
-                    fontSize: 10,
-                  ),
-                ),
-              ),
-        onTap: onTap,
-        title: Row(
-          children: [
-            Expanded(
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                    child: Text(
-                      message.senderName,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        fontWeight: weight,
-                      ),
-                    ),
-                  ),
-                  if (message.starred) ...[
-                    const SizedBox(width: 4),
-                    Icon(Icons.star, size: 14, color: Colors.amber.shade700),
-                  ],
-                ],
-              ),
-            ),
-            // Always top right, kept small so the name keeps its room.
-            const SizedBox(width: 4),
-            Text(
-              message.date,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.outline,
-              ),
-            ),
-          ],
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+      child: Material(
+        color: (selected || checked)
+            ? theme.colorScheme.secondaryContainer
+            : Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            // Tight all round so the row uses the pane edge to edge: the
+            // sender name and the subject get every pixel left over.
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (message.hasAttachments) ...[
-                  Icon(
-                    Icons.attach_file,
-                    size: 14,
-                    color: theme.colorScheme.outline,
-                  ),
-                  const SizedBox(width: 4),
-                ],
-                Expanded(
-                  child: Text(
-                    message.subject,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      fontWeight: weight,
-                    ),
+                SizedBox(
+                  width: 30,
+                  // Avatar at the top of the row, not centred: the title
+                  // lines up with it and the paperclip sits underneath.
+                  // The clip stays in selection mode too, below the box.
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (selectionMode)
+                        Checkbox(value: checked, onChanged: (_) => onToggle())
+                      else
+                        // Unread marker as a badge on the avatar's
+                        // corner, like the Qt row — bold text alone is
+                        // too easy to miss, and a column of its own
+                        // would cost the row its left edge.
+                        Badge(
+                          isLabelVisible: message.unread,
+                          smallSize: 10,
+                          alignment: AlignmentDirectional.topStart,
+                          offset: const Offset(-2, -2),
+                          backgroundColor: theme.colorScheme.primary,
+                          child: SenderAvatar(
+                            badge: message.badge,
+                            radius: 13,
+                            fontSize: 10,
+                          ),
+                        ),
+                      attach,
+                    ],
                   ),
                 ),
-                // One line below the date, slimmed to its icon at the
-                // same edge; the whole row stays tappable, so the
-                // smaller hit area costs nothing.
-                PopupMenuButton<String>(
-                  tooltip: 'Message actions',
-                  padding: const EdgeInsets.all(4),
-                  icon: const Icon(Icons.more_vert, size: 18),
-                  onSelected: (v) => runMessageAction(
-                    context,
-                    v,
-                    uid: message.uid,
-                    subject: message.subject,
-                    unread: message.unread,
-                  ),
-                  itemBuilder: (context) => messageActionItems(
-                    unread: message.unread,
-                    starred: message.starred,
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    message.senderName,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                      fontWeight: weight,
+                                    ),
+                                  ),
+                                ),
+                                if (message.starred) ...[
+                                  const SizedBox(width: 4),
+                                  Icon(
+                                    Icons.star,
+                                    size: 14,
+                                    color: Colors.amber.shade700,
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                          // Always top right, kept small so the name keeps
+                          // its room.
+                          const SizedBox(width: 4),
+                          Text(
+                            message.date,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.outline,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              message.subject,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                fontWeight: weight,
+                              ),
+                            ),
+                          ),
+                          // One line below the date, slimmed to its icon at
+                          // the same edge; the whole row stays tappable, so
+                          // the smaller hit area costs nothing.
+                          PopupMenuButton<String>(
+                            tooltip: 'Message actions',
+                            padding: const EdgeInsets.all(4),
+                            icon: const Icon(Icons.more_vert, size: 18),
+                            onSelected: (v) => runMessageAction(
+                              context,
+                              v,
+                              uid: message.uid,
+                              subject: message.subject,
+                              unread: message.unread,
+                            ),
+                            itemBuilder: (context) => messageActionItems(
+                              unread: message.unread,
+                              starred: message.starred,
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (!compact && message.snippet.isNotEmpty)
+                        Text(
+                          message.snippet,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.outline,
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ],
             ),
-            if (!compact && message.snippet.isNotEmpty)
-              Text(
-                message.snippet,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.outline,
-                ),
-              ),
-          ],
+          ),
         ),
       ),
     );

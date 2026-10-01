@@ -771,6 +771,8 @@ Rectangle {
                     // avatar's place instead of a column of its own, so the
                     // sender/subject keep their width. Custom-drawn so
                     // programmatic select-all/clear always reflects (see header).
+                    // The avatar sits at the top of the row; the paperclip
+                    // below it (not inline before the text) marks attachments.
                     Item {
                         id: checkCell
                         width: Math.round(28 * Theme.uiScale)
@@ -779,14 +781,18 @@ Rectangle {
 
                         Avatar {
                             id: avatar
-                            anchors.centerIn: parent
+                            anchors.top: parent.top
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            anchors.topMargin: 2
                             visible: !root.selectionMode
                             implicitWidth: Math.round(26 * Theme.uiScale)
                             implicitHeight: Math.round(26 * Theme.uiScale)
                             badge: row.model
                         }
                         Rectangle {
-                            anchors.centerIn: parent
+                            anchors.top: parent.top
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            anchors.topMargin: 4
                             visible: root.selectionMode
                             width: Theme.checkSize
                             height: Theme.checkSize
@@ -805,6 +811,22 @@ Rectangle {
                                 font.pixelSize: Theme.fontSmall
                                 font.bold: true
                             }
+                        }
+                        // Attachment cue under the avatar, not inline before
+                        // the text: the sender/subject keep the full width.
+                        // The gap scales with the interface like the avatar
+                        // and the glyph it separates (unlike layout spacing,
+                        // which stays put): a fixed gap collapses visually
+                        // at 125/150%.
+                        Label {
+                            anchors.top: avatar.bottom
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            anchors.topMargin: Math.round(6 * Theme.uiScale)
+                            text: Icons.attachFile
+                            font.family: Icons.fontFamily
+                            color: Theme.textMuted
+                            font.pixelSize: Theme.fontTiny
+                            visible: row.model.has_attachments
                         }
                         // Unread marker as a badge on the avatar's corner, not
                         // a column of its own: the row starts at the pane edge.
@@ -827,8 +849,10 @@ Rectangle {
                     }
 
                     Column {
+                        id: textCell
                         width: parent.width - checkCell.width - Theme.xs * 3
-                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.top: parent.top
+                        anchors.topMargin: 1
                         spacing: 2
 
                         Row {
@@ -848,18 +872,9 @@ Rectangle {
                                 font.pixelSize: Theme.fontBase
                                 font.bold: row.model.unread
                                 elide: Text.ElideRight
-                                width: Math.max(0, parent.width - dateLabel.width - Theme.xs - (row.model.has_attachments
+                                width: Math.max(0, parent.width - dateLabel.width - Theme.xs - (row.model.starred
                                                                                                 ? fromRow.cueWidth
-                                                                                                  + Theme.xs : 0) - (
-                                                    row.model.starred ? fromRow.cueWidth + Theme.xs : 0))
-                            }
-                            Label {
-                                text: row.model.has_attachments ? Icons.attachFile : ""
-                                font.family: Icons.fontFamily
-                                color: Theme.textMuted
-                                font.pixelSize: Theme.fontTiny
-                                width: fromRow.cueWidth
-                                visible: row.model.has_attachments
+                                                                                                  + Theme.xs : 0))
                             }
                             // Passive starred cue (the toggle lives in the row
                             // menu now, so a starred row still reads starred).
@@ -887,24 +902,27 @@ Rectangle {
                             spacing: Theme.xs
                             Label {
                                 text: row.model.subject
-                                color: row.model.unread ? Theme.text : Theme.textMuted
+                                // Full text colour like the sender line (and
+                                // the Flutter row): unread reads bold, not dim.
+                                color: Theme.text
                                 font.pixelSize: Theme.fontBase
                                 font.bold: row.model.unread
                                 elide: Text.ElideRight
-                                width: Math.max(0, parent.width - (moreButton.visible ? Theme.miniButton + Theme.xs :
-                                                                                        0))
+                                // The ⋮ slot is always reserved, so revealing
+                                // the button on hover reflows nothing.
+                                width: Math.max(0, parent.width - Theme.miniButton - Theme.xs)
                             }
                             // Row actions menu (⋮), opening the same menu as
                             // right-click: mark read/unread, star, archive,
                             // move, trash, purge (plus Open in search mode).
-                            // Shown on hover and on the current/checked row
-                            // so keyboard selection keeps it reachable.
+                            // Always visible, like the Flutter row — no
+                            // hover-reveal, so it is always reachable and
+                            // nothing ever reflows.
                             IconButton {
                                 id: moreButton
                                 width: Theme.miniButton
                                 height: Theme.miniButton
                                 fontSize: Theme.fontBase
-                                visible: hoverArea.containsMouse || row.current || row.checked
                                 text: Icons.moreVert
                                 iconFont: true
                                 contentColor: Theme.textMuted
