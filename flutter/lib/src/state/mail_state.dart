@@ -63,6 +63,56 @@ class MailState extends ChangeNotifier {
   Timer? _searchBackfillTimer;
   bool _serverSearchPending = false;
 
+  // --- list quick filters ------------------------------------------------
+  // Each checked entry narrows the visible rows (AND-combined), in the
+  // folder list and in search results alike — the Qt `MessageList`
+  // `filterUnread/filterStarred/filterAttachments` twin.
+  bool _filterUnread = false;
+  bool _filterStarred = false;
+  bool _filterAttachments = false;
+
+  bool get filterUnread => _filterUnread;
+  bool get filterStarred => _filterStarred;
+  bool get filterAttachments => _filterAttachments;
+  bool get hasListFilter =>
+      _filterUnread || _filterStarred || _filterAttachments;
+
+  bool matchesListFilter(MessageSummary m) {
+    if (_filterUnread && !m.unread) return false;
+    if (_filterStarred && !m.starred) return false;
+    if (_filterAttachments && !m.hasAttachments) return false;
+    return true;
+  }
+
+  bool matchesHitFilter(SearchHit h) {
+    if (_filterUnread && !h.unread) return false;
+    if (_filterStarred && !h.starred) return false;
+    if (_filterAttachments && !h.hasAttachments) return false;
+    return true;
+  }
+
+  void setFilterUnread(bool on) {
+    _filterUnread = on;
+    notifyListeners();
+  }
+
+  void setFilterStarred(bool on) {
+    _filterStarred = on;
+    notifyListeners();
+  }
+
+  void setFilterAttachments(bool on) {
+    _filterAttachments = on;
+    notifyListeners();
+  }
+
+  void clearListFilters() {
+    _filterUnread = false;
+    _filterStarred = false;
+    _filterAttachments = false;
+    notifyListeners();
+  }
+
   // --- multi-select ------------------------------------------------------
   bool _selectionMode = false;
   final Set<int> _selectedUids = {};

@@ -34,6 +34,18 @@ class MessageListHeader extends StatelessWidget {
     final sortDescending = context.select<MailState, bool>(
       (s) => s.settings.sortDescending,
     );
+    final hasFilter = context.select<MailState, bool>(
+      (s) => s.hasListFilter,
+    );
+    final filterUnread = context.select<MailState, bool>(
+      (s) => s.filterUnread,
+    );
+    final filterStarred = context.select<MailState, bool>(
+      (s) => s.filterStarred,
+    );
+    final filterAttachments = context.select<MailState, bool>(
+      (s) => s.filterAttachments,
+    );
     return Container(
       padding: const EdgeInsets.only(left: 2, right: 4),
       child: Row(
@@ -119,6 +131,65 @@ class MessageListHeader extends StatelessWidget {
                 ),
               ],
             ),
+          // Quick filters narrow the current list (AND-combined), in the
+          // folder list and in search results alike — the Qt `filterMenu`
+          // twin. The menu closes per toggle; the icon stays tinted while
+          // anything is active.
+          PopupMenuButton<String>(
+            tooltip: hasFilter ? 'Filter: active' : 'Filter messages',
+            icon: Icon(
+              Icons.filter_list,
+              color: hasFilter
+                  ? Theme.of(context).colorScheme.primary
+                  : null,
+            ),
+            onSelected: (v) {
+              final state = context.read<MailState>();
+              switch (v) {
+                case 'unread':
+                  state.setFilterUnread(!state.filterUnread);
+                case 'starred':
+                  state.setFilterStarred(!state.filterStarred);
+                case 'attachments':
+                  state.setFilterAttachments(!state.filterAttachments);
+                case 'clear':
+                  state.clearListFilters();
+              }
+            },
+            itemBuilder: (context) => [
+              CheckedPopupMenuItem(
+                value: 'unread',
+                checked: filterUnread,
+                child: const MenuRow(
+                  icon: Icons.mark_email_unread_outlined,
+                  text: 'Unread only',
+                ),
+              ),
+              CheckedPopupMenuItem(
+                value: 'starred',
+                checked: filterStarred,
+                child: const MenuRow(
+                  icon: Icons.star_border,
+                  text: 'Starred only',
+                ),
+              ),
+              CheckedPopupMenuItem(
+                value: 'attachments',
+                checked: filterAttachments,
+                child: const MenuRow(
+                  icon: Icons.attach_file,
+                  text: 'With attachments',
+                ),
+              ),
+              if (hasFilter) ...[
+                const PopupMenuDivider(),
+                const PopupMenuItem(
+                  value: 'clear',
+                  child: MenuRow(icon: Icons.clear, text: 'Clear filters'),
+                ),
+              ],
+            ],
+          ),
           // Hits come in rank order (grouped by folder); sorting them is
           // not offered.
           if (!searching)

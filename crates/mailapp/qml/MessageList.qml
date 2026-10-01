@@ -31,6 +31,11 @@ Rectangle {
     property int currentUid: -1
     property string folderName: ""
     property string filterText: ""
+    // Quick filters for the current list: each checked entry narrows the
+    // visible rows (AND-combined). They apply in folder and search modes.
+    property bool filterUnread: false
+    property bool filterStarred: false
+    property bool filterAttachments: false
     // Account-wide FTS mode: `searchRows` are index hits across every folder
     // (rank order, each with folder/folder_id), shown instead of the folder
     // feed. Opening a hit selects its folder and keeps the search; a row
@@ -78,9 +83,11 @@ Rectangle {
     signal bulkPurgeRequested(var uids)
     signal sortRequested(string field, bool descending)
 
-    readonly property bool canLoadOlder: root.folderName !== "" && root.filterText === "" && (root.messages.length > 0
-                                                                                              || root.serverTotal < 0)
-                                         && (root.serverTotal < 0 || root.serverTotal > root.totalCount)
+    readonly property bool hasQuickFilter: root.filterUnread || root.filterStarred || root.filterAttachments
+    readonly property bool hasAnyFilter: root.filterText !== "" || root.hasQuickFilter
+    readonly property bool canLoadOlder: root.folderName !== "" && !root.hasAnyFilter && (root.messages.length > 0
+                                                                                          || root.serverTotal < 0) && (
+                                             root.serverTotal < 0 || root.serverTotal > root.totalCount)
 
     // Row actions rebuild the feed, which destroys the delegates. Emitting
     // straight from a delegate's click handler therefore deletes the item
@@ -317,8 +324,27 @@ Rectangle {
         return (root.sortField === field && root.sortDescending === descending) ? "✓ " : "";
     }
 
+    function filterTick(on) {
+        return on ? "✓ " : "";
+    }
+
+    // Quick filters alone (unread/starred/attachments): used for search
+    // hits too, which the FTS query already matched, so the substring
+    // filter must not run on them a second time.
+    function matchesQuick(m) {
+        if (root.filterUnread && !m.unread)
+            return false;
+        if (root.filterStarred && !m.starred)
+            return false;
+        if (root.filterAttachments && m.has_attachments !== true)
+            return false;
+        return true;
+    }
+
     // Visible rows after applying the search filter.
     function matches(m) {
+        if (!root.matchesQuick(m))
+            return false;
         if (root.filterText === "")
             return true;
         var q = root.filterText.toLowerCase();
@@ -369,6 +395,8 @@ Rectangle {
             var order = [];
             var groups = {};
             for (var i = 0; i < hits.length; i++) {
+                if (!root.matchesQuick(hits[i]))
+                    continue;
                 hits[i].key = hits[i].folder_id + ":" + hits[i].uid;
                 var f = hits[i].folder || "";
                 if (groups[f] === undefined) {
@@ -486,6 +514,9 @@ Rectangle {
         root.scheduleRebuild();
     }
     onFilterTextChanged: root.scheduleRebuild()
+    onFilterUnreadChanged: root.scheduleRebuild()
+    onFilterStarredChanged: root.scheduleRebuild()
+    onFilterAttachmentsChanged: root.scheduleRebuild()
     onSearchRowsChanged: {
         root.pruneSelection();
         root.scheduleRebuild();
@@ -593,12 +624,20 @@ Rectangle {
                         elide: Text.ElideRight
                     }
                     Label {
-                        text: root.searching ? qsTr("%n result(s) across this account", "", filtered.count) : root.filterText
-                                               === "" ? qsTr("%1").arg(filtered.count) : qsTr("%1 of %2").arg(
-                                                            filtered.count).arg(root.messages ? root.messages.length :
-                                                                                                0)
+                        text: root.searching ? qsTr("%n result(s) across this account", "", filtered.count) :
+                                               !root.hasAnyFilter ? qsTr("%1").arg(filtered.count) : qsTr(
+                                                                        "%1 of %2").arg(filtered.count).arg(
+                                                                        root.messages ? root.messages.length : 0)
                         color: Theme.textMuted
                         font.pixelSize: Theme.fontSmall
+                    }
+                    IconButton {
+                        text: Icons.filterList
+                        iconFont: true
+                        fontSize: Theme.fontSmall
+                        active: root.hasQuickFilter
+                        tooltip: root.hasQuickFilter ? qsTr("Filter: active") : qsTr("Filter messages")
+                        onClicked: filterMenu.popup()
                     }
                     IconButton {
                         visible: !root.searching
@@ -955,8 +994,8 @@ Rectangle {
         Rectangle {
             id: loadOlderBar
             width: parent.width
-            implicitHeight: root.folderName !== "" && root.filterText === "" && (root.messages.length > 0
-                                                                                 || root.serverTotal < 0) ? 56 : 0
+            implicitHeight: root.folderName !== "" && !root.hasAnyFilter && (root.messages.length > 0
+                                                                             || root.serverTotal < 0) ? 56 : 0
             visible: implicitHeight > 0
             color: Theme.bgAlt
             clip: true
@@ -1116,6 +1155,41 @@ Rectangle {
     }
 
     AppMenu {
+        id: filterMenu
+
+        // Each entry toggles one quick filter; several can stay on at once
+        // (AND-combined). The tick column marks what is active.
+        AppMenuItem {
+            glyph: Icons.markUnread
+            label: root.filterTick(root.filterUnread) + qsTr("Unread only")
+            onTriggered: root.filterUnread = !root.filterUnread
+        }
+        AppMenuItem {
+            glyph: Icons.star
+            label: root.filterTick(root.filterStarred) + qsTr("Starred only")
+            onTriggered: root.filterStarred = !root.filterStarred
+        }
+        AppMenuItem {
+            glyph: Icons.attachFile
+            label: root.filterTick(root.filterAttachments) + qsTr("With attachments")
+            onTriggered: root.filterAttachments = !root.filterAttachments
+        }
+        MenuSeparator {
+            visible: root.hasQuickFilter
+        }
+        AppMenuItem {
+            visible: root.hasQuickFilter
+            glyph: Icons.clear
+            label: qsTr("Clear filters")
+            onTriggered: {
+                root.filterUnread = false;
+                root.filterStarred = false;
+                root.filterAttachments = false;
+            }
+        }
+    }
+
+    AppMenu {
         id: bulkMenu
 
         // Complete action set: the bulk bar collapses buttons into here on
@@ -1193,7 +1267,7 @@ Rectangle {
         visible: filtered.count === 0
         Label {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: root.filterText !== "" ? Icons.search : Icons.inbox
+            text: root.hasAnyFilter ? Icons.search : Icons.inbox
             font.family: Icons.fontFamily
             font.pixelSize: 32
             opacity: 0.5
@@ -1202,16 +1276,19 @@ Rectangle {
             anchors.horizontalCenter: parent.horizontalCenter
             color: Theme.textMuted
             font.pixelSize: Theme.fontBase
-            text: root.searching ? qsTr("No matches in this account") : root.filterText !== "" ? qsTr(
-                                                                                                     "No message matches “%1”").arg(
-                                                                                                     root.filterText) :
-                                                                                                 qsTr("This folder is empty")
+            text: root.searching ? qsTr("No matches in this account") : root.hasQuickFilter && root.filterText === "" ? qsTr(
+                                                                                                                            "No message matches this filter") :
+                                                                                                                        root.filterText
+                                                                                                                        !== "" ? qsTr(
+                                                                                                                                     "No message matches “%1”").arg(
+                                                                                                                                     root.filterText) :
+                                                                                                                                 qsTr("This folder is empty")
         }
         Label {
             anchors.horizontalCenter: parent.horizontalCenter
             color: Theme.textMuted
             font.pixelSize: Theme.fontSmall
-            visible: root.filterText === ""
+            visible: !root.hasAnyFilter
             text: qsTr("Press ⟳ to sync")
         }
     }

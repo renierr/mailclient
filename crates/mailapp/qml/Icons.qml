@@ -46,6 +46,7 @@ QtObject {
     readonly property string expandLess: "\ue5ce"
     readonly property string expandMore: "\ue5cf"
     readonly property string fileDownload: "\ue2c4"
+    readonly property string filterList: "\ue152"
     readonly property string flag: "\ue153"
     readonly property string folder: "\ue2c7"
     readonly property string formatClear: "\ue239"

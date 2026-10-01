@@ -530,6 +530,9 @@ class _ComposerDialogState extends State<ComposerDialog> {
       controller: _fromLocal,
       keyboardType: TextInputType.emailAddress,
       textInputAction: TextInputAction.next,
+      // Right-aligned so the local part sits neatly beside the fixed
+      // domain suffix, like the Qt composer.
+      textAlign: TextAlign.end,
       decoration: ComposerHeaderRow.field(
         hint: 'address',
         suffix: _domain.isEmpty

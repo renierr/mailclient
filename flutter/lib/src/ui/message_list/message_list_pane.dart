@@ -53,21 +53,34 @@ class MessageListPaneState extends State<MessageListPane> {
     );
     final syncing = context.select<MailState, bool>((s) => s.isSyncing);
     final drafts = context.select<MailState, bool>((s) => s.isDraftsFolder);
+    final filterUnread = context.select<MailState, bool>(
+      (s) => s.filterUnread,
+    );
+    final filterStarred = context.select<MailState, bool>(
+      (s) => s.filterStarred,
+    );
+    final filterAttachments = context.select<MailState, bool>(
+      (s) => s.filterAttachments,
+    );
+    final hasFilter = filterUnread || filterStarred || filterAttachments;
+    bool quick(MessageSummary m) =>
+        (!filterUnread || m.unread) &&
+        (!filterStarred || m.starred) &&
+        (!filterAttachments || m.hasAttachments);
     // Qt parity: 1–2 letter input filters the folder instantly (substring);
     // 3+ letters run the FTS index via `searching`. Without this, short input
     // shows the whole unfiltered folder.
     final q = query.trim().toLowerCase();
-    final shown = q.isEmpty
-        ? messages
-        : messages
-              .where(
-                (m) =>
-                    m.subject.toLowerCase().contains(q) ||
-                    m.from.toLowerCase().contains(q) ||
-                    m.senderName.toLowerCase().contains(q) ||
-                    m.snippet.toLowerCase().contains(q),
-              )
-              .toList(growable: false);
+    final shown = messages
+        .where((m) {
+          if (!quick(m)) return false;
+          if (q.isEmpty) return true;
+          return m.subject.toLowerCase().contains(q) ||
+              m.from.toLowerCase().contains(q) ||
+              m.senderName.toLowerCase().contains(q) ||
+              m.snippet.toLowerCase().contains(q);
+        })
+        .toList(growable: false);
     if (folderId < 0) {
       return const EmptyPane(
         icon: Icons.folder_open_outlined,
@@ -77,13 +90,32 @@ class MessageListPaneState extends State<MessageListPane> {
     return Column(
       children: [
         const MessageListHeader(),
-        if (q.isNotEmpty)
+        if (q.isNotEmpty || hasFilter)
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            child: Text(
-              '${shown.length} match(es) for “${query.trim()}”',
-              style: Theme.of(context).textTheme.bodySmall,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    q.isNotEmpty
+                        ? '${shown.length} match(es) for “${query.trim()}”'
+                            '${hasFilter ? ' · filters active' : ''}'
+                        : '${shown.length} of ${messages.length} · filters active',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+                if (hasFilter)
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    onPressed: () =>
+                        context.read<MailState>().clearListFilters(),
+                    child: const Text('Clear'),
+                  ),
+              ],
             ),
           ),
         if (selectionMode && selected.isNotEmpty)
@@ -91,8 +123,14 @@ class MessageListPaneState extends State<MessageListPane> {
         Expanded(
           child: shown.isEmpty
               ? EmptyPane(
-                  icon: Icons.mail_outline,
-                  text: syncing ? 'Syncing…' : 'Nothing here',
+                  icon: hasFilter || q.isNotEmpty
+                      ? Icons.search_off_outlined
+                      : Icons.mail_outline,
+                  text: syncing
+                      ? 'Syncing…'
+                      : hasFilter && q.isEmpty
+                      ? 'No message matches this filter'
+                      : 'Nothing here',
                 )
               : ListView.separated(
                   // The pane is rebuilt from scratch whenever the reader
@@ -172,20 +210,56 @@ class MessageListPaneState extends State<MessageListPane> {
     final selectionMode = context.select<MailState, bool>(
       (s) => s.selectionMode,
     );
+    final hasFilter = context.select<MailState, bool>(
+      (s) => s.hasListFilter,
+    );
+    final shownHits = hasFilter
+        ? hits.where((h) => context.read<MailState>().matchesHitFilter(h)).toList(
+            growable: false,
+          )
+        : hits;
     // A folder-scoped search is all one folder: no headers needed.
-    final rows = folderOnly ? List<Object>.of(hits) : groupHitsByFolder(hits);
+    final rows = folderOnly
+        ? List<Object>.of(shownHits)
+        : groupHitsByFolder(shownHits);
     return Column(
       children: [
         const MessageListHeader(),
+        if (hasFilter)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${shownHits.length} of ${hits.length} · filters active',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+                TextButton(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                  ),
+                  onPressed: () =>
+                      context.read<MailState>().clearListFilters(),
+                  child: const Text('Clear'),
+                ),
+              ],
+            ),
+          ),
         if (selectionMode && selected.isNotEmpty)
           BulkActionBar(onAction: () {}),
         const Divider(height: 1),
         Expanded(
-          child: hits.isEmpty
+          child: shownHits.isEmpty
               ? EmptyPane(
                   icon: Icons.search_off_outlined,
                   text: busy
                       ? 'Searching the server…'
+                      : hasFilter && hits.isNotEmpty
+                      ? 'No match survives this filter'
                       : 'No matches for “$query”',
                 )
               : ListView.separated(

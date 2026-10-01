@@ -501,6 +501,7 @@ Dialog {
                             leftPadding: 0
                             rightPadding: 0
                             background: null
+                            horizontalAlignment: TextInput.AlignRight
                             onTextChanged: root.dirty = true
                         }
                         Label {
