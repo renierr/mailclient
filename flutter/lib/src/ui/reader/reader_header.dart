@@ -113,7 +113,7 @@ class ReaderHeader extends StatelessWidget {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    SenderAvatar(from: sender.name),
+                    SenderAvatar(from: sender.name, address: sender.addr),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(

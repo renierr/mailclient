@@ -521,8 +521,7 @@ Rectangle {
                                 implicitWidth: Math.round(36 * Theme.uiScale)
                                 implicitHeight: Math.round(36 * Theme.uiScale)
                                 seed: root.sender.name || root.sender.addr || "?"
-                                initials: (root.sender.name || "?").replace(/^[^a-zA-Z0-9]*/, "").substring(0, 1).toUpperCase(
-                                              )
+                                initials: Initials.of(root.sender.name, root.sender.addr)
                             }
 
                             ColumnLayout {

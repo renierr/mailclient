@@ -781,10 +781,9 @@ Rectangle {
                             implicitWidth: Math.round(26 * Theme.uiScale)
                             implicitHeight: Math.round(26 * Theme.uiScale)
                             // Seed stays the address so colours never shift;
-                            // the initial follows the shown sender name.
+                            // the letters are the shown name plus the domain.
                             seed: row.model.from || "?"
-                            initials: (row.model.sender || row.model.from || "?").replace(/^[^a-zA-Z0-9]*/, "").substring(
-                                          0, 1).toUpperCase()
+                            initials: Initials.of(row.model.sender, row.model.from)
                         }
                         Rectangle {
                             anchors.centerIn: parent

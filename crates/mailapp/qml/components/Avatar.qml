@@ -2,7 +2,7 @@ import QtQuick
 
 import Mailclient
 
-// Circle with the sender's initial, coloured deterministically from the name.
+// Circle with the sender's initials, coloured deterministically from the seed.
 Rectangle {
     id: root
 
@@ -21,6 +21,7 @@ Rectangle {
         text: root.initials
         color: "white"
         font.bold: true
-        font.pixelSize: Math.round(root.width * 0.42)
+        // Two letters need a smaller size to stay inside the circle.
+        font.pixelSize: Math.round(root.width * (root.initials.length > 1 ? 0.36 : 0.42))
     }
 }

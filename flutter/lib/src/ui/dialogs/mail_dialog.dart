@@ -230,12 +230,38 @@ IconData folderIcon(FolderRole role) => switch (role) {
   FolderRole.custom => Icons.folder_outlined,
 };
 
-/// First letter of a sender or address, for avatars. Non-letters fall back
-/// to `?` rather than a digit-less empty circle.
-String senderInitial(String from) {
-  final m = RegExp(r'[a-zA-Z0-9]').firstMatch(from);
-  return m == null ? '?' : m.group(0)!.toUpperCase();
+/// Avatar letters for a sender: the first letter of the name (or of the
+/// address when there is none) plus the first letter of the address's
+/// domain, so the many senders sharing one initial still tell apart.
+/// Like Qt `Initials.of()`. Non-letters fall back to `?`.
+String senderInitials(String name, String address) {
+  final at = address.lastIndexOf('@');
+  final first = _firstAlnum(name) ?? _firstAlnum(address) ?? '?';
+  final second = at < 0
+      ? null
+      : _firstAlnum(_domainLabel(address.substring(at + 1)));
+  return second == null ? first : '$first$second';
 }
+
+String? _firstAlnum(String s) =>
+    RegExp(r'[a-zA-Z0-9]').firstMatch(s)?.group(0)!.toUpperCase();
+
+/// The name-bearing label of a domain: `mail.example.co.uk` -> `example`.
+String _domainLabel(String domain) {
+  final labels = domain
+      .replaceAll(RegExp(r'[>\s]'), '')
+      .toLowerCase()
+      .split('.')
+      .where((l) => l.isNotEmpty)
+      .toList();
+  if (labels.length > 1) labels.removeLast();
+  if (labels.length > 1 && _secondLevel.contains(labels.last)) {
+    labels.removeLast();
+  }
+  return labels.isEmpty ? '' : labels.last;
+}
+
+const _secondLevel = {'co', 'com', 'net', 'org', 'ac', 'gov', 'edu'};
 
 /// Deterministic avatar colour from any string, like Qt `avatarColor()`.
 Color avatarColor(BuildContext context, String seed) {

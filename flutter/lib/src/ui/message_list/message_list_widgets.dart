@@ -419,8 +419,8 @@ class MessageTile extends StatelessWidget {
                     backgroundColor: avatarBg,
                     foregroundColor: theme.colorScheme.onPrimary,
                     child: Text(
-                      senderInitial(message.from),
-                      style: const TextStyle(fontSize: 12),
+                      senderInitials(message.fromName, message.from),
+                      style: const TextStyle(fontSize: 11),
                     ),
                   ),
                 ),
