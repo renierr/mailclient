@@ -83,7 +83,13 @@ fun registerCargoNdk(name: String, abis: List<String>, profileArgs: List<String>
         // A missing cargo-ndk is a setup problem with a one-line fix, so say
         // so rather than letting Gradle report a bare non-zero exit.
         isIgnoreExitValue = false
-        doFirst { jniLibsDir.mkdirs() }
+        // Drop the previous copy first: when cargo has nothing to rebuild,
+        // cargo-ndk leaves an existing .so in place, so a release build after
+        // `flutter run` packaged the ~150 MB unoptimised debug core.
+        doFirst {
+            jniLibsDir.mkdirs()
+            abis.forEach { file("$jniLibsDir/$it/libmailffi.so").delete() }
+        }
     }
 
 val buildMailffiDebug = registerCargoNdk("buildMailffiDebug", debugAbis, emptyList())
