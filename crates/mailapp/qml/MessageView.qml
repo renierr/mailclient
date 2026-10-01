@@ -147,8 +147,10 @@ Rectangle {
         return qsTr("%1 MB").arg((n / (1024 * 1024)).toFixed(1));
     }
 
+    // Names come from the core: `display_name` to show, `file_name` for
+    // anything written (mailcore::paths::safe_attachment_name).
     function displayName(a) {
-        return a.filename || qsTr("attachment-%1.bin").arg(a.id);
+        return a.display_name || a.filename || "";
     }
 
     // Join a downloads-folder value with a filename into a `file://` URL
@@ -206,7 +208,7 @@ Rectangle {
             return;
         saveOneDialog.attachmentId = a.id;
         var base = StandardPaths.writableLocation(StandardPaths.DownloadLocation);
-        saveOneDialog.selectedFile = root.joinFileUrl(base, root.displayName(a));
+        saveOneDialog.selectedFile = root.joinFileUrl(base, a.file_name || "");
         saveOneDialog.open();
     }
 

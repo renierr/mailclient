@@ -2,11 +2,14 @@
 //!
 //! Flag state and the attachment rows hanging off a message each have their
 //! own rules, so they live next door: [`flags`] owns read/starred/draft and
-//! the local-change queue, [`attachments`] owns the files.
+//! the local-change queue, [`attachments`] owns the files, and
+//! [`attachment_files`] writes them out to disk.
 
+mod attachment_files;
 mod attachments;
 mod flags;
 
+pub use attachment_files::{save_all_attachments_to, save_attachment_to, write_attachment_copy};
 pub use attachments::{
     add_attachment, attachment_has_data, delete_attachments_for_message, get_attachment,
     inline_images, list_attachments, replace_attachments, save_attachment_to_path,

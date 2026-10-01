@@ -264,13 +264,8 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
     };
     let files: Vec<serde_json::Value> = messages::list_attachments(db, m.id)
         .unwrap_or_default()
-        .into_iter()
-        .map(|a| {
-            json!({
-                "id": a.id, "filename": a.filename, "mime_type": a.mime_type,
-                "size": a.size, "content_id": a.content_id, "is_inline": a.is_inline,
-            })
-        })
+        .iter()
+        .map(attachment_row)
         .collect();
     let date = short_date(m.date.as_deref());
     let from = m.from_addr.as_deref().unwrap_or("?");
@@ -299,26 +294,43 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
     Ok(serde_json::to_string(&out)?)
 }
 
-/// Attachment metadata for one message (`[{id, filename, mime_type, size,
-/// content_id, is_inline}]`, no bytes). Used by the reader pane and the
+/// Attachment metadata for one message (`[{id, filename, display_name,
+/// file_name, mime_type, size, content_id, is_inline}]`, no bytes). Used by the reader pane and the
 /// save dialog; bytes leave Rust only via `save_attachment_to_path`.
 pub fn attachments_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
     let m = messages::get_by_uid(db, folder_id, uid)?;
     let files: Vec<serde_json::Value> = messages::list_attachments(db, m.id)
         .unwrap_or_default()
-        .into_iter()
-        .map(|a| {
-            json!({
-                "id": a.id,
-                "filename": a.filename,
-                "mime_type": a.mime_type,
-                "size": a.size,
-                "content_id": a.content_id,
-                "is_inline": a.is_inline,
-            })
-        })
+        .iter()
+        .map(attachment_row)
         .collect();
     Ok(serde_json::to_string(&files)?)
+}
+
+/// One attachment's metadata. `display_name` is what to show (the mail's
+/// name, or a fallback when it has none); `file_name` is the name a file
+/// written for it gets (see [`crate::paths::safe_attachment_name`]), which a
+/// save dialog should suggest.
+fn attachment_row(a: &crate::models::Attachment) -> serde_json::Value {
+    let display_name = a
+        .filename
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map_or_else(
+            || crate::paths::fallback_attachment_name(a.id),
+            String::from,
+        );
+    json!({
+        "id": a.id,
+        "filename": a.filename,
+        "display_name": display_name,
+        "file_name": crate::paths::safe_attachment_name(a.filename.as_deref(), a.id),
+        "mime_type": a.mime_type,
+        "size": a.size,
+        "content_id": a.content_id,
+        "is_inline": a.is_inline,
+    })
 }
 
 /// A stored RFC 3339 date as local `2026-09-12 13:50`; the raw value when

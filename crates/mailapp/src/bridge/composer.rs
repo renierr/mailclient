@@ -3,7 +3,7 @@ use std::pin::Pin;
 use cxx_qt_lib::QString;
 use mailcore::compose::{self, ComposeForm};
 
-use crate::bridge::messages::{draft_attachment_path, ensure_attachment_data, safe_filename};
+use crate::bridge::messages::{draft_attachment_path, ensure_attachment_data};
 use crate::bridge::qobject;
 use crate::bridge::qstring;
 use crate::bridge::worker::{spawn_job, JobRefresh, BUSY_MESSAGE};
@@ -103,7 +103,7 @@ impl qobject::Bridge {
                     let path = draft_attachment_path(db, a.id)?;
                     Ok(serde_json::json!({
                         "path": path,
-                        "name": safe_filename(a.filename.as_deref(), a.id),
+                        "name": mailcore::paths::safe_attachment_name(a.filename.as_deref(), a.id),
                     }))
                 })
                 .collect::<Result<Vec<_>, String>>()?;

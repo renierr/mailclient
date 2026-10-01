@@ -7,8 +7,6 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `safe_filename`, `strip_file_url`
-
 /// One attachment's bytes, if they are already cached.
 ///
 /// `None` means "not downloaded yet" — call [`download_attachments`] and try
@@ -36,12 +34,13 @@ Future<void> downloadAttachments({
   uid: uid,
 );
 
-/// Write one cached attachment to `path` (desktop "Save as…").
+/// Write one cached attachment to `path` (desktop "Save as…"), a file or
+/// a folder (which gets the attachment's safe name). Returns where it went.
 ///
-/// A directory target appends the attachment's own filename. Fails rather
-/// than downloading when the bytes are not cached yet: a save dialog has
-/// already been through, and silently turning it into a network wait is the
-/// kind of surprise a progress event exists to avoid.
+/// Fails rather than downloading when the bytes are not cached yet: a save
+/// dialog has already been through, and silently turning it into a network
+/// wait is the kind of surprise a progress event exists to avoid. Naming and
+/// writing are `mailcore`'s, shared with the Qt adapter.
 Future<String> saveAttachmentTo({
   required PlatformInt64 attachmentId,
   required String path,
@@ -50,7 +49,8 @@ Future<String> saveAttachmentTo({
   path: path,
 );
 
-/// Write every non-inline attachment of a message into `dir`.
+/// Write every non-inline attachment of a message into `dir`, numbering
+/// names that are already taken. Returns how many were saved.
 Future<BigInt> saveAllAttachmentsTo({
   required PlatformInt64 folderId,
   required int uid,
@@ -58,5 +58,15 @@ Future<BigInt> saveAllAttachmentsTo({
 }) => MailCoreApi.instance.api.crateApiAttachmentsSaveAllAttachmentsTo(
   folderId: folderId,
   uid: uid,
+  dir: dir,
+);
+
+/// Write the copy a system viewer opens into `dir` (the app's temp or cache
+/// folder) under a name that cannot clash or escape it. Returns the path.
+Future<String> writeAttachmentCopy({
+  required PlatformInt64 attachmentId,
+  required String dir,
+}) => MailCoreApi.instance.api.crateApiAttachmentsWriteAttachmentCopy(
+  attachmentId: attachmentId,
   dir: dir,
 );

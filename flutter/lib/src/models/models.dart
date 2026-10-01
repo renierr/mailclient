@@ -341,10 +341,17 @@ class AttachmentInfo {
     required this.mimeType,
     required this.size,
     required this.isInline,
+    this.fileName = '',
   });
 
   final int id;
+
+  /// What to show: the mail's name, or the core's fallback without one.
   final String filename;
+
+  /// The name a file written for it gets (`mailcore::paths`): what a save
+  /// dialog suggests. Never build a path from [filename].
+  final String fileName;
   final String mimeType;
   final int size;
 
@@ -354,7 +361,11 @@ class AttachmentInfo {
 
   factory AttachmentInfo.fromJson(Map<String, dynamic> j) => AttachmentInfo(
     id: _int(j['id']),
-    filename: _str(j['filename'], orElse: 'attachment'),
+    filename: _str(
+      j['display_name'],
+      orElse: _str(j['filename'], orElse: 'attachment-${_int(j['id'])}.bin'),
+    ),
+    fileName: _str(j['file_name'], orElse: 'attachment-${_int(j['id'])}.bin'),
     mimeType: _str(j['mime_type'], orElse: 'application/octet-stream'),
     size: _int(j['size']),
     isInline: _bool(j['is_inline']),

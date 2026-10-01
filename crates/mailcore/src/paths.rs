@@ -1,4 +1,5 @@
-//! File-URL handling shared by every path that crosses the QML bridge.
+//! File-URL handling shared by every path that crosses the QML bridge, and
+//! the names attachments are written under.
 //!
 //! QML file/folder dialogs hand back `file://` URLs (`selectedFile` /
 //! `selectedFolder` / composer `selectedFiles`), never plain paths. Three
@@ -90,9 +91,169 @@ pub fn file_url_to_path(raw: &str) -> PathBuf {
     PathBuf::from(fixed)
 }
 
+/// Windows treats these as device names in any directory, with or without an
+/// extension: opening `CON` or `LPT1.txt` for writing talks to the device
+/// instead of creating a file.
+const WINDOWS_DEVICE_NAMES: &[&str] = &[
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
+
+/// What an attachment is called when the mail names it nothing usable.
+pub fn fallback_attachment_name(id: i64) -> String {
+    format!("attachment-{id}.bin")
+}
+
+/// Filename safe for the filesystem: keeps the basename, falls back to
+/// [`fallback_attachment_name`]. Used for every write of an attachment, by
+/// both frontends.
+///
+/// The name comes from the mail, so it is attacker-chosen and gets checked
+/// rather than trusted:
+///
+/// - only the basename survives, and the separators are replaced, so nothing
+///   can steer the write out of the directory the user picked;
+/// - `:` goes too — on NTFS `report.pdf:payload` writes an alternate data
+///   stream hidden behind an innocuous name — as do control characters and
+///   the other reserved Windows characters, which would fail the write;
+/// - `.` and `..` are not names, they are the directory itself and its
+///   parent;
+/// - a Windows device name (`CON`, `LPT1`, …) is prefixed, because opening it
+///   reaches the device, not a file;
+/// - trailing dots and spaces are stripped, which Windows does silently
+///   anyway — leaving them would make the saved file's name differ from the
+///   one reported back to the user.
+///
+/// The rules are applied on every platform: an attachment saved on Linux or
+/// Android can land on a shared or FAT/NTFS volume, and consistent names are
+/// easier to reason about than per-OS ones.
+pub fn safe_attachment_name(name: Option<&str>, id: i64) -> String {
+    let base = name
+        .unwrap_or("")
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .trim();
+    let cleaned: String = base
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let cleaned = cleaned.trim_end_matches([' ', '.']);
+    if cleaned.is_empty() || cleaned.chars().all(|c| c == '.') {
+        return fallback_attachment_name(id);
+    }
+    let stem = cleaned.split('.').next().unwrap_or("");
+    if WINDOWS_DEVICE_NAMES
+        .iter()
+        .any(|d| stem.eq_ignore_ascii_case(d))
+    {
+        return format!("_{cleaned}");
+    }
+    cleaned.to_string()
+}
+
+/// `photo.pdf` + 1 → `photo(1).pdf`, for saving next to a same-named file.
+pub fn numbered_filename(name: &str, n: u32) -> String {
+    match name.rfind('.') {
+        Some(i) if i > 0 => format!("{}({n}).{}", &name[..i], &name[i + 1..]),
+        _ => format!("{name}({n})"),
+    }
+}
+
+/// `dir/name`, or the first `dir/name(n)` that does not exist yet.
+pub fn free_path(dir: &std::path::Path, name: &str) -> PathBuf {
+    let mut p = dir.join(name);
+    let mut n = 1;
+    while p.exists() {
+        p = dir.join(numbered_filename(name, n));
+        n += 1;
+    }
+    p
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn safe_name_keeps_ordinary_names() {
+        assert_eq!(safe_attachment_name(Some("report.pdf"), 1), "report.pdf");
+        assert_eq!(
+            safe_attachment_name(Some("  spaced.txt  "), 1),
+            "spaced.txt"
+        );
+        assert_eq!(
+            safe_attachment_name(Some("Ümläut ök.pdf"), 1),
+            "Ümläut ök.pdf"
+        );
+    }
+
+    #[test]
+    fn safe_name_refuses_to_leave_the_chosen_directory() {
+        // Only the basename survives, so no traversal and no absolute path.
+        assert_eq!(safe_attachment_name(Some("../../etc/passwd"), 1), "passwd");
+        assert_eq!(
+            safe_attachment_name(Some("..\\..\\windows\\x.dll"), 1),
+            "x.dll"
+        );
+        assert_eq!(safe_attachment_name(Some("/etc/passwd"), 1), "passwd");
+        // A dot-file keeps its leading dot: it stays inside the folder.
+        assert_eq!(safe_attachment_name(Some("../../.bashrc"), 1), ".bashrc");
+        // `.` and `..` name directories, not files.
+        assert_eq!(safe_attachment_name(Some(".."), 7), "attachment-7.bin");
+        assert_eq!(safe_attachment_name(Some("."), 7), "attachment-7.bin");
+    }
+
+    #[test]
+    fn safe_name_defuses_windows_traps() {
+        // NTFS alternate data stream hidden behind an innocuous name.
+        assert_eq!(
+            safe_attachment_name(Some("report.pdf:payload"), 1),
+            "report.pdf_payload"
+        );
+        // Device names reach the device, not a file — extension or not.
+        assert_eq!(safe_attachment_name(Some("CON"), 1), "_CON");
+        assert_eq!(safe_attachment_name(Some("lpt1.txt"), 1), "_lpt1.txt");
+        // …but only the exact names.
+        assert_eq!(safe_attachment_name(Some("console.log"), 1), "console.log");
+        // Windows strips these silently; do it here so the saved name is the
+        // name the user is told about.
+        assert_eq!(safe_attachment_name(Some("trailing. . "), 1), "trailing");
+        // Characters Windows reserves outright, and control characters.
+        assert_eq!(safe_attachment_name(Some("a*b?c|d.txt"), 1), "a_b_c_d.txt");
+        assert_eq!(safe_attachment_name(Some("a\0b\tc.txt"), 1), "a_b_c.txt");
+    }
+
+    #[test]
+    fn safe_name_falls_back_when_nothing_usable_is_left() {
+        assert_eq!(safe_attachment_name(None, 42), "attachment-42.bin");
+        assert_eq!(safe_attachment_name(Some(""), 42), "attachment-42.bin");
+        assert_eq!(safe_attachment_name(Some("   "), 42), "attachment-42.bin");
+        assert_eq!(safe_attachment_name(Some("dir/"), 42), "attachment-42.bin");
+    }
+
+    #[test]
+    fn numbered_filename_keeps_the_extension() {
+        assert_eq!(numbered_filename("photo.pdf", 1), "photo(1).pdf");
+        assert_eq!(numbered_filename("archive.tar.gz", 2), "archive.tar(2).gz");
+        assert_eq!(numbered_filename("noext", 3), "noext(3)");
+        assert_eq!(numbered_filename(".hidden", 4), ".hidden(4)");
+    }
+
+    #[test]
+    fn free_path_numbers_around_existing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(free_path(dir.path(), "a.txt"), dir.path().join("a.txt"));
+        std::fs::write(dir.path().join("a.txt"), b"x").unwrap();
+        std::fs::write(dir.path().join("a(1).txt"), b"x").unwrap();
+        assert_eq!(free_path(dir.path(), "a.txt"), dir.path().join("a(2).txt"));
+    }
 
     #[test]
     fn windows_three_slash_url_strips_leading_slash() {

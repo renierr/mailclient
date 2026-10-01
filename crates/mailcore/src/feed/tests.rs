@@ -129,6 +129,19 @@ fn feed_carries_attachment_metadata_without_bytes() {
         },
     )
     .unwrap();
+    msg_store::add_attachment(
+        &db,
+        id,
+        &NewAttachment {
+            filename: Some("../con".to_string()),
+            mime_type: None,
+            content_id: None,
+            size: 1,
+            data: None,
+            is_inline: false,
+        },
+    )
+    .unwrap();
     let row: serde_json::Value = serde_json::from_str(&message_json(&db, f, 71).unwrap()).unwrap();
     assert!(row["has_attachments"].as_bool().unwrap());
     assert_eq!(row["attachments"][0]["filename"], "doc.pdf");
@@ -138,6 +151,11 @@ fn feed_carries_attachment_metadata_without_bytes() {
     let only: serde_json::Value =
         serde_json::from_str(&attachments_json(&db, f, 71).unwrap()).unwrap();
     assert_eq!(only[0]["filename"], "doc.pdf");
+    // What to show and what a written file is called come from the core.
+    assert_eq!(only[0]["display_name"], "doc.pdf");
+    assert_eq!(only[0]["file_name"], "doc.pdf");
+    assert_eq!(only[1]["display_name"], "../con");
+    assert_eq!(only[1]["file_name"], "_con");
 }
 
 #[test]

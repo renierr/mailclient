@@ -34,26 +34,12 @@ still to promote") points here instead of keeping its own list.
 | Sender avatar letters and colour | `mailcore::badge` |
 | Where a reply goes, Reply-To differs | `mailcore::compose::reply_address` |
 | New, reply, reply-all and forward drafts | `mailcore::compose::answer` |
+| Attachment file names, Save, Save all, viewer copy | `mailcore::paths::safe_attachment_name`, `mailcore::store::messages::{save_attachment_to, save_all_attachments_to, write_attachment_copy}`; feed fields `display_name` / `file_name` |
 
 ## Open
 
-Ordered by priority. "Drift" says whether the two versions already behave
-differently.
-
-### 1. Attachment file names and saving
-
-- **Where:** `safe_filename` in `crates/mailapp/src/bridge/messages/files.rs`
-  and in `crates/mailffi/src/api/attachments.rs`; the temp path for "Open"
-  in `flutter/lib/src/ui/reader/attachment_card.dart`; the fallback name in
-  `MessageView.qml` and `flutter/lib/src/models/models.dart`.
-- **Drift: yes, and it is a safety issue.** Only the Qt copy handles
-  Windows device names, trailing dots/spaces and duplicate names. Flutter's
-  "Save all" overwrites same-named files, its "Open" temp path uses the raw
-  attachment name, and its file-URL handling does no percent-decoding.
-  Fallback names differ (`attachment-<id>.bin` vs `attachment`).
-- **Change:** `mailcore::paths::safe_attachment_name(name, id)`, a shared
-  save / save-all helper that numbers collisions, and a `display_name`
-  field in the attachment feed. Both adapters call these.
+Ordered by priority; numbers stay as first assigned, so a done item leaves
+a gap. "Drift" says whether the two versions already behave differently.
 
 ### 2. Account setup guesses, defaults and validation
 

@@ -4,7 +4,9 @@
 use mailcore::store::{accounts, folders, messages};
 use mailcore::sync::pool::checkout_session;
 
-use super::files::{file_url, safe_filename};
+use mailcore::paths::safe_attachment_name;
+
+use super::files::file_url;
 
 /// Make sure a message's file bytes are cached, downloading them now on
 /// explicit user request. Background sync stores names/sizes only, so this
@@ -68,7 +70,7 @@ pub(crate) fn draft_attachment_path(
         "{}-{}-{}",
         attachment.message_id,
         attachment.id,
-        safe_filename(attachment.filename.as_deref(), attachment.id)
+        safe_attachment_name(attachment.filename.as_deref(), attachment.id)
     );
     let dest = dir.join(name);
     let mut file = std::fs::OpenOptions::new()

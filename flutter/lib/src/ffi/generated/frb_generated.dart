@@ -82,7 +82,7 @@ class MailCoreApi
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 1191704307;
+  int get rustContentHash => 2090798539;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -346,6 +346,11 @@ abstract class MailCoreApiApi extends BaseApi {
   int crateApiMutateUndoGraceSecs();
 
   Future<String> crateApiMutateUndoMove({required String batch});
+
+  Future<String> crateApiAttachmentsWriteAttachmentCopy({
+    required PlatformInt64 attachmentId,
+    required String dir,
+  });
 }
 
 class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
@@ -2353,6 +2358,41 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
 
   TaskConstMeta get kCrateApiMutateUndoMoveConstMeta =>
       const TaskConstMeta(debugName: "undo_move", argNames: ["batch"]);
+
+  @override
+  Future<String> crateApiAttachmentsWriteAttachmentCopy({
+    required PlatformInt64 attachmentId,
+    required String dir,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_i_64(attachmentId, serializer);
+          sse_encode_String(dir, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 63,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiAttachmentsWriteAttachmentCopyConstMeta,
+        argValues: [attachmentId, dir],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiAttachmentsWriteAttachmentCopyConstMeta =>
+      const TaskConstMeta(
+        debugName: "write_attachment_copy",
+        argNames: ["attachmentId", "dir"],
+      );
 
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw) {

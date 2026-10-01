@@ -206,4 +206,19 @@ void main() {
     expect(d.quoteFirst, isTrue);
     expect(AnswerDraft.fromJson({}).quoteHtml, '');
   });
+
+  test('attachment names come from the core', () {
+    final a = AttachmentInfo.fromJson({
+      'id': 7,
+      'filename': '../con',
+      'display_name': '../con',
+      'file_name': '_con',
+    });
+    expect(a.filename, '../con');
+    expect(a.fileName, '_con');
+    // An older core without the fields still never yields an empty name.
+    final old = AttachmentInfo.fromJson({'id': 3});
+    expect(old.filename, 'attachment-3.bin');
+    expect(old.fileName, 'attachment-3.bin');
+  });
 }

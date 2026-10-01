@@ -406,6 +406,13 @@ class MailCore {
   Future<String> saveAttachmentTo(int attachmentId, String path) =>
       rust_attachments.saveAttachmentTo(attachmentId: attachmentId, path: path);
 
+  /// Write the copy a system viewer opens into [dir]; returns its path.
+  Future<String> writeAttachmentCopy(int attachmentId, String dir) =>
+      rust_attachments.writeAttachmentCopy(
+        attachmentId: attachmentId,
+        dir: dir,
+      );
+
   /// Write every non-inline attachment of a message into `dir`.
   /// Returns how many files were written.
   Future<int> saveAllAttachmentsTo(int folderId, int uid, String dir) async =>

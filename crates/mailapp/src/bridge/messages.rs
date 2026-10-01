@@ -14,9 +14,7 @@ mod bulk;
 mod files;
 
 pub(crate) use attachments::{draft_attachment_path, ensure_attachment_data};
-pub(crate) use files::{
-    dir_to_path, file_url, numbered_filename, resolve_save_path, safe_filename,
-};
+pub(crate) use files::file_url;
 
 /// Parse a bulk UID argument (JSON array of numbers from QML) into a
 /// deduplicated, sorted UID list. Caps at `MAX_MESSAGE_LIMIT` so one click
@@ -156,18 +154,8 @@ impl qobject::Bridge {
             let parent =
                 messages::get_attachment(db, attachment_id as i64).map_err(|e| e.to_string())?;
             ensure_attachment_data(db, parent.message_id, false).await?;
-            let a =
-                messages::get_attachment(db, attachment_id as i64).map_err(|e| e.to_string())?;
             let dir = std::env::temp_dir().join("mailclient-attachments");
-            std::fs::create_dir_all(&dir).map_err(|e| format!("cannot use temp folder: {e}"))?;
-            let name = format!(
-                "{}-{}-{}",
-                parent.message_id,
-                attachment_id,
-                safe_filename(a.filename.as_deref(), attachment_id as i64)
-            );
-            let dest = dir.join(name);
-            messages::save_attachment_to_path(db, attachment_id as i64, &dest)
+            let dest = messages::write_attachment_copy(db, attachment_id as i64, &dir)
                 .map_err(|e| e.to_string())?;
             // Reading bytes out of a message changes nothing the feeds
             // show, so the list keeps its scroll position and selection.
@@ -184,8 +172,7 @@ impl qobject::Bridge {
             let parent =
                 messages::get_attachment(db, attachment_id as i64).map_err(|e| e.to_string())?;
             ensure_attachment_data(db, parent.message_id, false).await?;
-            let dest = resolve_save_path(db, attachment_id as i64, &path)?;
-            messages::save_attachment_to_path(db, attachment_id as i64, &dest)
+            let dest = messages::save_attachment_to(db, attachment_id as i64, &path)
                 .map_err(|e| e.to_string())?;
             Ok((format!("Saved to {}", dest.display()), None))
         })
@@ -201,39 +188,8 @@ impl qobject::Bridge {
             let msg = messages::get_by_uid(db, folder_id, uid as u32)
                 .map_err(|_| "unknown message".to_string())?;
             ensure_attachment_data(db, msg.id, false).await?;
-            let files = messages::list_attachments(db, msg.id)
-                .map_err(|e| e.to_string())?
-                .into_iter()
-                .filter(|a| !a.is_inline)
-                .collect::<Vec<_>>();
-            if files.is_empty() {
-                return Err("no attachments to save".to_string());
-            }
-            let mut base = dir_to_path(&dir);
-            std::fs::create_dir_all(&base).map_err(|e| format!("cannot create folder: {e}"))?;
-            let mut saved = 0u32;
-            for a in &files {
-                let name = safe_filename(a.filename.as_deref(), a.id);
-                base.push(&name);
-                let mut n = 1;
-                while base.exists() {
-                    base.pop();
-                    base.push(numbered_filename(&name, n));
-                    n += 1;
-                }
-                match messages::save_attachment_to_path(db, a.id, &base) {
-                    Ok(_) => saved += 1,
-                    Err(e) => {
-                        log::warn!("save-all: {} failed: {e}", a.id);
-                        base.pop();
-                        continue;
-                    }
-                }
-                base.pop();
-            }
-            if saved == 0 {
-                return Err("could not save attachments".to_string());
-            }
+            let saved =
+                messages::save_all_attachments_to(db, msg.id, &dir).map_err(|e| e.to_string())?;
             Ok((format!("Saved {saved} attachment(s)"), None))
         })
     }

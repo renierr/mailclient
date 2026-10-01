@@ -54,103 +54,30 @@ pub fn download_attachments(account_id: i64, folder_id: i64, uid: u32) -> anyhow
     })
 }
 
-/// Write one cached attachment to `path` (desktop "Save as…").
+/// Write one cached attachment to `path` (desktop "Save as…"), a file or
+/// a folder (which gets the attachment's safe name). Returns where it went.
 ///
-/// A directory target appends the attachment's own filename. Fails rather
-/// than downloading when the bytes are not cached yet: a save dialog has
-/// already been through, and silently turning it into a network wait is the
-/// kind of surprise a progress event exists to avoid.
+/// Fails rather than downloading when the bytes are not cached yet: a save
+/// dialog has already been through, and silently turning it into a network
+/// wait is the kind of surprise a progress event exists to avoid. Naming and
+/// writing are `mailcore`'s, shared with the Qt adapter.
 pub fn save_attachment_to(attachment_id: i64, path: String) -> anyhow::Result<String> {
-    let db = shared_db()?;
-    let a = messages::get_attachment(db, attachment_id)?;
-    let mut dest = std::path::PathBuf::from(strip_file_url(&path));
-    if dest.is_dir() {
-        dest.push(safe_filename(a.filename.as_deref().unwrap_or_default()));
-    }
-    messages::save_attachment_to_path(db, attachment_id, &dest)?;
+    let dest = messages::save_attachment_to(shared_db()?, attachment_id, &path)?;
     Ok(dest.to_string_lossy().into_owned())
 }
 
-/// Write every non-inline attachment of a message into `dir`.
+/// Write every non-inline attachment of a message into `dir`, numbering
+/// names that are already taken. Returns how many were saved.
 pub fn save_all_attachments_to(folder_id: i64, uid: u32, dir: String) -> anyhow::Result<u64> {
     let db = shared_db()?;
     let m = messages::get_by_uid(db, folder_id, uid)?;
-    let dir = std::path::PathBuf::from(strip_file_url(&dir));
-    let mut saved = 0;
-    for a in messages::list_attachments(db, m.id)? {
-        // Inline parts are the images the reader already shows; writing them
-        // next to the real files is noise.
-        if a.is_inline {
-            continue;
-        }
-        let name = safe_filename(a.filename.as_deref().unwrap_or_default());
-        messages::save_attachment_to_path(db, a.id, &dir.join(name))?;
-        saved += 1;
-    }
-    Ok(saved)
+    Ok(messages::save_all_attachments_to(db, m.id, &dir)?.into())
 }
 
-/// Strip a `file://` prefix from a path handed over by a file picker.
-fn strip_file_url(path: &str) -> String {
-    let rest = match path.strip_prefix("file://") {
-        Some(r) => r,
-        None => return path.to_string(),
-    };
-    // Windows URLs are `file:///C:/…`; the leading slash is not part of the
-    // path there, but on Unix it is the root and must stay.
-    match rest.strip_prefix('/') {
-        Some(win) if win.chars().nth(1) == Some(':') => win.to_string(),
-        _ => rest.to_string(),
-    }
-}
-
-/// A filename safe to join onto a directory the user picked.
-///
-/// The name comes from the message, which is to say from a stranger: a part
-/// called `../../.bashrc` must land as a file in the chosen folder, not
-/// somewhere else entirely.
-fn safe_filename(name: &str) -> String {
-    let base = name
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or("attachment")
-        .trim();
-    let cleaned: String = base
-        .chars()
-        .map(|c| {
-            if c.is_control() || matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|') {
-                '_'
-            } else {
-                c
-            }
-        })
-        .collect();
-    match cleaned.trim_matches('.') {
-        "" => "attachment".to_string(),
-        s => s.to_string(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{safe_filename, strip_file_url};
-
-    #[test]
-    fn a_traversing_attachment_name_stays_inside_the_chosen_folder() {
-        assert_eq!(safe_filename("../../.bashrc"), "bashrc");
-        assert_eq!(safe_filename("C:\\windows\\system32\\evil.dll"), "evil.dll");
-        assert_eq!(safe_filename("   "), "attachment");
-        assert_eq!(safe_filename("report:2024?.pdf"), "report_2024_.pdf");
-        assert_eq!(safe_filename("normal name.pdf"), "normal name.pdf");
-    }
-
-    #[test]
-    fn file_urls_lose_their_scheme_without_losing_the_unix_root() {
-        assert_eq!(strip_file_url("file:///home/me/x.pdf"), "/home/me/x.pdf");
-        assert_eq!(
-            strip_file_url("file:///C:/Users/me/x.pdf"),
-            "C:/Users/me/x.pdf"
-        );
-        assert_eq!(strip_file_url("/plain/path"), "/plain/path");
-    }
+/// Write the copy a system viewer opens into `dir` (the app's temp or cache
+/// folder) under a name that cannot clash or escape it. Returns the path.
+pub fn write_attachment_copy(attachment_id: i64, dir: String) -> anyhow::Result<String> {
+    let dest =
+        messages::write_attachment_copy(shared_db()?, attachment_id, std::path::Path::new(&dir))?;
+    Ok(dest.to_string_lossy().into_owned())
 }

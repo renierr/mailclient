@@ -131,12 +131,14 @@ Future<void> openAttachment(
       );
       return;
     }
+    // The core names and writes the copy, as for Qt: the mail's own
+    // filename never becomes a path.
     final dir = await getTemporaryDirectory();
-    final file = File(
-      '${dir.path}/mailclient-${attachment.id}-${attachment.filename}',
+    final path = await MailCore.instance.writeAttachmentCopy(
+      attachment.id,
+      '${dir.path}${Platform.pathSeparator}mailclient-attachments',
     );
-    await file.writeAsBytes(bytes, flush: true);
-    final result = await OpenFilex.open(file.path);
+    final result = await OpenFilex.open(path);
     if (result.type != ResultType.done) {
       state.showStatus(
         'Could not open ${attachment.filename}: ${result.message}',
@@ -171,7 +173,7 @@ Future<void> saveAttachment(
     }
     final uri = await FilePicker.saveFile(
       dialogTitle: 'Save attachment',
-      fileName: attachment.filename,
+      fileName: attachment.fileName,
       bytes: Uint8List.fromList(bytes),
       mimeType: attachment.mimeType,
     );
