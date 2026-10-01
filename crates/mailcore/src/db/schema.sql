@@ -193,3 +193,15 @@ create table if not exists settings (
     key   text primary key,
     value text not null
 );
+
+-- -------------------------------------------------------- account settings
+-- Per-account overrides of app settings (see store::account_settings for
+-- the overridable keys). A missing row means "use the app-wide value".
+create table if not exists account_settings (
+    account_id integer not null references accounts (id) on delete cascade,
+    key        text not null,
+    value      text not null,
+    created_at text not null,
+    updated_at text not null,
+    primary key (account_id, key)
+);

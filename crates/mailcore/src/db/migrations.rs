@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 16;
+pub const SCHEMA_VERSION: u32 = 17;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -56,6 +56,16 @@ const SCHEMA_V15: &str = "create table if not exists pending_moves (
 );
 create index if not exists idx_pending_moves_batch on pending_moves (batch);
 create index if not exists idx_pending_moves_due on pending_moves (due_at);";
+
+/// v17 DDL: `account_settings` — per-account overrides of app settings.
+const SCHEMA_V17: &str = "create table if not exists account_settings (
+    account_id integer not null references accounts (id) on delete cascade,
+    key        text not null,
+    value      text not null,
+    created_at text not null,
+    updated_at text not null,
+    primary key (account_id, key)
+);";
 
 /// Run `ALTER TABLE ... ADD COLUMN` statements, tolerating columns that are
 /// already there.
@@ -207,6 +217,10 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         if let Err(e) = backfill_from_names(conn) {
             log::warn!("migration v16: sender-name backfill failed: {e}");
         }
+    }
+    if current < 17 {
+        // v17: `account_settings`, per-account overrides of sync settings.
+        conn.execute_batch(SCHEMA_V17)?;
     }
     if current != SCHEMA_VERSION {
         conn.execute(
@@ -629,5 +643,25 @@ b<c",
             sql.to_ascii_lowercase().contains("when old.subject"),
             "{sql}"
         );
+    }
+
+    #[test]
+    fn v17_migration_adds_account_settings() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_FULL).unwrap();
+        conn.execute(
+            "insert into schema_meta (key, value) values ('version', '16')",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch("drop table account_settings;").unwrap();
+
+        ensure_schema(&conn).unwrap();
+
+        conn.execute(
+            "select account_id, key, value, created_at, updated_at from account_settings",
+            [],
+        )
+        .unwrap();
     }
 }

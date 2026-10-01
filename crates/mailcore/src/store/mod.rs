@@ -2,6 +2,7 @@
 //! cross-table flows compose them via [`crate::db::Db`].
 
 pub mod account_form;
+pub mod account_settings;
 pub mod accounts;
 pub mod contacts;
 pub mod folders;

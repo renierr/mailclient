@@ -7,7 +7,7 @@ use crate::db::Db;
 use crate::error::{Result, StoreError};
 use crate::html::{is_inline_image_mime, MAX_INLINE_BYTES_PER_MESSAGE, MAX_INLINE_IMAGE_BYTES};
 use crate::models::{NewAttachment, NewMessage};
-use crate::store::{contacts, messages, settings};
+use crate::store::{account_settings, contacts, messages, settings};
 
 use super::types::{MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_BYTES};
 
@@ -244,8 +244,8 @@ fn addr_list(a: Option<&mail_parser::Address>) -> Vec<String> {
     out
 }
 
-pub(crate) fn collect_contacts_from_headers(db: &Db, raw_headers: Option<&str>) {
-    if !settings::get_bool(db, settings::COLLECT_SENT_CONTACTS).unwrap_or(true) {
+pub(crate) fn collect_contacts_from_headers(db: &Db, account_id: i64, raw_headers: Option<&str>) {
+    if !account_settings::get_bool(db, account_id, settings::COLLECT_SENT_CONTACTS) {
         return;
     }
     let Some(headers) = raw_headers else {

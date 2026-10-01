@@ -8,7 +8,9 @@
 //! what the UI shows is what the app will actually do with a stale or
 //! hand-edited row — `list_density = "tiny"` reads back as `comfortable`.
 
+use mailcore::store::account_settings;
 use mailcore::store::settings as s;
+use mailcore::sync::background::schedule;
 
 use crate::db::shared_db;
 
@@ -65,4 +67,34 @@ pub fn set_settings(values: std::collections::HashMap<String, String>) -> anyhow
 /// are only meaningful together, and `mailcore` normalizes the pair.
 pub fn set_sort(field: String, descending: bool) -> anyhow::Result<()> {
     Ok(s::set_sort(shared_db()?, &field, descending)?)
+}
+
+/// One account's settings as JSON: `overrides` holds only what the account
+/// sets itself, `effective` what applies to it for every overridable key.
+/// Both use the app-wide key names and string values (`"1"`/`"0"`, minutes).
+pub fn account_settings_json(account_id: i64) -> anyhow::Result<String> {
+    Ok(serde_json::to_string(&account_settings::view(
+        shared_db()?,
+        account_id,
+    )?)?)
+}
+
+/// Write several of one account's overrides at once: all apply or none do.
+/// An empty value inherits the app-wide setting again.
+pub fn set_account_settings(
+    account_id: i64,
+    values: std::collections::HashMap<String, String>,
+) -> anyhow::Result<()> {
+    let pairs: Vec<(String, String)> = values.into_iter().collect();
+    Ok(account_settings::set_overrides(
+        shared_db()?,
+        account_id,
+        &pairs,
+    )?)
+}
+
+/// What the Android host should run in the background, as JSON
+/// (`push`, `poll_minutes`, `poll_scheduler`).
+pub fn background_plan_json() -> anyhow::Result<String> {
+    Ok(serde_json::to_string(&schedule::plan(shared_db()?))?)
 }

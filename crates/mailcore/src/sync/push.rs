@@ -33,7 +33,7 @@ use crate::db::Db;
 use crate::error::{Result, StoreError};
 use crate::models::Account;
 use crate::store::accounts;
-use crate::sync::background::{self, BackgroundReport};
+use crate::sync::background::{self, schedule, BackgroundReport};
 use crate::sync::imap::{IdleEnd, ImapSync};
 
 /// Re-issue IDLE at least this often while the phone is awake. RFC 2177
@@ -70,8 +70,10 @@ pub struct PushMonitor {
 }
 
 impl PushMonitor {
-    /// Start watching every account in the database at `db_path`. Accounts
-    /// added later are picked up on the next keep-alive or network change.
+    /// Start watching every push account in the database at `db_path`
+    /// ([`schedule::push_account_ids`]). Accounts added, or switched to or
+    /// from push, later are picked up on the next keep-alive or network
+    /// change.
     pub fn start(db_path: PathBuf, listener: Arc<dyn PushListener>, online: bool) -> Result<Self> {
         let (signal, rx) = watch::channel(Signal {
             online,
@@ -130,7 +132,9 @@ struct Ctx {
     busy: Cell<usize>,
 }
 
-/// Keeps one task per account and re-reads the account list on every signal.
+/// Keeps one task per push account and re-reads the account list on every
+/// signal. An account that left push is dropped mid-IDLE: the server sees
+/// the connection close, which is all a LOGOUT would have told it.
 async fn supervise(
     db_path: PathBuf,
     listener: Arc<dyn PushListener>,
@@ -154,10 +158,17 @@ async fn supervise(
         if rx.borrow_and_update().stop {
             break;
         }
-        tasks.retain(|_, task| !task.is_finished());
-        for account in accounts::list(&ctx.db).unwrap_or_default() {
-            tasks.entry(account.id).or_insert_with(|| {
-                tokio::task::spawn_local(run_account(ctx.clone(), account.id, rx.clone()))
+        let wanted = schedule::push_account_ids(&ctx.db);
+        tasks.retain(|id, task| {
+            let keep = wanted.contains(id) && !task.is_finished();
+            if !keep {
+                task.abort();
+            }
+            keep
+        });
+        for id in wanted {
+            tasks.entry(id).or_insert_with(|| {
+                tokio::task::spawn_local(run_account(ctx.clone(), id, rx.clone()))
             });
         }
         if rx.changed().await.is_err() {

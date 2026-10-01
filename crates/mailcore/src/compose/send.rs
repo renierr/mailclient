@@ -12,7 +12,7 @@
 
 use crate::auth;
 use crate::models::{Account, FolderRole};
-use crate::store::{contacts, folders, messages, queue, settings};
+use crate::store::{account_settings, contacts, folders, messages, queue, settings};
 use crate::sync::imap::QUICK_SYNC_WINDOW;
 use crate::sync::pool::{checkout_session, job_account, resolve_account};
 use crate::sync::sender::{valid_mailboxes, SendFormat, SendPolicy, SmtpSender};
@@ -125,7 +125,7 @@ pub async fn deliver(
         sent.discard(db);
         return Err(format!("send failed: {e}"));
     }
-    if settings::get_bool(db, settings::COLLECT_SENT_CONTACTS).unwrap_or(true) {
+    if account_settings::get_bool(db, acc.id, settings::COLLECT_SENT_CONTACTS) {
         collect_recipients(db, &sent.to, &sent.cc, &sent.bcc);
     }
     on_accepted();

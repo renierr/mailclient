@@ -48,6 +48,14 @@ AppDialog {
     property string localSortField: "date"
     property bool localSortDesc: true
 
+    // Accounts & sync edits every account's defaults (-1) or one account's
+    // own values. Drafts map account id -> { key: value }, "" = default.
+    property int syncScopeId: -1
+    property var accountSaved: ({})
+    property var accountDrafts: ({})
+    // Bumped on every draft edit: bindings cannot see a var mutated in place.
+    property int draftRevision: 0
+
     // About view: live IMAP CAPABILITY list per account (refreshed on demand
     // over the pooled session; the JSON arrives via `job_finished`).
     property var capsAccounts: []
@@ -153,6 +161,63 @@ AppDialog {
         return [0, 5, 10, 15, 30, 60][idx] || 0;
     }
 
+    function syncLabels() {
+        return [qsTr("Manually"), qsTr("Every 5 minutes"), qsTr("Every 10 minutes"), qsTr("Every 15 minutes"), qsTr("Every 30 minutes"),
+                qsTr("Every hour")];
+    }
+
+    function onOffLabel(on) {
+        return on ? qsTr("on") : qsTr("off");
+    }
+
+    function syncScopeIndex() {
+        for (var i = 0; i < root.capsAccounts.length; i++) {
+            if (root.capsAccounts[i].id === root.syncScopeId)
+                return i + 1;
+        }
+        return 0;
+    }
+
+    // Show one account's settings (index 0 = every account's defaults),
+    // loading its overrides the first time.
+    function pickSyncScope(index) {
+        var id = index <= 0 ? -1 : root.capsAccounts[index - 1].id;
+        if (id >= 0 && root.accountSaved[id] === undefined) {
+            var view = FeedJson.parse(settingsBridge.account_settings_json(id), {});
+            var saved = view.overrides || {};
+            root.accountSaved[id] = saved;
+            root.accountDrafts[id] = Object.assign({}, saved);
+            root.draftRevision++;
+        }
+        root.syncScopeId = id;
+    }
+
+    function accountDraft(key) {
+        var d = root.draftRevision >= 0 ? root.accountDrafts[root.syncScopeId] : undefined;
+        return d ? (d[key] || "") : "";
+    }
+
+    function setAccountDraft(key, value) {
+        var d = root.accountDrafts[root.syncScopeId];
+        if (!d)
+            return;
+        d[key] = value;
+        root.draftRevision++;
+    }
+
+    // Write every account draft that changed; `""` or the first error.
+    function saveAccountDrafts() {
+        for (var id in root.accountDrafts) {
+            var writes = AccountOverrides.changes(root.accountDrafts[id], root.accountSaved[id]);
+            if (AccountOverrides.isEmpty(writes))
+                continue;
+            var err = settingsBridge.set_account_settings(parseInt(id, 10), JSON.stringify(writes));
+            if (err !== "")
+                return err;
+        }
+        return "";
+    }
+
     function indexOr(list, value, fallback) {
         var idx = list.indexOf(value);
         return idx >= 0 ? idx : fallback;
@@ -244,6 +309,10 @@ AppDialog {
         root.localSortField = root.backend ? root.backend.sort_field : "date";
         root.localSortDesc = root.backend ? root.backend.sort_descending : true;
         root.loadCapsAccounts();
+        root.syncScopeId = -1;
+        root.accountSaved = {};
+        root.accountDrafts = {};
+        root.draftRevision++;
         root.capsEmail = "";
         root.capsHost = "";
         root.serverCaps = [];
@@ -648,30 +717,82 @@ AppDialog {
                         text: qsTr("ACCOUNTS & SYNC")
                     }
 
-                    AppCheckBox {
-                        Layout.fillWidth: true
-                        checked: root.localSentCopy
-                        text: qsTr("Save a copy of sent mail in Sent")
-                        onToggled: root.localSentCopy = checked
-                    }
-                    AppCheckBox {
-                        Layout.fillWidth: true
-                        checked: root.localCollectContacts
-                        text: qsTr("Suggest recipients from sent mail")
-                        onToggled: root.localCollectContacts = checked
-                    }
-                    HintLabel {
-                        text: qsTr("Addresses you sent to are suggested while composing.")
-                    }
                     ChoiceRow {
-                        caption: qsTr("Check for new mail")
-                        model: [qsTr("Manually"), qsTr("Every 5 minutes"), qsTr("Every 10 minutes"), qsTr(
-                                "Every 15 minutes"), qsTr("Every 30 minutes"), qsTr("Every hour")]
-                        currentIndex: syncIndex(root.localSyncInterval)
-                        help: qsTr("Automatic checks only run while the app is idle, never mid-action.")
-                        onChosen: index => {
-                                      root.localSyncInterval = syncMins(index);
-                                  }
+                        visible: root.capsAccounts.length > 0
+                        caption: qsTr("Settings for")
+                        model: [qsTr("All accounts")].concat(root.capsAccountEmails())
+                        currentIndex: root.syncScopeIndex()
+                        help: root.syncScopeId < 0 ? qsTr("Accounts use these unless they set their own.") : ""
+                        onChosen: index => root.pickSyncScope(index)
+                    }
+
+                    // Every account's defaults.
+                    ColumnLayout {
+                        visible: root.syncScopeId < 0
+                        Layout.fillWidth: true
+                        spacing: Theme.sm
+
+                        AppCheckBox {
+                            Layout.fillWidth: true
+                            checked: root.localSentCopy
+                            text: qsTr("Save a copy of sent mail in Sent")
+                            onToggled: root.localSentCopy = checked
+                        }
+                        AppCheckBox {
+                            Layout.fillWidth: true
+                            checked: root.localCollectContacts
+                            text: qsTr("Suggest recipients from sent mail")
+                            onToggled: root.localCollectContacts = checked
+                        }
+                        HintLabel {
+                            text: qsTr("Addresses you sent to are suggested while composing.")
+                        }
+                        ChoiceRow {
+                            caption: qsTr("Check for new mail")
+                            model: root.syncLabels()
+                            currentIndex: syncIndex(root.localSyncInterval)
+                            help: qsTr("Automatic checks only run while the app is idle, never mid-action.")
+                            onChosen: index => {
+                                          root.localSyncInterval = syncMins(index);
+                                      }
+                        }
+                    }
+
+                    // One account's own values. Rebuilt per account (the
+                    // model is its id), so no combo keeps another's index.
+                    Repeater {
+                        model: root.syncScopeId >= 0 ? [root.syncScopeId] : []
+                        delegate: ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.sm
+
+                            ChoiceRow {
+                                caption: qsTr("Check for new mail")
+                                model: [qsTr("Default (%1)").arg(root.syncLabels()[syncIndex(
+                                                                                       root.localSyncInterval)])].concat(
+                                    root.syncLabels())
+                                currentIndex: AccountOverrides.intervalIndex(root.accountDraft("sync_interval_minutes"))
+                                help: qsTr("Automatic checks only run while the app is idle, never mid-action.")
+                                onChosen: index => root.setAccountDraft("sync_interval_minutes",
+                                                                        AccountOverrides.intervalValue(index))
+                            }
+                            ChoiceRow {
+                                caption: qsTr("Save a copy of sent mail in Sent")
+                                model: [qsTr("Default (%1)").arg(root.onOffLabel(root.localSentCopy)), qsTr("On"), qsTr(
+                                        "Off")]
+                                currentIndex: AccountOverrides.flagIndex(root.accountDraft("sent_copy_enabled"))
+                                onChosen: index => root.setAccountDraft("sent_copy_enabled", AccountOverrides.flagValue(
+                                                                            index))
+                            }
+                            ChoiceRow {
+                                caption: qsTr("Suggest recipients from sent mail")
+                                model: [qsTr("Default (%1)").arg(root.onOffLabel(root.localCollectContacts)), qsTr("On"),
+                                    qsTr("Off")]
+                                currentIndex: AccountOverrides.flagIndex(root.accountDraft("collect_sent_contacts"))
+                                onChosen: index => root.setAccountDraft("collect_sent_contacts",
+                                                                        AccountOverrides.flagValue(index))
+                            }
+                        }
                     }
                 }
             }
@@ -824,10 +945,12 @@ AppDialog {
         settingsBridge.reply_below_quote = root.localReplyBelow;
         settingsBridge.request_mdn = root.localRequestMdn;
         var saveError = settingsBridge.save();
+        var accountError = root.saveAccountDrafts();
         // Sort lives on Bridge (shared with the list header menu).
         if (root.backend && root.backend.set_sort && (root.localSortField !== root.backend.sort_field
                                                       || root.localSortDesc !== root.backend.sort_descending))
             root.backend.set_sort(root.localSortField, root.localSortDesc);
-        root.statusMessage(saveError !== "" ? saveError : qsTr("Settings saved"));
+        root.statusMessage(saveError !== "" ? saveError : (accountError !== "" ? accountError : qsTr(
+                                                                                     "Settings saved")));
     }
 }

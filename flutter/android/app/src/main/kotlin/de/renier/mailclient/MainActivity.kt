@@ -35,6 +35,7 @@ class MainActivity : FlutterActivity() {
                 "schedule" -> {
                     MailSchedule.apply(
                         this,
+                        call.argument<Boolean>("push") ?: false,
                         call.argument<String>("mode") ?: "workmanager",
                         call.argument<Int>("minutes") ?: 0,
                     )

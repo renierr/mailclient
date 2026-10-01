@@ -14,7 +14,7 @@ use lettre::{SmtpTransport, Transport};
 use crate::db::Db;
 use crate::error::{Result, StoreError};
 use crate::models::{Account, FolderRole};
-use crate::store::{accounts, contacts, folders, queue, settings};
+use crate::store::{account_settings, accounts, contacts, folders, queue, settings};
 use crate::sync::imap::ImapSync;
 use crate::sync::traits::MailSender;
 
@@ -221,7 +221,7 @@ impl SmtpSender {
             let _ = queue::discard_mime(db, queue_id);
             return Err(e);
         }
-        if settings::get_bool(db, settings::COLLECT_SENT_CONTACTS).unwrap_or(true) {
+        if account_settings::get_bool(db, account_id, settings::COLLECT_SENT_CONTACTS) {
             let mut all_rcpts = valid_mailboxes(req.to);
             all_rcpts.extend(valid_mailboxes(req.cc));
             all_rcpts.extend(valid_mailboxes(req.bcc));
@@ -313,7 +313,7 @@ impl SmtpSender {
             match self.submit_claimed(db, row.id, password) {
                 Ok(()) => {
                     sent += 1;
-                    if settings::get_bool(db, settings::COLLECT_SENT_CONTACTS).unwrap_or(true) {
+                    if account_settings::get_bool(db, account_id, settings::COLLECT_SENT_CONTACTS) {
                         // Envelope only: the display names lived in the
                         // composer form, which is long gone by now.
                         for addr in &row.envelope_to {
@@ -364,17 +364,9 @@ impl SmtpSender {
     /// Resolved before any connection is touched, so a disabled copy or a
     /// missing Sent folder costs nothing.
     fn sent_copy_target(db: &Db, account_id: i64) -> Result<Option<String>> {
-        match settings::get_bool(db, settings::SENT_COPY_ENABLED) {
-            Ok(true) => {}
-            Ok(false) => {
-                log::info!("smtp: sent-copy disabled by setting");
-                return Ok(None);
-            }
-            Err(e) => {
-                return Err(StoreError::InvalidInput(format!(
-                    "cannot read sent-copy setting, skipping copy: {e}"
-                )));
-            }
+        if !account_settings::get_bool(db, account_id, settings::SENT_COPY_ENABLED) {
+            log::info!("smtp: sent-copy disabled by setting");
+            return Ok(None);
         }
         folders::list_by_account(db, account_id)
             .map_err(|e| {

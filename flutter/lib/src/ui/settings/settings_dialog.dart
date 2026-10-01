@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../ffi/mail_core.dart';
+import '../../models/account_settings.dart';
 import '../../models/models.dart';
 import '../../models/settings.dart';
 import '../../state/mail_state.dart';
@@ -11,7 +12,9 @@ import '../../sync/background_alarm.dart';
 import '../../sync/background_power.dart';
 import '../../sync/background_sync.dart';
 import '../dialogs/mail_dialog.dart';
+import 'account_sync_settings.dart';
 import 'background_check_status.dart';
+import 'setting_choice.dart';
 
 /// All preferences, Roundcube-style: sections on the left, the form on the
 /// right. Everything edits a local copy; Save writes it through, Cancel
@@ -44,6 +47,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
   bool _saving = false;
   String? _error;
   int? _capsAccountId;
+
+  /// Accounts & sync shows every account's defaults (-1) or one account.
+  int _syncScope = -1;
+  final Map<int, AccountSettings> _accountSaved = {};
+  final Map<int, Map<String, String>> _accountDrafts = {};
 
   @override
   void initState() {
@@ -288,7 +296,70 @@ class _SettingsDialogState extends State<SettingsDialog> {
     ],
   );
 
-  Widget _sync() => Column(
+  // A Builder for the same reason as About: it selects the account list.
+  Widget _sync() => Builder(builder: _syncSection);
+
+  Widget _syncSection(BuildContext context) {
+    final accounts = context.select<MailState, List<Account>>(
+      (s) => s.accounts,
+    );
+    final scope = accounts.any((a) => a.id == _syncScope) ? _syncScope : -1;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (accounts.isNotEmpty)
+          _choice<int>(
+            'Settings for',
+            scope,
+            [-1, for (final a in accounts) a.id],
+            (id) => id < 0
+                ? 'All accounts'
+                : accounts.firstWhere((a) => a.id == id).email,
+            _pickSyncScope,
+            help: scope < 0
+                ? 'Accounts use these unless they set their own.'
+                : null,
+          ),
+        if (scope < 0) _globalSync() else _accountSync(scope),
+      ],
+    );
+  }
+
+  Widget _accountSync(int accountId) {
+    final draft = _accountDrafts[accountId];
+    if (draft == null) {
+      return const Padding(
+        padding: EdgeInsets.all(16),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    return AccountSyncSettings(
+      defaults: _draft,
+      overrides: draft,
+      showPush: Platform.isAndroid,
+      onChanged: (key, value) => setState(() => draft[key] = value),
+    );
+  }
+
+  /// Show one account's settings (or every account's defaults for -1),
+  /// loading its overrides the first time.
+  Future<void> _pickSyncScope(int accountId) async {
+    setState(() => _syncScope = accountId);
+    if (accountId < 0 || _accountSaved.containsKey(accountId)) return;
+    final state = context.read<MailState>();
+    try {
+      final loaded = await state.accountSettings(accountId);
+      if (!mounted) return;
+      setState(() {
+        _accountSaved[accountId] = loaded;
+        _accountDrafts[accountId] = Map.of(loaded.overrides);
+      });
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+    }
+  }
+
+  Widget _globalSync() => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       _switch(
@@ -328,7 +399,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
               setState(() => _draft = _draft.copyWith(backgroundScheduler: v)),
           help:
               'Push: the server announces new mail as it arrives. The '
-              'on-time alarm checks at the interval, in standby too.',
+              'on-time alarm checks at the interval, in standby too. '
+              'Each account can choose push or interval checks itself.',
         ),
       _switch(
         'Show notifications for new mail',
@@ -483,6 +555,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       _error = null;
     });
     try {
+      final planBefore = await state.backgroundPlan();
       final before = state.settings;
       final now = _values(_draft);
       final old = _values(before);
@@ -500,22 +573,29 @@ class _SettingsDialogState extends State<SettingsDialog> {
         // Sort is its own call: the two keys only make sense together.
         await state.setSort(d.sortField, d.sortDescending);
       }
+      for (final e in _accountDrafts.entries) {
+        final saved = _accountSaved[e.key]?.overrides ?? const {};
+        await state.setAccountSettings(e.key, {
+          for (final key in AccountSettingKeys.all)
+            if ((e.value[key] ?? '') != (saved[key] ?? ''))
+              key: e.value[key] ?? '',
+        });
+      }
+      final plan = await state.backgroundPlan();
       // Background checks just got enabled: ask for the notification
       // permission now, not on some later cold start.
       // Then the battery exemption, without which Doze postpones the
       // worker by hours while the phone sleeps.
-      if (d.syncIntervalMinutes > 0 && before.syncIntervalMinutes <= 0) {
+      if (plan.any && !planBefore.any) {
         await requestNotificationPermission();
         final power = await backgroundPowerStatus();
         if (power != null && !power.unrestricted) {
           await requestUnrestrictedBackground();
         }
       }
-      // The alarm scheduler and push's keep-alive need the exact-alarm
-      // grant on Android 14+; without it they still fire, just not exact.
-      if (d.backgroundScheduler != schedulerWorkmanager &&
-          d.backgroundScheduler != before.backgroundScheduler &&
-          d.syncIntervalMinutes > 0) {
+      // The alarm poller and push's keep-alive need the exact-alarm grant
+      // on Android 14+; without it they still fire, just not exact.
+      if (_needsExactAlarm(plan) && !_needsExactAlarm(planBefore)) {
         if (!await exactAlarmPermitted()) {
           await requestExactAlarm();
         }
@@ -558,6 +638,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
 
   static String _yn(bool v) => v ? '1' : '0';
 
+  static bool _needsExactAlarm(BackgroundPlan p) =>
+      p.push || (p.pollMinutes > 0 && p.pollScheduler == schedulerAlarm);
+
   static String _label(_Section s) => switch (s) {
     _Section.interface => 'Interface',
     _Section.mailbox => 'Mailbox',
@@ -576,13 +659,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _Section.about => Icons.info_outline,
   };
 
-  /// Secondary hint under a setting: small and muted, so the labels carry
-  /// the page and the hints stay out of the way.
-  Widget _help(String text) => Text(
-    text,
-    style: Theme.of(context).textTheme.bodySmall
-        ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
-  );
+  Widget _help(String text) => SettingChoice.hint(context, text);
 
   Widget _switch(
     String title,
@@ -607,54 +684,15 @@ class _SettingsDialogState extends State<SettingsDialog> {
     ValueChanged<T> onChanged, {
     String? help,
     bool enabled = true,
-  }) {
-    DropdownButton<T> control({required bool expanded}) => DropdownButton<T>(
-      value: options.contains(value) ? value : options.first,
-      isExpanded: expanded,
-      items: [
-        for (final o in options)
-          DropdownMenuItem(
-            value: o,
-            child: Text(label(o), overflow: TextOverflow.ellipsis),
-          ),
-      ],
-      onChanged: enabled ? (v) => v != null ? onChanged(v) : null : null,
-    );
-    final labels = Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [Text(title), if (help != null) _help(help)],
-    );
-    // Label above the control on narrow/zoomed layouts: label-beside-control
-    // rows squeeze the dropdown (or the label) to zero there. Wide screens
-    // keep the compact side-by-side form.
-    if (MailDialog.isNarrow(context)) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            labels,
-            const SizedBox(height: 2),
-            // Expanded: a long option label ellipsizes instead of
-            // overflowing the dropdown at 360px / large text.
-            control(expanded: true),
-          ],
-        ),
-      );
-    }
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          Expanded(child: labels),
-          const SizedBox(width: 8),
-          // Flexible + isExpanded: the button caps at the remaining width and
-          // ellipsizes instead of overflowing the row on narrow dialogs.
-          Flexible(child: control(expanded: true)),
-        ],
-      ),
-    );
-  }
+  }) => SettingChoice<T>(
+    title: title,
+    value: value,
+    options: options,
+    label: label,
+    onChanged: onChanged,
+    help: help,
+    enabled: enabled,
+  );
 
   /// Section selector for pages too narrow or short for the rail.
   Widget _sectionDropdown() {

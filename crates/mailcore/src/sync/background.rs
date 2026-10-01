@@ -12,6 +12,7 @@
 //! what the notification should do.
 
 pub mod notify;
+pub mod schedule;
 
 use std::path::Path;
 
@@ -22,7 +23,7 @@ use crate::db::Db;
 use crate::models::Account;
 use crate::store::settings;
 use crate::sync::headless::{
-    self, acquire_sync_lock, sync_account, sync_all_accounts, SyncLock, SyncScope,
+    self, acquire_sync_lock, sync_account, sync_accounts, SyncLock, SyncScope,
 };
 use crate::sync::imap::ImapSync;
 
@@ -229,8 +230,9 @@ pub fn record_outcome(db: &Db, started_at: &str, outcome: &str) {
     });
 }
 
-/// One background tick: lock, sync every account's inbox over fresh
-/// connections, and report mail that arrived since the previous tick.
+/// One background tick: lock, sync the inbox of every polled account that
+/// is due ([`schedule::due_accounts`]) over fresh connections, and report
+/// mail that arrived since the previous tick.
 /// Every tick, skipped or not, leaves a [`LastRun`] tagged with `trigger`.
 ///
 /// The lock turns overlap with a foreground sync (or a second worker) into
@@ -266,14 +268,19 @@ async fn background_tick(db: &Db, db_path: &Path) -> BackgroundReport {
         }
     };
     // NB: `skipped` stays false here — losing the lock returns above.
-    let report = sync_all_accounts(db, SyncScope::InboxOnly).await;
+    let started = Utc::now();
+    let due = schedule::due_accounts(db, started);
+    let report = sync_accounts(db, &due, SyncScope::InboxOnly).await;
+    for result in report.accounts.iter().filter(|r| r.errors.is_empty()) {
+        schedule::mark_checked(db, result.account_id, started);
+    }
     let (new, marks) = collect_new_mail(db);
     BackgroundReport {
         skipped: false,
         new,
         marks,
         pending: collect_pending(db),
-        total_unread: report.total_unread,
+        total_unread: cached_total_unread(db),
         errors: report.errors,
         run: String::new(),
     }

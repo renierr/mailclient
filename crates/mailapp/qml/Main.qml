@@ -825,12 +825,17 @@ ApplicationWindow {
         onTriggered: root.consumePendingOpen()
     }
 
+    // The open account's check interval: its own, or the app-wide default.
+    // Re-read on account switch and after Settings saves (the revision).
+    property int syncSettingsRevision: 0
+    readonly property int autoSyncMinutes: root.syncSettingsRevision >= 0 && backend.current_account_id >= 0 ? appSettings.sync_interval_for(backend.current_account_id) : 0
+
     // Automatic mail check: only while idle (never mid-action), manual-only
     // when the interval is 0. Bound to the setting, so Save applies it live.
     Timer {
         id: autoSyncTimer
-        interval: Math.max(1, appSettings.sync_interval_minutes) * 60000
-        running: appSettings.sync_interval_minutes > 0
+        interval: Math.max(1, root.autoSyncMinutes) * 60000
+        running: root.autoSyncMinutes > 0
         repeat: true
         onTriggered: {
             if (!root.busy && backend.account_count > 0)
@@ -1610,6 +1615,7 @@ ApplicationWindow {
             // The image setting changes what the feed sanitizes to, so the
             // open message must re-render from a fresh feed.
             reloadMessages();
+            root.syncSettingsRevision++;
             root.statusText = text;
         }
     }

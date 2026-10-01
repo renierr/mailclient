@@ -18,7 +18,6 @@ use jni::objects::{JClass, JObject, JString};
 use jni::refs::Global;
 use jni::vm::JavaVM;
 use jni::{jni_sig, jni_str, Env, EnvUnowned, JValue};
-use mailcore::store::settings;
 use mailcore::sync::background::{self, notify, BackgroundReport, SeenMark};
 use mailcore::sync::push::{PushListener, PushMonitor};
 use serde::Deserialize;
@@ -123,8 +122,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_plan<'caller>(
                 Some(string(env, &shown)?)
             };
             let db = crate::db::shared_db()?;
-            let alerts_on = settings::get_bool(db, settings::NOTIFICATIONS_ENABLED).unwrap_or(true);
-            let plan = notify::plan(&report, alerts_on, permitted, foreground, shown.as_deref());
+            let plan = notify::plan_for(db, &report, permitted, foreground, shown.as_deref());
             Ok(env.new_string(serde_json::to_string(&plan)?)?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()

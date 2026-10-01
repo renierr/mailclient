@@ -153,8 +153,17 @@ The renderer depends on the platform:
 
 Three schedulers, chosen in Settings → Accounts & sync and stored in the
 shared `background_scheduler` Rust setting (default `workmanager`, which Qt
-never reads or writes). Exactly one runs at a time (`MailSchedule.kt`); an
-interval of Manually stops all of them.
+never reads or writes). Every account can override the interval and
+whether it uses push (`mailcore::store::account_settings`), so the core
+plans what runs (`sync::background::schedule::plan`): the push service
+for the push accounts, and one poller — the alarm when the app-wide method
+is `alarm`, otherwise WorkManager — ticking at the shortest interval among
+the rest. Each tick only syncs the accounts that are due, so a 60-minute
+account is not checked at a 15-minute one's cadence. `MailSchedule.kt`
+starts what the plan names and stops the others; with every account on
+Manually nothing runs. Per-account push is the way out for servers that
+send IDLE heartbeats (`* OK Still here`) every few minutes: each one wakes
+the radio and CPU, so such an account is cheaper polled.
 
 - **Battery-saving (WorkManager, default).** A periodic worker, deferrable
   by design: in Doze it only runs in maintenance windows, so notifications
@@ -172,7 +181,9 @@ interval of Manually stops all of them.
   account syncs its inbox over the same session — no reconnect, no TLS
   handshake — and the notification goes out within seconds. Between
   arrivals the CPU sleeps: the service holds a wake lock only while the
-  monitor reports busy. Tokio's timers stand still in suspend, so a
+  monitor reports busy. Only accounts that use push get a connection; an
+  account switched away from push is dropped on the next keep-alive or
+  settings change. Tokio's timers stand still in suspend, so a
   keep-alive alarm (`MailPush.kt`, every 15 minutes) re-issues each IDLE,
   keeping the connection and the carrier's NAT mapping alive, retries
   accounts that are backing off, and restarts the service if Android

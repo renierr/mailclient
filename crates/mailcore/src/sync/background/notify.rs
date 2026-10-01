@@ -6,9 +6,13 @@
 //! then commits the marks — every scheduler (worker, alarm, push) shares
 //! this, so their notifications cannot drift apart.
 
+use std::collections::HashMap;
+
 use serde::Serialize;
 
 use super::{BackgroundReport, NewMail, SeenMark};
+use crate::db::Db;
+use crate::store::{account_settings, settings};
 
 /// Payload prefix for "open this message" taps: `mail:<account>:<folder>:<uid>`.
 pub const OPEN_PAYLOAD_PREFIX: &str = "mail:";
@@ -137,6 +141,32 @@ pub fn plan(
         run: report.run.clone(),
         marks: report.marks.clone(),
     }
+}
+
+/// [`plan`] under each account's own "Show notifications" setting
+/// (`store::account_settings`): mail of muted accounts stays out of the
+/// notification, and new mail only from muted accounts plans as alerts off.
+/// The marks still cover every account, so muted mail never alerts later.
+pub fn plan_for(
+    db: &Db,
+    report: &BackgroundReport,
+    permitted: bool,
+    foreground: bool,
+    shown: Option<&str>,
+) -> NotificationPlan {
+    let mut alerts: HashMap<i64, bool> = HashMap::new();
+    let mut audible = |m: &NewMail| {
+        *alerts.entry(m.account_id).or_insert_with(|| {
+            account_settings::get_bool(db, m.account_id, settings::NOTIFICATIONS_ENABLED)
+        })
+    };
+    let mut heard = report.clone();
+    heard.new.retain(&mut audible);
+    heard.pending.retain(&mut audible);
+    if heard.new.is_empty() && !report.new.is_empty() {
+        return plan(report, false, permitted, foreground, shown);
+    }
+    plan(&heard, true, permitted, foreground, shown)
 }
 
 /// The alert decision. `wanted` is the signature of what the notification
@@ -364,5 +394,41 @@ mod tests {
         );
         assert_eq!(p.action, NotifyAction::Clear);
         assert!(p.payload.is_empty());
+    }
+
+    #[test]
+    fn muted_accounts_stay_out_of_the_notification() {
+        let db = Db::open_in_memory().unwrap();
+        let loud = crate::store::accounts::create_for_test(&db, "a@example.com");
+        let muted = crate::store::accounts::create_for_test(&db, "b@example.org");
+        account_settings::set_overrides(
+            &db,
+            muted,
+            &[(settings::NOTIFICATIONS_ENABLED.to_string(), "0".to_string())],
+        )
+        .unwrap();
+        let from = |account_id, uid| NewMail {
+            account_id,
+            ..mail(uid, "c@example.org")
+        };
+        let both = vec![from(loud, 1), from(muted, 2)];
+        let report = BackgroundReport {
+            new: both.clone(),
+            pending: both,
+            ..Default::default()
+        };
+        let p = plan_for(&db, &report, true, false, None);
+        assert_eq!(p.action, NotifyAction::Alert);
+        assert_eq!(p.count, 1);
+        assert_eq!(p.payload, open_payload(&from(loud, 1)));
+
+        let only_muted = BackgroundReport {
+            new: vec![from(muted, 3)],
+            marks: vec![SeenMark::default()],
+            ..Default::default()
+        };
+        let p = plan_for(&db, &only_muted, true, false, None);
+        assert_eq!(p.action, NotifyAction::AlertsOff);
+        assert_eq!(p.marks.len(), 1, "muted mail is still marked seen");
     }
 }

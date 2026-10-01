@@ -43,7 +43,7 @@ class _MailAppState extends State<MailApp> with WidgetsBindingObserver {
     if (!mounted) return;
     await clearMailNotification();
     await _markSeen();
-    if (_state.settings.syncIntervalMinutes > 0) {
+    if ((await _state.backgroundPlan()).any) {
       await requestNotificationPermission();
     }
     await listenForBackgroundEvents(

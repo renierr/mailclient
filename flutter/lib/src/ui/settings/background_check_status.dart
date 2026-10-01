@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../ffi/mail_core.dart';
+import '../../models/account_settings.dart';
 import '../../sync/background_alarm.dart';
 import '../../sync/background_power.dart';
 
@@ -19,7 +20,11 @@ class _BackgroundCheckStatusState extends State<BackgroundCheckStatus>
     with WidgetsBindingObserver {
   PowerStatus? _power;
   List<Map<String, dynamic>> _runs = const [];
-  String _scheduler = schedulerWorkmanager;
+  BackgroundPlan _plan = const BackgroundPlan(
+    push: false,
+    pollMinutes: 0,
+    pollScheduler: schedulerWorkmanager,
+  );
   bool _exactAlarm = true;
   bool _loaded = false;
 
@@ -44,11 +49,11 @@ class _BackgroundCheckStatusState extends State<BackgroundCheckStatus>
   Future<void> _load() async {
     final power = await backgroundPowerStatus();
     var runs = const <Map<String, dynamic>>[];
-    var scheduler = schedulerWorkmanager;
+    var plan = _plan;
     var exactAlarm = true;
     try {
       runs = await MailCore.instance.backgroundRunHistory();
-      scheduler = (await MailCore.instance.settings()).backgroundScheduler;
+      plan = await MailCore.instance.backgroundPlan();
       exactAlarm = await exactAlarmPermitted();
     } catch (_) {
       runs = const [];
@@ -57,11 +62,14 @@ class _BackgroundCheckStatusState extends State<BackgroundCheckStatus>
     setState(() {
       _power = power;
       _runs = runs;
-      _scheduler = scheduler;
+      _plan = plan;
       _exactAlarm = exactAlarm;
       _loaded = true;
     });
   }
+
+  bool get _polledByAlarm =>
+      _plan.pollMinutes > 0 && _plan.pollScheduler == schedulerAlarm;
 
   @override
   Widget build(BuildContext context) {
@@ -76,36 +84,42 @@ class _BackgroundCheckStatusState extends State<BackgroundCheckStatus>
       children: [
         Text('Background checks', style: theme.textTheme.titleSmall),
         const SizedBox(height: 8),
-        _line(
-          context,
-          switch (_scheduler) {
-            schedulerAlarm => Icons.alarm_outlined,
-            schedulerPush => Icons.bolt_outlined,
-            _ => Icons.battery_saver_outlined,
-          },
-          switch (_scheduler) {
-            schedulerAlarm => 'On-time alarm: checks fire in standby too.',
-            schedulerPush =>
-              'Push: the server announces new mail as it arrives. The '
-                  '"Mail monitor" notification Android requires for it can '
-                  'be turned off in the system notification settings.',
-            _ =>
-              'Battery-saving worker: standby may delay checks until '
-                  'the phone is unlocked.',
-          },
-        ),
-        if (_scheduler != schedulerWorkmanager && !_exactAlarm)
+        if (!_plan.any)
+          _line(
+            context,
+            Icons.sync_disabled_outlined,
+            'Every account checks manually: nothing runs in the background.',
+          ),
+        if (_plan.push)
+          _line(
+            context,
+            Icons.bolt_outlined,
+            'Push: the server announces new mail as it arrives. The '
+            '"Mail monitor" notification Android requires for it can '
+            'be turned off in the system notification settings.',
+          ),
+        if (_plan.pollMinutes > 0)
+          _line(
+            context,
+            _polledByAlarm
+                ? Icons.alarm_outlined
+                : Icons.battery_saver_outlined,
+            _polledByAlarm
+                ? 'On-time alarm: checks fire in standby too.'
+                : 'Battery-saving worker: standby may delay checks until '
+                      'the phone is unlocked.',
+          ),
+        if ((_plan.push || _polledByAlarm) && !_exactAlarm) ...[
           _line(
             context,
             Icons.notification_important_outlined,
-            _scheduler == schedulerPush
+            _plan.push
                 ? 'Exact alarms are not allowed: in standby the push '
                       'keep-alive may run late and connections drop.'
                 : 'Exact alarms are not allowed: the alarm still fires in '
                       'standby, just not at the exact minute.',
             error: true,
           ),
-        if (_scheduler != schedulerWorkmanager && !_exactAlarm)
           Padding(
             padding: const EdgeInsets.only(top: 4, bottom: 4),
             child: FilledButton.tonalIcon(
@@ -114,6 +128,7 @@ class _BackgroundCheckStatusState extends State<BackgroundCheckStatus>
               label: const Text('Allow exact alarms'),
             ),
           ),
+        ],
         if (power != null)
           _line(
             context,

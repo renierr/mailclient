@@ -391,6 +391,21 @@ pub mod qobject {
         /// Persist current properties to the settings store; `""` or the error.
         #[qinvokable]
         fn save(self: Pin<&mut Self>) -> QString;
+
+        /// One account's settings as JSON: `overrides` (what it sets itself)
+        /// and `effective` (what applies), `{}` on error.
+        #[qinvokable]
+        fn account_settings_json(&self, account_id: i64) -> QString;
+
+        /// Write one account's overrides from a JSON object of key to string
+        /// value (`""` inherits the app-wide value); `""` or the error.
+        #[qinvokable]
+        fn set_account_settings(&self, account_id: i64, json: &QString) -> QString;
+
+        /// The automatic check interval that applies to an account (minutes,
+        /// 0 = manually).
+        #[qinvokable]
+        fn sync_interval_for(&self, account_id: i64) -> i32;
     }
 
     impl cxx_qt::Threading for Bridge {}

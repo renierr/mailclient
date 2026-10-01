@@ -2,10 +2,45 @@ use std::pin::Pin;
 
 use cxx_qt_lib::QString;
 
+use mailcore::store::account_settings;
+
 use crate::bridge::qobject;
 use crate::bridge::qstring;
 
 impl qobject::SettingsBridge {
+    pub fn account_settings_json(&self, account_id: i64) -> QString {
+        let json = Self::shared_db()
+            .and_then(|db| {
+                account_settings::view(db, account_id)
+                    .map_err(|e| log::warn!("settings: account {account_id}: {e}"))
+                    .ok()
+            })
+            .and_then(|view| serde_json::to_string(&view).ok());
+        qstring(json.as_deref().unwrap_or("{}"))
+    }
+
+    pub fn set_account_settings(&self, account_id: i64, json: &QString) -> QString {
+        let Some(db) = Self::shared_db() else {
+            return qstring("cannot open the database");
+        };
+        let values: std::collections::BTreeMap<String, String> =
+            match serde_json::from_str(&json.to_string()) {
+                Ok(values) => values,
+                Err(e) => return qstring(&format!("account settings: {e}")),
+            };
+        let pairs: Vec<(String, String)> = values.into_iter().collect();
+        match account_settings::set_overrides(db, account_id, &pairs) {
+            Ok(()) => qstring(""),
+            Err(e) => qstring(&e.to_string()),
+        }
+    }
+
+    pub fn sync_interval_for(&self, account_id: i64) -> i32 {
+        Self::shared_db().map_or(0, |db| {
+            account_settings::sync_interval(db, account_id) as i32
+        })
+    }
+
     fn shared_db() -> Option<&'static mailcore::Db> {
         crate::bridge::shared_db()
             .map_err(|e| {

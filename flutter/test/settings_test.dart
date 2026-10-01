@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mailclient/src/models/account_settings.dart';
 import 'package:mailclient/src/models/settings.dart';
 
 void main() {
@@ -112,6 +113,35 @@ void main() {
       expect(h.from, 'a@example.com');
       expect(h.messageId, '<1@x>');
       expect(h.raw, contains('From:'));
+    });
+  });
+
+  group('AccountSettings', () {
+    test('decodes overrides and effective values', () {
+      final s = AccountSettings.fromJson({
+        'overrides': {'sync_interval_minutes': '30'},
+        'effective': {'sync_interval_minutes': '30', 'push_enabled': '0'},
+      });
+      expect(s.overrides, {'sync_interval_minutes': '30'});
+      expect(s.syncIntervalMinutes, 30);
+      expect(AccountSettings.empty.syncIntervalMinutes, 0);
+    });
+
+    test('a plan runs something only when an account checks', () {
+      final off = BackgroundPlan.fromJson({
+        'push': false,
+        'poll_minutes': 0,
+        'poll_scheduler': 'workmanager',
+      });
+      expect(off.any, isFalse);
+      final mixed = BackgroundPlan.fromJson({
+        'push': true,
+        'poll_minutes': 30,
+        'poll_scheduler': 'alarm',
+      });
+      expect(mixed.any, isTrue);
+      expect(mixed.pollMinutes, 30);
+      expect(mixed.pollScheduler, 'alarm');
     });
   });
 }

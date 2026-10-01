@@ -31,3 +31,26 @@ Future<void> setSort({required String field, required bool descending}) =>
       field: field,
       descending: descending,
     );
+
+/// One account's settings as JSON: `overrides` holds only what the account
+/// sets itself, `effective` what applies to it for every overridable key.
+/// Both use the app-wide key names and string values (`"1"`/`"0"`, minutes).
+Future<String> accountSettingsJson({required PlatformInt64 accountId}) =>
+    MailCoreApi.instance.api.crateApiSettingsAccountSettingsJson(
+      accountId: accountId,
+    );
+
+/// Write several of one account's overrides at once: all apply or none do.
+/// An empty value inherits the app-wide setting again.
+Future<void> setAccountSettings({
+  required PlatformInt64 accountId,
+  required Map<String, String> values,
+}) => MailCoreApi.instance.api.crateApiSettingsSetAccountSettings(
+  accountId: accountId,
+  values: values,
+);
+
+/// What the Android host should run in the background, as JSON
+/// (`push`, `poll_minutes`, `poll_scheduler`).
+Future<String> backgroundPlanJson() =>
+    MailCoreApi.instance.api.crateApiSettingsBackgroundPlanJson();

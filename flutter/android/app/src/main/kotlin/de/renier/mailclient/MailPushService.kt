@@ -48,6 +48,9 @@ class MailPushService : Service(), PushCallbacks {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Every startForegroundService() needs its own startForeground().
         goForeground()
+        // A start while running means the push accounts may have changed:
+        // the monitor re-reads them on any signal.
+        MailNative.pushKeepalive()
         return START_STICKY
     }
 

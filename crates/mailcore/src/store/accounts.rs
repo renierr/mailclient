@@ -32,6 +32,30 @@ const COLS: &str = "id, name, email_address, from_name, imap_host, imap_port, im
     imap_username, smtp_host, smtp_port, smtp_security, smtp_username,
     auth_vault_key, check_interval_secs, created_at, updated_at";
 
+/// A throwaway account for tests: `email` at example hosts, no secrets.
+#[cfg(test)]
+pub(crate) fn create_for_test(db: &Db, email: &str) -> i64 {
+    create(
+        db,
+        &NewAccount {
+            name: email.to_string(),
+            email_address: email.to_string(),
+            from_name: String::new(),
+            imap_host: "imap.example.com".into(),
+            imap_port: 993,
+            imap_security: "tls".into(),
+            imap_username: email.to_string(),
+            smtp_host: "smtp.example.com".into(),
+            smtp_port: 465,
+            smtp_security: "tls".into(),
+            smtp_username: email.to_string(),
+            auth_vault_key: format!("vault-{email}"),
+            check_interval_secs: 300,
+        },
+    )
+    .unwrap()
+}
+
 /// Insert a new account, returning its row id.
 pub fn create(db: &Db, a: &NewAccount) -> Result<i64> {
     let ts = now();

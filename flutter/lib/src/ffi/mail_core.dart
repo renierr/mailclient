@@ -13,6 +13,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge.dart'
     show AnyhowException;
 import 'package:path_provider/path_provider.dart';
 
+import '../models/account_settings.dart';
 import '../models/models.dart';
 import '../models/settings.dart';
 import 'generated/api/accounts.dart' as rust_accounts;
@@ -426,6 +427,22 @@ class MailCore {
 
   Future<void> setSort(String field, bool descending) =>
       rust_settings.setSort(field: field, descending: descending);
+
+  Future<AccountSettings> accountSettings(int accountId) async =>
+      AccountSettings.fromJson(
+        await _decodeMap(
+          await rust_settings.accountSettingsJson(accountId: accountId),
+        ),
+      );
+
+  /// Several of one account's overrides at once; an empty value inherits
+  /// the app-wide setting again.
+  Future<void> setAccountSettings(int accountId, Map<String, String> values) =>
+      rust_settings.setAccountSettings(accountId: accountId, values: values);
+
+  Future<BackgroundPlan> backgroundPlan() async => BackgroundPlan.fromJson(
+    await _decodeMap(await rust_settings.backgroundPlanJson()),
+  );
 }
 
 // The core hands back JSON it built itself, so a decode failure means the two

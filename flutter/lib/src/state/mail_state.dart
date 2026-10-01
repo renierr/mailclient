@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
 import '../ffi/mail_core.dart';
+import '../models/account_settings.dart';
 import '../models/models.dart';
 import '../models/settings.dart';
 import '../sync/background_sync.dart';
@@ -52,6 +54,7 @@ class MailState extends ChangeNotifier {
   final Map<String, List<Completer<JobEvent>>> _finishWaiters = {};
 
   AppSettings _settings = AppSettings.defaults;
+  int _autoSyncMinutes = 0;
 
   // --- search ------------------------------------------------------------
   String _searchQuery = '';
@@ -123,6 +126,9 @@ class MailState extends ChangeNotifier {
   bool get statusIsError => _statusIsError;
 
   AppSettings get settings => _settings;
+
+  /// The open account's automatic check interval (0 = manually).
+  int get autoSyncMinutes => _autoSyncMinutes;
 
   // --- search ------------------------------------------------------------
 
@@ -364,7 +370,7 @@ class MailState extends ChangeNotifier {
     _rescheduleAutoSync();
     await _reloadFolders();
     await _reloadMessages();
-    if (_settings.syncIntervalMinutes > 0 &&
+    if (_autoSyncMinutes > 0 &&
         !isSyncing &&
         shouldSyncOnResume(_lastSyncRequest, DateTime.now())) {
       unawaited(syncAccount());
@@ -531,8 +537,12 @@ class MailState extends ChangeNotifier {
       _folderId = -1;
       _folders = const [];
       _messages = const [];
+      await _reloadAutoSync();
       notifyListeners();
     }
+    // A new account inherits the app-wide interval; a removed one may have
+    // been the only one polling or pushing.
+    unawaited(rescheduleBackgroundSync());
   }
 
   /// Delete an account. The core reports which account to show instead.
@@ -567,10 +577,28 @@ class MailState extends ChangeNotifier {
     await _reloadSettings();
     if (values.containsKey(SettingKeys.syncInterval) ||
         values.containsKey(SettingKeys.backgroundScheduler)) {
-      _rescheduleAutoSync();
+      await _reloadAutoSync();
       unawaited(rescheduleBackgroundSync());
     }
   }
+
+  Future<AccountSettings> accountSettings(int accountId) =>
+      _core.accountSettings(accountId);
+
+  /// Write one account's overrides (an empty value inherits again), then
+  /// reschedule: any of them can change what checks when.
+  Future<void> setAccountSettings(
+    int accountId,
+    Map<String, String> values,
+  ) async {
+    if (values.isEmpty) return;
+    await _core.setAccountSettings(accountId, values);
+    if (accountId == _accountId) await _reloadAutoSync();
+    unawaited(rescheduleBackgroundSync());
+    notifyListeners();
+  }
+
+  Future<BackgroundPlan> backgroundPlan() => _core.backgroundPlan();
 
   Future<void> refreshCapabilities(int accountId) =>
       _queue('Capabilities', () => _core.refreshServerCapabilities(accountId));
@@ -725,24 +753,32 @@ class MailState extends ChangeNotifier {
     }
   }
 
+  /// Read the open account's interval, then restart the foreground timer.
+  Future<void> _reloadAutoSync() async {
+    _autoSyncMinutes = _accountId < 0
+        ? 0
+        : (await _core.accountSettings(_accountId)).syncIntervalMinutes;
+    _rescheduleAutoSync();
+  }
+
   void _rescheduleAutoSync() {
     _autoSyncTimer?.cancel();
-    final minutes = _settings.syncIntervalMinutes;
+    final minutes = _autoSyncMinutes;
     if (minutes <= 0 || _accountId < 0) return;
     _autoSyncTimer = Timer.periodic(Duration(minutes: minutes), (_) {
       if (!isSyncing && hasAccounts) unawaited(syncAccount());
     });
   }
 
-  /// Re-register the Android background check from the current settings.
-  /// Called after startup and on every interval or scheduler change; the
-  /// platform runs exactly the chosen mechanism (worker, alarm or push) and
-  /// stops the others, and an interval of 0 stops all of them. Off Android
-  /// this is a no-op.
-  Future<void> rescheduleBackgroundSync() => scheduleBackgroundChecks(
-    scheduler: _settings.backgroundScheduler,
-    intervalMinutes: _settings.syncIntervalMinutes,
-  );
+  /// Re-register the Android background checks from the current settings.
+  /// Called after startup and on every interval, scheduler or account
+  /// change; the core works out from every account's settings what runs
+  /// (push service, one poller, both or neither). Off Android this is a
+  /// no-op.
+  Future<void> rescheduleBackgroundSync() async {
+    if (!Platform.isAndroid) return;
+    await scheduleBackgroundChecks(await _core.backgroundPlan());
+  }
 
   /// A background check (push, while the app is open) stored new mail: show
   /// it from the cache, no network.
@@ -792,6 +828,7 @@ class MailState extends ChangeNotifier {
     exitSearch();
     await _reloadFolders();
     await _reloadMessages();
+    await _reloadAutoSync();
     notifyListeners();
   }
 

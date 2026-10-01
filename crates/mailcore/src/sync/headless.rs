@@ -259,15 +259,19 @@ pub async fn sync_account(
 /// Sync every account with a fresh connection each. One account failing
 /// (bad password, offline) never stops the rest.
 pub async fn sync_all_accounts(db: &Db, scope: SyncScope) -> SyncAllReport {
+    match accounts::list(db) {
+        Ok(list) => sync_accounts(db, &list, scope).await,
+        Err(e) => SyncAllReport {
+            errors: vec![format!("accounts: {e}")],
+            ..Default::default()
+        },
+    }
+}
+
+/// [`sync_all_accounts`] over just `list`, one fresh connection each.
+pub async fn sync_accounts(db: &Db, list: &[Account], scope: SyncScope) -> SyncAllReport {
     let mut report = SyncAllReport::default();
-    let list = match accounts::list(db) {
-        Ok(a) => a,
-        Err(e) => {
-            report.errors.push(format!("accounts: {e}"));
-            return report;
-        }
-    };
-    for acc in &list {
+    for acc in list {
         let mut imap = ImapSync::new(acc);
         let secrets = auth::load_account_secrets_retry(&acc.auth_vault_key).await;
         let result = match secrets {
