@@ -6,22 +6,33 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.util.Log
 import org.json.JSONObject
 
-// The new-mail notification, for every scheduler (worker, alarm, push).
-// What to show is decided in Rust (sync::background::notify); this reads
-// back the Android state the plan needs, posts it and commits it.
+// The new-mail notifications, for every scheduler (worker, alarm, push) and
+// for the "Mark read" buttons. What to show is decided in Rust
+// (sync::background::notify): one group per account, a summary plus one
+// child per mail, each told apart by its tag. This reads back what is on
+// screen, cancels and posts what the plan says and commits it.
 object MailNotifier {
-    // Channel and id shared with the notifications the Dart side posted
-    // before the checks moved here, so an update replaces rather than adds.
+    // Channel shared with the notifications the Dart side posted before the
+    // checks moved here.
     const val CHANNEL_ID = "mail_new"
     private const val CHANNEL_NAME = "New mail"
-    const val NOTIFICATION_ID = 0
+
+    // Every mail notification is posted under this id with its own tag.
+    // The untagged one is the single notification older versions posted.
+    private const val NOTIFICATION_ID = 0
 
     const val ACTION_OPEN = "de.renier.mailclient.OPEN_MAIL"
     const val EXTRA_PAYLOAD = "payload"
+
+    // Tags the plan uses (notify::OPEN_PAYLOAD_PREFIX, SUMMARY_TAG_PREFIX),
+    // and the Settings test sample.
+    private val TAG_PREFIXES = listOf("mail:", "account:")
+    private const val TEST_TAG = "test"
 
     private const val TAG = "mailclient"
 
@@ -29,25 +40,30 @@ object MailNotifier {
     // instead of alerting (set from onResume/onPause).
     @Volatile var foreground = false
 
-    // Told when a check saw new mail while the app is open, so the list
-    // re-reads the cache. Set by MainActivity while its engine lives.
+    // Told when mail changed while the app is open (a check saw new mail, a
+    // notification button marked some read), so the list re-reads the
+    // cache. Set by MainActivity while its engine lives.
     @Volatile var onMailChanged: (() -> Unit)? = null
 
-    // Post, update or clear the notification for a BackgroundReport, then
-    // commit. A failed post leaves the marks uncommitted, so the next check
-    // reports the same mail again.
+    // Carry out the plan for a BackgroundReport, then commit. A failed post
+    // leaves the marks uncommitted, so the next check reports the same mail
+    // again.
     @Synchronized
     fun deliver(context: Context, report: String) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
-        val planJson = MailNative.plan(report, manager.areNotificationsEnabled(), foreground, shownSignature(manager))
+        val planJson = MailNative.plan(report, manager.areNotificationsEnabled(), foreground, shown(manager).toString())
         val plan = JSONObject(planJson)
         try {
-            when (plan.getString("action")) {
-                "alert" -> post(context, manager, plan, silent = false)
-                "update" -> post(context, manager, plan, silent = true)
-                "clear" -> manager.cancel(NOTIFICATION_ID)
-                "foreground" -> onMailChanged?.invoke()
+            manager.cancel(NOTIFICATION_ID)
+            val cancel = plan.getJSONArray("cancel")
+            for (i in 0 until cancel.length()) manager.cancel(cancel.getString(i), NOTIFICATION_ID)
+            val post = plan.getJSONArray("post")
+            if (post.length() > 0) ensureChannel(manager)
+            for (i in 0 until post.length()) {
+                val n = post.getJSONObject(i)
+                manager.notify(n.getString("tag"), NOTIFICATION_ID, build(context, n))
             }
+            if (plan.getString("action") == "foreground") onMailChanged?.invoke()
         } catch (e: RuntimeException) {
             Log.w(TAG, "new-mail notification failed", e)
             MailNative.recordOutcome(plan.optString("run"), "notification failed: ${e.message}")
@@ -59,51 +75,103 @@ object MailNotifier {
     // A sample with every display option, for Settings' test button.
     fun showTest(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
-        val plan = JSONObject()
+        ensureChannel(manager)
+        val sample = JSONObject()
+            .put("tag", TEST_TAG)
+            .put("group", "mail-test")
+            .put("summary", false)
             .put("title", "Mailclient Test")
             .put("body", "Test notification — tap to open the app")
+            .put("big_text", "Test notification — tap to open the app\nExpanded, a mail shows the start of its text here.")
+            .put("account", "Test")
+            .put("redacted", "New message")
             .put("count", 1)
+            .put("alert", true)
             .put("payload", "")
-        post(context, manager, plan, silent = false)
+            .put("mark_read", "")
+        manager.notify(TEST_TAG, NOTIFICATION_ID, build(context, sample))
     }
 
+    // Remove every mail notification (the app was opened).
     fun clear(context: Context) {
-        context.getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        manager.cancel(NOTIFICATION_ID)
+        for (n in manager.activeNotifications) {
+            val tag = n.tag ?: continue
+            if (n.id == NOTIFICATION_ID && (isMine(tag) || tag == TEST_TAG)) manager.cancel(tag, n.id)
+        }
     }
 
-    // Title and body of the notification on screen, as the plan compares
-    // them; null when there is none (never posted, or swiped away).
-    private fun shownSignature(manager: NotificationManager): String? {
-        val mine = manager.activeNotifications.firstOrNull { it.id == NOTIFICATION_ID } ?: return null
-        val extras = mine.notification.extras
-        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
-        val body = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
-        return "$title\n$body"
+    private fun isMine(tag: String) = TAG_PREFIXES.any { tag.startsWith(it) }
+
+    // The mail notifications on screen, tag → title and body as the plan
+    // compares them. Swiped-away ones are gone from here.
+    private fun shown(manager: NotificationManager): JSONObject {
+        val out = JSONObject()
+        for (n in manager.activeNotifications) {
+            val tag = n.tag ?: continue
+            if (n.id != NOTIFICATION_ID || !isMine(tag)) continue
+            val extras = n.notification.extras
+            val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
+            val body = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
+            out.put(tag, "$title\n$body")
+        }
+        return out
     }
 
-    private fun post(context: Context, manager: NotificationManager, plan: JSONObject, silent: Boolean) {
-        ensureChannel(manager)
-        val title = plan.optString("title")
-        val body = plan.optString("body")
+    private fun build(context: Context, n: JSONObject): Notification {
+        val tag = n.getString("tag")
+        val title = n.optString("title")
+        val body = n.optString("body")
+        val account = n.optString("account")
+        val summary = n.optBoolean("summary")
         val builder = builder(context)
             .setSmallIcon(R.drawable.ic_launcher_monochrome)
             .setContentTitle(title)
             .setContentText(body)
-            .setNumber(plan.optInt("count"))
+            .setSubText(account.ifEmpty { null })
+            .setNumber(n.optInt("count"))
             .setAutoCancel(true)
-            .setOnlyAlertOnce(silent)
+            .setOnlyAlertOnce(!n.optBoolean("alert"))
             .setCategory(Notification.CATEGORY_EMAIL)
-            .setContentIntent(openIntent(context, plan.optString("payload")))
-        val lines = plan.optJSONArray("lines")
-        if (lines != null && lines.length() > 0) {
-            val style = Notification.InboxStyle().setBigContentTitle(title)
-            for (i in 0 until lines.length()) style.addLine(lines.getString(i))
-            if (!plan.isNull("summary")) style.setSummaryText(plan.optString("summary"))
-            builder.setStyle(style)
+            .setGroup(n.optString("group"))
+            .setGroupSummary(summary)
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .setPublicVersion(publicVersion(context, n))
+            .setContentIntent(openIntent(context, tag, n.optString("payload")))
+        if (!n.isNull("when")) builder.setWhen(n.getLong("when")).setShowWhen(true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            builder.setGroupAlertBehavior(Notification.GROUP_ALERT_SUMMARY)
         }
-        if (silent) builder.muted()
-        manager.notify(NOTIFICATION_ID, builder.build())
+        if (summary) {
+            val lines = n.optJSONArray("lines")
+            val style = Notification.InboxStyle().setBigContentTitle(title)
+            if (lines != null) for (i in 0 until lines.length()) style.addLine(lines.getString(i))
+            if (!n.isNull("summary_text")) style.setSummaryText(n.optString("summary_text"))
+            builder.setStyle(style)
+        } else if (!n.isNull("big_text")) {
+            builder.setStyle(Notification.BigTextStyle().setBigContentTitle(title).bigText(n.getString("big_text")))
+        }
+        val target = n.optString("mark_read")
+        if (target.isNotEmpty()) {
+            val label = if (summary && n.optInt("count") > 1) "Mark all read" else "Mark read"
+            val pending = MailActionReceiver.markReadIntent(context, tag, target)
+            @Suppress("DEPRECATION")
+            builder.addAction(Notification.Action.Builder(R.drawable.ic_launcher_monochrome, label, pending).build())
+        }
+        if (!n.optBoolean("alert")) builder.muted()
+        return builder.build()
     }
+
+    // What the lock screen shows: the account and a count, no sender or
+    // subject.
+    private fun publicVersion(context: Context, n: JSONObject): Notification =
+        builder(context)
+            .setSmallIcon(R.drawable.ic_launcher_monochrome)
+            .setContentTitle(n.optString("redacted"))
+            .setSubText(n.optString("account").ifEmpty { null })
+            .setCategory(Notification.CATEGORY_EMAIL)
+            .build()
 
     private fun Notification.Builder.muted(): Notification.Builder {
         // Below Android 8 the channel cannot mute a single post; no sound,
@@ -125,9 +193,12 @@ object MailNotifier {
                 .setDefaults(Notification.DEFAULT_ALL)
         }
 
-    private fun openIntent(context: Context, payload: String): PendingIntent {
+    // One PendingIntent per notification: intents that differ only in
+    // extras are the same PendingIntent, so the tag goes into the data URI.
+    private fun openIntent(context: Context, tag: String, payload: String): PendingIntent {
         val intent = Intent(context, MainActivity::class.java)
             .setAction(ACTION_OPEN)
+            .setData(Uri.fromParts("mailclient", tag, null))
             .putExtra(EXTRA_PAYLOAD, payload)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         return PendingIntent.getActivity(

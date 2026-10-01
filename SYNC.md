@@ -186,7 +186,10 @@ the phone 4 times an hour instead of 30.
 ## 5. Notifications (Android)
 
 Every background report goes through `notify::plan_for`, which decides per
-report: alert, update the shown notification, clear it, or stay silent.
+report which notifications to post (with or without a sound) and which to
+remove. Mail shows as one Android group per account: a summary counting
+the account's unseen mail, plus one expandable notification per mail
+(sender, subject, the cached snippet when expanded) for the newest few.
 
 - Only accounts with **New-mail notifications** on (per account, default =
   app-wide) contribute mail to an alert.
@@ -194,7 +197,11 @@ report: alert, update the shown notification, clear it, or stay silent.
   notification has been handled, and mail the foreground showed while the
   app was open is marked seen when the app goes to the background.
 - While the app is open, new mail reloads the list instead of alerting.
-- Opening the app clears the notification.
+- Opening the app clears the notifications.
+- **Mark read** on a mail, or **Mark all read** on an account's summary,
+  marks the cache at once and re-plans the notifications; the flag reaches
+  the server through a one-off worker that waits for a network (fresh
+  connection, retried, and pushed by the next sync otherwise).
 
 ## 6. Settings reference
 

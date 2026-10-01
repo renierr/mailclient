@@ -317,6 +317,32 @@ pub async fn sync_accounts(db: &Db, list: &[Account], scope: SyncScope) -> SyncA
     report
 }
 
+/// Push one account's queued flag changes over a fresh connection — for
+/// callers without the app's pooled sessions, such as a notification's
+/// "Mark read" while the app is closed. Returns how many went out; whatever
+/// fails stays queued (`flags_dirty`) for the next sync.
+pub async fn push_flags(db: &Db, account_id: i64) -> Result<u64> {
+    if messages::list_flags_dirty(db, account_id)?.is_empty() {
+        return Ok(0);
+    }
+    let acc = accounts::get(db, account_id)?;
+    let secrets = auth::load_account_secrets_retry(&acc.auth_vault_key).await?;
+    let mut imap = ImapSync::new(&acc);
+    imap.connect(&secrets.imap_password).await?;
+    let pushed = imap.push_dirty_flags(db, acc.id).await;
+    imap.logout().await;
+    Ok(pushed)
+}
+
+/// Synchronous wrapper around [`push_flags`] for FFI callers.
+pub fn push_flags_blocking(db: &Db, account_id: i64) -> Result<u64> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime for flag push");
+    rt.block_on(push_flags(db, account_id))
+}
+
 /// Synchronous wrapper around [`sync_all_accounts`] for CLI callers.
 pub fn sync_all_accounts_blocking(db: &Db) -> SyncAllReport {
     let rt = tokio::runtime::Builder::new_current_thread()

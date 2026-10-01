@@ -29,7 +29,8 @@ use crate::sync::imap::ImapSync;
 
 /// One mail the background check has never reported before. Carries the ids
 /// the UI needs to open it (`account_id`/`folder_id`/`uid`), plus the
-/// metadata a notification shows. Bodies never cross here.
+/// metadata a notification shows. Bodies never cross here, only the cached
+/// list snippet the expanded notification previews.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NewMail {
@@ -45,6 +46,7 @@ pub struct NewMail {
     pub from: String,
     pub subject: String,
     pub date: String,
+    pub snippet: String,
 }
 
 /// Outcome of [`background_check`]: what arrived since the previous check.
@@ -489,7 +491,7 @@ fn unread_above(db: &Db, top: &SeenMark, mark: i64) -> Vec<NewMail> {
         .prepare(
             "select a.email_address, f.path, m.uid,
                         coalesce(m.from_addr, ''), coalesce(m.subject, ''),
-                        coalesce(m.date, '')
+                        coalesce(m.date, ''), coalesce(m.snippet, '')
                  from messages m
                  join accounts a on a.id = m.account_id
                  join folders f on f.id = m.folder_id
@@ -509,6 +511,7 @@ fn unread_above(db: &Db, top: &SeenMark, mark: i64) -> Vec<NewMail> {
                     from: row.get(3)?,
                     subject: row.get(4)?,
                     date: row.get(5)?,
+                    snippet: row.get(6)?,
                 })
             })
             .and_then(|mapped| mapped.collect::<rusqlite::Result<Vec<_>>>())

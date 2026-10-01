@@ -1,32 +1,50 @@
-//! What a background check does with the new-mail notification.
+//! What a background check does with the new-mail notifications.
 //!
-//! Pure decisions over a [`BackgroundReport`]: whether to alert, quietly
-//! update, clear or leave the one notification alone, and what it says.
-//! The Android host only reads back what is on screen, posts the plan and
-//! then commits the marks — every scheduler (worker, alarm, push) shares
-//! this, so their notifications cannot drift apart.
+//! Pure decisions over a [`BackgroundReport`]: which notifications to post
+//! (with or without a sound), which to remove, and what they say. Mail is
+//! shown the Android way — one group per account, a summary plus one child
+//! per mail, each with a "Mark read" button ([`ReadTarget`]). The Android
+//! host only reads back what is on screen, posts and cancels what the plan
+//! says and then commits the marks — every scheduler (worker, alarm, push)
+//! shares this, so their notifications cannot drift apart.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use serde::Serialize;
+use chrono::DateTime;
+use serde::{Deserialize, Serialize};
 
-use super::{BackgroundReport, NewMail, SeenMark};
+use super::{collect_pending, BackgroundReport, NewMail, SeenMark};
 use crate::db::Db;
-use crate::store::{account_settings, settings};
+use crate::error::Result;
+use crate::store::{account_settings, messages, settings};
 
 /// Payload prefix for "open this message" taps: `mail:<account>:<folder>:<uid>`.
+/// A mail's notification carries the same string as its tag.
 pub const OPEN_PAYLOAD_PREFIX: &str = "mail:";
 
-/// What to do with the notification.
+/// Tag prefix of an account's group summary: `account:<account>`.
+pub const SUMMARY_TAG_PREFIX: &str = "account:";
+
+/// How many mails a summary lists as inbox lines (pre-Android 7 and
+/// launchers that show the summary instead of the group).
+const SUMMARY_LINES: usize = 5;
+
+/// How many mails of one account get a notification of their own, newest
+/// first; the summary still counts and marks them all. Android drops an
+/// app's notifications past a few dozen.
+const MAX_CHILDREN: usize = 8;
+
+/// What the plan amounts to, for the run history and the host's callbacks.
+/// The host does not branch on it to post: `post` and `cancel` say it all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NotifyAction {
-    /// New mail: post (or replace) the notification and make a sound.
+    /// New mail: post it, and the account's summary makes a sound.
     Alert,
-    /// Nothing new, but the visible notification lists mail that has been
-    /// read meanwhile: repost it quietly.
+    /// Nothing new, but what is on screen changed (mail was read meanwhile):
+    /// repost or remove quietly.
     Update,
-    /// Everything the visible notification listed has been read: remove it.
+    /// Everything on screen has been read: remove it all.
     Clear,
     /// New mail, but the user turned alerts off.
     AlertsOff,
@@ -44,31 +62,54 @@ pub enum NotifyAction {
 #[derive(Debug, Clone, Serialize)]
 pub struct NotificationPlan {
     pub action: NotifyAction,
-    pub title: String,
-    pub body: String,
-    /// Inbox-style lines, newest first; empty for a single mail.
-    pub lines: Vec<String>,
-    pub summary: Option<String>,
-    /// How many mails the notification lists.
+    /// Notifications to post or repost, each group's summary before its
+    /// children: Android sheds an app's rapid *updates*, never new posts, so
+    /// the summary that rings goes out before a burst of new children.
+    pub post: Vec<MailNotification>,
+    /// Tags of notifications on screen to remove.
+    pub cancel: Vec<String>,
+    /// How many mails are on screen once the plan is carried out.
     pub count: usize,
-    /// Tap target, see [`open_payload`]; empty when nothing is listed.
-    pub payload: String,
     /// Run-history note for `record_outcome`, if the action is worth one.
     pub outcome: Option<String>,
     pub run: String,
     pub marks: Vec<SeenMark>,
 }
 
-/// Title, body and inbox lines of the notification for some mail.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NotificationText {
+/// One notification: a mail (child) or an account's group summary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MailNotification {
+    /// Unique among the app's notifications: the open payload for a mail,
+    /// `account:<id>` for a summary.
+    pub tag: String,
+    /// Android group key, one per account.
+    pub group: String,
+    pub summary: bool,
     pub title: String,
     pub body: String,
+    /// Expanded text of a mail: subject and snippet.
+    pub big_text: Option<String>,
+    /// Inbox lines of a summary, newest first.
     pub lines: Vec<String>,
-    pub summary: Option<String>,
+    /// `+N more` under a summary's lines.
+    pub summary_text: Option<String>,
+    /// The account, shown in the notification header.
+    pub account: String,
+    /// What the lock screen shows instead of sender and subject.
+    pub redacted: String,
+    /// Mails listed: 1 for a mail, the group's size for a summary.
+    pub count: usize,
+    /// Arrival time in epoch milliseconds, for ordering.
+    pub when: Option<i64>,
+    /// Make a sound. Only summaries alert; their children stay quiet.
+    pub alert: bool,
+    /// Tap target, see [`open_payload`].
+    pub payload: String,
+    /// What the "Mark read" button marks, as [`ReadTarget`] JSON.
+    pub mark_read: String,
 }
 
-impl NotificationText {
+impl MailNotification {
     /// What [`signature_of`] reads back from the posted notification.
     #[must_use]
     pub fn signature(&self) -> String {
@@ -77,82 +118,140 @@ impl NotificationText {
 }
 
 /// Signature of a posted notification: title and body, as Android reports
-/// them back for the active notification.
+/// them back for an active notification.
 #[must_use]
 pub fn signature_of(title: &str, body: &str) -> String {
     format!("{title}\n{body}")
 }
 
-/// Plan the notification for `report`.
+/// The app's notifications on screen: tag → [`signature_of`].
+pub type Shown = HashMap<String, String>;
+
+/// Mail a "Mark read" button marks: one mail, or a whole account group.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadTarget {
+    pub account_id: i64,
+    pub mails: Vec<ReadMail>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadMail {
+    pub folder_id: i64,
+    pub uid: u32,
+}
+
+/// Plan the notifications for `report`.
 ///
-/// `shown` is the signature of the notification on screen (`None` when there
-/// is none — never posted, or swiped away); `permitted` whether Android lets
-/// the app notify; `foreground` whether the app is on screen.
+/// `shown` is what is on screen (empty when nothing is — never posted, or
+/// swiped away); `permitted` whether Android lets the app notify;
+/// `foreground` whether the app is on screen. A mail swiped away only comes
+/// back when it is new; nothing new never adds a notification.
 #[must_use]
 pub fn plan(
     report: &BackgroundReport,
     alerts_on: bool,
     permitted: bool,
     foreground: bool,
-    shown: Option<&str>,
+    shown: &Shown,
 ) -> NotificationPlan {
+    let has_new = !report.new.is_empty();
+    let settled = |action, outcome: Option<String>| NotificationPlan {
+        action,
+        post: Vec::new(),
+        cancel: Vec::new(),
+        count: 0,
+        outcome,
+        run: report.run.clone(),
+        marks: report.marks.clone(),
+    };
+    if foreground && has_new {
+        return settled(
+            NotifyAction::Foreground,
+            Some("new mail, app is open".into()),
+        );
+    }
+    if has_new && !permitted {
+        return settled(
+            NotifyAction::Blocked,
+            Some("new mail, notifications blocked".into()),
+        );
+    }
+    let alerting = has_new && alerts_on;
     // Pending covers new; the fallback only guards a report without it.
     let listed = if report.pending.is_empty() {
         &report.new
     } else {
         &report.pending
     };
-    let text = (!listed.is_empty()).then(|| notification_text(listed));
-    let action = if foreground && !report.new.is_empty() {
-        NotifyAction::Foreground
-    } else {
-        decide(
-            !report.new.is_empty(),
-            alerts_on,
-            permitted,
-            shown,
-            text.as_ref().map(NotificationText::signature).as_deref(),
+    let fresh: HashSet<String> = report.new.iter().map(open_payload).collect();
+    let on_screen: Vec<&NewMail> = listed
+        .iter()
+        .filter(|m| {
+            let tag = open_payload(m);
+            shown.contains_key(&tag) || (alerting && fresh.contains(&tag))
+        })
+        .collect();
+
+    let mut post = Vec::new();
+    let mut keep = HashSet::new();
+    for group in by_account(&on_screen) {
+        let loud = alerting && group.iter().any(|m| fresh.contains(&open_payload(m)));
+        let summary = summary_of(&group, loud);
+        if loud || shown.get(&summary.tag) != Some(&summary.signature()) {
+            post.push(summary.clone());
+        }
+        keep.insert(summary.tag);
+        for m in &group[group.len().saturating_sub(MAX_CHILDREN)..] {
+            let child = child_of(m);
+            if fresh.contains(&child.tag) && alerting
+                || shown.get(&child.tag) != Some(&child.signature())
+            {
+                post.push(child.clone());
+            }
+            keep.insert(child.tag);
+        }
+    }
+    let mut cancel: Vec<String> = shown
+        .keys()
+        .filter(|tag| !keep.contains(*tag))
+        .cloned()
+        .collect();
+    cancel.sort();
+
+    let count = on_screen.len();
+    let (action, outcome) = if alerting {
+        (NotifyAction::Alert, Some(format!("notified ({count})")))
+    } else if has_new {
+        (
+            NotifyAction::AlertsOff,
+            Some("new mail, alerts are off".into()),
         )
+    } else if post.is_empty() && cancel.is_empty() {
+        (NotifyAction::None, None)
+    } else if count == 0 {
+        (NotifyAction::Clear, Some("notification cleared".into()))
+    } else {
+        (NotifyAction::Update, Some("notification updated".into()))
     };
-    let outcome = match action {
-        NotifyAction::Alert => Some(format!("notified ({})", listed.len())),
-        NotifyAction::Update => Some("notification updated".to_string()),
-        NotifyAction::Clear => Some("notification cleared".to_string()),
-        NotifyAction::AlertsOff => Some("new mail, alerts are off".to_string()),
-        NotifyAction::Blocked => Some("new mail, notifications blocked".to_string()),
-        NotifyAction::Foreground => Some("new mail, app is open".to_string()),
-        NotifyAction::None => None,
-    };
-    let text = text.unwrap_or(NotificationText {
-        title: String::new(),
-        body: String::new(),
-        lines: Vec::new(),
-        summary: None,
-    });
     NotificationPlan {
         action,
-        title: text.title,
-        body: text.body,
-        lines: text.lines,
-        summary: text.summary,
-        count: listed.len(),
-        payload: listed.last().map(open_payload).unwrap_or_default(),
-        outcome,
-        run: report.run.clone(),
-        marks: report.marks.clone(),
+        post,
+        cancel,
+        count,
+        ..settled(action, outcome)
     }
 }
 
 /// [`plan`] under each account's own "Show notifications" setting
 /// (`store::account_settings`): mail of muted accounts stays out of the
-/// notification, and new mail only from muted accounts plans as alerts off.
+/// notifications, and new mail only from muted accounts plans as alerts off.
 /// The marks still cover every account, so muted mail never alerts later.
 pub fn plan_for(
     db: &Db,
     report: &BackgroundReport,
     permitted: bool,
     foreground: bool,
-    shown: Option<&str>,
+    shown: &Shown,
 ) -> NotificationPlan {
     let mut alerts: HashMap<i64, bool> = HashMap::new();
     let mut audible = |m: &NewMail| {
@@ -164,59 +263,104 @@ pub fn plan_for(
     heard.new.retain(&mut audible);
     heard.pending.retain(&mut audible);
     if heard.new.is_empty() && !report.new.is_empty() {
-        return plan(report, false, permitted, foreground, shown);
+        // Still new mail, so it plans as alerts off rather than nothing.
+        heard.new.clone_from(&report.new);
+        return plan(&heard, false, permitted, foreground, shown);
     }
     plan(&heard, true, permitted, foreground, shown)
 }
 
-/// The alert decision. `wanted` is the signature of what the notification
-/// should list now (`None` when nothing is unseen). A swiped-away
-/// notification only comes back for new mail.
-#[must_use]
-pub fn decide(
-    has_new: bool,
-    alerts_on: bool,
-    permitted: bool,
-    shown: Option<&str>,
-    wanted: Option<&str>,
-) -> NotifyAction {
-    if has_new {
-        if !alerts_on {
-            return NotifyAction::AlertsOff;
-        }
-        return if permitted {
-            NotifyAction::Alert
-        } else {
-            NotifyAction::Blocked
-        };
+/// A "Mark read" button was pressed: mark `target` read in the cache (queued
+/// for the server like any toggle, `flags_dirty`) and report what is still
+/// pending, for re-planning the notifications. No network.
+pub fn mark_read(db: &Db, target: &ReadTarget) -> Result<BackgroundReport> {
+    let mut by_folder: HashMap<i64, Vec<u32>> = HashMap::new();
+    for m in &target.mails {
+        by_folder.entry(m.folder_id).or_default().push(m.uid);
     }
-    match (shown, wanted) {
-        (None, _) => NotifyAction::None,
-        (Some(_), None) => NotifyAction::Clear,
-        (Some(s), Some(w)) if s == w => NotifyAction::None,
-        _ => NotifyAction::Update,
+    for (folder_id, uids) in by_folder {
+        messages::set_read_many_by_uids(db, folder_id, &uids, true)?;
+    }
+    Ok(BackgroundReport {
+        pending: collect_pending(db),
+        total_unread: super::cached_total_unread(db),
+        ..Default::default()
+    })
+}
+
+/// `items` grouped by account, in order of first appearance; each group
+/// keeps report order (oldest first).
+fn by_account<'a>(items: &[&'a NewMail]) -> Vec<Vec<&'a NewMail>> {
+    let mut groups: Vec<Vec<&NewMail>> = Vec::new();
+    for m in items {
+        match groups.iter_mut().find(|g| g[0].account_id == m.account_id) {
+            Some(g) => g.push(m),
+            None => groups.push(vec![m]),
+        }
+    }
+    groups
+}
+
+/// The notification for one mail.
+#[must_use]
+pub fn child_of(m: &NewMail) -> MailNotification {
+    let subject = body_of(m);
+    let snippet = m.snippet.trim();
+    MailNotification {
+        tag: open_payload(m),
+        group: group_of(m.account_id),
+        summary: false,
+        title: title_of(m),
+        body: subject.clone(),
+        big_text: Some(if snippet.is_empty() {
+            subject
+        } else {
+            format!("{subject}\n{snippet}")
+        }),
+        lines: Vec::new(),
+        summary_text: None,
+        account: m.account_email.trim().to_string(),
+        redacted: "New message".into(),
+        count: 1,
+        when: when_of(m),
+        alert: false,
+        payload: open_payload(m),
+        mark_read: read_target(m.account_id, &[m]),
     }
 }
 
-/// Layout for `items` (never empty), in report order (oldest first): the
-/// title names the sender of the newest, or the count when there are
-/// several; lines list the newest five.
+/// The summary of one account's group (`group` never empty, oldest first):
+/// counts the mails, lists the newest, opens the newest.
 #[must_use]
-pub fn notification_text(items: &[NewMail]) -> NotificationText {
-    let newest = &items[items.len() - 1];
-    if items.len() == 1 {
-        return NotificationText {
-            title: title_of(newest),
-            body: body_of(newest),
-            lines: Vec::new(),
-            summary: None,
-        };
-    }
-    NotificationText {
-        title: format!("{} new messages", items.len()),
+pub fn summary_of(group: &[&NewMail], alert: bool) -> MailNotification {
+    let newest = group[group.len() - 1];
+    let n = group.len();
+    let title = if n == 1 {
+        "1 new message".to_string()
+    } else {
+        format!("{n} new messages")
+    };
+    MailNotification {
+        tag: format!("{SUMMARY_TAG_PREFIX}{}", newest.account_id),
+        group: group_of(newest.account_id),
+        summary: true,
+        title: title.clone(),
         body: line_of(newest),
-        lines: items.iter().rev().take(5).map(line_of).collect(),
-        summary: (items.len() > 5).then(|| format!("+{} more", items.len() - 5)),
+        big_text: None,
+        lines: group
+            .iter()
+            .rev()
+            .take(SUMMARY_LINES)
+            .map(|m| line_of(m))
+            .collect(),
+        summary_text: (n > SUMMARY_LINES).then(|| format!("+{} more", n - SUMMARY_LINES)),
+        account: newest.account_email.trim().to_string(),
+        redacted: title,
+        count: n,
+        when: when_of(newest),
+        alert,
+        payload: open_payload(newest),
+        mark_read: read_target(newest.account_id, group),
     }
 }
 
@@ -227,6 +371,30 @@ pub fn open_payload(mail: &NewMail) -> String {
         "{OPEN_PAYLOAD_PREFIX}{}:{}:{}",
         mail.account_id, mail.folder_id, mail.uid
     )
+}
+
+fn group_of(account_id: i64) -> String {
+    format!("mail-account-{account_id}")
+}
+
+fn read_target(account_id: i64, mails: &[&NewMail]) -> String {
+    let target = ReadTarget {
+        account_id,
+        mails: mails
+            .iter()
+            .map(|m| ReadMail {
+                folder_id: m.folder_id,
+                uid: m.uid,
+            })
+            .collect(),
+    };
+    serde_json::to_string(&target).unwrap_or_default()
+}
+
+fn when_of(m: &NewMail) -> Option<i64> {
+    DateTime::parse_from_rfc3339(m.date.trim())
+        .ok()
+        .map(|d| d.timestamp_millis())
 }
 
 fn title_of(m: &NewMail) -> String {
@@ -252,183 +420,4 @@ fn line_of(m: &NewMail) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn mail(uid: u32, from: &str) -> NewMail {
-        NewMail {
-            account_id: 1,
-            folder_id: 4,
-            uid,
-            from: from.to_string(),
-            subject: format!("subject {uid}"),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn new_mail_alerts_unless_alerts_are_off_or_blocked() {
-        assert_eq!(
-            decide(true, true, true, None, Some("a")),
-            NotifyAction::Alert
-        );
-        assert_eq!(
-            decide(true, true, true, Some("a"), Some("a")),
-            NotifyAction::Alert
-        );
-        assert_eq!(
-            decide(true, false, true, None, None),
-            NotifyAction::AlertsOff
-        );
-        assert_eq!(decide(true, true, false, None, None), NotifyAction::Blocked);
-    }
-
-    #[test]
-    fn nothing_new_leaves_a_dismissed_notification_alone() {
-        assert_eq!(
-            decide(false, true, true, None, Some("a")),
-            NotifyAction::None
-        );
-        assert_eq!(decide(false, true, true, None, None), NotifyAction::None);
-    }
-
-    #[test]
-    fn nothing_new_keeps_a_visible_notification_in_step() {
-        assert_eq!(
-            decide(false, true, true, Some("a"), Some("a")),
-            NotifyAction::None
-        );
-        assert_eq!(
-            decide(false, true, true, Some("a"), Some("b")),
-            NotifyAction::Update
-        );
-        assert_eq!(
-            decide(false, true, true, Some("a"), None),
-            NotifyAction::Clear
-        );
-    }
-
-    #[test]
-    fn one_mail_names_its_sender_and_subject() {
-        let t = notification_text(&[mail(1, "a@example.com")]);
-        assert_eq!(t.title, "a@example.com");
-        assert_eq!(t.body, "subject 1");
-        assert!(t.lines.is_empty());
-    }
-
-    #[test]
-    fn a_mail_without_sender_or_subject_still_reads() {
-        let mut m = mail(1, " ");
-        m.account_email = "me@example.com".to_string();
-        m.subject = String::new();
-        let t = notification_text(&[m]);
-        assert_eq!(t.title, "me@example.com");
-        assert_eq!(t.body, "(no subject)");
-    }
-
-    #[test]
-    fn several_mails_count_newest_first_capped_at_five_lines() {
-        let items: Vec<_> = (1..=7)
-            .map(|i| mail(i, &format!("s{i}@example.com")))
-            .collect();
-        let t = notification_text(&items);
-        assert_eq!(t.title, "7 new messages");
-        assert_eq!(t.body, "s7@example.com — subject 7");
-        assert_eq!(t.lines.len(), 5);
-        assert!(t.lines[0].starts_with("s7@"));
-        assert_eq!(t.summary.as_deref(), Some("+2 more"));
-    }
-
-    #[test]
-    fn the_plan_opens_the_newest_and_carries_marks_and_run() {
-        let report = BackgroundReport {
-            new: vec![mail(9, "b@example.org")],
-            pending: vec![mail(8, "a@example.org"), mail(9, "b@example.org")],
-            marks: vec![SeenMark {
-                account_id: 1,
-                folder_id: 4,
-                uid_validity: 7,
-                uid: 9,
-            }],
-            run: "started".to_string(),
-            ..Default::default()
-        };
-        let p = plan(&report, true, true, false, None);
-        assert_eq!(p.action, NotifyAction::Alert);
-        assert_eq!(p.count, 2);
-        assert_eq!(p.payload, "mail:1:4:9");
-        assert_eq!(p.title, "2 new messages");
-        assert_eq!(p.outcome.as_deref(), Some("notified (2)"));
-        assert_eq!(p.run, "started");
-        assert_eq!(p.marks, report.marks);
-    }
-
-    #[test]
-    fn the_open_app_takes_new_mail_without_an_alert() {
-        let report = BackgroundReport {
-            new: vec![mail(9, "b@example.org")],
-            ..Default::default()
-        };
-        let p = plan(&report, true, true, true, None);
-        assert_eq!(p.action, NotifyAction::Foreground);
-    }
-
-    #[test]
-    fn a_visible_notification_follows_what_is_still_unread() {
-        let listed = vec![mail(8, "a@example.org")];
-        let shown = notification_text(&[mail(8, "a@example.org"), mail(9, "b@example.org")]);
-        let report = BackgroundReport {
-            pending: listed.clone(),
-            ..Default::default()
-        };
-        let p = plan(&report, true, true, false, Some(&shown.signature()));
-        assert_eq!(p.action, NotifyAction::Update);
-        assert_eq!(p.title, "a@example.org");
-
-        let p = plan(
-            &BackgroundReport::default(),
-            true,
-            true,
-            false,
-            Some(&shown.signature()),
-        );
-        assert_eq!(p.action, NotifyAction::Clear);
-        assert!(p.payload.is_empty());
-    }
-
-    #[test]
-    fn muted_accounts_stay_out_of_the_notification() {
-        let db = Db::open_in_memory().unwrap();
-        let loud = crate::store::accounts::create_for_test(&db, "a@example.com");
-        let muted = crate::store::accounts::create_for_test(&db, "b@example.org");
-        account_settings::set_overrides(
-            &db,
-            muted,
-            &[(settings::NOTIFICATIONS_ENABLED.to_string(), "0".to_string())],
-        )
-        .unwrap();
-        let from = |account_id, uid| NewMail {
-            account_id,
-            ..mail(uid, "c@example.org")
-        };
-        let both = vec![from(loud, 1), from(muted, 2)];
-        let report = BackgroundReport {
-            new: both.clone(),
-            pending: both,
-            ..Default::default()
-        };
-        let p = plan_for(&db, &report, true, false, None);
-        assert_eq!(p.action, NotifyAction::Alert);
-        assert_eq!(p.count, 1);
-        assert_eq!(p.payload, open_payload(&from(loud, 1)));
-
-        let only_muted = BackgroundReport {
-            new: vec![from(muted, 3)],
-            marks: vec![SeenMark::default()],
-            ..Default::default()
-        };
-        let p = plan_for(&db, &only_muted, true, false, None);
-        assert_eq!(p.action, NotifyAction::AlertsOff);
-        assert_eq!(p.marks.len(), 1, "muted mail is still marked seen");
-    }
-}
+mod tests;

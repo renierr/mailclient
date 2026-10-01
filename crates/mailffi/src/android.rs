@@ -19,6 +19,7 @@ use jni::refs::Global;
 use jni::vm::JavaVM;
 use jni::{jni_sig, jni_str, Env, EnvUnowned, JValue};
 use mailcore::sync::background::{self, notify, BackgroundReport, SeenMark};
+use mailcore::sync::headless;
 use mailcore::sync::push::{PushListener, PushMonitor};
 use serde::Deserialize;
 
@@ -102,8 +103,8 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_check<'caller>(
 }
 
 /// `MailNative.plan(report, permitted, foreground, shown)`: what to do with
-/// the notification for a report, as `NotificationPlan` JSON. `shown` is the
-/// signature of the notification on screen, or null.
+/// the notifications for a report, as `NotificationPlan` JSON. `shown` is a
+/// JSON object of the app's notifications on screen, tag → signature.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_de_renier_mailclient_MailNative_plan<'caller>(
     mut unowned: EnvUnowned<'caller>,
@@ -116,14 +117,48 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_plan<'caller>(
     unowned
         .with_env(|env| -> Result<JString<'caller>> {
             let report: BackgroundReport = serde_json::from_str(&string(env, &report)?)?;
-            let shown = if shown.is_null() {
-                None
-            } else {
-                Some(string(env, &shown)?)
-            };
+            let shown: notify::Shown = serde_json::from_str(&string(env, &shown)?)?;
             let db = crate::db::shared_db()?;
-            let plan = notify::plan_for(db, &report, permitted, foreground, shown.as_deref());
+            let plan = notify::plan_for(db, &report, permitted, foreground, &shown);
             Ok(env.new_string(serde_json::to_string(&plan)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.markRead(target)`: a notification's "Mark read" button, with
+/// the `ReadTarget` JSON the plan gave it. Marks the cache only and returns
+/// a `BackgroundReport` of what is still pending, to plan again with;
+/// `pushFlags` carries the change to the server.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_markRead<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    target: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let target: notify::ReadTarget = serde_json::from_str(&string(env, &target)?)?;
+            let report = notify::mark_read(crate::db::shared_db()?, &target)?;
+            Ok(env.new_string(serde_json::to_string(&report)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.pushFlags(accountId)`: send the account's queued flag changes
+/// over a fresh connection. Blocks for the network, so only a worker thread
+/// calls it; throws when the server cannot be reached (the change stays
+/// queued).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_pushFlags<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+) {
+    unowned
+        .with_env(|_env| -> Result<()> {
+            let db = crate::db::shared_db()?;
+            headless::push_flags_blocking(db, account_id)?;
+            Ok(())
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }

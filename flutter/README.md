@@ -219,11 +219,19 @@ Android withholds network access in Doze. Vendor battery savers (Samsung,
 Xiaomi, …) stop apps on their own terms and need the app set to
 unrestricted there as well.
 
-There is one new-mail notification, replaced on every post. It lists all
-unread inbox mail since the user last had the app open (`pending` in the
-report), alerts only for mail new since the previous check, is updated
-quietly or removed when that mail gets read elsewhere, and is cleared when
-the app comes to the foreground. Opening the app also marks the cache as
+New mail shows as one notification group per account, each notification
+told apart by its tag: a summary (`account:<id>`) plus one child per mail
+(`mail:<account>:<folder>:<uid>`, the open payload) for the newest eight.
+Together they list all unread inbox mail since the user last had the app
+open (`pending` in the report). Only the summary rings, and only for mail
+new since the previous check; a mail swiped away comes back only if it is
+new. Notifications are removed or recounted quietly when their mail gets
+read elsewhere, and all are cleared when the app comes to the foreground.
+Each child has a "Mark read" button and each summary "Mark all read"
+(`MailActions.kt`): the receiver marks the cache through
+`MailNative.markRead` and re-plans, and `MailFlagWorker` pushes the flags
+over a fresh connection once a network is up. Lock screens show only the
+account and a count. Opening the app also marks the cache as
 seen (`background_mark_seen`), and resuming it reloads the list and syncs
 unless auto-sync is off or a sync just ran. Settings keeps the last ten
 checks (scheduler, result, what happened to the notification) under

@@ -90,6 +90,10 @@
         <receiver
             android:name=".MailPushReceiver"
             android:exported="false" />
+        <!-- The new-mail notifications' "Mark read" buttons (MailActions.kt). -->
+        <receiver
+            android:name=".MailActionReceiver"
+            android:exported="false" />
         <meta-data
             android:name="android.webkit.WebView.MetricsOptOut"
             android:value="true" />
