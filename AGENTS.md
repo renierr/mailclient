@@ -36,7 +36,10 @@ This file is normative for all coding agents (human or AI) working in this repo.
     decisions derived from data. Return a plain struct or feed fields that
     say what to show; the frontend only decides how (sizes, fonts, layout,
     theme lookups, widgets). Toolkit-bound code (Qt/Flutter APIs, gestures,
-    rendering) stays in its frontend.
+    rendering) stays in its frontend. Heavily UI-dependent logic may live
+    in a frontend, but avoid it where possible: when something is half
+    common, half toolkit, move the common half. `SHARED-CORE.md` tracks
+    what is still duplicated and the deliberate exceptions.
 - Qt frontend: **QML (QtQuick + QtQuick.Controls)**, single source in
   `crates/mailapp/qml/`, embedded via the `Mailclient` QML module
   (`CxxQtBuilder::new_qml_module`). HTML mail rendered via `QtWebEngine`.
@@ -70,7 +73,7 @@ This file is normative for all coding agents (human or AI) working in this repo.
   SQLite only) — never add a test that dials out.
 - Do **not** add broad new external dependencies without justification. Prefer: std → small well-scoped crate → large framework. Large additions (new Qt modules, new async runtime, new DB) require user approval.
 - Do **not** put business logic in QML. QML is view-only; logic lives in Rust and is exposed via explicit bridge types.
-- Do **not** invent new top-level directories without updating this file and `PROJECT.md`. Current ones: `crates/`, `flutter/`, `qml` (inside `mailapp`), `resources/`, `scripts/`, `dist/` (gitignored).
+- Do **not** invent new top-level directories without updating this file and `PROJECT.md`. Current ones: `crates/`, `flutter/`, `qml` (inside `mailapp`), `resources/`, `scripts/`, `dist/` (gitignored). Root docs: `AGENTS.md`, `PROJECT.md`, `SHARED-CORE.md`.
 - Do **not** let the two frontends drift in features or behaviour (UI
   layout may differ, see §1). Before copying anything out of
   `mailapp` into `mailffi` (or back), check whether it belongs in `mailcore`

@@ -297,10 +297,7 @@ the same SQLite file in that directory.
 
 ## Shared code still to promote
 
-The composer (send, drafts) lives once in `mailcore::compose`, account
-saving in `mailcore::store::account_form`, the IMAP session pool, the lease
-and the panic guard in `mailcore::sync::pool`, sender avatars (letters and
-colour) in `mailcore::badge`, where a reply goes in
-`mailcore::compose::reply_address`, and new/reply/forward drafts in
-`mailcore::compose::answer`. Nothing else known. Add an entry here before making any new
-copy between `mailapp` and `mailffi`, or between QML and Dart (AGENTS.md §1).
+Tracked in the repo-root `SHARED-CORE.md`: what already lives once in
+`mailcore`, what is still written in both frontends (QML and Dart, or
+`mailapp` and `mailffi`), and what replaces it. Add an entry there before
+making any new copy.
