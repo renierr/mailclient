@@ -287,6 +287,9 @@ class ShellSearchField extends StatelessWidget {
         controller: controller,
         focusNode: focus,
         textInputAction: TextInputAction.search,
+        // A tap anywhere else ends editing; without it the cursor keeps
+        // blinking (and the keyboard stays up) after the user moved on.
+        onTapOutside: (_) => focus.unfocus(),
         decoration: InputDecoration(
           hintText: hint,
           suffixIcon: query.isEmpty

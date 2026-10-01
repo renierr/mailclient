@@ -186,6 +186,9 @@ class MessageListPaneState extends State<MessageListPane> {
                       : 'No matches for “$query”',
                 )
               : ListView.separated(
+                  // Back from a hit's reader rebuilds this pane; the key
+                  // brings the results back where they were.
+                  key: const PageStorageKey<String>('search-results'),
                   itemCount: hits.length,
                   separatorBuilder: (_, _) => const Divider(height: 1),
                   itemBuilder: (context, i) => SearchHitTile(

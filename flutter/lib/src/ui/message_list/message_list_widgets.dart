@@ -28,10 +28,14 @@ class MessageListHeader extends StatelessWidget {
       (s) => s.settings.sortDescending,
     );
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 4),
+      padding: const EdgeInsets.only(left: 2, right: 4),
       child: Row(
         children: [
+          // Narrow hit box, centred over the avatar column below it, so
+          // the title starts close to the pane edge.
           IconButton(
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 34, minHeight: 40),
             tooltip: selectionMode ? 'Leave selection' : 'Select messages',
             icon: Icon(
               selectionMode
@@ -286,15 +290,17 @@ Future<void> confirmDelete(
   required List<int> uids,
   required bool permanent,
   bool purge = false,
+  String? subject,
+  int? folderId,
 }) async {
   if (!purge && !permanent && !state.settings.confirmDelete) {
-    await state.deleteMessages(uids);
+    await state.deleteMessages(uids, folderId: folderId);
     return;
   }
   final title = purge || permanent ? 'Delete permanently?' : 'Move to Trash?';
   final what = uids.length > 1
       ? '${uids.length} messages'
-      : '“${subjectOf(state, uids.first)}”';
+      : '“${subject ?? subjectOf(state, uids.first)}”';
   final how = purge || permanent
       ? 'will be destroyed on the server. This cannot be undone.'
       : 'will be moved to Trash.';
@@ -326,9 +332,9 @@ Future<void> confirmDelete(
       false;
   if (!confirmed || !context.mounted) return;
   if (purge) {
-    await state.purgeMessages(uids);
+    await state.purgeMessages(uids, folderId: folderId);
   } else {
-    await state.deleteMessages(uids);
+    await state.deleteMessages(uids, folderId: folderId);
   }
 }
 
@@ -377,33 +383,25 @@ class MessageTile extends StatelessWidget {
         leading: selectionMode
             ? Checkbox(value: checked, onChanged: (_) => onToggle())
             : SizedBox(
-                width: 40,
-                child: Row(
-                  children: [
-                    // Unread marker beside the avatar, like the Qt row's dot
-                    // column — bold text alone is too easy to miss.
-                    if (message.unread)
-                      Container(
-                        width: 8,
-                        height: 8,
-                        margin: const EdgeInsets.only(right: 4),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: theme.colorScheme.primary,
-                        ),
-                      )
-                    else
-                      const SizedBox(width: 12),
-                    CircleAvatar(
-                      radius: 13,
-                      backgroundColor: avatarBg,
-                      foregroundColor: theme.colorScheme.onPrimary,
-                      child: Text(
-                        senderInitial(message.from),
-                        style: const TextStyle(fontSize: 12),
-                      ),
+                width: 30,
+                // Unread marker as a badge on the avatar's corner, like the
+                // Qt row — bold text alone is too easy to miss, and a column
+                // of its own would cost the row its left edge.
+                child: Badge(
+                  isLabelVisible: message.unread,
+                  smallSize: 10,
+                  alignment: AlignmentDirectional.topStart,
+                  offset: const Offset(-2, -2),
+                  backgroundColor: theme.colorScheme.primary,
+                  child: CircleAvatar(
+                    radius: 13,
+                    backgroundColor: avatarBg,
+                    foregroundColor: theme.colorScheme.onPrimary,
+                    child: Text(
+                      senderInitial(message.from),
+                      style: const TextStyle(fontSize: 12),
                     ),
-                  ],
+                  ),
                 ),
               ),
         onTap: onTap,
@@ -468,8 +466,17 @@ class MessageTile extends StatelessWidget {
                   tooltip: 'Message actions',
                   padding: const EdgeInsets.all(4),
                   icon: const Icon(Icons.more_vert, size: 18),
-                  onSelected: (v) => runMessageAction(context, message, v),
-                  itemBuilder: (context) => messageActionItems(message),
+                  onSelected: (v) => runMessageAction(
+                    context,
+                    v,
+                    uid: message.uid,
+                    subject: message.subject,
+                    unread: message.unread,
+                  ),
+                  itemBuilder: (context) => messageActionItems(
+                    unread: message.unread,
+                    starred: message.starred,
+                  ),
                 ),
               ],
             ),
@@ -489,21 +496,24 @@ class MessageTile extends StatelessWidget {
   }
 }
 
-List<PopupMenuEntry<String>> messageActionItems(MessageSummary message) => [
+List<PopupMenuEntry<String>> messageActionItems({
+  required bool unread,
+  required bool starred,
+}) => [
   PopupMenuItem(
     value: 'read',
     child: MenuRow(
-      icon: message.unread
+      icon: unread
           ? Icons.mark_email_read_outlined
           : Icons.mark_email_unread_outlined,
-      text: message.unread ? 'Mark as read' : 'Mark as unread',
+      text: unread ? 'Mark as read' : 'Mark as unread',
     ),
   ),
   PopupMenuItem(
     value: 'star',
     child: MenuRow(
-      icon: message.starred ? Icons.star : Icons.star_border,
-      text: message.starred ? 'Remove star' : 'Star',
+      icon: starred ? Icons.star : Icons.star_border,
+      text: starred ? 'Remove star' : 'Star',
     ),
   ),
   const PopupMenuItem(
@@ -539,30 +549,45 @@ Future<void> showMessageContextMenu(
       Rect.fromPoints(at, at),
       Offset.zero & overlay.size,
     ),
-    items: messageActionItems(message),
+    items: messageActionItems(unread: message.unread, starred: message.starred),
   );
   if (choice != null && context.mounted) {
-    await runMessageAction(context, message, choice);
+    await runMessageAction(
+      context,
+      choice,
+      uid: message.uid,
+      subject: message.subject,
+      unread: message.unread,
+    );
   }
 }
 
+/// One row action on [uid]. `folderId` is the shown folder unless given;
+/// a search hit passes the folder it lives in.
 Future<void> runMessageAction(
   BuildContext context,
-  MessageSummary message,
-  String action,
-) async {
+  String action, {
+  required int uid,
+  required String subject,
+  required bool unread,
+  int? folderId,
+}) async {
   final state = context.read<MailState>();
-  final uid = message.uid;
   switch (action) {
     case 'read':
-      await state.setRead(uid, message.unread);
+      await state.setRead(uid, unread, folderId: folderId);
     case 'star':
-      await state.toggleStar(uid);
+      await state.toggleStar(uid, folderId: folderId);
     case 'archive':
-      await state.archiveMessages([uid]);
+      await state.archiveMessages([uid], folderId: folderId);
     case 'move':
       if (context.mounted) {
-        await MoveToDialog.show(context, uids: [uid], subject: message.subject);
+        await MoveToDialog.show(
+          context,
+          uids: [uid],
+          subject: subject,
+          folderId: folderId,
+        );
       }
     case 'delete':
       if (context.mounted) {
@@ -570,7 +595,9 @@ Future<void> runMessageAction(
           context,
           state,
           uids: [uid],
-          permanent: state.deleteIsPermanent,
+          subject: subject,
+          folderId: folderId,
+          permanent: state.deleteIsPermanentIn(folderId ?? state.folderId),
         );
       }
     case 'purge':
@@ -579,6 +606,8 @@ Future<void> runMessageAction(
           context,
           state,
           uids: [uid],
+          subject: subject,
+          folderId: folderId,
           permanent: true,
           purge: true,
         );
@@ -586,8 +615,8 @@ Future<void> runMessageAction(
   }
 }
 
-/// One search hit. Navigates only: mutating a row that lives in another
-/// folder from here would act on the wrong mailbox.
+/// One search hit. Tapping opens it; the ⋮ / right-click menu offers the
+/// folder row's actions, aimed at the folder the hit lives in.
 class SearchHitTile extends StatelessWidget {
   const SearchHitTile({super.key, required this.hit, this.onOpened});
 
@@ -597,11 +626,35 @@ class SearchHitTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     void open() {
+      FocusManager.instance.primaryFocus?.unfocus();
       context.read<MailState>().jumpToHit(hit);
       onOpened?.call();
     }
 
-    return ListTile(
+    Future<void> act(String action) async {
+      if (action == 'open') return open();
+      final folderId = await context.read<MailState>().folderIdOfHit(hit);
+      if (!context.mounted) return;
+      await runMessageAction(
+        context,
+        action,
+        uid: hit.uid,
+        subject: hit.subject,
+        unread: hit.unread,
+        folderId: folderId,
+      );
+    }
+
+    List<PopupMenuEntry<String>> items() => [
+      const PopupMenuItem(
+        value: 'open',
+        child: MenuRow(icon: Icons.open_in_new, text: 'Open message'),
+      ),
+      const PopupMenuDivider(),
+      ...messageActionItems(unread: hit.unread, starred: hit.starred),
+    ];
+
+    final tile = ListTile(
       title: Row(
         children: [
           Expanded(child: Text(hit.subject, overflow: TextOverflow.ellipsis)),
@@ -631,24 +684,31 @@ class SearchHitTile extends StatelessWidget {
               ),
             ),
           PopupMenuButton<String>(
-            tooltip: 'Actions',
+            tooltip: 'Message actions',
             icon: const Icon(Icons.more_vert, size: 18),
-            onSelected: (v) {
-              if (v == 'open') open();
-            },
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                value: 'open',
-                child: MenuRow(
-                  icon: Icons.open_in_new,
-                  text: 'Jump to message',
-                ),
-              ),
-            ],
+            onSelected: act,
+            itemBuilder: (context) => items(),
           ),
         ],
       ),
       onTap: open,
+    );
+    return GestureDetector(
+      // Desktop parity with folder rows: right-click opens the same menu.
+      onSecondaryTapDown: (d) async {
+        final overlay =
+            Overlay.of(context).context.findRenderObject() as RenderBox;
+        final choice = await showMenu<String>(
+          context: context,
+          position: RelativeRect.fromRect(
+            Rect.fromPoints(d.globalPosition, d.globalPosition),
+            Offset.zero & overlay.size,
+          ),
+          items: items(),
+        );
+        if (choice != null) await act(choice);
+      },
+      child: tile,
     );
   }
 }

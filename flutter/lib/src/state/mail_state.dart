@@ -158,8 +158,12 @@ class MailState extends ChangeNotifier {
 
   /// Deleting from Junk, from Trash itself, or without a Trash folder destroys
   /// outright — the confirm dialog says which, because only one is undoable.
-  bool get deleteIsPermanent {
-    final f = folder;
+  bool get deleteIsPermanent => deleteIsPermanentIn(_folderId);
+
+  /// [deleteIsPermanent] for any folder of this account, e.g. a search
+  /// hit's.
+  bool deleteIsPermanentIn(int folderId) {
+    final f = _folders.where((o) => o.id == folderId).firstOrNull;
     if (f == null) return true;
     if (f.role == FolderRole.junk || f.role == FolderRole.trash) return true;
     return !_folders.any((o) => o.role == FolderRole.trash);
@@ -258,11 +262,19 @@ class MailState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _applyRead(int uid, bool read) async {
-    await _core.markRead(_accountId, _folderId, uid, read);
-    _patchRow(uid, (m) => m.copyWith(unread: !read));
+  Future<void> _applyRead(int uid, bool read, {int? folderId}) async {
+    final fid = folderId ?? _folderId;
+    await _core.markRead(_accountId, fid, uid, read);
+    if (fid == _folderId) _patchRow(uid, (m) => m.copyWith(unread: !read));
     unawaited(_reloadFolders());
+    await _refreshHits();
     notifyListeners();
+  }
+
+  /// A row action from the search results may hit another folder than the
+  /// one shown: re-read the hits so their flags (or their absence) show.
+  Future<void> _refreshHits() async {
+    if (searching) await _rerunSearch();
   }
 
   void closeMessage() {
@@ -275,14 +287,18 @@ class MailState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> toggleStar(int uid) async {
-    final starred = await _core.toggleStar(_accountId, _folderId, uid);
-    _patchRow(uid, (m) => m.copyWith(starred: starred));
+  // `folderId` defaults to the shown folder; search hits pass their own.
+
+  Future<void> toggleStar(int uid, {int? folderId}) async {
+    final fid = folderId ?? _folderId;
+    final starred = await _core.toggleStar(_accountId, fid, uid);
+    if (fid == _folderId) _patchRow(uid, (m) => m.copyWith(starred: starred));
+    await _refreshHits();
     notifyListeners();
   }
 
-  Future<void> setRead(int uid, bool read) async {
-    await _applyRead(uid, read);
+  Future<void> setRead(int uid, bool read, {int? folderId}) async {
+    await _applyRead(uid, read, folderId: folderId);
   }
 
   /// Delete a selection — Trash, or destroyed where Trash does not apply.
@@ -290,28 +306,47 @@ class MailState extends ChangeNotifier {
   /// Delete a selection: to Trash and undoable (see [undoOffer]), or — from
   /// Junk, from Trash, or without a Trash folder — a purge job the UI has
   /// already confirmed as permanent.
-  Future<void> deleteMessages(List<int> uids) => _queueUndoable(
-    () => _core.deleteMessages(_accountId, _folderId, uids),
-    uids,
-  );
+  Future<void> deleteMessages(List<int> uids, {int? folderId}) =>
+      _queueUndoable(
+        () => _core.deleteMessages(_accountId, folderId ?? _folderId, uids),
+        uids,
+        folderId: folderId,
+      );
 
   /// Destroy a selection server-side. No undo; the UI always confirms first.
-  Future<void> purgeMessages(List<int> uids) => _queue(
-    'Purge',
-    () => _core.purgeMessages(_accountId, _folderId, uids),
-    clearSelection: true,
-    closeUid: uids,
-  );
+  Future<void> purgeMessages(List<int> uids, {int? folderId}) {
+    final fid = folderId ?? _folderId;
+    return _queue(
+      'Purge',
+      () => _core.purgeMessages(_accountId, fid, uids),
+      clearSelection: fid == _folderId,
+      closeUid: fid == _folderId ? uids : const [],
+    );
+  }
 
-  Future<void> archiveMessages(List<int> uids) => _queueUndoable(
-    () => _core.archiveMessages(_accountId, _folderId, uids),
-    uids,
-  );
+  Future<void> archiveMessages(List<int> uids, {int? folderId}) =>
+      _queueUndoable(
+        () => _core.archiveMessages(_accountId, folderId ?? _folderId, uids),
+        uids,
+        folderId: folderId,
+      );
 
-  Future<void> moveMessages(List<int> uids, String destPath) => _queueUndoable(
-    () => _core.moveMessages(_accountId, _folderId, uids, destPath),
-    uids,
-  );
+  Future<void> moveMessages(List<int> uids, String destPath, {int? folderId}) =>
+      _queueUndoable(
+        () => _core.moveMessages(
+          _accountId,
+          folderId ?? _folderId,
+          uids,
+          destPath,
+        ),
+        uids,
+        folderId: folderId,
+      );
+
+  /// The folder a search hit lives in; older index rows may lack the id.
+  Future<int> folderIdOfHit(SearchHit hit) async => hit.folderId >= 0
+      ? hit.folderId
+      : await _core.folderIdForPath(_accountId, hit.folder);
 
   /// The latest undoable action, for the Undo snackbar. `seq` grows with
   /// every offer so a repeat of the same label still shows.
@@ -328,6 +363,7 @@ class MailState extends ChangeNotifier {
       if (_undoOffer?.batch == batch) _undoOffer = null;
       await _reloadMessages();
       await _reloadFolders();
+      await _refreshHits();
     } catch (e) {
       showStatus(coreErrorText(e), isError: true);
     }
@@ -444,12 +480,11 @@ class MailState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Open a search hit: leave search, land in its folder, open the message.
+  /// Open a search hit: switch to its folder underneath and open the
+  /// message. The search stays, so back from the reader returns to the
+  /// results (Qt does the same).
   Future<void> jumpToHit(SearchHit hit) async {
-    final folderId = hit.folderId >= 0
-        ? hit.folderId
-        : await _core.folderIdForPath(_accountId, hit.folder);
-    exitSearch();
+    final folderId = await folderIdOfHit(hit);
     _folderId = folderId;
     _openUid = -1;
     _openMessage = null;
@@ -937,15 +972,21 @@ class MailState extends ChangeNotifier {
   /// and is tracked like any other job.
   Future<void> _queueUndoable(
     Future<MoveResult> Function() start,
-    List<int> uids,
-  ) async {
+    List<int> uids, {
+    int? folderId,
+  }) async {
+    final fid = folderId ?? _folderId;
+    // Only rows of the shown folder can be the open or selected ones.
+    final shown = fid == _folderId ? uids : const <int>[];
     try {
       final r = await start();
-      _selectedUids.clear();
-      _selectionMode = false;
+      if (shown.isNotEmpty) {
+        _selectedUids.clear();
+        _selectionMode = false;
+      }
       if (r.purging) {
         _busyKinds.add('Purge');
-        if (uids.contains(_openUid)) {
+        if (shown.contains(_openUid)) {
           _pendingClose = (
             kind: 'Purge',
             accountId: _accountId,
@@ -957,15 +998,16 @@ class MailState extends ChangeNotifier {
         return;
       }
       if (r.batch.isNotEmpty) {
-        if (uids.contains(_openUid)) closeMessage();
+        if (shown.contains(_openUid)) closeMessage();
         _undoOffer = (batch: r.batch, label: r.label, seq: ++_undoSeq);
         await _reloadMessages();
         await _reloadFolders();
+        await _refreshHits();
       }
       showStatus(r.label);
     } catch (e) {
       showStatus(coreErrorText(e), isError: true);
-      await _closeIfOpenGone(uids);
+      await _closeIfOpenGone(shown);
     }
   }
 

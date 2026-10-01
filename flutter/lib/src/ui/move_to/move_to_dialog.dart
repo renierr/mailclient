@@ -10,9 +10,17 @@ import '../dialogs/mail_dialog.dart';
 /// Subscribed folders only, current folder dimmed out — moving mail where it
 /// already is just reports "Already here".
 class MoveToDialog extends StatelessWidget {
-  const MoveToDialog({super.key, required this.uids, this.subject});
+  const MoveToDialog({
+    super.key,
+    required this.uids,
+    this.subject,
+    this.folderId,
+  });
 
   final List<int> uids;
+
+  /// The folder the messages live in, when not the shown one (search hits).
+  final int? folderId;
 
   /// Shown for a single message, so the dialog names what it moves.
   final String? subject;
@@ -21,10 +29,12 @@ class MoveToDialog extends StatelessWidget {
     BuildContext context, {
     required List<int> uids,
     String? subject,
+    int? folderId,
   }) async {
     await MailDialog.show(
       context,
-      builder: (_) => MoveToDialog(uids: uids, subject: subject),
+      builder: (_) =>
+          MoveToDialog(uids: uids, subject: subject, folderId: folderId),
     );
   }
 
@@ -33,7 +43,8 @@ class MoveToDialog extends StatelessWidget {
     final folders = context.select<MailState, List<Folder>>(
       (s) => s.visibleFolders,
     );
-    final currentId = context.select<MailState, int>((s) => s.folderId);
+    final shownId = context.select<MailState, int>((s) => s.folderId);
+    final currentId = folderId ?? shownId;
     final title = uids.length > 1
         ? 'Move ${uids.length} messages to:'
         : subject != null && subject!.isNotEmpty
@@ -62,7 +73,11 @@ class MoveToDialog extends StatelessWidget {
                     ? null
                     : () {
                         Navigator.of(context).pop();
-                        context.read<MailState>().moveMessages(uids, f.path);
+                        context.read<MailState>().moveMessages(
+                          uids,
+                          f.path,
+                          folderId: folderId,
+                        );
                       },
               );
             },

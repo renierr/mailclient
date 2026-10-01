@@ -231,6 +231,16 @@ class _MailShellState extends State<MailShell> {
       state.toggleReaderFullscreen();
       return;
     }
+    // Where the reader stands in for the list (one and two panes), back
+    // leaves it first: a hit opened from search returns to the results.
+    if (effective < Breakpoints.medium && state.openUid >= 0) {
+      if (effective < Breakpoints.compact) {
+        _paneBack(state);
+      } else {
+        state.closeMessage();
+      }
+      return;
+    }
     // One back press leaves search entirely.
     if (state.searching) {
       _closeSearch(state);

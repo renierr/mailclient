@@ -32,9 +32,9 @@ Rectangle {
     property string filterText: ""
     // Account-wide FTS mode: `searchRows` are index hits across every folder
     // (rank order, each with folder/folder_id), shown instead of the folder
-    // feed. Rows are navigation-only here — every mutation below is scoped
-    // to the current folder, so acting on a foreign UID would hit the wrong
-    // message. Selecting a hit jumps to its folder and clears the search.
+    // feed. Opening a hit selects its folder and keeps the search; a row
+    // action selects the hit's folder first (`searchFolderNeeded`), since
+    // every bridge mutation is scoped to the selected folder.
     property bool searching: false
     property var searchRows: []
     // `totalCount` is the local cache count; `serverTotal` is the count seen
@@ -60,6 +60,8 @@ Rectangle {
 
     signal messageSelected(int uid)
     signal searchJump(string folderPath, int uid)
+    // A search hit's row action needs its folder selected first (Main).
+    signal searchFolderNeeded(string folderPath)
     signal starToggled(int uid)
     signal archiveRequested(int uid)
     signal moveRequested(int uid)
@@ -99,6 +101,14 @@ Rectangle {
     property string menuFolderPath: ""
     property bool menuStarred: false
     property bool menuUnread: false
+
+    // The menu's UID, after making sure a search hit's folder is the one the
+    // bridge acts on.
+    function menuTarget() {
+        if (root.searching)
+            root.searchFolderNeeded(root.menuFolderPath);
+        return root.menuUid;
+    }
 
     color: Theme.bg
 
@@ -457,7 +467,7 @@ Rectangle {
             Qt.callLater(root.restoreScroll);
     }
     onSearchingChanged: {
-        // Search results are navigation-only: a stale checkbox set must
+        // Search results have no bulk selection: a stale checkbox set must
         // never act on foreign-folder UIDs afterwards.
         if (root.searching)
             root.setSelectionMode(false);
@@ -496,10 +506,10 @@ Rectangle {
 
                     // Selection-mode toggle: checkboxes stay out of the way
                     // until bulk actions are actually wanted. Hidden while
-                    // searching (results are navigation-only).
+                    // searching (bulk actions stay folder-scoped).
                     IconButton {
                         visible: !root.searching
-                        Layout.leftMargin: Theme.sm
+                        Layout.leftMargin: Theme.xs
                         text: root.selectionMode ? Icons.checkBox : Icons.checkBoxBlank
                         iconFont: true
                         fontSize: Theme.fontSmall
@@ -643,7 +653,10 @@ Rectangle {
                 required property int index
                 required property var model
 
-                readonly property bool current: row.model.uid === root.currentUid
+                // Search hits span folders: a UID is only unique within one.
+                readonly property bool current: row.model.uid === root.currentUid && (!root.searching
+                                                                                      || row.model.folder
+                                                                                      === root.folderName)
                 readonly property bool checked: root.selectionVersion >= 0 && root.isSelected(row.model.uid)
 
                 Rectangle {
@@ -675,23 +688,14 @@ Rectangle {
                     hoverEnabled: true
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     onClicked: mouse => {
-                                   if (root.searching) {
-                                       // Navigation-only: every mutation below is scoped
-                                       // to the current folder.
-                                       if (mouse.button === Qt.RightButton) {
-                                           root.menuUid = row.model.uid;
-                                           root.menuFolderPath = row.model.folder;
-                                           rowMenu.popup();
-                                       } else {
-                                           root.emitLater2(root.searchJump, row.model.folder, row.model.uid);
-                                       }
-                                       return;
-                                   }
                                    if (mouse.button === Qt.RightButton) {
                                        root.menuUid = row.model.uid;
+                                       root.menuFolderPath = row.model.folder;
                                        root.menuStarred = row.model.starred;
                                        root.menuUnread = row.model.unread;
                                        rowMenu.popup();
+                                   } else if (root.searching) {
+                                       root.emitLater2(root.searchJump, row.model.folder, row.model.uid);
                                    } else if (mouse.modifiers & Qt.ControlModifier) {
                                        if (!root.selectionMode)
                                        root.setSelectionMode(true);
@@ -718,20 +722,6 @@ Rectangle {
                     anchors.bottomMargin: Theme.xs
                     spacing: Theme.xs
 
-                    // Unread marker column.
-                    Item {
-                        width: 8
-                        height: parent.height
-                        Rectangle {
-                            anchors.centerIn: parent
-                            width: 8
-                            height: 8
-                            radius: 4
-                            color: Theme.accent
-                            visible: row.model.unread
-                        }
-                    }
-
                     // Avatar slot: in selection mode the checkbox takes the
                     // avatar's place instead of a column of its own, so the
                     // sender/subject keep their width. Custom-drawn so
@@ -743,6 +733,7 @@ Rectangle {
                         z: 1
 
                         Avatar {
+                            id: avatar
                             anchors.centerIn: parent
                             visible: !root.selectionMode
                             implicitWidth: Math.round(26 * Theme.uiScale)
@@ -774,6 +765,19 @@ Rectangle {
                                 font.bold: true
                             }
                         }
+                        // Unread marker as a badge on the avatar's corner, not
+                        // a column of its own: the row starts at the pane edge.
+                        Rectangle {
+                            x: avatar.x - 1
+                            y: avatar.y - 1
+                            width: 10
+                            height: 10
+                            radius: 5
+                            color: Theme.accent
+                            border.width: 2
+                            border.color: Theme.bg
+                            visible: row.model.unread && !root.selectionMode
+                        }
                         MouseArea {
                             anchors.fill: parent
                             enabled: root.selectionMode
@@ -782,7 +786,7 @@ Rectangle {
                     }
 
                     Column {
-                        width: parent.width - 8 - checkCell.width - Theme.xs * 4
+                        width: parent.width - checkCell.width - Theme.xs * 3
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 2
 
@@ -851,7 +855,7 @@ Rectangle {
                             }
                             // Row actions menu (⋮), opening the same menu as
                             // right-click: mark read/unread, star, archive,
-                            // move, trash, purge (or Open in search mode).
+                            // move, trash, purge (plus Open in search mode).
                             // Shown on hover and on the current/checked row
                             // so keyboard selection keeps it reachable.
                             IconButton {
@@ -953,52 +957,48 @@ Rectangle {
     AppMenu {
         id: rowMenu
 
-        // Search hits belong to foreign folders: the folder-scoped actions
-        // below would hit the wrong message, so search mode only opens.
+        // Search hits belong to foreign folders: `menuTarget` has Main select
+        // the hit's folder first, so the folder-scoped actions hit the right
+        // message (the results stay on screen).
         AppMenuItem {
             visible: root.searching
             glyph: Icons.mail
             label: qsTr("Open message")
             onTriggered: Qt.callLater(root.searchJump, root.menuFolderPath, root.menuUid)
         }
+        MenuSeparator {
+            visible: root.searching
+        }
         AppMenuItem {
-            visible: !root.searching
             glyph: root.menuUnread ? Icons.markRead : Icons.markUnread
             label: root.menuUnread ? qsTr("Mark as read") : qsTr("Mark as unread")
-            onTriggered: Qt.callLater(root.markReadRequested, root.menuUid, root.menuUnread)
+            onTriggered: Qt.callLater(root.markReadRequested, root.menuTarget(), root.menuUnread)
         }
         AppMenuItem {
-            visible: !root.searching
             glyph: root.menuStarred ? Icons.starBorder : Icons.star
             label: root.menuStarred ? qsTr("Remove star") : qsTr("Star")
-            onTriggered: root.emitLater(root.starToggled, root.menuUid)
+            onTriggered: root.emitLater(root.starToggled, root.menuTarget())
         }
         AppMenuItem {
-            visible: !root.searching
             glyph: Icons.archive
             label: qsTr("Archive")
-            onTriggered: root.emitLater(root.archiveRequested, root.menuUid)
+            onTriggered: root.emitLater(root.archiveRequested, root.menuTarget())
         }
         AppMenuItem {
-            visible: !root.searching
             glyph: Icons.driveFileMove
             label: qsTr("Move to…")
-            onTriggered: root.emitLater(root.moveRequested, root.menuUid)
+            onTriggered: root.emitLater(root.moveRequested, root.menuTarget())
         }
         AppMenuItem {
-            visible: !root.searching
             glyph: Icons.trash
             label: qsTr("Move to Trash")
-            onTriggered: root.emitLater(root.deleteRequested, root.menuUid)
+            onTriggered: root.emitLater(root.deleteRequested, root.menuTarget())
         }
-        MenuSeparator {
-            visible: !root.searching
-        }
+        MenuSeparator {}
         AppMenuItem {
-            visible: !root.searching
             glyph: Icons.deleteForever
             label: qsTr("Delete permanently…")
-            onTriggered: root.emitLater(root.purgeRequested, root.menuUid)
+            onTriggered: root.emitLater(root.purgeRequested, root.menuTarget())
         }
     }
 

@@ -293,12 +293,19 @@ ApplicationWindow {
         }
     }
 
-    // Open a search hit: leave search mode, jump to its folder, open it.
+    // Open a search hit: switch to its folder underneath and open it. The
+    // search stays, so Back from the reader returns to the results.
     function jumpToSearchResult(path, uid) {
-        searchField.text = "";
-        root.selectFolder(path);
+        root.useSearchFolder(path);
         if (root.currentFolder === path)
             root.openMessage(uid);
+    }
+
+    // Bridge actions act on the selected folder: a search hit's row action
+    // selects the hit's folder first (the results stay on screen).
+    function useSearchFolder(path) {
+        if (path !== "" && root.currentFolder !== path)
+            root.selectFolder(path);
     }
 
     // --- actions ----------------------------------------------------------
@@ -386,6 +393,8 @@ ApplicationWindow {
             return;
         showResult("", backend.toggle_star(uid));
         reloadMessages();
+        if (root.searching)
+            root.updateSearch(false);
     }
 
     // Moves to Trash — except spam (destroyed outright, junk never touches
@@ -712,6 +721,8 @@ ApplicationWindow {
         function onUndo_available(batch, label) {
             reloadFolders();
             reloadMessages();
+            if (root.searching)
+                root.updateSearch(false);
             undoToast.show(batch, label);
         }
 
@@ -1197,6 +1208,7 @@ ApplicationWindow {
             searchRows: root.searchRows
             onMessageSelected: uid => root.openMessage(uid)
             onSearchJump: (path, uid) => root.jumpToSearchResult(path, uid)
+            onSearchFolderNeeded: path => root.useSearchFolder(path)
             onStarToggled: uid => root.toggleStar(uid)
             onArchiveRequested: uid => root.archiveMessage(uid)
             onMoveRequested: uid => root.openMove(uid)
@@ -1204,6 +1216,8 @@ ApplicationWindow {
                 var r = backend.mark_read(uid, read);
                 reloadFolders();
                 reloadMessages();
+                if (root.searching)
+                    root.updateSearch(false);
                 root.statusText = r !== "" ? r : (read ? qsTr("Marked as read") : qsTr("Marked as unread"));
             }
             onDeleteRequested: uid => root.deleteMessage(uid)
