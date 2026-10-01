@@ -72,6 +72,10 @@ pub fn save_all_attachments_to(db: &Db, message_id: i64, dir: &str) -> Result<u3
 /// cache folder, created when missing) as `<message>-<attachment>-<name>`,
 /// so two same-named attachments never replace each other while open.
 /// Returns the path.
+///
+/// Also prunes viewer copies older than a day in the same folder, so
+/// opening files does not fill storage over time (notably the app cache
+/// on Android). Pruning is best-effort and never fails the open.
 pub fn write_attachment_copy(db: &Db, attachment_id: i64, dir: &Path) -> Result<PathBuf> {
     let a = get_attachment(db, attachment_id)?;
     std::fs::create_dir_all(dir)?;
@@ -82,6 +86,7 @@ pub fn write_attachment_copy(db: &Db, attachment_id: i64, dir: &Path) -> Result<
         safe_attachment_name(a.filename.as_deref(), attachment_id)
     ));
     save_attachment_to_path(db, attachment_id, &dest)?;
+    crate::paths::prune_temp_copies(dir, Some(&dest));
     Ok(dest)
 }
 

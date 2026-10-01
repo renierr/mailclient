@@ -100,6 +100,11 @@ class AttachmentCard extends StatelessWidget {
 }
 
 /// Cached bytes, downloading first when the message arrived without them.
+///
+/// `downloadAttachments` only queues the job — the bytes land when its
+/// `Attachments` finish event arrives — so the waiter is registered *before*
+/// queueing and awaited. Awaiting the queue call alone races the download:
+/// the re-read below comes back empty and the user has to tap Open twice.
 Future<List<int>?> attachmentBytes(
   MailState state,
   MessageBody message,
@@ -107,12 +112,28 @@ Future<List<int>?> attachmentBytes(
 ) async {
   var bytes = await MailCore.instance.attachmentBytes(attachmentId);
   if (bytes != null) return bytes;
-  await MailCore.instance.downloadAttachments(
-    state.accountId,
-    state.folderId,
-    message.uid,
-  );
-  return MailCore.instance.attachmentBytes(attachmentId);
+  // Parallel downloads share the `Attachments` kind, so a finish event may
+  // belong to another message's job: keep waiting while nothing arrived.
+  for (var attempt = 0; attempt < 5; attempt++) {
+    final finished = state.nextFinished('Attachments');
+    try {
+      await MailCore.instance.downloadAttachments(
+        state.accountId,
+        state.folderId,
+        message.uid,
+      );
+    } catch (e) {
+      if (!coreErrorText(e).contains('already running')) {
+        // The job never started; there is no finish event coming.
+        return MailCore.instance.attachmentBytes(attachmentId);
+      }
+      // Otherwise the bytes are on their way already — wait below.
+    }
+    await finished;
+    bytes = await MailCore.instance.attachmentBytes(attachmentId);
+    if (bytes != null) return bytes;
+  }
+  return null;
 }
 
 Future<void> openAttachment(

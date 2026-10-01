@@ -92,5 +92,9 @@ pub(crate) fn draft_attachment_path(
     };
     file.write_all(&bytes)
         .map_err(|e| format!("cannot write draft attachment: {e}"))?;
+    drop(file);
+    // Each draft staging dir is single-use; prune the ones older than a day
+    // so abandoned drafts do not fill the temp folder. Best-effort.
+    mailcore::paths::prune_stale_draft_dirs(&base);
     Ok(file_url(&dest))
 }

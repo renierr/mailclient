@@ -177,6 +177,86 @@ pub fn free_path(dir: &std::path::Path, name: &str) -> PathBuf {
     p
 }
 
+/// How long a viewer copy or draft staging dir may lie around in the
+/// platform temp folder before it is pruned (24 h). The external viewer
+/// keeps its own handle once opened, so deleting a stale copy only stops
+/// storage from filling up — on Android this is the app cache, which the
+/// OS otherwise clears on its own schedule only.
+pub const TEMP_COPY_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
+/// Prefix of the per-draft staging dirs created for the composer.
+pub const DRAFT_TEMP_PREFIX: &str = "mailclient-draft-";
+
+/// Best-effort prune of viewer copies older than [`TEMP_COPY_MAX_AGE`] in
+/// `dir` (the dedicated `mailclient-attachments` folder). `keep` is the
+/// file just written and is never deleted. Never fails — a prune must not
+/// break the open it runs alongside.
+pub fn prune_temp_copies(dir: &std::path::Path, keep: Option<&std::path::Path>) {
+    prune_older_than(dir, TEMP_COPY_MAX_AGE, keep);
+}
+
+/// Best-effort prune of stale [`DRAFT_TEMP_PREFIX`] staging dirs in the
+/// base temp folder. Never fails, for the same reason as above.
+pub fn prune_stale_draft_dirs(base: &std::path::Path) {
+    let entries = match std::fs::read_dir(base) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(TEMP_COPY_MAX_AGE)
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with(DRAFT_TEMP_PREFIX) {
+            continue;
+        }
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let stale = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .map(|t| t <= cutoff)
+            .unwrap_or(false);
+        if stale {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
+}
+
+fn prune_older_than(
+    dir: &std::path::Path,
+    max_age: std::time::Duration,
+    keep: Option<&std::path::Path>,
+) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(max_age)
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if let Some(k) = keep {
+            if path == k {
+                continue;
+            }
+        }
+        if !path.is_file() {
+            continue;
+        }
+        let stale = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .map(|t| t <= cutoff)
+            .unwrap_or(false);
+        if stale {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,5 +395,69 @@ mod tests {
             file_url_to_path("file://localhost/home/u/x.pdf"),
             PathBuf::from("/home/u/x.pdf")
         );
+    }
+
+    #[cfg(unix)]
+    fn age(path: &std::path::Path, secs: u64) {
+        use std::time::{Duration, SystemTime};
+        let old = SystemTime::now() - Duration::from_secs(secs);
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+    }
+
+    #[test]
+    fn prune_keeps_fresh_copies_and_drops_stale_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let fresh = dir.path().join("1-1-fresh.pdf");
+        let stale = dir.path().join("2-2-stale.pdf");
+        std::fs::write(&fresh, b"x").unwrap();
+        std::fs::write(&stale, b"x").unwrap();
+        #[cfg(unix)]
+        age(&stale, 7 * 24 * 3600);
+        #[cfg(unix)]
+        {
+            prune_temp_copies(dir.path(), None);
+            assert!(fresh.exists());
+            assert!(!stale.exists());
+        }
+        #[cfg(not(unix))]
+        {
+            // Without mtime control both are fresh and survive.
+            prune_temp_copies(dir.path(), None);
+            assert!(fresh.exists());
+            assert!(stale.exists());
+        }
+    }
+
+    #[test]
+    fn prune_never_deletes_the_file_just_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let keep = dir.path().join("3-3-keep.pdf");
+        std::fs::write(&keep, b"x").unwrap();
+        prune_older_than(&keep, std::time::Duration::ZERO, Some(&keep));
+        assert!(keep.exists());
+    }
+
+    #[test]
+    fn prune_tolerates_a_missing_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        prune_temp_copies(&dir.path().join("gone"), None);
+        prune_stale_draft_dirs(&dir.path().join("gone"));
+    }
+
+    #[test]
+    fn prune_leaves_unrelated_files_and_dirs_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let other = dir.path().join("something-else");
+        std::fs::create_dir(&other).unwrap();
+        let plain = dir.path().join("notes.txt");
+        std::fs::write(&plain, b"x").unwrap();
+        prune_stale_draft_dirs(dir.path());
+        assert!(other.exists());
+        assert!(plain.exists());
     }
 }
