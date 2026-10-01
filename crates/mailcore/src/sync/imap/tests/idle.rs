@@ -39,7 +39,10 @@ async fn new_mail_ends_the_idle_as_a_change() {
     let session = sync.session().unwrap();
     assert!(session.has_capability("IDLE"));
 
-    let end = session.idle(std::future::pending()).await.unwrap();
+    let end = session
+        .idle(std::future::pending(), || false)
+        .await
+        .unwrap();
     assert_eq!(end, IdleEnd::Changed);
     assert!(sync.is_healthy().await, "the session answers after DONE");
     let sent = server.received.lock().await;
@@ -55,12 +58,31 @@ async fn heartbeats_do_not_end_the_idle_but_the_wake_does() {
 
     let wake = tokio::time::sleep(Duration::from_millis(100));
     let session = sync.session().unwrap();
-    let end = session.idle(wake).await.unwrap();
+    let end = session.idle(wake, || false).await.unwrap();
     assert_eq!(end, IdleEnd::Woken);
     let stats = session.last_idle();
     assert_eq!(stats.heartbeats, 1);
     assert!(stats.heartbeat_every.is_some());
     assert!(sync.is_healthy().await);
+}
+
+#[tokio::test]
+async fn a_heartbeat_can_end_the_idle_for_a_refresh() {
+    let server = idle_server(Some("* OK Still here\r\n")).await;
+    let mut sync = ImapSync::new(&test_mock_account(server.port));
+    sync.connect("secret").await.unwrap();
+
+    let session = sync.session().unwrap();
+    let end = tokio::time::timeout(
+        Duration::from_secs(5),
+        session.idle(std::future::pending(), || true),
+    )
+    .await
+    .expect("the heartbeat ends the IDLE")
+    .unwrap();
+    assert_eq!(end, IdleEnd::Woken);
+    assert_eq!(session.last_idle().heartbeats, 1);
+    assert!(sync.is_healthy().await, "the session answers after DONE");
 }
 
 #[tokio::test]
@@ -77,7 +99,10 @@ async fn a_refused_idle_is_an_error() {
     sync.connect("secret").await.unwrap();
     let session = sync.session().unwrap();
     assert!(!session.has_capability("IDLE"));
-    assert!(session.idle(std::future::pending()).await.is_err());
+    assert!(session
+        .idle(std::future::pending(), || false)
+        .await
+        .is_err());
 }
 
 #[tokio::test]
@@ -85,6 +110,10 @@ async fn bye_while_idling_is_an_error() {
     let server = idle_server(Some("* BYE shutting down\r\n")).await;
     let mut sync = ImapSync::new(&test_mock_account(server.port));
     sync.connect("secret").await.unwrap();
-    let end = sync.session().unwrap().idle(std::future::pending()).await;
+    let end = sync
+        .session()
+        .unwrap()
+        .idle(std::future::pending(), || false)
+        .await;
     assert!(end.is_err());
 }

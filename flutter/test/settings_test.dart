@@ -155,5 +155,34 @@ void main() {
       expect(mixed.pollMinutes, 30);
       expect(mixed.pollScheduler, 'alarm');
     });
+
+    test('accounts in quiet hours still count as checking', () {
+      final night = BackgroundPlan.fromJson({
+        'push': false,
+        'poll_minutes': 0,
+        'poll_scheduler': 'workmanager',
+        'quiet_accounts': 2,
+        'replan_at': 1700000000,
+      });
+      expect(night.any, isTrue);
+      expect(night.quietAccounts, 2);
+      expect(night.replanAt?.millisecondsSinceEpoch, 1700000000000);
+      final s = AccountSettings.fromJson({
+        'overrides': {},
+        'effective': {},
+        'quiet_now': true,
+      });
+      expect(s.quietNow, isTrue);
+      expect(AccountSettings.empty.quietNow, isFalse);
+    });
+
+    test('quiet-hours times parse like the core and store padded', () {
+      expect(QuietTime.parse('7:05'), (hour: 7, minute: 5));
+      expect(QuietTime.parse(' 23:59 '), (hour: 23, minute: 59));
+      for (final bad in ['', '7', '24:00', '07:60', '07:5', 'a:00', '007:00']) {
+        expect(QuietTime.parse(bad), isNull, reason: bad);
+      }
+      expect(QuietTime.format(7, 5), '07:05');
+    });
   });
 }

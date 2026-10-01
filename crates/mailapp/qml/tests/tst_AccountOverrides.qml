@@ -20,6 +20,17 @@ TestCase {
         compare(AccountOverrides.intervalValue(9), "");
     }
 
+    function test_quiet_times_normalize_like_the_core() {
+        compare(AccountOverrides.timeValue("7:05"), "07:05");
+        compare(AccountOverrides.timeValue(" 23:59 "), "23:59");
+        var bad = ["", "7", "24:00", "07:60", "07:5", "a:00", "007:00"];
+        for (var i = 0; i < bad.length; i++)
+            compare(AccountOverrides.timeValue(bad[i]), "", bad[i]);
+        compare(AccountOverrides.timeValue(undefined), "");
+        compare(AccountOverrides.timeText("", "07:00"), "07:00");
+        compare(AccountOverrides.timeText("6:30", "07:00"), "06:30");
+    }
+
     function test_flags_round_trip_through_the_choice_index() {
         compare(AccountOverrides.flagIndex(""), 0);
         compare(AccountOverrides.flagIndex("1"), 1);

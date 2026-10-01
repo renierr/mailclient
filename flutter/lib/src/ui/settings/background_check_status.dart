@@ -109,6 +109,16 @@ class _BackgroundCheckStatusState extends State<BackgroundCheckStatus>
                 : 'Battery-saving worker: standby may delay checks until '
                       'the phone is unlocked.',
           ),
+        if (_plan.quietAccounts > 0)
+          _line(
+            context,
+            Icons.bedtime_outlined,
+            _plan.quietAccounts == 1
+                ? 'One account is in its quiet hours: no checks for it '
+                      'right now.'
+                : '${_plan.quietAccounts} accounts are in their quiet hours: '
+                      'no checks for them right now.',
+          ),
         if ((_plan.push || _polledByAlarm) && !_exactAlarm) ...[
           _line(
             context,

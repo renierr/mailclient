@@ -17,7 +17,6 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-import '../models/account_settings.dart';
 import 'background_power.dart';
 
 /// Payload prefix for "open this message" taps: `mail:<account>:<folder>:<uid>`
@@ -39,14 +38,13 @@ const openPayloadPrefix = 'mail:';
   return (accountId: ids[0], folderId: ids[1], uid: ids[2]);
 }
 
-/// Run what [plan] asks for: the push service when any account pushes, the
-/// poller (`workmanager` or `alarm`) every `pollMinutes` when any account is
-/// polled, and stop everything else. Needs the foreground engine (the
-/// channel lives in `MainActivity`).
-Future<void> scheduleBackgroundChecks(BackgroundPlan plan) => _invoke(
-  'schedule',
-  {'push': plan.push, 'mode': plan.pollScheduler, 'minutes': plan.pollMinutes},
-);
+/// Run what the core plans from the current settings
+/// (`MailSchedule.refresh`): the push service when any account pushes, the
+/// poller (`workmanager` or `alarm`) when any account is polled, the
+/// quiet-hours replan alarm, and stop everything else. The host reads the
+/// plan itself, since it plans again on its own when quiet hours start or
+/// end. Needs the foreground engine (the channel lives in `MainActivity`).
+Future<void> scheduleBackgroundChecks() => _invoke('schedule');
 
 /// Remove the new-mail notification: the user opened the app and sees the
 /// list itself.

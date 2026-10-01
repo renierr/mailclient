@@ -102,6 +102,22 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_check<'caller>(
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `MailNative.backgroundPlan()`: what the host should run now, as the
+/// `BackgroundPlan` JSON. Database only, no network; called again at the
+/// plan's `replan_at`, when some account's quiet hours start or end.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_backgroundPlan<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let plan = background::schedule::plan(crate::db::shared_db()?);
+            Ok(env.new_string(serde_json::to_string(&plan)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `MailNative.plan(report, permitted, foreground, shown)`: what to do with
 /// the notifications for a report, as `NotificationPlan` JSON. `shown` is a
 /// JSON object of the app's notifications on screen, tag → signature.

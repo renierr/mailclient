@@ -765,9 +765,26 @@ class MailState extends ChangeNotifier {
     _autoSyncTimer?.cancel();
     final minutes = _autoSyncMinutes;
     if (minutes <= 0 || _accountId < 0) return;
-    _autoSyncTimer = Timer.periodic(Duration(minutes: minutes), (_) {
-      if (!isSyncing && hasAccounts) unawaited(syncAccount());
-    });
+    _autoSyncTimer = Timer.periodic(
+      Duration(minutes: minutes),
+      (_) => unawaited(_autoSyncTick()),
+    );
+  }
+
+  /// Whether someone is looking at the app: a focused desktop window, or
+  /// the app in the foreground on Android. Set from the app lifecycle.
+  bool _attended = true;
+
+  void setAttended(bool attended) => _attended = attended;
+
+  /// One timer tick. While the app is unattended, the account's quiet hours
+  /// hold it back; with someone looking, it always checks.
+  Future<void> _autoSyncTick() async {
+    if (isSyncing || !hasAccounts) return;
+    if (!_attended && (await _core.accountSettings(_accountId)).quietNow) {
+      return;
+    }
+    if (!isSyncing) unawaited(syncAccount());
   }
 
   /// Re-register the Android background checks from the current settings.
@@ -777,7 +794,7 @@ class MailState extends ChangeNotifier {
   /// no-op.
   Future<void> rescheduleBackgroundSync() async {
     if (!Platform.isAndroid) return;
-    await scheduleBackgroundChecks(await _core.backgroundPlan());
+    await scheduleBackgroundChecks();
   }
 
   /// A background check (push, while the app is open) stored new mail: show

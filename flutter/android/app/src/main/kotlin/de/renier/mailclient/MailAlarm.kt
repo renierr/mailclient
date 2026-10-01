@@ -50,9 +50,9 @@ object MailAlarm {
         if (minutes > 0) schedule(context, minutes)
     }
 
-    fun enqueueCheck(context: Context) {
+    fun enqueueCheck(context: Context, trigger: String = "alarm") {
         val request = OneTimeWorkRequest.Builder(MailCheckWorker::class.java)
-            .setInputData(MailCheckWorker.input("alarm"))
+            .setInputData(MailCheckWorker.input(trigger))
             .setConstraints(
                 Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),
             )
@@ -94,8 +94,9 @@ object MailAlarm {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 }
 
-// Alarm shots, plus re-arming after a reboot or an app update (both drop
-// pending alarms or may) — and restarting the push service, if it was on.
+// Alarm shots, plus planning everything again after a reboot or an app
+// update (both drop pending alarms or may): the poller, the push service and
+// the quiet-hours replan alarm (MailSchedule).
 class MailAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
@@ -104,8 +105,11 @@ class MailAlarmReceiver : BroadcastReceiver() {
                 MailAlarm.rearm(context)
             }
             Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED -> {
-                MailAlarm.rearm(context)
-                MailPush.restore(context)
+                if (MailSchedule.refresh(context) == null) {
+                    // No plan from the core: keep what ran before.
+                    MailAlarm.rearm(context)
+                    MailPush.restore(context)
+                }
             }
         }
     }

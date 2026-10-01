@@ -838,9 +838,18 @@ ApplicationWindow {
         running: root.autoSyncMinutes > 0
         repeat: true
         onTriggered: {
-            if (!root.busy && backend.account_count > 0)
-                root.syncNow();
+            if (root.busy || backend.account_count === 0)
+                return;
+            // Quiet hours hold the check back while nobody looks at the
+            // window; a focused window always checks.
+            if (!root.active && root.quietNow(backend.current_account_id))
+                return;
+            root.syncNow();
         }
+    }
+
+    function quietNow(accountId) {
+        return accountId >= 0 && FeedJson.parse(appSettings.account_settings_json(accountId), {}).quiet_now === true;
     }
 
     Component.onCompleted: {

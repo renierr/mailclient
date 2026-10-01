@@ -29,8 +29,10 @@ syncs.
 | WorkManager tick | Android background | polled accounts that are due | inbox only | fresh connection each |
 | Exact-alarm tick | Android background | polled accounts that are due | inbox only | fresh connection each |
 | Server says "mailbox changed" during IDLE | Android push service | that one account | inbox only | the IDLE connection itself |
-| Push keep-alive alarm | Android push service | every push account | no sync, IDLE re-issued | the IDLE connection itself |
+| Push keep-alive alarm | Android push service | every push account | no sync, IDLE re-issued (skipped while server heartbeats are fresh) | the IDLE connection itself |
+| Server heartbeat after 10 min of IDLE | Android push service | that one account | no sync, IDLE re-issued | the IDLE connection itself |
 | Network change | Android push service | every push account | reconnect, then inbox | new connection |
+| Quiet hours start or end | Android (replan alarm) | every account | re-plan; at the end, one check of the due polled accounts, and push accounts reconnect and catch up | as for the mechanism |
 
 Foreground syncs never touch accounts you are not looking at. Background
 checks never sync anything but inboxes.
@@ -94,6 +96,28 @@ asks the core for a plan (`sync::background::schedule::plan`) and
   app-wide method is *alarm*, otherwise WorkManager.
 - So push and polling can run side by side: e.g. one account on push, two
   polled every 15 and 60 minutes.
+- Accounts inside their **quiet hours** are left out (see below).
+
+### Quiet hours
+
+Each account can set a daily window of device local time, by default
+00:00–07:00, off until switched on (`account_settings::quiet_hours`; a
+window may wrap past midnight, start equal to end is no window). Inside it:
+
+- **Background (Android):** the account is not in the plan. Its IDLE
+  connection is dropped and no poller ticks on its behalf; when every
+  account is quiet, the push service stops and the poller is cancelled, so
+  nothing wakes the phone. The plan carries `replan_at`, the next start or
+  end of any account's window; `MailSchedule.kt` arms a wall-clock wake-up
+  alarm for it (exact when allowed) and plans again then. At a window's end
+  it also enqueues one check of the polled accounts (trigger `quiet-end`),
+  rather than waiting a full interval; push accounts reconnect and catch up
+  on their own. A time-zone or clock change plans again at once.
+- **Foreground:** the auto-sync timer skips the account while nobody looks
+  at the app — an unfocused desktop window (Qt, Flutter desktop) or the app
+  in the background. With the window focused it checks as usual.
+- Never affected: app start, switching account, the Sync button, resume,
+  notification taps.
 
 ### Poller tick (`background::background_check`)
 
@@ -145,8 +169,11 @@ low-importance "Push mail is on" notification for it) hosting the Rust
 4. **Keep-alive alarm** every 15 minutes (`MailPush.KEEPALIVE_MINUTES`,
    exact and Doze-proof when allowed): ends and re-issues every IDLE. This
    keeps the connection and the carrier's NAT mapping alive, retries
-   accounts that are backing off, re-reads which accounts use push, and
-   restarts the service if Android killed it. A keep-alive does not sync.
+   accounts that are backing off, re-reads which accounts use push (and
+   which are in quiet hours), and restarts the service if Android killed
+   it. A keep-alive does not sync. An IDLE whose server sent a heartbeat
+   within the last 15 minutes (`push::HEARTBEAT_FRESH`) is left alone: the
+   heartbeat already kept the connection alive (section 4).
 5. **Awake refresh**: while the phone is awake anyway, IDLE is also
    re-issued after `IDLE_REFRESH` (25 minutes), inside the 30-minute limit
    RFC 2177 lets servers enforce. Tokio timers stop while the phone sleeps,
@@ -183,6 +210,20 @@ the account's **Push** setting (Flutter, Android) shows a hint suggesting
 *Check at the interval* for that account — polling every 15 minutes wakes
 the phone 4 times an hour instead of 30.
 
+The monitor makes those wake-ups do the keep-alive's work, so the alarm
+adds none of its own:
+
+- **Piggyback refresh:** once an IDLE has run 10 minutes
+  (`push::PIGGYBACK_AFTER`), the next heartbeat ends and re-issues it while
+  the radio is awake for the heartbeat anyway.
+- **Skipped keep-alive:** a keep-alive alarm that finds a heartbeat from the
+  last 15 minutes leaves the IDLE alone. It still runs when the IDLE nears
+  the server's limit (`push::IDLE_REFRESH`, 25 minutes) or the heartbeats
+  stop. A network change or stop always ends the IDLE.
+- **No wake lock for heartbeats:** the service holds its wake lock only
+  while the monitor is busy, and an ignored heartbeat inside IDLE is not
+  busy — the CPU wakes only as long as the kernel needs to read the packet.
+
 ## 5. Notifications (Android)
 
 Every background report goes through `notify::plan_for`, which decides per
@@ -217,6 +258,7 @@ between the app-wide defaults and one account; an account value of
 | Show notifications for new mail | yes, Flutter | none | Whether the account's new mail alerts |
 | Save a copy of sent mail in Sent | yes | Sent copy after an SMTP send or outbox flush | Same, when a background tick flushes the outbox |
 | Suggest recipients from sent mail | yes | Collects addresses you sent to | Same, during background syncs |
+| Quiet hours (on/off, from, to) | only per account, default off, 00:00–07:00 | Auto-sync timer skips the account while the window is unfocused | No push connection, no poller tick for the account |
 
 ## 7. Timing at a glance
 
@@ -227,8 +269,10 @@ between the app-wide defaults and one account; an account value of
 | Full folder discovery | when the tree changed, else after `FULL_DISCOVERY_INTERVAL_SECS` | `sync/imap/folders.rs` |
 | WorkManager tick | shortest polled interval, at least 15 min, may run late in Doze | `MailCheckWorker.kt` |
 | Exact-alarm tick | shortest polled interval, on time in Doze | `MailAlarm.kt` |
-| Push keep-alive (re-IDLE) | every 15 min | `MailPush.kt` |
+| Push keep-alive (re-IDLE) | every 15 min, skipped while heartbeats are fresh | `MailPush.kt`, `push::HEARTBEAT_FRESH` |
+| Push heartbeat refresh | first heartbeat after 10 min of IDLE | `push::PIGGYBACK_AFTER` |
 | Push awake refresh | after 25 min of awake time | `push::IDLE_REFRESH` |
+| Quiet-hours replan | when any account's window starts or ends | `schedule::BackgroundPlan::replan_at`, `MailSchedule.kt` |
 | Push reconnect backoff | 30 s doubling to 15 min | `push::backoff` |
 | Due tolerance per account | half a poller tick early | `schedule::due_accounts` |
 

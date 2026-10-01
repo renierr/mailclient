@@ -12,8 +12,9 @@ pub enum IdleEnd {
     /// The server announced a change to the selected mailbox (new mail,
     /// expunge, flag change).
     Changed,
-    /// The caller's `wake` future finished first. The IDLE was ended
-    /// cleanly, so the session is ready for the next command.
+    /// The caller's `wake` future finished first, or its heartbeat hook
+    /// asked to end. The IDLE was ended cleanly, so the session is ready for
+    /// the next command.
     Woken,
 }
 
@@ -51,9 +52,15 @@ impl ImapSession {
     /// Waiting is unbounded on purpose; only the entry and exit handshakes
     /// are bounded by [`COMMAND_TIMEOUT`]. The caller bounds the wait through
     /// `wake` (keep-alive tick, network change, stop). Server heartbeats
-    /// (`* OK Still here`) do not end it but are counted in
-    /// [`ImapSession::last_idle`]; `BYE` is an error.
-    pub async fn idle(&mut self, wake: impl Future<Output = ()>) -> Result<IdleEnd> {
+    /// (`* OK Still here`) are counted in [`ImapSession::last_idle`] and
+    /// passed to `on_heartbeat`, which ends the IDLE by returning `true` —
+    /// the radio is awake for the heartbeat anyway, so a refresh then costs
+    /// almost nothing. `BYE` is an error.
+    pub async fn idle(
+        &mut self,
+        wake: impl Future<Output = ()>,
+        mut on_heartbeat: impl FnMut() -> bool,
+    ) -> Result<IdleEnd> {
         let tag = self.next_tag();
         let cmd = Command::new(tag.clone(), CommandBody::Idle)
             .map_err(|e| StoreError::InvalidInput(format!("invalid command: {e}")))?;
@@ -96,6 +103,9 @@ impl ImapSession {
                         } if body.kind == StatusKind::Ok => {
                             heartbeats += 1;
                             last_heartbeat = Some(SystemTime::now());
+                            if on_heartbeat() {
+                                break IdleEnd::Woken;
+                            }
                         }
                         event => log::debug!("imap: ignoring event while idling: {event:?}"),
                     }

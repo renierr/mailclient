@@ -68,6 +68,9 @@ class _MailAppState extends State<MailApp> with WidgetsBindingObserver {
     if (lifecycle == AppLifecycleState.detached) {
       widget.core.shutdown();
     }
+    // Unfocused desktop window or app in the background: quiet hours apply
+    // to the foreground timer then.
+    _state.setAttended(lifecycle == AppLifecycleState.resumed);
     if (!Platform.isAndroid) return;
     switch (lifecycle) {
       case AppLifecycleState.resumed:

@@ -33,12 +33,7 @@ class MainActivity : FlutterActivity() {
                 "exactAlarmStatus" -> result.success(canScheduleExactAlarms())
                 "requestExactAlarm" -> result.success(requestExactAlarm())
                 "schedule" -> {
-                    MailSchedule.apply(
-                        this,
-                        call.argument<Boolean>("push") ?: false,
-                        call.argument<String>("mode") ?: "workmanager",
-                        call.argument<Int>("minutes") ?: 0,
-                    )
+                    MailSchedule.refresh(this)
                     result.success(true)
                 }
                 "showTestNotification" -> {

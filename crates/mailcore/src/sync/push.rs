@@ -15,6 +15,15 @@
 //! backing off after an error. [`PushMonitor::network_changed`] reconnects
 //! everything at once when the default network changes.
 //!
+//! Servers that send heartbeats (`* OK Still here`) wake the radio anyway.
+//! Each IDLE then refreshes itself on a heartbeat ([`PIGGYBACK_AFTER`]), and
+//! a keep-alive that finds a fresh heartbeat leaves the IDLE alone
+//! ([`HEARTBEAT_FRESH`]): the alarm adds no radio wake-ups of its own.
+//!
+//! Accounts in their quiet hours are not in [`schedule::push_account_ids`],
+//! so the next signal drops their connection; the host plans again when the
+//! window ends.
+//!
 //! [`PushListener::busy`] brackets every stretch of work, so the host holds
 //! a wake lock exactly while the monitor needs the CPU and not while it
 //! waits.
@@ -24,7 +33,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use tokio::sync::watch;
 
@@ -40,6 +49,16 @@ use crate::sync::imap::{IdleEnd, ImapSync};
 /// lets a server drop an IDLE after 30 minutes; while the phone sleeps the
 /// host's keep-alive alarm takes this over.
 pub const IDLE_REFRESH: Duration = Duration::from_secs(25 * 60);
+
+/// Once an IDLE has run this long, the next server heartbeat re-issues it.
+/// The heartbeat already woke the radio, so the refresh rides along.
+pub const PIGGYBACK_AFTER: Duration = Duration::from_secs(10 * 60);
+
+/// A keep-alive leaves an IDLE alone while the server sent a heartbeat this
+/// recently: that traffic already keeps the connection and the NAT mapping
+/// alive. The host's keep-alive cadence, so any server chatty enough to
+/// arrive between two alarms qualifies.
+pub const HEARTBEAT_FRESH: Duration = Duration::from_secs(15 * 60);
 
 /// What the monitor tells its host. Called on the push thread.
 pub trait PushListener: Send + Sync + 'static {
@@ -311,9 +330,14 @@ async fn serve_session(
         }
         busy.set(false);
         let end = if idle {
-            imap.session()?.idle(wait_for_signal(rx, base)).await
+            let clock = IdleClock::new(SystemTime::now());
+            imap.session()?
+                .idle(wait_for_signal(rx, base, Some(&clock)), || {
+                    clock.heartbeat(SystemTime::now())
+                })
+                .await
         } else {
-            wait_for_signal(rx, base).await;
+            wait_for_signal(rx, base, None).await;
             Ok(IdleEnd::Changed)
         };
         busy.set(true);
@@ -334,8 +358,9 @@ async fn serve_session(
         if let Some(exit) = exit_for(base, *rx.borrow()) {
             return Ok(exit);
         }
-        // A keep-alive needs nothing more: DONE and the tagged OK already
-        // went over the wire. Without IDLE the keep-alive is the check.
+        // A keep-alive or heartbeat refresh needs nothing more: DONE and the
+        // tagged OK already went over the wire. Without IDLE the keep-alive
+        // is the check.
         if end == IdleEnd::Changed {
             check(ctx, account, imap).await?;
         }
@@ -367,14 +392,76 @@ fn exit_for(base: Signal, now: Signal) -> Option<Exit> {
     }
 }
 
+/// When the current IDLE started and when the server last sent a
+/// heartbeat, on the wall clock (the monotonic one stops while the phone
+/// sleeps).
+struct IdleClock {
+    started: SystemTime,
+    last_heartbeat: Cell<Option<SystemTime>>,
+}
+
+impl IdleClock {
+    fn new(started: SystemTime) -> Self {
+        Self {
+            started,
+            last_heartbeat: Cell::new(None),
+        }
+    }
+
+    fn age(&self, now: SystemTime) -> Duration {
+        now.duration_since(self.started).unwrap_or_default()
+    }
+
+    /// A heartbeat arrived at `now`: whether to refresh the IDLE on it.
+    fn heartbeat(&self, now: SystemTime) -> bool {
+        self.last_heartbeat.set(Some(now));
+        self.age(now) >= PIGGYBACK_AFTER
+    }
+
+    /// Whether a keep-alive at `now` would only repeat what the server's
+    /// heartbeats already do. Never once the IDLE nears the server's limit.
+    fn keepalive_redundant(&self, now: SystemTime) -> bool {
+        let fresh = self
+            .last_heartbeat
+            .get()
+            .is_some_and(|t| now.duration_since(t).unwrap_or_default() < HEARTBEAT_FRESH);
+        fresh && self.age(now) < IDLE_REFRESH
+    }
+}
+
+/// Whether `now` differs from `base` only by keep-alive ticks.
+fn keepalive_only(base: Signal, now: Signal) -> bool {
+    now != base
+        && Signal {
+            keepalive: base.keepalive,
+            ..now
+        } == base
+}
+
 /// Resolves on the first signal that differs from `base`, when the monitor
-/// goes away, or after [`IDLE_REFRESH`] of awake time.
-async fn wait_for_signal(rx: &mut watch::Receiver<Signal>, base: Signal) {
+/// goes away, or after [`IDLE_REFRESH`] of awake time. A keep-alive that
+/// `clock` shows to be redundant is skipped.
+async fn wait_for_signal(
+    rx: &mut watch::Receiver<Signal>,
+    mut base: Signal,
+    clock: Option<&IdleClock>,
+) {
     let _ = tokio::time::timeout(IDLE_REFRESH, async {
         while rx.changed().await.is_ok() {
-            if *rx.borrow() != base {
-                return;
+            let now = *rx.borrow();
+            if now == base {
+                continue;
             }
+            if keepalive_only(base, now)
+                && clock.is_some_and(|c| c.keepalive_redundant(SystemTime::now()))
+            {
+                log::debug!(
+                    "push: keep-alive skipped, the server's heartbeats keep the IDLE alive"
+                );
+                base = now;
+                continue;
+            }
+            return;
         }
     })
     .await;
@@ -479,14 +566,97 @@ mod tests {
         let (tx, mut rx) = watch::channel(Signal::default());
         let base = *rx.borrow_and_update();
         tx.send_modify(|s| s.keepalive += 1);
-        tokio::time::timeout(Duration::from_secs(1), wait_for_signal(&mut rx, base))
+        tokio::time::timeout(Duration::from_secs(1), wait_for_signal(&mut rx, base, None))
             .await
             .expect("keep-alive wakes the wait");
 
         let base = *rx.borrow_and_update();
         tx.send_modify(|_| {});
-        let waited =
-            tokio::time::timeout(Duration::from_millis(50), wait_for_signal(&mut rx, base)).await;
+        let waited = tokio::time::timeout(
+            Duration::from_millis(50),
+            wait_for_signal(&mut rx, base, None),
+        )
+        .await;
         assert!(waited.is_err(), "a no-op send keeps waiting");
+    }
+
+    #[tokio::test]
+    async fn a_fresh_heartbeat_makes_the_keepalive_redundant_but_not_a_reconnect() {
+        let (tx, mut rx) = watch::channel(Signal {
+            online: true,
+            ..Default::default()
+        });
+        let clock = IdleClock::new(SystemTime::now());
+        clock.heartbeat(SystemTime::now());
+
+        let base = *rx.borrow_and_update();
+        tx.send_modify(|s| s.keepalive += 1);
+        let waited = tokio::time::timeout(
+            Duration::from_millis(50),
+            wait_for_signal(&mut rx, base, Some(&clock)),
+        )
+        .await;
+        assert!(waited.is_err(), "the keep-alive is skipped");
+
+        tx.send_modify(|s| {
+            s.keepalive += 1;
+            s.reconnect += 1;
+        });
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            wait_for_signal(&mut rx, base, Some(&clock)),
+        )
+        .await
+        .expect("a network change always ends the wait");
+    }
+
+    #[test]
+    fn heartbeats_refresh_the_idle_and_stand_in_for_the_keepalive() {
+        let start = SystemTime::now();
+        let at = |mins: u64| start + Duration::from_secs(mins * 60);
+        let clock = IdleClock::new(start);
+        assert!(!clock.keepalive_redundant(at(1)), "no heartbeat seen yet");
+        assert!(!clock.heartbeat(at(2)), "too young to refresh");
+        assert!(clock.keepalive_redundant(at(5)));
+        assert!(
+            !clock.keepalive_redundant(at(2 + 15)),
+            "the heartbeat went stale"
+        );
+        assert!(clock.heartbeat(at(10)), "old enough: refresh on it");
+        assert!(
+            !clock.keepalive_redundant(at(25)),
+            "near the server's IDLE limit the keep-alive always runs"
+        );
+    }
+
+    #[test]
+    fn only_pure_keepalive_changes_count_as_keepalive_only() {
+        let base = Signal {
+            online: true,
+            ..Default::default()
+        };
+        assert!(!keepalive_only(base, base));
+        assert!(keepalive_only(
+            base,
+            Signal {
+                keepalive: 3,
+                ..base
+            }
+        ));
+        assert!(!keepalive_only(
+            base,
+            Signal {
+                keepalive: 1,
+                stop: true,
+                ..base
+            }
+        ));
+        assert!(!keepalive_only(
+            base,
+            Signal {
+                online: false,
+                ..base
+            }
+        ));
     }
 }

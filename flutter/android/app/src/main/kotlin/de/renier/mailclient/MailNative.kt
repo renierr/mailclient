@@ -27,6 +27,10 @@ object MailNative {
 
     @JvmStatic private external fun init(dataDir: String)
 
+    // What to run in the background now (BackgroundPlan JSON): push,
+    // poll_minutes, poll_scheduler, quiet_accounts, replan_at. No network.
+    @JvmStatic external fun backgroundPlan(): String
+
     // One scheduled check; blocks for the network run. BackgroundReport JSON.
     @JvmStatic external fun check(trigger: String): String
 

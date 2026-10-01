@@ -52,6 +52,25 @@ QtObject {
         return out;
     }
 
+    // A quiet-hours time as stored ("HH:MM"), from "7:05" or "07:05"; ""
+    // for anything else. Mirrors `account_settings::parse_time`.
+    function timeValue(text) {
+        var m = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(text || "");
+        if (!m)
+            return "";
+        var h = parseInt(m[1], 10);
+        var min = parseInt(m[2], 10);
+        if (h > 23 || min > 59)
+            return "";
+        return (h < 10 ? "0" : "") + h + ":" + m[2];
+    }
+
+    // The time to show for a stored value, or `fallback` when unset.
+    function timeText(value, fallback) {
+        var t = timeValue(value);
+        return t !== "" ? t : fallback;
+    }
+
     function isEmpty(obj) {
         for (var k in obj)
             return false;

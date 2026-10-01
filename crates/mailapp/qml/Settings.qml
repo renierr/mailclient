@@ -792,6 +792,64 @@ AppDialog {
                                 onChosen: index => root.setAccountDraft("collect_sent_contacts",
                                                                         AccountOverrides.flagValue(index))
                             }
+                            AppCheckBox {
+                                id: quietBox
+                                Layout.fillWidth: true
+                                Layout.topMargin: Theme.sm
+                                checked: root.accountDraft("quiet_hours_enabled") === "1"
+                                text: qsTr("Quiet hours")
+                                onToggled: root.setAccountDraft("quiet_hours_enabled", checked ? "1" : "")
+                            }
+                            HintLabel {
+                                text: qsTr(
+                                          "Between these times the automatic check skips this account while the window is not active. Syncing by hand still checks.")
+                            }
+                            Flow {
+                                visible: quietBox.checked
+                                Layout.fillWidth: true
+                                spacing: Theme.sm
+
+                                Label {
+                                    height: quietStart.height
+                                    verticalAlignment: Text.AlignVCenter
+                                    text: qsTr("From")
+                                    color: Theme.text
+                                }
+                                AppTextField {
+                                    id: quietStart
+                                    width: Math.round(80 * Theme.uiScale)
+                                    text: AccountOverrides.timeText(root.accountDraft("quiet_hours_start"), "00:00")
+                                    placeholderText: "00:00"
+                                    validator: RegularExpressionValidator {
+                                        regularExpression: /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/
+                                    }
+                                    Accessible.name: qsTr("Quiet hours start")
+                                    onTextEdited: {
+                                        if (acceptableInput)
+                                            root.setAccountDraft("quiet_hours_start", AccountOverrides.timeValue(text));
+                                    }
+                                }
+                                Label {
+                                    height: quietEnd.height
+                                    verticalAlignment: Text.AlignVCenter
+                                    text: qsTr("to")
+                                    color: Theme.text
+                                }
+                                AppTextField {
+                                    id: quietEnd
+                                    width: Math.round(80 * Theme.uiScale)
+                                    text: AccountOverrides.timeText(root.accountDraft("quiet_hours_end"), "07:00")
+                                    placeholderText: "07:00"
+                                    validator: RegularExpressionValidator {
+                                        regularExpression: /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/
+                                    }
+                                    Accessible.name: qsTr("Quiet hours end")
+                                    onTextEdited: {
+                                        if (acceptableInput)
+                                            root.setAccountDraft("quiet_hours_end", AccountOverrides.timeValue(text));
+                                    }
+                                }
+                            }
                         }
                     }
                 }

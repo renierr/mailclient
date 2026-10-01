@@ -4,6 +4,7 @@ import '../../models/account_settings.dart';
 import '../../models/settings.dart';
 import '../../sync/background_alarm.dart';
 import 'heartbeat_warning.dart';
+import 'quiet_hours_setting.dart';
 import 'setting_choice.dart';
 
 /// One account's sync settings: every row offers "Default (…)", which
@@ -89,6 +90,7 @@ class AccountSyncSettings extends StatelessWidget {
           ),
         if (showPush && usesPush && heartbeat != null)
           HeartbeatWarning(seconds: heartbeat),
+        QuietHoursSetting(overrides: overrides, onChanged: onChanged),
         _flag(
           'Save a copy of sent mail in Sent',
           SettingKeys.sentCopy,
