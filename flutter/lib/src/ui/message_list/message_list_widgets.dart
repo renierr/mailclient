@@ -791,16 +791,12 @@ class LoadOlderTile extends StatelessWidget {
     final server = context.select<MailState, int>((s) => s.serverTotal);
     final syncing = context.select<MailState, bool>((s) => s.isSyncing);
     final canAsk = context.select<MailState, bool>((s) => s.folderId >= 0);
-    // The list pages the cache, so cached rows can still be off the list.
-    final hidden = context.select<MailState, bool>(
-      (s) => s.cachedCount > s.messages.length,
-    );
     final label = server < 0
         ? 'Cached $cached (server not checked)'
         : cached >= server
         ? 'All $cached loaded'
         : 'Cached $cached of $server';
-    final canLoad = canAsk && (hidden || server < 0 || server > cached);
+    final canLoad = canAsk && (server < 0 || server > cached);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Column(

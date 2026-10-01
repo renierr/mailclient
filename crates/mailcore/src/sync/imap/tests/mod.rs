@@ -5,8 +5,10 @@
 //! - [`ops`]: trash / move / bulk-move `Seen` enforcement, Junk shortcut,
 //!   cross-account guard, attachment fetching.
 //! - [`discovery`]: subtree + NAMESPACE discovery, parent folder creation.
+//! - [`backfill`]: quick sync, open, load older, delete, resync.
 //! - [`idle`]: IDLE entry, server push, wake, refusal and BYE.
 
+mod backfill;
 mod discovery;
 mod idle;
 mod ops;

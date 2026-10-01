@@ -119,9 +119,10 @@ a gap. "Drift" says whether the two versions already behave differently.
 
 - **Where:** `Main.qml`, `MessageList.qml`; `mail_state.dart`,
   `message_list_widgets.dart`.
-- **Drift: yes.** "Show older" has a cached-rows case only in Flutter and a
-  "No cached messages" case only in Qt; both re-derive from the backend
-  whether delete is permanent.
+- **Drift: yes.** Both lists now show every cached row, so "Show older"
+  always asks the server (Flutter used to page the cache and fell back to
+  the first page on reopen). Left: a "No cached messages" case only in Qt,
+  and both re-derive from the backend whether delete is permanent.
 - **Change:** folder feed fields `delete_is_permanent` and
   `older: {can_load, cached, server}`.
 

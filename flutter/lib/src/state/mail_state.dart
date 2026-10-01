@@ -87,8 +87,6 @@ class MailState extends ChangeNotifier {
   }
 
   // --- list paging and counts --------------------------------------------
-  int _messageLimit = _pageSize;
-  static const _pageSize = 200;
   int _cachedCount = 0;
   int _serverTotal = -1;
 
@@ -246,7 +244,6 @@ class MailState extends ChangeNotifier {
     _folderId = id;
     _openUid = -1;
     _openMessage = null;
-    _messageLimit = _pageSize;
     notifyListeners();
     await _reloadMessages();
     unawaited(_core.syncFolder(_accountId, id).catchError(_ignoreBusy));
@@ -536,17 +533,10 @@ class MailState extends ChangeNotifier {
     }
   }
 
-  Future<void> loadOlderMessages() async {
-    // Show the next page of what is already cached immediately; the server
-    // batch lands through the job event and extends it further. Mail
-    // already cached (an earlier "load older", or a folder reopened at the
-    // first page) is shown without asking the server for more.
-    final hadHidden = _cachedCount > _messages.length;
-    _messageLimit += _pageSize;
-    await _reloadMessages();
-    if (hadHidden) return;
-    return _queue('Sync', () => _core.loadOlderMessages(_accountId, _folderId));
-  }
+  /// The list shows everything cached (like Qt), so "older" always means
+  /// the next batch from the server; the job event re-reads the list.
+  Future<void> loadOlderMessages() =>
+      _queue('Sync', () => _core.loadOlderMessages(_accountId, _folderId));
 
   Future<void> refreshFolders() =>
       _queue('Folders', () => _core.refreshFolders(_accountId));
@@ -621,7 +611,6 @@ class MailState extends ChangeNotifier {
     _folderId = folderId;
     _openUid = -1;
     _openMessage = null;
-    _messageLimit = _pageSize;
     notifyListeners();
     await _reloadMessages();
     await openMessage(hit.uid);
@@ -1032,7 +1021,6 @@ class MailState extends ChangeNotifier {
     _folderId = folderId;
     _openUid = -1;
     _openMessage = null;
-    _messageLimit = _pageSize;
     exitSearch();
     await _reloadFolders();
     await _reloadMessages();
@@ -1058,15 +1046,18 @@ class MailState extends ChangeNotifier {
       _cachedCount = 0;
       _serverTotal = -1;
     } else {
-      _messages = await _core.messages(_folderId, limit: _messageLimit);
+      // Every cached row, like Qt: mail fetched with "Show older" stays on
+      // the list when the folder is opened again.
+      int? cached;
       try {
         final counts = await _core.folderCounts(_folderId);
-        _cachedCount = counts.cached.toInt();
+        cached = counts.cached.toInt();
         _serverTotal = counts.server.toInt();
       } catch (_) {
-        _cachedCount = _messages.length;
         _serverTotal = -1;
       }
+      _messages = await _core.messages(_folderId, limit: cached ?? 200);
+      _cachedCount = cached ?? _messages.length;
       _pruneSelection();
     }
     notifyListeners();

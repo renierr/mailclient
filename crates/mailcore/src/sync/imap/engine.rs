@@ -40,6 +40,7 @@ use super::{
     },
     roles::{is_already_exists, normalize_folder_path},
     search::search_recent_uids,
+    seq::uids_to_sequence_set,
     session::ImapSession,
     tls::{build_tls_connector, server_name_for},
     types::{

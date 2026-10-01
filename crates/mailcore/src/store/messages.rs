@@ -399,17 +399,6 @@ pub fn delete_by_uid(db: &Db, folder_id: i64, uid: u32) -> Result<bool> {
     Ok(n > 0)
 }
 
-/// Delete a UID range `[lo, hi]` in one statement (QRESYNC VANISHED path).
-/// Returns rows removed; never expands the range into individual UIDs.
-pub fn delete_by_uid_range(db: &Db, folder_id: i64, lo: u32, hi: u32) -> Result<u64> {
-    let (lo, hi) = (lo.min(hi) as i64, lo.max(hi) as i64);
-    let n = db.conn().execute(
-        "delete from messages where folder_id = ?1 and uid >= ?2 and uid <= ?3",
-        params![folder_id, lo, hi],
-    )?;
-    Ok(n as u64)
-}
-
 /// Helper used by tests.
 #[cfg(test)]
 pub fn sample_new(account_id: i64, folder_id: i64, uid: u32) -> NewMessage {

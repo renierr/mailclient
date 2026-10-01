@@ -7,8 +7,8 @@ use crate::error::{Result, StoreError};
 /// Helper to extract all UIDs from a sequence set.
 ///
 /// Only used for small sets (tests). Production VANISHED handling must use
-/// [`vanished_ranges`] + range deletes instead: a server may report
-/// `VANISHED 1:100000`, which would allocate ~100k entries here.
+/// [`vanished_ranges`] instead: a server may report `VANISHED 1:100000`,
+/// which would allocate ~100k entries here.
 #[allow(dead_code)]
 #[cfg(test)]
 pub(crate) fn sequence_set_to_uids(set: &SequenceSet) -> Vec<u32> {
@@ -70,10 +70,6 @@ mod tests {
 
     use imap_types::sequence::SequenceSet;
 
-    use crate::db::Db;
-    use crate::models::FolderRole;
-    use crate::store::{accounts, folders, messages};
-
     #[test]
     fn vanished_ranges_do_not_expand() {
         let set = SequenceSet::try_from("1:3,5,10:8").unwrap();
@@ -81,33 +77,6 @@ mod tests {
         // Pathological range is skipped by the small-set helper …
         let huge = SequenceSet::try_from("1:200000").unwrap();
         assert!(sequence_set_to_uids(&huge).is_empty());
-        // … and deleted by a single BETWEEN statement, not 200k rows.
-        let db = Db::open_in_memory().unwrap();
-        let acc = accounts::create(
-            &db,
-            &crate::models::NewAccount {
-                name: "t".to_string(),
-                email_address: "a@x.y".to_string(),
-                from_name: String::new(),
-                imap_host: "h".to_string(),
-                imap_port: 993,
-                imap_security: "tls".to_string(),
-                imap_username: "u".to_string(),
-                smtp_host: "s".to_string(),
-                smtp_port: 465,
-                smtp_security: "tls".to_string(),
-                smtp_username: "u".to_string(),
-                auth_vault_key: "k".to_string(),
-                check_interval_secs: 60,
-            },
-        )
-        .unwrap();
-        let f = folders::upsert(&db, acc, "INBOX", "/", FolderRole::Inbox).unwrap();
-        for uid in [1u32, 2, 3, 50, 100] {
-            messages::upsert(&db, &messages::sample_new(acc, f, uid)).unwrap();
-        }
-        assert_eq!(messages::delete_by_uid_range(&db, f, 1, 3).unwrap(), 3);
-        assert_eq!(messages::list_uids(&db, f).unwrap().len(), 2);
     }
 
     #[test]

@@ -12,8 +12,19 @@ impl ImapSync {
     /// message count, with no QRESYNC VANISHED ranges. Only meaningful for a
     /// folder we fully synced before (`highest_modseq > 0`); fresh folders
     /// always take the full window. Callers check VANISHED separately.
-    fn folder_unchanged(folder: &Folder, mb: &SelectResult) -> bool {
-        folder.highest_modseq > 0
+    ///
+    /// The cache must also already hold the `window` this sync asks for: a
+    /// quick sync leaves a folder at its short window, and an unchanged
+    /// server must not stop opening the folder from filling it.
+    fn folder_unchanged(
+        folder: &Folder,
+        mb: &SelectResult,
+        cached: usize,
+        window: Option<usize>,
+    ) -> bool {
+        let wanted = window.map_or(mb.exists as usize, |n| n.min(mb.exists as usize));
+        cached >= wanted
+            && folder.highest_modseq > 0
             && mb
                 .highest_modseq
                 .is_some_and(|m| m == folder.highest_modseq)
@@ -83,8 +94,11 @@ impl ImapSync {
 
         let mut expunged = 0u64;
 
-        // 1. Process QRESYNC VANISHED ranges immediately, with range
-        // deletes so a `VANISHED 1:100000` never materializes 100k UIDs.
+        // 1. QRESYNC VANISHED. Servers may name UIDs they still hold (some
+        // report everything from UID 1 up), so a range is only a hint: the
+        // cached rows inside it are asked about once more, and only those a
+        // UID SEARCH no longer finds are dropped. Ranges are never expanded,
+        // so a `VANISHED 1:100000` costs one pass over the cache.
         if !mb.vanished.is_empty() {
             let vanished_count: u64 = mb
                 .vanished
@@ -97,8 +111,28 @@ impl ImapSync {
                 vanished_count,
                 folder.path
             );
-            for (lo, hi) in &mb.vanished {
-                expunged += messages::delete_by_uid_range(db, folder_id, *lo, *hi)?;
+            let named: Vec<u32> = messages::list_uids(db, folder_id)?
+                .into_iter()
+                .filter(|u| mb.vanished.iter().any(|(lo, hi)| (*lo..=*hi).contains(u)))
+                .collect();
+            let mut still_there: HashSet<u32> = HashSet::new();
+            for chunk in named.chunks(FETCH_CHUNK) {
+                let seq = uids_to_sequence_set(chunk)?;
+                still_there.extend(session.uid_search(vec1![SearchKey::Uid(seq)]).await?);
+            }
+            let gone: Vec<u32> = named
+                .into_iter()
+                .filter(|u| !still_there.contains(u))
+                .collect();
+            if !still_there.is_empty() {
+                log::warn!(
+                    "imap: {} VANISHED named {} mail(s) still on the server, kept",
+                    folder.path,
+                    still_there.len()
+                );
+            }
+            for chunk in gone.chunks(FETCH_CHUNK) {
+                expunged += messages::delete_many_by_uids(db, folder_id, chunk)?;
             }
         }
 
@@ -109,7 +143,10 @@ impl ImapSync {
         // SELECT instead of a dozen round-trips per unchanged folder. This
         // is what keeps a big-but-quiet folder (e.g. Gmail Sent with 3k+
         // mails) cheap: only folders with real changes pay the window.
-        if !validity_changed && mb.vanished.is_empty() && Self::folder_unchanged(&folder, &mb) {
+        if !validity_changed
+            && mb.vanished.is_empty()
+            && Self::folder_unchanged(&folder, &mb, local_uids.len(), window)
+        {
             log::debug!("imap: {} unchanged, skipping window sync", folder.path);
             if folder.role == FolderRole::Trash {
                 self.sweep_trash_seen(db, account.id, folder_id).await?;
@@ -461,7 +498,35 @@ mod tests {
 
     #[test]
     fn unchanged_folder_is_detected() {
-        assert!(ImapSync::folder_unchanged(&synced_folder(), &same_select()));
+        assert!(ImapSync::folder_unchanged(
+            &synced_folder(),
+            &same_select(),
+            50,
+            Some(200)
+        ));
+    }
+
+    #[test]
+    fn a_cache_short_of_the_window_is_not_unchanged() {
+        // A quick sync left 20 of 50 cached; opening the folder wants 200.
+        assert!(!ImapSync::folder_unchanged(
+            &synced_folder(),
+            &same_select(),
+            20,
+            Some(200)
+        ));
+        assert!(ImapSync::folder_unchanged(
+            &synced_folder(),
+            &same_select(),
+            20,
+            Some(20)
+        ));
+        assert!(!ImapSync::folder_unchanged(
+            &synced_folder(),
+            &same_select(),
+            49,
+            None
+        ));
     }
 
     #[test]
@@ -469,26 +534,56 @@ mod tests {
         let folder = synced_folder();
         let mut changed = same_select();
         changed.highest_modseq = Some(9001);
-        assert!(!ImapSync::folder_unchanged(&folder, &changed));
+        assert!(!ImapSync::folder_unchanged(
+            &folder,
+            &changed,
+            50,
+            Some(200)
+        ));
         let mut changed = same_select();
         changed.uid_next = Some(101);
-        assert!(!ImapSync::folder_unchanged(&folder, &changed));
+        assert!(!ImapSync::folder_unchanged(
+            &folder,
+            &changed,
+            50,
+            Some(200)
+        ));
         let mut changed = same_select();
         changed.exists = 49;
-        assert!(!ImapSync::folder_unchanged(&folder, &changed));
+        assert!(!ImapSync::folder_unchanged(
+            &folder,
+            &changed,
+            50,
+            Some(200)
+        ));
         let mut changed = same_select();
         changed.uid_validity = Some(43);
-        assert!(!ImapSync::folder_unchanged(&folder, &changed));
+        assert!(!ImapSync::folder_unchanged(
+            &folder,
+            &changed,
+            50,
+            Some(200)
+        ));
     }
 
     #[test]
     fn fresh_or_condstore_less_folders_never_skip() {
         let mut folder = synced_folder();
         folder.highest_modseq = 0;
-        assert!(!ImapSync::folder_unchanged(&folder, &same_select()));
+        assert!(!ImapSync::folder_unchanged(
+            &folder,
+            &same_select(),
+            50,
+            Some(200)
+        ));
         let folder = synced_folder();
         let mut no_modseq = same_select();
         no_modseq.highest_modseq = None;
-        assert!(!ImapSync::folder_unchanged(&folder, &no_modseq));
+        assert!(!ImapSync::folder_unchanged(
+            &folder,
+            &no_modseq,
+            50,
+            Some(200)
+        ));
     }
 }
