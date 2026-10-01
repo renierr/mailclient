@@ -10,4 +10,4 @@ members = [
 # `version.workspace = true`; the Flutter pubspec mirrors it as versionName
 # (see AGENT.md §5). Bump here, never per-crate.
 [workspace.package]
-version = "0.8.0"
+version = "0.9.0"
