@@ -34,24 +34,13 @@ still to promote") points here instead of keeping its own list.
 | Sender avatar letters and colour | `mailcore::badge` |
 | Where a reply goes, Reply-To differs | `mailcore::compose::reply_address` |
 | New, reply, reply-all and forward drafts | `mailcore::compose::answer` |
+| Account setup guesses, ports, security choices, field check, edit form | `mailcore::store::account_form::{guess, default_port, port_after_security_change, SECURITY_CHOICES, check, load, defaults_json}` |
 | Attachment file names, Save, Save all, viewer copy | `mailcore::paths::safe_attachment_name`, `mailcore::store::messages::{save_attachment_to, save_all_attachments_to, write_attachment_copy}`; feed fields `display_name` / `file_name` |
 
 ## Open
 
 Ordered by priority; numbers stay as first assigned, so a done item leaves
 a gap. "Drift" says whether the two versions already behave differently.
-
-### 2. Account setup guesses, defaults and validation
-
-- **Where:** `crates/mailapp/qml/AccountSetup.qml`,
-  `flutter/lib/src/ui/accounts/account_setup_dialog.dart`.
-- **Drift: yes.** Server guess `imap.`/`smtp.` + domain vs `mail.` + domain;
-  Flutter offers an unencrypted option Qt does not; Qt falls back to the
-  address as IMAP user when blank, Flutter does not; default ports and the
-  port swap on security change are written twice.
-- **Change:** in `mailcore::store::account_form`: `guess(email)`,
-  `default_port(protocol, security)`, the security choices, and a
-  per-field `validate()` the forms show inline.
 
 ### 3. Locked From domain
 

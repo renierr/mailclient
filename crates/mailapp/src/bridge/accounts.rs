@@ -150,28 +150,49 @@ impl qobject::Bridge {
     }
 
     pub fn account_form(&self, id: i64) -> QString {
-        let Ok(db) = shared_db() else {
-            return qstring("{}");
+        let form = shared_db()
+            .ok()
+            .and_then(|db| account_form::load(db, id).ok())
+            .unwrap_or_else(|| "{}".to_string());
+        qstring(&form)
+    }
+
+    pub fn account_form_defaults(&self) -> QString {
+        qstring(&account_form::defaults_json())
+    }
+
+    pub fn account_guess(&self, email: &QString) -> QString {
+        let json = match account_form::guess(&email.to_string()) {
+            Some(g) => serde_json::json!({
+                "imap_host": g.imap_host,
+                "smtp_host": g.smtp_host,
+                "imap_user": g.imap_user,
+            }),
+            None => serde_json::json!({}),
         };
-        let Ok(a) = accounts::get(db, id) else {
-            return qstring("{}");
+        qstring(&json.to_string())
+    }
+
+    pub fn account_port_for_security(
+        &self,
+        protocol: &QString,
+        old_sec: &QString,
+        new_sec: &QString,
+        port: &QString,
+    ) -> QString {
+        let Some(protocol) = account_form::Protocol::parse(&protocol.to_string()) else {
+            return port.clone();
         };
-        // Passwords stay in the keyring; the dialog leaves the field blank and
-        // an empty password on save keeps the stored one.
-        let form = serde_json::json!({
-            "id": a.id,
-            "name": a.name,
-            "email": a.email_address,
-            "from_name": a.from_name,
-            "imap_host": a.imap_host,
-            "imap_port": a.imap_port.to_string(),
-            "imap_sec": a.imap_security,
-            "imap_user": a.imap_username,
-            "smtp_host": a.smtp_host,
-            "smtp_port": a.smtp_port.to_string(),
-            "smtp_sec": a.smtp_security,
-            "smtp_user": a.smtp_username,
-        });
-        qstring(&form.to_string())
+        qstring(&account_form::port_after_security_change(
+            protocol,
+            &old_sec.to_string(),
+            &new_sec.to_string(),
+            &port.to_string(),
+        ))
+    }
+
+    pub fn account_form_check(&self, form: &QString, editing: bool) -> QString {
+        let v = serde_json::from_str(&form.to_string()).unwrap_or_default();
+        qstring(&account_form::check(&v, editing).to_json())
     }
 }

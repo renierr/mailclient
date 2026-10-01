@@ -8,6 +8,8 @@ import "components"
 // Add / edit account. Submit goes to the Rust bridge, which persists to SQLite
 // + the OS keyring. An edit sends its account id, so changing the address
 // renames that account; a new form with a known address updates it in place.
+// Defaults, host guesses, port changes and the field check all come from
+// `mailcore::store::account_form` through the bridge, shared with Flutter.
 AppDialog {
     id: root
     preferredWidth: 560
@@ -17,8 +19,15 @@ AppDialog {
     padding: Theme.lg
     closePolicy: Popup.NoAutoClose
 
+    required property var backend
+
     // Set when editing an existing account; -1 for a new one.
     property int editId: -1
+    // Security choices from the core, labelled here.
+    property var securityChoices: []
+    property string imapSec: "tls"
+    property string smtpSec: "tls"
+    property var warnings: ({})
     property bool editing: editId >= 0
 
     title: editing ? qsTr("Edit account") : qsTr("Add account")
@@ -28,24 +37,40 @@ AppDialog {
     signal statusMessage(string text)
     signal accountSubmit(string payload)
 
+    function securityLabel(value) {
+        if (value === "starttls")
+            return "STARTTLS";
+        if (value === "none")
+            return qsTr("None (unencrypted)");
+        return "SSL/TLS";
+    }
+
+    function securityIndex(value) {
+        var i = root.securityChoices.indexOf(value);
+        return i < 0 ? 0 : i;
+    }
+
     // Empty for a new account, prefilled from `Bridge.account_form` for an edit.
     function loadForm(json, id) {
+        var d = FeedJson.parse(root.backend.account_form_defaults(), ({}));
         var f = FeedJson.parse(json, ({}));
+        root.securityChoices = d.security_choices || ["tls", "starttls", "none"];
         root.editId = id === undefined ? -1 : id;
         nameField.text = f.name || "";
         emailField.text = f.email || "";
         fromNameField.text = f.from_name || "";
         imapField.text = f.imap_host || "";
-        imapPortField.text = f.imap_port || "993";
-        imapSecBox.currentIndex = (f.imap_sec || "tls").toLowerCase() === "starttls" ? 1 : 0;
+        imapPortField.text = f.imap_port || d.imap_port || "";
+        root.imapSec = f.imap_sec || d.imap_sec || "tls";
         imapUserField.text = f.imap_user || "";
         passField.text = "";
         smtpField.text = f.smtp_host || "";
-        smtpPortField.text = f.smtp_port || "465";
-        smtpSecBox.currentIndex = (f.smtp_sec || "tls").toLowerCase() === "starttls" ? 1 : 0;
+        smtpPortField.text = f.smtp_port || d.smtp_port || "";
+        root.smtpSec = f.smtp_sec || d.smtp_sec || "tls";
         smtpUserField.text = f.smtp_user || "";
         smtpPassField.text = "";
         root.clearErrors();
+        root.refreshWarnings();
     }
 
     function openNew() {
@@ -61,75 +86,95 @@ AppDialog {
     function clearErrors() {
         emailField.invalid = false;
         imapField.invalid = false;
+        imapPortField.invalid = false;
         smtpField.invalid = false;
+        smtpPortField.invalid = false;
         passField.invalid = false;
         errorLabel.text = "";
     }
 
-    // Validate here so the dialog can point at the offending field; the
-    // bridge re-checks anyway.
+    function payload() {
+        return JSON.stringify({
+                                  id: root.editId,
+                                  name: nameField.text,
+                                  email: emailField.text.trim(),
+                                  from_name: fromNameField.text.trim(),
+                                  imap_host: imapField.text.trim(),
+                                  imap_port: imapPortField.text,
+                                  imap_sec: root.imapSec,
+                                  imap_user: imapUserField.text.trim(),
+                                  password: passField.text,
+                                  smtp_host: smtpField.text.trim(),
+                                  smtp_port: smtpPortField.text,
+                                  smtp_sec: root.smtpSec,
+                                  smtp_user: smtpUserField.text.trim(),
+                                  smtp_password: smtpPassField.text
+                              });
+    }
+
+    function check() {
+        return FeedJson.parse(root.backend.account_form_check(root.payload(), root.editing), ({
+                                                                                                  "errors": {},
+                                                                                                  "warnings": {}
+                                                                                              }));
+    }
+
+    function refreshWarnings() {
+        root.warnings = root.check().warnings || {};
+    }
+
+    // The core's check points at the offending fields; save re-checks anyway.
     function validate() {
         root.clearErrors();
+        var errors = root.check().errors || {};
+        var fields = {
+            "email": emailField,
+            "imap_host": imapField,
+            "imap_port": imapPortField,
+            "smtp_host": smtpField,
+            "smtp_port": smtpPortField,
+            "password": passField
+        };
         var problems = [];
-        if (emailField.text.trim() === "" || emailField.text.indexOf("@") < 0) {
-            emailField.invalid = true;
-            problems.push(qsTr("a valid email address"));
+        for (var key in errors) {
+            if (fields[key] !== undefined)
+                fields[key].invalid = true;
+            problems.push(errors[key]);
         }
-        if (imapField.text.trim() === "") {
-            imapField.invalid = true;
-            problems.push(qsTr("the IMAP host"));
-        }
-        if (smtpField.text.trim() === "") {
-            smtpField.invalid = true;
-            problems.push(qsTr("the SMTP host"));
-        }
-        if (!root.editing && passField.text === "") {
-            passField.invalid = true;
-            problems.push(qsTr("a password"));
-        }
-        if (problems.length > 0) {
-            errorLabel.text = qsTr("Please fill in %1.").arg(problems.join(", "));
-            return false;
-        }
-        return true;
+        errorLabel.text = problems.join(" · ");
+        return problems.length === 0;
     }
 
     function submit() {
         if (!root.validate())
             return;
-        root.accountSubmit(JSON.stringify({
-                                              id: root.editId,
-                                              name: nameField.text,
-                                              email: emailField.text.trim(),
-                                              from_name: fromNameField.text.trim(),
-                                              imap_host: imapField.text.trim(),
-                                              imap_port: imapPortField.text,
-                                              imap_sec: imapSecBox.currentText.toLowerCase(),
-                                              imap_user: imapUserField.text.trim() === "" ? emailField.text.trim() :
-                                                                                            imapUserField.text.trim(),
-                                              password: passField.text,
-                                              smtp_host: smtpField.text.trim(),
-                                              smtp_port: smtpPortField.text,
-                                              smtp_sec: smtpSecBox.currentText.toLowerCase(),
-                                              smtp_user: smtpUserField.text.trim(),
-                                              smtp_password: smtpPassField.text
-                                          }));
+        root.accountSubmit(root.payload());
     }
 
-    // Fill the obvious hosts/user from the address once it is typed.
+    // Fill the obvious hosts/user from the address once it is typed. Never
+    // overwrites a field the user filled.
     function guessFromEmail() {
-        var at = emailField.text.indexOf("@");
-        if (at < 0)
-            return;
-        var domain = emailField.text.substring(at + 1).trim();
-        if (domain === "")
+        var g = FeedJson.parse(root.backend.account_guess(emailField.text), ({}));
+        if (g.imap_host === undefined)
             return;
         if (imapField.text === "")
-            imapField.text = "imap." + domain;
+            imapField.text = g.imap_host;
         if (smtpField.text === "")
-            smtpField.text = "smtp." + domain;
+            smtpField.text = g.smtp_host;
         if (imapUserField.text === "")
-            imapUserField.text = emailField.text.trim();
+            imapUserField.text = g.imap_user;
+    }
+
+    function setImapSec(value) {
+        imapPortField.text = root.backend.account_port_for_security("imap", root.imapSec, value, imapPortField.text);
+        root.imapSec = value;
+        root.refreshWarnings();
+    }
+
+    function setSmtpSec(value) {
+        smtpPortField.text = root.backend.account_port_for_security("smtp", root.smtpSec, value, smtpPortField.text);
+        root.smtpSec = value;
+        root.refreshWarnings();
     }
 
     footer: ColumnLayout {
@@ -229,7 +274,6 @@ AppDialog {
                     id: imapPortField
                     Layout.preferredWidth: 90
                     label: qsTr("Port")
-                    text: "993"
                     inputMethodHints: Qt.ImhDigitsOnly
                     validator: IntValidator {
                         bottom: 1
@@ -245,16 +289,21 @@ AppDialog {
                     }
                     AppComboBox {
                         id: imapSecBox
-                        Layout.preferredWidth: 120
-                        model: ["TLS", "STARTTLS"]
-                        onActivated: function (index) {
-                            if (index === 1 && imapPortField.text === "993")
-                                imapPortField.text = "143";
-                            else if (index === 0 && imapPortField.text === "143")
-                                imapPortField.text = "993";
-                        }
+                        Layout.preferredWidth: 170
+                        Layout.minimumWidth: 0
+                        model: root.securityChoices.map(v => root.securityLabel(v))
+                        currentIndex: root.securityIndex(root.imapSec)
+                        onActivated: index => root.setImapSec(root.securityChoices[index])
                     }
                 }
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: text !== ""
+                text: root.warnings.imap_sec || ""
+                color: Theme.warning
+                font.pixelSize: Theme.fontSmall
+                wrapMode: Text.Wrap
             }
             FormField {
                 id: imapUserField
@@ -295,7 +344,6 @@ AppDialog {
                     id: smtpPortField
                     Layout.preferredWidth: 90
                     label: qsTr("Port")
-                    text: "465"
                     inputMethodHints: Qt.ImhDigitsOnly
                     validator: IntValidator {
                         bottom: 1
@@ -311,16 +359,21 @@ AppDialog {
                     }
                     AppComboBox {
                         id: smtpSecBox
-                        Layout.preferredWidth: 120
-                        model: ["TLS", "STARTTLS"]
-                        onActivated: function (index) {
-                            if (index === 1 && smtpPortField.text === "465")
-                                smtpPortField.text = "587";
-                            else if (index === 0 && smtpPortField.text === "587")
-                                smtpPortField.text = "465";
-                        }
+                        Layout.preferredWidth: 170
+                        Layout.minimumWidth: 0
+                        model: root.securityChoices.map(v => root.securityLabel(v))
+                        currentIndex: root.securityIndex(root.smtpSec)
+                        onActivated: index => root.setSmtpSec(root.securityChoices[index])
                     }
                 }
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: text !== ""
+                text: root.warnings.smtp_sec || ""
+                color: Theme.warning
+                font.pixelSize: Theme.fontSmall
+                wrapMode: Text.Wrap
             }
             FormField {
                 id: smtpUserField

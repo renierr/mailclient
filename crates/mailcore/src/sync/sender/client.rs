@@ -34,6 +34,8 @@ pub struct SmtpEndpoint {
     pub addr: String,
     /// `true` = implicit TLS (465), `false` = STARTTLS (587).
     pub implicit_tls: bool,
+    /// Security `none`: the account's explicit opt-in to no encryption.
+    pub plaintext: bool,
 }
 
 /// Derive the endpoint from account settings.
@@ -42,6 +44,7 @@ pub fn endpoint_for(account: &Account) -> SmtpEndpoint {
     SmtpEndpoint {
         addr: format!("{}:{}", account.smtp_host, account.smtp_port),
         implicit_tls: account.smtp_port == 465 || account.smtp_security.eq_ignore_ascii_case("tls"),
+        plaintext: crate::store::account_form::is_plaintext(&account.smtp_security),
     }
 }
 /// SMTP sender bound to one account's settings.
@@ -85,7 +88,9 @@ impl SmtpSender {
                 self.username.clone(),
                 password.to_string(),
             ))
-            .tls(if self.endpoint.implicit_tls {
+            .tls(if self.endpoint.plaintext {
+                Tls::None
+            } else if self.endpoint.implicit_tls {
                 Tls::Wrapper(tls_params)
             } else {
                 Tls::Required(tls_params)

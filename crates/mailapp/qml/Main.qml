@@ -786,9 +786,9 @@ ApplicationWindow {
             if (root.collectedUndo !== null) {
                 // Part of a per-folder bulk run: shown once it is done.
                 root.collectedUndo.push({
-                    batch: batch,
-                    label: label
-                });
+                                            batch: batch,
+                                            label: label
+                                        });
                 return;
             }
             if (root.searching)
@@ -909,7 +909,8 @@ ApplicationWindow {
     // The open account's check interval: its own, or the app-wide default.
     // Re-read on account switch and after Settings saves (the revision).
     property int syncSettingsRevision: 0
-    readonly property int autoSyncMinutes: root.syncSettingsRevision >= 0 && backend.current_account_id >= 0 ? appSettings.sync_interval_for(backend.current_account_id) : 0
+    readonly property int autoSyncMinutes: root.syncSettingsRevision >= 0 && backend.current_account_id >= 0
+                                           ? appSettings.sync_interval_for(backend.current_account_id) : 0
 
     // Automatic mail check: only while idle (never mid-action), manual-only
     // when the interval is 0. Bound to the setting, so Save applies it live.
@@ -1390,7 +1391,8 @@ ApplicationWindow {
                 id: statusTextEdit
                 Layout.fillWidth: true
                 text: root.statusText
-                color: (root.statusText.toLowerCase().indexOf("error") >= 0 || root.statusText.toLowerCase().indexOf("failed") >= 0) ? Theme.danger : Theme.textMuted
+                color: (root.statusText.toLowerCase().indexOf("error") >= 0 || root.statusText.toLowerCase().indexOf(
+                            "failed") >= 0) ? Theme.danger : Theme.textMuted
                 font.pixelSize: Theme.fontSmall
                 readOnly: true
                 selectByMouse: true
@@ -1473,6 +1475,7 @@ ApplicationWindow {
 
     AccountSetup {
         id: accountSetup
+        backend: backend
         onStatusMessage: text => root.statusText = text
         onAccountSubmit: payload => {
             var r = backend.add_account(payload);

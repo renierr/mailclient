@@ -17,22 +17,50 @@ pub fn accounts_json() -> anyhow::Result<String> {
 /// overwrite them, never read them back. An empty password on save therefore
 /// means "keep the stored one" (see [`save_account`]).
 pub fn account_form(id: i64) -> anyhow::Result<String> {
-    let a = accounts::get(shared_db()?, id)?;
-    Ok(serde_json::json!({
-        "id": a.id,
-        "name": a.name,
-        "email": a.email_address,
-        "from_name": a.from_name,
-        "imap_host": a.imap_host,
-        "imap_port": a.imap_port.to_string(),
-        "imap_sec": a.imap_security,
-        "imap_user": a.imap_username,
-        "smtp_host": a.smtp_host,
-        "smtp_port": a.smtp_port.to_string(),
-        "smtp_sec": a.smtp_security,
-        "smtp_user": a.smtp_username,
-    })
-    .to_string())
+    Ok(account_form::load(shared_db()?, id)?)
+}
+
+/// A new account form's starting values and security choices (JSON).
+#[flutter_rust_bridge::frb(sync)]
+pub fn account_form_defaults() -> String {
+    account_form::defaults_json()
+}
+
+/// Server guesses for a typed address as JSON (`imap_host`, `smtp_host`,
+/// `imap_user`), `{}` while the address is still partial.
+#[flutter_rust_bridge::frb(sync)]
+pub fn account_guess(email: String) -> String {
+    match account_form::guess(&email) {
+        Some(g) => serde_json::json!({
+            "imap_host": g.imap_host,
+            "smtp_host": g.smtp_host,
+            "imap_user": g.imap_user,
+        }),
+        None => serde_json::json!({}),
+    }
+    .to_string()
+}
+
+/// The port field after `protocol`'s (`imap`/`smtp`) security changed.
+#[flutter_rust_bridge::frb(sync)]
+pub fn account_port_for_security(
+    protocol: String,
+    old_sec: String,
+    new_sec: String,
+    port: String,
+) -> String {
+    match account_form::Protocol::parse(&protocol) {
+        Some(p) => account_form::port_after_security_change(p, &old_sec, &new_sec, &port),
+        None => port,
+    }
+}
+
+/// Per-field `errors` and `warnings` for the account form (JSON), the same
+/// check [`save_account`] runs.
+#[flutter_rust_bridge::frb(sync)]
+pub fn account_form_check(form: String, editing: bool) -> String {
+    let v = serde_json::from_str(&form).unwrap_or_default();
+    account_form::check(&v, editing).to_json()
 }
 
 /// Create or update an account from the setup dialog's JSON form.

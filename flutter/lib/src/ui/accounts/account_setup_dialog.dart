@@ -61,6 +61,14 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
   };
   String _imapSec = 'tls';
   String _smtpSec = 'tls';
+  List<String> _securityChoices = const ['tls', 'starttls', 'none'];
+
+  /// Per-field errors from the core's check, set by [_save] right before
+  /// the form validates.
+  Map<String, String> _fieldErrors = const {};
+
+  /// Per-field warnings (an unencrypted connection), kept current.
+  Map<String, String> _warnings = const {};
   bool _saving = false;
   String? _error;
   final _revealed = <String>{};
@@ -77,8 +85,14 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
   @override
   void initState() {
     super.initState();
-    _fields['imap_port']!.text = '993';
-    _fields['smtp_port']!.text = '465';
+    // Starting values and choices come from the core, shared with Qt.
+    final d = MailCore.instance.accountFormDefaults();
+    _fields['imap_port']!.text = d['imap_port'] as String? ?? '';
+    _fields['smtp_port']!.text = d['smtp_port'] as String? ?? '';
+    _imapSec = d['imap_sec'] as String? ?? _imapSec;
+    _smtpSec = d['smtp_sec'] as String? ?? _smtpSec;
+    _securityChoices =
+        (d['security_choices'] as List?)?.cast<String>() ?? _securityChoices;
     for (final c in _fields.values) {
       c.addListener(_edited);
     }
@@ -96,63 +110,79 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
         final value = form[entry.key];
         if (value is String) entry.value.text = value;
       }
-      // Older builds stored 'ssl'; the core canonical value is 'tls'.
-      _imapSec = _normSec(form['imap_sec'] as String?) ?? _imapSec;
-      _smtpSec = _normSec(form['smtp_sec'] as String?) ?? _smtpSec;
+      // The core already normalized older values ('ssl', 'plain').
+      _imapSec = form['imap_sec'] as String? ?? _imapSec;
+      _smtpSec = form['smtp_sec'] as String? ?? _smtpSec;
       _guessed = true;
       // Filling in the stored values is not an edit.
       _dirty = false;
     });
+    _refreshWarnings();
   }
 
-  static String? _normSec(String? v) {
-    final s = (v ?? '').trim().toLowerCase();
-    if (s.isEmpty) return null;
-    if (s == 'ssl') return 'tls';
-    if (s == 'tls' || s == 'starttls' || s == 'none') return s;
-    return s;
-  }
-
-  /// Qt parity: typing the address once fills host/user guesses, so a standard
-  /// provider needs only the password. Never overwrites an edited field.
+  /// Qt parity: typing the address once fills the core's host/user guesses,
+  /// so a standard provider needs only the password. Never overwrites an
+  /// edited field.
   void _maybeGuess() {
     if (_guessed || widget.accountId != null) return;
-    final email = _fields['email']!.text.trim();
-    final at = email.indexOf('@');
-    if (at <= 0 || !email.substring(at).contains('.')) return;
-    final domain = email.substring(at + 1);
+    final g = MailCore.instance.accountGuess(_fields['email']!.text);
+    if (g.isEmpty) return;
     _guessed = true;
-    if (_fields['imap_host']!.text.isEmpty) {
-      _fields['imap_host']!.text = 'mail.$domain';
-    }
-    if (_fields['smtp_host']!.text.isEmpty) {
-      _fields['smtp_host']!.text = 'mail.$domain';
-    }
-    if (_fields['imap_user']!.text.isEmpty) {
-      _fields['imap_user']!.text = email;
+    for (final key in const ['imap_host', 'smtp_host', 'imap_user']) {
+      if (_fields[key]!.text.isEmpty) _fields[key]!.text = g[key] as String;
     }
   }
 
-  void _onImapSec(String v) => setState(() {
-    _imapSec = v;
-    _dirty = true;
-    // Qt port auto-swap: standard ports follow the encryption.
-    if (v == 'tls' && _fields['imap_port']!.text == '143') {
-      _fields['imap_port']!.text = '993';
-    } else if (v != 'tls' && _fields['imap_port']!.text == '993') {
-      _fields['imap_port']!.text = '143';
-    }
-  });
+  /// Standard ports follow the encryption (the core decides; a port the
+  /// user chose stays).
+  String _portFor(String protocol, String oldSec, String newSec) {
+    final field = _fields['${protocol}_port']!;
+    return MailCore.instance.accountPortForSecurity(
+      protocol,
+      oldSec,
+      newSec,
+      field.text,
+    );
+  }
 
-  void _onSmtpSec(String v) => setState(() {
-    _smtpSec = v;
-    _dirty = true;
-    if (v == 'tls' && _fields['smtp_port']!.text == '587') {
-      _fields['smtp_port']!.text = '465';
-    } else if (v != 'tls' && _fields['smtp_port']!.text == '465') {
-      _fields['smtp_port']!.text = '587';
-    }
-  });
+  void _onImapSec(String v) {
+    setState(() {
+      _fields['imap_port']!.text = _portFor('imap', _imapSec, v);
+      _imapSec = v;
+      _dirty = true;
+    });
+    _refreshWarnings();
+  }
+
+  void _onSmtpSec(String v) {
+    setState(() {
+      _fields['smtp_port']!.text = _portFor('smtp', _smtpSec, v);
+      _smtpSec = v;
+      _dirty = true;
+    });
+    _refreshWarnings();
+  }
+
+  static bool _isSecret(String key) =>
+      key == 'password' || key == 'smtp_password';
+
+  Map<String, dynamic> _payload() => {
+    // Passwords go verbatim: a space at either end can be part of one.
+    for (final e in _fields.entries)
+      e.key: _isSecret(e.key) ? e.value.text : e.value.text.trim(),
+    'imap_sec': _imapSec,
+    'smtp_sec': _smtpSec,
+    // Without the id, changing the address creates a second account
+    // instead of renaming this one.
+    if (widget.accountId != null) 'id': widget.accountId,
+  };
+
+  void _refreshWarnings() {
+    final w = MailCore.instance
+        .accountFormCheck(_payload(), editing: widget.accountId != null)
+        .warnings;
+    setState(() => _warnings = w);
+  }
 
   @override
   void dispose() {
@@ -314,13 +344,7 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        _text(
-          'email',
-          'Email address',
-          required: true,
-          email: true,
-          keyboard: TextInputType.emailAddress,
-        ),
+        _text('email', 'Email address', keyboard: TextInputType.emailAddress),
         _text('name', 'Account name (optional)', keyboard: TextInputType.text),
         _text(
           'from_name',
@@ -329,18 +353,17 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
         ),
         const SizedBox(height: 12),
         _section('Incoming (IMAP)'),
-        _text('imap_host', 'Host', required: true),
+        _text('imap_host', 'Host'),
         _portSecurity('imap_port', _imapSec, _onImapSec),
         _text('imap_user', 'Username'),
         _text(
           'password',
           editing ? 'Password (blank keeps the stored one)' : 'Password',
           obscure: true,
-          required: !editing,
         ),
         const SizedBox(height: 12),
         _section('Outgoing (SMTP)'),
-        _text('smtp_host', 'Host', required: true),
+        _text('smtp_host', 'Host'),
         _portSecurity('smtp_port', _smtpSec, _onSmtpSec),
         _text('smtp_user', 'Username (blank = same as IMAP)'),
         _text(
@@ -357,13 +380,9 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
   /// Port beside encryption on wide screens, stacked full-width on
   /// narrow/zoomed layouts where the Row squeezes both unreadably thin.
   Widget _portSecurity(String portKey, String sec, ValueChanged<String> onSec) {
-    final port = _text(
-      portKey,
-      'Port',
-      port: true,
-      keyboard: TextInputType.number,
-    );
-    final security = _security(sec, onSec);
+    final port = _text(portKey, 'Port', keyboard: TextInputType.number);
+    final protocol = portKey == 'imap_port' ? 'imap' : 'smtp';
+    final security = _security(sec, onSec, _warnings['${protocol}_sec']);
     if (MailDialog.isNarrow(context)) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -371,6 +390,7 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
       );
     }
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(child: port),
         const SizedBox(width: 12),
@@ -391,9 +411,6 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
     String key,
     String label, {
     bool obscure = false,
-    bool required = false,
-    bool email = false,
-    bool port = false,
     TextInputType? keyboard,
   }) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 4),
@@ -427,53 +444,65 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
               )
             : null,
       ),
-      validator: (v) {
-        final t = (v ?? '').trim();
-        if (required && t.isEmpty) return 'Required';
-        if (email && t.isNotEmpty && !t.contains('@')) {
-          return 'Enter a full email address';
-        }
-        if (port && t.isNotEmpty && int.tryParse(t) == null) {
-          return 'Port must be a number';
-        }
-        return null;
-      },
+      // The core's check, run by [_save] just before validating.
+      validator: (_) => _fieldErrors[key],
     ),
   );
 
-  Widget _security(String value, ValueChanged<String> onChanged) =>
+  static String _securityLabel(String value) => switch (value) {
+    'starttls' => 'STARTTLS',
+    'none' => 'None (unencrypted)',
+    _ => 'SSL/TLS',
+  };
+
+  Widget _security(
+    String value,
+    ValueChanged<String> onChanged,
+    String? warning,
+  ) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
       DropdownButtonFormField<String>(
         initialValue: value,
         isDense: true,
+        isExpanded: true,
         decoration: const InputDecoration(labelText: 'Encryption'),
-        items: const [
-          DropdownMenuItem(value: 'tls', child: Text('SSL/TLS')),
-          DropdownMenuItem(value: 'starttls', child: Text('STARTTLS')),
-          DropdownMenuItem(value: 'none', child: Text('None')),
+        items: [
+          for (final v in _securityChoices)
+            DropdownMenuItem(
+              value: v,
+              child: Text(_securityLabel(v), overflow: TextOverflow.ellipsis),
+            ),
         ],
         onChanged: (v) => onChanged(v ?? value),
-      );
-
-  static bool _isSecret(String key) =>
-      key == 'password' || key == 'smtp_password';
+      ),
+      if (warning != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(
+            warning,
+            style: TextStyle(
+              color: Theme.of(context).brightness == Brightness.dark
+                  ? Colors.amber.shade300
+                  : Colors.amber.shade900,
+              fontSize: 12,
+            ),
+          ),
+        ),
+    ],
+  );
 
   Future<void> _save() async {
+    _fieldErrors = MailCore.instance
+        .accountFormCheck(_payload(), editing: widget.accountId != null)
+        .errors;
     if (!(_form.currentState?.validate() ?? false)) return;
     setState(() {
       _saving = true;
       _error = null;
     });
     try {
-      final id = await MailCore.instance.saveAccount({
-        // Passwords go verbatim: a space at either end can be part of one.
-        for (final e in _fields.entries)
-          e.key: _isSecret(e.key) ? e.value.text : e.value.text.trim(),
-        'imap_sec': _imapSec,
-        'smtp_sec': _smtpSec,
-        // Without the id, changing the address creates a second account
-        // instead of renaming this one.
-        if (widget.accountId != null) 'id': widget.accountId,
-      });
+      final id = await MailCore.instance.saveAccount(_payload());
       if (!mounted) return;
       await context.read<MailState>().accountsChanged(select: id);
       if (mounted) Navigator.of(context).pop(true);

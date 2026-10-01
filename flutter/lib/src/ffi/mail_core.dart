@@ -126,6 +126,45 @@ class MailCore {
   Future<Map<String, dynamic>> accountForm(int id) async =>
       _decodeMap(await rust_accounts.accountForm(id: id));
 
+  /// A new account form's starting values and the security choices
+  /// (`security_choices`), from the core.
+  Map<String, dynamic> accountFormDefaults() =>
+      jsonDecode(rust_accounts.accountFormDefaults()) as Map<String, dynamic>;
+
+  /// Host and user guesses for a typed address; empty while it is partial.
+  Map<String, dynamic> accountGuess(String email) =>
+      jsonDecode(rust_accounts.accountGuess(email: email))
+          as Map<String, dynamic>;
+
+  /// The port field after `protocol`'s (`imap`/`smtp`) security changed.
+  String accountPortForSecurity(
+    String protocol,
+    String oldSec,
+    String newSec,
+    String port,
+  ) => rust_accounts.accountPortForSecurity(
+    protocol: protocol,
+    oldSec: oldSec,
+    newSec: newSec,
+    port: port,
+  );
+
+  /// Per-field errors and warnings for the account form — the check
+  /// [saveAccount] runs too.
+  ({Map<String, String> errors, Map<String, String> warnings}) accountFormCheck(
+    Map<String, dynamic> form, {
+    required bool editing,
+  }) {
+    final raw = jsonDecode(
+      rust_accounts.accountFormCheck(form: jsonEncode(form), editing: editing),
+    ) as Map<String, dynamic>;
+    Map<String, String> strings(Object? m) => {
+      for (final e in ((m as Map<String, dynamic>?) ?? const {}).entries)
+        e.key: e.value as String,
+    };
+    return (errors: strings(raw['errors']), warnings: strings(raw['warnings']));
+  }
+
   /// Create or update an account; returns its id. Keyed by email address, so
   /// re-saving a known address edits rather than duplicates.
   Future<int> saveAccount(Map<String, dynamic> form) =>

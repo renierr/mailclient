@@ -22,6 +22,36 @@ Future<String> accountsJson() =>
 Future<String> accountForm({required PlatformInt64 id}) =>
     MailCoreApi.instance.api.crateApiAccountsAccountForm(id: id);
 
+/// A new account form's starting values and security choices (JSON).
+String accountFormDefaults() =>
+    MailCoreApi.instance.api.crateApiAccountsAccountFormDefaults();
+
+/// Server guesses for a typed address as JSON (`imap_host`, `smtp_host`,
+/// `imap_user`), `{}` while the address is still partial.
+String accountGuess({required String email}) =>
+    MailCoreApi.instance.api.crateApiAccountsAccountGuess(email: email);
+
+/// The port field after `protocol`'s (`imap`/`smtp`) security changed.
+String accountPortForSecurity({
+  required String protocol,
+  required String oldSec,
+  required String newSec,
+  required String port,
+}) => MailCoreApi.instance.api.crateApiAccountsAccountPortForSecurity(
+  protocol: protocol,
+  oldSec: oldSec,
+  newSec: newSec,
+  port: port,
+);
+
+/// Per-field `errors` and `warnings` for the account form (JSON), the same
+/// check [`save_account`] runs.
+String accountFormCheck({required String form, required bool editing}) =>
+    MailCoreApi.instance.api.crateApiAccountsAccountFormCheck(
+      form: form,
+      editing: editing,
+    );
+
 /// Create or update an account from the setup dialog's JSON form.
 ///
 /// The decision — edit by id, update a known address, reject a duplicate,

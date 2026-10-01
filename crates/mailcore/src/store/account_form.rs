@@ -8,6 +8,13 @@
 
 use serde_json::Value;
 
+mod fields;
+
+pub use fields::{
+    check, default_port, defaults_json, guess, is_plaintext, normalize_security,
+    port_after_security_change, FormCheck, Protocol, ServerGuess, SECURITY_CHOICES,
+};
+
 use crate::auth::{self, AccountSecrets};
 use crate::db::Db;
 use crate::error::{Result, StoreError};
@@ -62,36 +69,28 @@ pub fn save(db: &Db, form: &str, secrets: &mut dyn SecretStore) -> Result<i64> {
             .to_string()
     };
     let text = |k: &str| raw(k).trim().to_string();
-    // Ports arrive as strings from a text field, but a numeric preset is just
-    // as plausible — accept either. Anything else is refused rather than
-    // silently replaced by the default.
-    let port = |k: &str, dflt: u16| -> Result<u16> {
-        match v.get(k) {
-            None | Some(Value::Null) => Ok(dflt),
-            Some(Value::String(s)) if s.trim().is_empty() => Ok(dflt),
-            Some(x) => x
-                .as_str()
-                .and_then(|s| s.trim().parse().ok())
-                .or_else(|| x.as_u64().and_then(|n| u16::try_from(n).ok()))
-                .filter(|p| *p > 0)
-                .ok_or_else(|| invalid("a port must be a number from 1 to 65535")),
-        }
-    };
+    let edit_id = v.get("id").and_then(Value::as_i64).filter(|id| *id >= 0);
+    // The same check the forms show inline; the first problem is the error.
+    if let Some((_, msg)) = check(&v, edit_id.is_some()).errors.into_iter().next() {
+        return Err(invalid(&msg));
+    }
 
     let email = text("email");
-    let imap_host = text("imap_host");
-    let smtp_host = text("smtp_host");
+    let imap_security = normalize_security(&raw("imap_sec"));
+    let smtp_security = normalize_security(&raw("smtp_sec"));
+    let port = |k: &str, protocol: Protocol, security: &str| -> Result<u16> {
+        fields::port_value(v.get(k))
+            .map(|p| p.unwrap_or_else(|| default_port(protocol, security)))
+            .map_err(|()| invalid("a port must be a number from 1 to 65535"))
+    };
     // Passwords are taken verbatim: a leading or trailing space is part of
     // the secret.
     let password = raw("password");
     let smtp_password = raw("smtp_password");
-    let imap_user = text("imap_user");
-    if email.is_empty() || imap_host.is_empty() {
-        return Err(invalid("fill email and IMAP host"));
-    }
-    if smtp_host.is_empty() {
-        return Err(invalid("fill the SMTP host"));
-    }
+    let imap_user = match text("imap_user") {
+        ref s if s.is_empty() => email.clone(),
+        s => s,
+    };
     let smtp_user = match text("smtp_user") {
         ref s if s.is_empty() => imap_user.clone(),
         s => s,
@@ -105,19 +104,18 @@ pub fn save(db: &Db, form: &str, secrets: &mut dyn SecretStore) -> Result<i64> {
         name,
         email_address: email.clone(),
         from_name: text("from_name"),
-        imap_host,
-        imap_port: port("imap_port", 993)?,
-        imap_security: text("imap_sec"),
+        imap_host: text("imap_host"),
+        imap_port: port("imap_port", Protocol::Imap, imap_security)?,
+        imap_security: imap_security.to_string(),
         imap_username: imap_user,
-        smtp_host,
-        smtp_port: port("smtp_port", 465)?,
-        smtp_security: text("smtp_sec"),
+        smtp_host: text("smtp_host"),
+        smtp_port: port("smtp_port", Protocol::Smtp, smtp_security)?,
+        smtp_security: smtp_security.to_string(),
         smtp_username: smtp_user,
         auth_vault_key: String::new(),
         check_interval_secs: 300,
     };
 
-    let edit_id = v.get("id").and_then(Value::as_i64).filter(|id| *id >= 0);
     let all = accounts::list(db)?;
     if let Some(other) = all
         .iter()
@@ -142,6 +140,28 @@ pub fn save(db: &Db, form: &str, secrets: &mut dyn SecretStore) -> Result<i64> {
     };
     settings::set_last_active_account_id(db, id)?;
     Ok(id)
+}
+
+/// One account as the edit form's JSON. Never carries a password: secrets
+/// live in the keyring and the form can only overwrite them, so a blank
+/// password on [`save`] keeps the stored one.
+pub fn load(db: &Db, id: i64) -> Result<String> {
+    let a = accounts::get(db, id)?;
+    Ok(serde_json::json!({
+        "id": a.id,
+        "name": a.name,
+        "email": a.email_address,
+        "from_name": a.from_name,
+        "imap_host": a.imap_host,
+        "imap_port": a.imap_port.to_string(),
+        "imap_sec": normalize_security(&a.imap_security),
+        "imap_user": a.imap_username,
+        "smtp_host": a.smtp_host,
+        "smtp_port": a.smtp_port.to_string(),
+        "smtp_sec": normalize_security(&a.smtp_security),
+        "smtp_user": a.smtp_username,
+    })
+    .to_string())
 }
 
 fn invalid(msg: &str) -> StoreError {
@@ -374,5 +394,33 @@ mod tests {
         let err = save(&db, &form(r#","password":"""#), &mut secrets).unwrap_err();
         assert!(matches!(err, StoreError::InvalidInput(_)));
         assert!(accounts::list(&db).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_blank_imap_user_is_the_address_and_security_is_normalized() {
+        let db = Db::open_in_memory().unwrap();
+        let mut secrets = Memory::default();
+        let id = save(
+            &db,
+            &form(r#","imap_sec":"SSL","smtp_sec":"plain","smtp_port":"""#),
+            &mut secrets,
+        )
+        .unwrap();
+        let a = accounts::get(&db, id).unwrap();
+        assert_eq!(a.imap_username, "user@example.com");
+        assert_eq!(a.smtp_username, "user@example.com");
+        assert_eq!(
+            (a.imap_security.as_str(), a.smtp_security.as_str()),
+            ("tls", "none")
+        );
+        assert_eq!(
+            a.smtp_port, 587,
+            "a blank port is the usual one for its security"
+        );
+
+        let loaded: Value = serde_json::from_str(&load(&db, id).unwrap()).unwrap();
+        assert_eq!(loaded["smtp_sec"], "none");
+        assert_eq!(loaded["imap_user"], "user@example.com");
+        assert!(loaded.get("password").is_none());
     }
 }

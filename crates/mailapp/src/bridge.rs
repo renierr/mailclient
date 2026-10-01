@@ -106,6 +106,29 @@ pub mod qobject {
         #[qinvokable]
         fn account_form(&self, id: i64) -> QString;
 
+        /// A new account form's starting values and security choices (JSON).
+        #[qinvokable]
+        fn account_form_defaults(&self) -> QString;
+
+        /// Server guesses for a typed address as JSON
+        /// (`imap_host`, `smtp_host`, `imap_user`), `{}` while it is partial.
+        #[qinvokable]
+        fn account_guess(&self, email: &QString) -> QString;
+
+        /// The port field after `protocol`'s security changed `old_sec` → `new_sec`.
+        #[qinvokable]
+        fn account_port_for_security(
+            &self,
+            protocol: &QString,
+            old_sec: &QString,
+            new_sec: &QString,
+            port: &QString,
+        ) -> QString;
+
+        /// Per-field `errors` and `warnings` for the account form (JSON).
+        #[qinvokable]
+        fn account_form_check(&self, form: &QString, editing: bool) -> QString;
+
         /// Known sent-mail recipients as JSON, ranked by use. `prefix` matches
         /// an address or name; an empty prefix lists all contacts.
         #[qinvokable]
