@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../models/models.dart';
 import '../../state/mail_state.dart';
 import '../dialogs/mail_dialog.dart';
+import '../dialogs/sender_avatar.dart';
 
 /// Accounts on top, this account's folders below.
 class FolderSidebar extends StatelessWidget {
@@ -86,14 +87,10 @@ class AccountPicker extends StatelessWidget {
       ),
       child: Row(
         children: [
-          CircleAvatar(
+          SenderAvatar(
+            badge: account?.badge ?? SenderBadge.none,
             radius: 14,
-            backgroundColor: avatarColor(context, email),
-            foregroundColor: scheme.onPrimary,
-            child: Text(
-              email.isEmpty ? '?' : email[0].toUpperCase(),
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-            ),
+            fontSize: 12,
           ),
           const SizedBox(width: 8),
           Expanded(

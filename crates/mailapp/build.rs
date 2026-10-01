@@ -75,9 +75,6 @@ fn main() {
             // Pure per-account settings form helpers, shared by Settings and
             // its headless tests (see qml/AccountOverrides.qml).
             .qml_file(QmlFile::from("qml/AccountOverrides.qml").singleton(true))
-            // Sender avatar letters, shared by the list and the reader
-            // (see qml/Initials.qml).
-            .qml_file(QmlFile::from("qml/Initials.qml").singleton(true))
             .qml_file("qml/Main.qml")
             .qml_file("qml/Sidebar.qml")
             .qml_file("qml/MessageList.qml")

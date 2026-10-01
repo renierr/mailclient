@@ -346,7 +346,10 @@ Rectangle {
             snippet: m.snippet,
             unread: m.unread,
             starred: m.starred,
-            has_attachments: m.has_attachments === true
+            has_attachments: m.has_attachments === true,
+            initials: m.initials || "",
+            avatar_light: m.avatar_light || "",
+            avatar_dark: m.avatar_dark || ""
         };
     }
 
@@ -780,10 +783,7 @@ Rectangle {
                             visible: !root.selectionMode
                             implicitWidth: Math.round(26 * Theme.uiScale)
                             implicitHeight: Math.round(26 * Theme.uiScale)
-                            // Seed stays the address so colours never shift;
-                            // the letters are the shown name plus the domain.
-                            seed: row.model.from || "?"
-                            initials: Initials.of(row.model.sender, row.model.from)
+                            badge: row.model
                         }
                         Rectangle {
                             anchors.centerIn: parent

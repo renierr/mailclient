@@ -5,6 +5,7 @@ import '../../models/models.dart';
 import '../../models/settings.dart';
 import '../../state/mail_state.dart';
 import '../composer/composer_dialog.dart';
+import '../dialogs/sender_avatar.dart';
 import '../menu_row.dart';
 import '../message_list/message_list_pane.dart' show confirmDelete;
 import 'reader_widgets.dart';
@@ -113,7 +114,7 @@ class ReaderHeader extends StatelessWidget {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    SenderAvatar(from: sender.name, address: sender.addr),
+                    SenderAvatar(badge: message.badge),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(

@@ -148,4 +148,26 @@ void main() {
       expect(c.displayName, 'a@x.de');
     });
   });
+
+  group('SenderBadge', () {
+    test('rows carry the core badge', () {
+      final m = MessageSummary.fromJson({
+        'uid': 1,
+        'from': 'alice@example.com',
+        'initials': 'AE',
+        'avatar_light': '#aa3366',
+        'avatar_dark': '#882255',
+      });
+      expect(m.badge.initials, 'AE');
+      expect(m.badge.light, '#aa3366');
+      expect(m.badge.dark, '#882255');
+      expect(m.copyWith(unread: true).badge.initials, 'AE');
+    });
+
+    test('a row from an older core degrades to a placeholder', () {
+      final m = MessageSummary.fromJson({'uid': 1, 'from': 'a@example.com'});
+      expect(m.badge.initials, '?');
+      expect(m.badge.dark, '');
+    });
+  });
 }

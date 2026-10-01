@@ -185,26 +185,3 @@ class HeaderDetailRow extends StatelessWidget {
     );
   }
 }
-
-/// Deterministic sender avatar, like the Qt Avatar seed.
-class SenderAvatar extends StatelessWidget {
-  const SenderAvatar({super.key, required this.from, this.address = ''});
-
-  /// Display name; also the colour seed.
-  final String from;
-  final String address;
-
-  @override
-  Widget build(BuildContext context) {
-    final bg = avatarColor(context, from);
-    return CircleAvatar(
-      radius: 18,
-      backgroundColor: bg,
-      foregroundColor: Theme.of(context).colorScheme.onPrimary,
-      child: Text(
-        senderInitials(from, address),
-        style: const TextStyle(fontSize: 14),
-      ),
-    );
-  }
-}

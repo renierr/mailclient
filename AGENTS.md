@@ -27,6 +27,16 @@ This file is normative for all coding agents (human or AI) working in this repo.
     actions, fullscreen forms, swipe/long-press instead of hover or context
     menus). A UI-only change in one frontend needs no mirror in the other;
     a feature change does.
+  - **Shared logic is built once, in `mailcore`.** If both frontends would
+    compute the same thing, it is a `mailcore` function and the result
+    reaches them through the feed or the bridge — never a QML helper plus a
+    Dart twin kept in step by matching tests. This includes logic that is
+    UI-flavoured but frontend-neutral: what a sender's avatar shows (letters,
+    colour per theme — `mailcore::badge`), parsed address parts, display
+    decisions derived from data. Return a plain struct or feed fields that
+    say what to show; the frontend only decides how (sizes, fonts, layout,
+    theme lookups, widgets). Toolkit-bound code (Qt/Flutter APIs, gestures,
+    rendering) stays in its frontend.
 - Qt frontend: **QML (QtQuick + QtQuick.Controls)**, single source in
   `crates/mailapp/qml/`, embedded via the `Mailclient` QML module
   (`CxxQtBuilder::new_qml_module`). HTML mail rendered via `QtWebEngine`.
@@ -78,7 +88,7 @@ This file is normative for all coding agents (human or AI) working in this repo.
   `CxxQtThread`. Keep it that way — a blocking call on the GUI thread freezes
   the window, and a second runtime is a dependency decision (see §4).
 - SQL: lowercase keywords, `snake_case` tables/columns, explicit `FOREIGN KEY … ON DELETE CASCADE`, indexes for every `(account_id, folder_id, uid)`-style lookup and for date-descending list queries. Every table has `created_at`/`updated_at` (UTC ISO8601 text) unless it is a pure FTS/virtual table.
-- QML: formatted by `scripts/qml-format.sh [file.qml ...]`, never by a bare `qmlformat -i`. qmlformat's output changes between Qt minor versions, so the script pins one (`PINNED`, the Omarchy system Qt) and refuses any other version; the repo-root `.qmlformat.ini` supplies indent, line endings and column width. On Windows point `QT_BIN_DIR` (or `QMLFORMAT`) at a kit of the pinned version — without one, leave formatting to the Linux machine rather than reflowing with another version. Pass no style flags, and do not hand-align what it would reflow. One component per file in `crates/mailapp/qml/`, `PascalCase.qml` filenames, `qmllint`-clean, no inline JS business logic beyond formatting. Pure QML logic (parsing, decisions) lives in `pragma Singleton` helpers (cf. `FeedJson`, `LinkSafety`) with `tst_*.qml` coverage run by `scripts/qml-check.sh`. All user-visible strings ready for `qsTr()`. Rust objects reach QML via `#[qml_element]` in the `Mailclient` module — never duplicate QML outside the crate.
+- QML: formatted by `scripts/qml-format.sh [file.qml ...]`, never by a bare `qmlformat -i`. qmlformat's output changes between Qt minor versions, so the script pins one (`PINNED`, the Omarchy system Qt) and refuses any other version; the repo-root `.qmlformat.ini` supplies indent, line endings and column width. On Windows point `QT_BIN_DIR` (or `QMLFORMAT`) at a kit of the pinned version — without one, leave formatting to the Linux machine rather than reflowing with another version. Pass no style flags, and do not hand-align what it would reflow. One component per file in `crates/mailapp/qml/`, `PascalCase.qml` filenames, `qmllint`-clean, no inline JS business logic beyond formatting. Pure QML logic that only Qt needs (parsing bridge payloads, Qt-side decisions) lives in `pragma Singleton` helpers (cf. `FeedJson`, `LinkSafety`) — logic Flutter needs too belongs in `mailcore` (§1) with `tst_*.qml` coverage run by `scripts/qml-check.sh`. All user-visible strings ready for `qsTr()`. Rust objects reach QML via `#[qml_element]` in the `Mailclient` module — never duplicate QML outside the crate.
 - QML must stay responsive: dialogs are resizable (`AppDialog` with geometry memory) and windows vary in width, so every pane has to adapt instead of clipping. Rules: wrapping text gets `wrapMode` + a width bound (`Layout.fillWidth`); content inside a `ScrollView` binds its width to the ScrollView's own `availableWidth` via an explicit `id` (never `parent.availableWidth` — ScrollView reparents its children, so `parent` is not the ScrollView and the column falls back to its implicit width, which disables wrapping and pushes trailing controls off-screen); items in a `RowLayout` that must yield get `Layout.minimumWidth: 0` (e.g. a ComboBox next to a button); `Flow` only wraps when its own width is constrained. Verify resizable dialogs at narrow widths, not just the default size.
 - Flutter must stay overflow-free at 360px widths, short (~400px) heights, and 150% text scale — `RenderFlex` overflow is a bug, not a warning. Rules below are the bar; the paragraph is the summary. Verify small width *and* small height, not just the default window.
 

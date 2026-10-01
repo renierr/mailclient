@@ -11,6 +11,30 @@
 /// degrades to a sensible default instead of taking the list down.
 library;
 
+/// A sender's avatar badge, built once by `mailcore::badge` for both
+/// frontends: the letters plus a background colour per theme (`#rrggbb`),
+/// with white text on either.
+class SenderBadge {
+  const SenderBadge({
+    required this.initials,
+    required this.light,
+    required this.dark,
+  });
+
+  /// What a row from an older core, without badge fields, shows.
+  static const none = SenderBadge(initials: '?', light: '', dark: '');
+
+  final String initials;
+  final String light;
+  final String dark;
+
+  factory SenderBadge.fromJson(Map<String, dynamic> j) => SenderBadge(
+    initials: _str(j['initials'], orElse: '?'),
+    light: _str(j['avatar_light']),
+    dark: _str(j['avatar_dark']),
+  );
+}
+
 /// A configured mail account.
 class Account {
   const Account({
@@ -20,6 +44,7 @@ class Account {
     required this.fromName,
     required this.imapHost,
     required this.smtpHost,
+    this.badge = SenderBadge.none,
   });
 
   final int id;
@@ -32,6 +57,9 @@ class Account {
   final String imapHost;
   final String smtpHost;
 
+  /// The account's own avatar, as others see it as a sender.
+  final SenderBadge badge;
+
   factory Account.fromJson(Map<String, dynamic> j) => Account(
     id: _int(j['id']),
     name: _str(j['name']),
@@ -39,6 +67,7 @@ class Account {
     fromName: _str(j['from_name']),
     imapHost: _str(j['imap_host']),
     smtpHost: _str(j['smtp_host']),
+    badge: SenderBadge.fromJson(j),
   );
 
   /// What to show when an account has no name of its own.
@@ -121,11 +150,13 @@ class MessageSummary {
     required this.unread,
     required this.starred,
     required this.hasAttachments,
+    this.badge = SenderBadge.none,
   });
 
   final int uid;
   final String subject;
   final String from;
+  final SenderBadge badge;
 
   /// Sender display name from the core (`""` = address only).
   final String fromName;
@@ -152,6 +183,7 @@ class MessageSummary {
     unread: _bool(j['unread']),
     starred: _bool(j['starred']),
     hasAttachments: _bool(j['has_attachments']),
+    badge: SenderBadge.fromJson(j),
   );
 
   MessageSummary copyWith({bool? unread, bool? starred}) => MessageSummary(
@@ -164,6 +196,7 @@ class MessageSummary {
     unread: unread ?? this.unread,
     starred: starred ?? this.starred,
     hasAttachments: hasAttachments,
+    badge: badge,
   );
 }
 
@@ -184,11 +217,13 @@ class MessageBody {
     this.missingInlineImages = 0,
     this.htmlColored = false,
     required this.attachments,
+    this.badge = SenderBadge.none,
   });
 
   final int uid;
   final String subject;
   final String from;
+  final SenderBadge badge;
   final String to;
   final String cc;
 
@@ -233,6 +268,7 @@ class MessageBody {
     attachments: _list(j['attachments'])
         .map(AttachmentInfo.fromJson)
         .toList(growable: false),
+    badge: SenderBadge.fromJson(j),
   );
 }
 

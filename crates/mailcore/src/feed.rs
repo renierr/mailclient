@@ -4,6 +4,7 @@
 
 use serde_json::json;
 
+use crate::badge::sender_badge;
 use crate::db::Db;
 use crate::error::Result;
 use crate::html::{self, Sanitized};
@@ -37,11 +38,13 @@ pub fn folders_json(db: &Db, account_id: i64) -> Result<String> {
     Ok(serde_json::to_string(&arr)?)
 }
 
-/// `[{id, name, email, from_name, imap_host, smtp_host}]` for the account manager.
+/// `[{id, name, email, from_name, imap_host, smtp_host, …}]` for the account
+/// manager, plus the account's own sender badge (see [`crate::badge`]).
 pub fn accounts_json(db: &Db) -> Result<String> {
     let mut arr = Vec::new();
     for a in accounts::list(db)? {
-        arr.push(json!({
+        let badge = sender_badge(&a.from_name, &a.email_address);
+        let mut row = json!({
             "id": a.id,
             "name": a.name,
             "email": a.email_address,
@@ -54,7 +57,9 @@ pub fn accounts_json(db: &Db) -> Result<String> {
             "smtp_port": a.smtp_port,
             "smtp_sec": a.smtp_security,
             "smtp_user": a.smtp_username,
-        }));
+        });
+        badge.extend(&mut row);
+        arr.push(row);
     }
     Ok(serde_json::to_string(&arr)?)
 }
@@ -214,18 +219,23 @@ pub fn messages_list_json_paged(
             .into_iter()
             .map(|m| {
                 let date = short_date(m.date.as_deref());
-                json!({
+                let from = m.from_addr.unwrap_or_else(|| "?".to_string());
+                let from_name = m.from_name.unwrap_or_default();
+                let badge = sender_badge(&from_name, &from);
+                let mut row = json!({
                     "uid": m.uid,
                     "subject": m.subject.unwrap_or_else(|| "(no subject)".to_string()),
-                    "from": m.from_addr.unwrap_or_else(|| "?".to_string()),
-                    "from_name": m.from_name.unwrap_or_default(),
+                    "from": from,
+                    "from_name": from_name,
                     "date": date.text,
                     "date_key": date.key,
                     "snippet": m.snippet.unwrap_or_default(),
                     "unread": if is_trash { false } else { !m.is_read },
                     "starred": m.is_starred,
                     "has_attachments": m.has_attachments,
-                })
+                });
+                badge.extend(&mut row);
+                row
             })
             .collect::<Vec<_>>(),
     )?)
@@ -260,10 +270,13 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
         })
         .collect();
     let date = short_date(m.date.as_deref());
-    Ok(serde_json::to_string(&json!({
+    let from = m.from_addr.as_deref().unwrap_or("?");
+    let from_name = m.from_name.as_deref().unwrap_or("");
+    let mut out = json!({
         "uid": m.uid,
         "subject": m.subject.as_deref().unwrap_or("(no subject)"),
-        "from": m.from_addr.as_deref().unwrap_or("?"),
+        "from": from,
+        "from_name": from_name,
         "reply_to": m.reply_to.as_deref().unwrap_or(""),
         "date": date.text,
         "date_key": date.key,
@@ -275,7 +288,9 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
         "missing_inline_images": missing_inline,
         "html_colored": is_html && html::has_own_colors(&body_html),
         "body": legacy_body,
-    }))?)
+    });
+    sender_badge(from_name, from).extend(&mut out);
+    Ok(serde_json::to_string(&out)?)
 }
 
 /// Attachment metadata for one message (`[{id, filename, mime_type, size,
@@ -388,19 +403,25 @@ pub fn search_json(
         rusqlite::params![match_query, account_id, limit as i64, folder],
         |row| {
             let date = short_date(row.get::<_, Option<String>>(5)?.as_deref());
-            Ok(json!({
+            let from = row
+                .get::<_, Option<String>>(4)?
+                .unwrap_or_else(|| "?".to_string());
+            let badge = sender_badge("", &from);
+            let mut hit = json!({
                 "uid": row.get::<_, u32>(0)?,
                 "folder_id": row.get::<_, i64>(1)?,
                 "folder": row.get::<_, String>(2)?,
                 "subject": row.get::<_, Option<String>>(3)?.unwrap_or_else(|| "(no subject)".to_string()),
-                "from": row.get::<_, Option<String>>(4)?.unwrap_or_else(|| "?".to_string()),
+                "from": from,
                 "date": date.text,
                 "date_key": date.key,
                 "snippet": one_line(&row.get::<_, String>(6)?),
                 "unread": row.get::<_, i64>(7)? == 0,
                 "starred": row.get::<_, i64>(8)? != 0,
                 "has_attachments": row.get::<_, i64>(9)? != 0,
-            }))
+            });
+            badge.extend(&mut hit);
+            Ok(hit)
         },
     )?;
     for row in rows {

@@ -2,19 +2,21 @@ import QtQuick
 
 import Mailclient
 
-// Circle with the sender's initials, coloured deterministically from the seed.
+// Circle with a sender's badge. `badge` is any feed row carrying the
+// mailcore badge fields (`initials`, `avatar_light`, `avatar_dark`, see
+// mailcore::badge) -- a list row's model, the reader payload, an account.
 Rectangle {
     id: root
 
-    property string initials: "?"
-    property string seed: initials
+    property var badge: null
+    readonly property string initials: (root.badge && root.badge.initials) || "?"
 
     implicitWidth: Math.round(34 * Theme.uiScale)
     implicitHeight: Math.round(34 * Theme.uiScale)
     width: implicitWidth
     height: implicitHeight
     radius: width / 2
-    color: Theme.avatarColor(root.seed)
+    color: (root.badge && (Theme.dark ? root.badge.avatar_dark : root.badge.avatar_light)) || Theme.textMuted
 
     Text {
         anchors.centerIn: parent

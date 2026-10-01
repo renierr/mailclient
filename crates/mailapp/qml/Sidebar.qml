@@ -76,6 +76,15 @@ Rectangle {
         ItemDelegate {
             id: accountChip
             readonly property bool canSwitch: !!root.accounts && root.accounts.count > 1
+            // The current account's feed row, for its badge.
+            readonly property var currentAccount: {
+                var n = root.accounts ? root.accounts.count : 0;
+                for (var i = 0; i < n; i++) {
+                    if (root.accounts.get(i).email === root.currentEmail)
+                        return root.accounts.get(i);
+                }
+                return null;
+            }
             Layout.fillWidth: true
             Layout.margins: Theme.sm
             implicitHeight: 48
@@ -97,8 +106,7 @@ Rectangle {
                 Avatar {
                     implicitWidth: Math.round(28 * Theme.uiScale)
                     implicitHeight: Math.round(28 * Theme.uiScale)
-                    seed: root.currentEmail
-                    initials: (root.currentEmail || "?").substring(0, 1).toUpperCase()
+                    badge: accountChip.currentAccount
                 }
                 ColumnLayout {
                     spacing: 0

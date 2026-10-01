@@ -90,8 +90,7 @@ AppDialog {
                 Avatar {
                     implicitWidth: Math.round(32 * Theme.uiScale)
                     implicitHeight: Math.round(32 * Theme.uiScale)
-                    seed: accountRow.model.email
-                    initials: (accountRow.model.email || "?").substring(0, 1).toUpperCase()
+                    badge: accountRow.model
                 }
 
                 ColumnLayout {

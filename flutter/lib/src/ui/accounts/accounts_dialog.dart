@@ -6,6 +6,7 @@ import '../../models/models.dart';
 import '../../state/mail_state.dart';
 import '../accounts/account_setup_dialog.dart';
 import '../dialogs/mail_dialog.dart';
+import '../dialogs/sender_avatar.dart';
 
 /// List, switch, edit and remove accounts.
 ///
@@ -76,17 +77,9 @@ class AccountsDialog extends StatelessWidget {
 
   Widget _row(BuildContext context, MailState state, Account a, int activeId) {
     final current = a.id == activeId;
-    final avatarBg = avatarColor(context, a.email);
     return ListTile(
       dense: true,
-      leading: CircleAvatar(
-        backgroundColor: avatarBg,
-        foregroundColor: Theme.of(context).colorScheme.onPrimary,
-        child: Text(
-          a.email.isEmpty ? '?' : a.email[0].toUpperCase(),
-          style: const TextStyle(fontWeight: FontWeight.w600),
-        ),
-      ),
+      leading: SenderAvatar(badge: a.badge, radius: 20),
       // Plain title: the "active" chip moved to the subtitle, where it costs
       // no horizontal width next to up to three trailing buttons.
       title: Text(a.email, overflow: TextOverflow.ellipsis),

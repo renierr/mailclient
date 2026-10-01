@@ -5,6 +5,7 @@ import '../../models/models.dart';
 import '../../models/settings.dart';
 import '../../state/mail_state.dart';
 import '../dialogs/mail_dialog.dart';
+import '../dialogs/sender_avatar.dart';
 import '../menu_row.dart';
 import '../move_to/move_to_dialog.dart';
 
@@ -387,7 +388,6 @@ class MessageTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final weight = message.unread ? FontWeight.w700 : FontWeight.normal;
-    final avatarBg = avatarColor(context, message.from);
     return GestureDetector(
       // Desktop parity: right-click opens the same row menu as ⋮.
       onSecondaryTapDown: (d) =>
@@ -414,14 +414,10 @@ class MessageTile extends StatelessWidget {
                   alignment: AlignmentDirectional.topStart,
                   offset: const Offset(-2, -2),
                   backgroundColor: theme.colorScheme.primary,
-                  child: CircleAvatar(
+                  child: SenderAvatar(
+                    badge: message.badge,
                     radius: 13,
-                    backgroundColor: avatarBg,
-                    foregroundColor: theme.colorScheme.onPrimary,
-                    child: Text(
-                      senderInitials(message.fromName, message.from),
-                      style: const TextStyle(fontSize: 11),
-                    ),
+                    fontSize: 10,
                   ),
                 ),
               ),

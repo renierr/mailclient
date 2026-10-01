@@ -141,6 +141,31 @@ fn feed_carries_attachment_metadata_without_bytes() {
 }
 
 #[test]
+fn every_sender_row_carries_one_badge() {
+    let (db, acc, f) = setup();
+    msg_store::upsert(&db, &msg_store::sample_new(acc, f, 9)).unwrap();
+    let want = crate::badge::sender_badge("Alice", "alice@example.com");
+
+    let rows: serde_json::Value =
+        serde_json::from_str(&messages_list_json_paged(&db, f, 10, 0).unwrap()).unwrap();
+    let reader: serde_json::Value =
+        serde_json::from_str(&message_json(&db, f, 9).unwrap()).unwrap();
+    for row in [&rows[0], &reader] {
+        assert_eq!(row["initials"], want.initials.as_str());
+        assert_eq!(row["avatar_light"], want.avatar_light.as_str());
+        assert_eq!(row["avatar_dark"], want.avatar_dark.as_str());
+    }
+    assert_eq!(reader["from_name"], "Alice");
+
+    let accounts: serde_json::Value = serde_json::from_str(&accounts_json(&db).unwrap()).unwrap();
+    assert_eq!(accounts[0]["initials"].as_str().unwrap().len(), 2);
+    assert!(accounts[0]["avatar_dark"]
+        .as_str()
+        .unwrap()
+        .starts_with('#'));
+}
+
+#[test]
 fn compact_list_omits_bodies_but_reader_payload_has_them() {
     let (db, acc, f) = setup();
     let mut m = msg_store::sample_new(acc, f, 72);

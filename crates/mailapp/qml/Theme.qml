@@ -69,15 +69,6 @@ QtObject {
     readonly property int fontMedium: Math.round(15 * uiScale)
     readonly property int fontTitle: Math.round(20 * uiScale)
 
-    // Deterministic avatar colour per sender (same name, same colour).
-    function avatarColor(seed) {
-        var s = seed || "?";
-        var h = 0;
-        for (var i = 0; i < s.length; i++)
-            h = (h * 31 + s.charCodeAt(i)) % 360;
-        return Qt.hsla(h / 360, dark ? 0.42 : 0.5, dark ? 0.46 : 0.52, 1);
-    }
-
     // Scrollbars inside WebEngine pages (reader, composer editor) are app
     // chrome, not content: thin and in the app's colours (as the QML
     // ScrollBars: border handle, muted on hover) in every paint mode. Chromium honours the standard properties and then ignores

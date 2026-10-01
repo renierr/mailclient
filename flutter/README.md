@@ -297,7 +297,13 @@ the same SQLite file in that directory.
 
 ## Shared code still to promote
 
-Nothing known. The composer (send, drafts) lives once in `mailcore::compose`,
-account saving in `mailcore::store::account_form`, and the IMAP session pool,
-the lease and the panic guard in `mailcore::sync::pool`. Add an entry here
-before making any new copy between `mailapp` and `mailffi`.
+The composer (send, drafts) lives once in `mailcore::compose`, account
+saving in `mailcore::store::account_form`, the IMAP session pool, the lease
+and the panic guard in `mailcore::sync::pool`, and sender avatars (letters
+and colour) in `mailcore::badge`. Add an entry here before making any new
+copy between `mailapp` and `mailffi`, or between QML and Dart (AGENTS.md §1).
+
+- Reader sender/Reply-To splitting: `splitAddr` in `MessageView.qml` and in
+  `ui/reader/reader_widgets.dart` both split the raw `From`/`Reply-To`
+  header, and both decide "Reply-To differs from the sender". The feed could
+  carry the parsed parts and the flag instead.

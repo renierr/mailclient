@@ -520,8 +520,7 @@ Rectangle {
                             Avatar {
                                 implicitWidth: Math.round(36 * Theme.uiScale)
                                 implicitHeight: Math.round(36 * Theme.uiScale)
-                                seed: root.sender.name || root.sender.addr || "?"
-                                initials: Initials.of(root.sender.name, root.sender.addr)
+                                badge: root.message
                             }
 
                             ColumnLayout {
