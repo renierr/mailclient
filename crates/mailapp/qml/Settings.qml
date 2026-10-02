@@ -374,8 +374,8 @@ AppDialog {
         return out;
     }
 
-    // Re-read the storage stats (on open, and after every maintenance
-    // action completes — the export job reports back via `job_finished`).
+    // Re-read the storage stats (when the Maintenance pane shows, and after
+    // every maintenance action completes — the export job reports back via `job_finished`).
     function refreshMaintStats() {
         if (!root.backend || !root.backend.maintenance_json)
             return;
@@ -466,7 +466,6 @@ AppDialog {
         root.serverCaps = [];
         root.capsError = "";
         root.refreshCaps();
-        root.refreshMaintStats();
     }
 
     // The bridge exposes its signal under the Rust name, so the handler is
@@ -1009,6 +1008,12 @@ AppDialog {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
+                // The stats stat files and count rows on the GUI thread:
+                // only when this pane is actually shown, not on every open.
+                onVisibleChanged: {
+                    if (visible)
+                        root.refreshMaintStats();
+                }
                 contentWidth: availableWidth
                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                 ColumnLayout {

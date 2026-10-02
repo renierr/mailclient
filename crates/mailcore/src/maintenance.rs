@@ -143,13 +143,16 @@ fn draft_dir_count(base: Option<&Path>) -> u64 {
         Ok(e) => e,
         Err(_) => return 0,
     };
+    // `base` is the system temp folder, often tens of thousands of entries:
+    // match the name first and take the type from the directory listing,
+    // so only our own entries cost anything.
     entries
         .flatten()
         .filter(|e| {
-            e.path().is_dir()
-                && e.file_name()
-                    .to_string_lossy()
-                    .starts_with(DRAFT_TEMP_PREFIX)
+            e.file_name()
+                .to_string_lossy()
+                .starts_with(DRAFT_TEMP_PREFIX)
+                && e.file_type().is_ok_and(|t| t.is_dir())
         })
         .count() as u64
 }
