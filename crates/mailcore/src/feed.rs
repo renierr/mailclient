@@ -399,8 +399,8 @@ fn rfc_header(raw: &Option<String>, wanted: &str) -> Option<String> {
 /// relevance order read as random next to it). `folder` scopes the search to one
 /// folder path (empty = whole account). `snippet` is plain match context
 /// (the empty-string `snippet()` markers produce it tag-free — the list
-/// renders plain rows). Blank or operator-only queries yield `[]`, never an
-/// error.
+/// renders plain rows). The query language is [`crate::search`]'s. Blank,
+/// operator-only or exclusion-only queries yield `[]`, never an error.
 pub fn search_json(
     db: &Db,
     account_id: i64,
@@ -408,12 +408,12 @@ pub fn search_json(
     limit: u64,
     folder: &str,
 ) -> Result<String> {
-    let Some(match_query) = crate::search::escape_fts_query(query) else {
+    let Some(match_query) = crate::search::fts_query(query) else {
         return Ok("[]".to_string());
     };
     let mut stmt = db.conn().prepare(
         "select m.uid, m.folder_id, f.path, m.subject, m.from_addr, m.date,
-                snippet(messages_fts, 2, '', '', '…', 12),
+                snippet(messages_fts, 6, '', '', '…', 12),
                 m.is_read, m.is_starred, m.has_attachments, m.from_name
          from messages_fts
          join messages m on m.id = messages_fts.rowid

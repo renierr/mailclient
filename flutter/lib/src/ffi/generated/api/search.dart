@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-/// FTS5 search over subject / sender / body for one account.
+/// FTS5 search over subject / sender / recipients / body for one account.
 ///
 /// Pure SQLite, no network, safe to call on every keystroke. `folder` scopes
 /// to one IMAP path; empty searches the whole account. A blank or
@@ -26,8 +26,9 @@ Future<String> searchJson({
 
 /// Backfill thin local results from the server.
 ///
-/// Runs IMAP `TEXT` search per token across the account's folders — or one
-/// folder when `folder` is set — and pulls missing hits into the cache
+/// Runs one IMAP SEARCH built from the query (same language as
+/// [`search_json`]) across the account's folders — or one folder when
+/// `folder` is set — and pulls missing hits into the cache
 /// (bounded, metadata only). Queued; when the `"Search"` job finishes, re-run
 /// [`search_json`] and the new hits are there.
 Future<void> searchServer({

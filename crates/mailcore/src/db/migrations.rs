@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 18;
+pub const SCHEMA_VERSION: u32 = 19;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -66,6 +66,48 @@ const SCHEMA_V17: &str = "create table if not exists account_settings (
     updated_at text not null,
     primary key (account_id, key)
 );";
+
+/// v19 DDL: the search index also covers the sender name and the To/Cc/Bcc
+/// addresses. FTS5 cannot add columns, so the table and its triggers are
+/// dropped, re-created as in `schema.sql`, and rebuilt from `messages`.
+const SCHEMA_V19: &str = "drop trigger if exists trg_messages_ai;
+drop trigger if exists trg_messages_ad;
+drop trigger if exists trg_messages_au;
+drop table if exists messages_fts;
+create virtual table messages_fts using fts5 (
+    subject,
+    from_addr,
+    from_name,
+    to_addrs,
+    cc_addrs,
+    bcc_addrs,
+    body_text,
+    content = 'messages',
+    content_rowid = 'id'
+);
+create trigger trg_messages_ai after insert on messages begin
+    insert into messages_fts (rowid, subject, from_addr, from_name, to_addrs, cc_addrs, bcc_addrs, body_text)
+    values (new.id, new.subject, new.from_addr, new.from_name, new.to_addrs, new.cc_addrs, new.bcc_addrs, new.body_text);
+end;
+create trigger trg_messages_ad after delete on messages begin
+    insert into messages_fts (messages_fts, rowid, subject, from_addr, from_name, to_addrs, cc_addrs, bcc_addrs, body_text)
+    values ('delete', old.id, old.subject, old.from_addr, old.from_name, old.to_addrs, old.cc_addrs, old.bcc_addrs, old.body_text);
+end;
+create trigger trg_messages_au after update on messages
+when old.subject is not new.subject
+  or old.from_addr is not new.from_addr
+  or old.from_name is not new.from_name
+  or old.to_addrs is not new.to_addrs
+  or old.cc_addrs is not new.cc_addrs
+  or old.bcc_addrs is not new.bcc_addrs
+  or old.body_text is not new.body_text
+begin
+    insert into messages_fts (messages_fts, rowid, subject, from_addr, from_name, to_addrs, cc_addrs, bcc_addrs, body_text)
+    values ('delete', old.id, old.subject, old.from_addr, old.from_name, old.to_addrs, old.cc_addrs, old.bcc_addrs, old.body_text);
+    insert into messages_fts (rowid, subject, from_addr, from_name, to_addrs, cc_addrs, bcc_addrs, body_text)
+    values (new.id, new.subject, new.from_addr, new.from_name, new.to_addrs, new.cc_addrs, new.bcc_addrs, new.body_text);
+end;
+insert into messages_fts (messages_fts) values ('rebuild');";
 
 /// Run `ALTER TABLE ... ADD COLUMN` statements, tolerating columns that are
 /// already there.
@@ -236,6 +278,10 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         if reset > 0 {
             log::info!("migration v18: {reset} account(s) reset from plaintext SMTP to STARTTLS");
         }
+    }
+    if current < 19 {
+        // v19: sender name and recipients join the search index.
+        conn.execute_batch(SCHEMA_V19)?;
     }
     if current != SCHEMA_VERSION {
         conn.execute(
@@ -418,8 +464,12 @@ b<c",
             [],
         )
         .unwrap();
+        // Pre-v19 triggers did not index `from_name`; today's would block the drop.
         conn.execute_batch(
-            "alter table messages drop column from_name;
+            "drop trigger trg_messages_ai;
+             drop trigger trg_messages_ad;
+             drop trigger trg_messages_au;
+             alter table messages drop column from_name;
              insert into accounts (id, name, email_address, imap_host, imap_port,
                   imap_security, imap_username, smtp_host, smtp_port,
                   smtp_security, smtp_username, auth_vault_key, created_at, updated_at)
@@ -658,6 +708,69 @@ b<c",
             sql.to_ascii_lowercase().contains("when old.subject"),
             "{sql}"
         );
+    }
+
+    #[test]
+    fn v19_migration_rebuilds_the_index_with_names_and_recipients() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_FULL).unwrap();
+        conn.execute(
+            "insert into schema_meta (key, value) values ('version', '18')",
+            [],
+        )
+        .unwrap();
+        // The v18 index: subject, address and body only.
+        conn.execute_batch(
+            "drop trigger trg_messages_ai;
+             drop trigger trg_messages_ad;
+             drop trigger trg_messages_au;
+             drop table messages_fts;
+             create virtual table messages_fts using fts5 (
+                 subject, from_addr, body_text,
+                 content = 'messages', content_rowid = 'id');
+             insert into accounts (id, name, email_address, imap_host, smtp_host,
+                 auth_vault_key, created_at, updated_at)
+             values (1, 'a', 'a@example.com', 'i', 's', 'k', 't', 't');
+             insert into folders (id, account_id, path, delimiter, role, created_at, updated_at)
+             values (1, 1, 'INBOX', '/', 'inbox', 't', 't');
+             insert into messages (id, account_id, folder_id, uid, from_name, cc_addrs,
+                 created_at, updated_at)
+             values (1, 1, 1, 1, 'Anna', '[\"carl@example.org\"]', 't', 't');",
+        )
+        .unwrap();
+
+        ensure_schema(&conn).unwrap();
+
+        let fresh = rusqlite::Connection::open_in_memory().unwrap();
+        fresh.execute_batch(SCHEMA_FULL).unwrap();
+        let shape = |c: &Connection| -> Vec<String> {
+            c.prepare(
+                "select sql from sqlite_master where name like '%messages_fts'
+                 or name like 'trg_messages_a_' order by name",
+            )
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+        };
+        let norm = |v: Vec<String>| -> Vec<String> {
+            v.into_iter()
+                .map(|s| s.replace("if not exists ", ""))
+                .collect()
+        };
+        assert_eq!(norm(shape(&conn)), norm(shape(&fresh)));
+        // Existing rows were re-indexed, new columns included.
+        for q in ["from_name : anna", "cc_addrs : carl"] {
+            let n: i64 = conn
+                .query_row(
+                    "select count(*) from messages_fts where messages_fts match ?1",
+                    [q],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "{q}");
+        }
     }
 
     #[test]

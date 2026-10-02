@@ -400,6 +400,61 @@ fn search_rows_carry_folder_and_plain_snippet() {
     assert_eq!(scoped.as_array().unwrap().len(), 1);
 }
 
+fn hit_uids(db: &Db, acc: i64, query: &str) -> Vec<u32> {
+    let hits: Vec<serde_json::Value> =
+        serde_json::from_str(&search_json(db, acc, query, 50, "").unwrap()).unwrap();
+    let mut uids: Vec<u32> = hits
+        .iter()
+        .map(|h| h["uid"].as_u64().unwrap() as u32)
+        .collect();
+    uids.sort_unstable();
+    uids
+}
+
+#[test]
+fn search_reads_names_recipients_phrases_and_fields() {
+    let (db, acc, f) = setup();
+    let mut a = msg_store::sample_new(acc, f, 1);
+    a.from_name = Some("Anna Example".to_string());
+    a.from_addr = Some("anna@example.com".to_string());
+    a.to_addrs = vec!["team@example.org".to_string()];
+    a.subject = Some("Project plan".to_string());
+    a.body_text = Some("the plan for the project".to_string());
+    msg_store::upsert(&db, &a).unwrap();
+    let mut b = msg_store::sample_new(acc, f, 2);
+    b.from_name = Some("Bert".to_string());
+    b.from_addr = Some("bert@example.com".to_string());
+    b.cc_addrs = vec!["anna@example.com".to_string()];
+    b.subject = Some("Reminder".to_string());
+    b.body_text = Some("project plan reminder".to_string());
+    msg_store::upsert(&db, &b).unwrap();
+
+    // The sender's display name is indexed, not only the address.
+    assert_eq!(hit_uids(&db, acc, "Anna"), [1, 2]);
+    assert_eq!(hit_uids(&db, acc, "from:anna"), [1]);
+    // `to:` covers Cc as well.
+    assert_eq!(hit_uids(&db, acc, "to:anna"), [2]);
+    assert_eq!(hit_uids(&db, acc, "to:team"), [1]);
+    // A phrase keeps its word order; loose words do not.
+    assert_eq!(hit_uids(&db, acc, r#""project plan""#), [1, 2]);
+    assert_eq!(hit_uids(&db, acc, r#""plan for""#), [1]);
+    assert_eq!(hit_uids(&db, acc, "plan project"), [1, 2]);
+    assert_eq!(hit_uids(&db, acc, "subject:reminder"), [2]);
+    assert_eq!(hit_uids(&db, acc, "project -reminder"), [1]);
+    assert_eq!(
+        hit_uids(&db, acc, "project -from:anna -to:anna"),
+        Vec::<u32>::new()
+    );
+    // Exclusions alone search nothing.
+    assert_eq!(hit_uids(&db, acc, "-reminder"), Vec::<u32>::new());
+    // Typed operators are text, never syntax errors.
+    assert_eq!(
+        hit_uids(&db, acc, r#"project AND NOT ( "#),
+        Vec::<u32>::new()
+    );
+    assert_eq!(hit_uids(&db, acc, "pro* NEAR("), Vec::<u32>::new());
+}
+
 #[test]
 fn search_rows_are_newest_first_across_folders() {
     let (db, acc, f) = setup();

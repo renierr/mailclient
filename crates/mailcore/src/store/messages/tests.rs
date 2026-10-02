@@ -377,8 +377,9 @@ fn changing_indexed_text_does_re_index() {
 
     assert!(fts_rows(&db) > index_before);
     // The index now carries the new subject, not the old one.
+    let hits = crate::feed::search_json(&db, acc, "Goodbye", 10, "").unwrap();
     assert_eq!(
-        crate::search::search(&db, acc, "Goodbye", 10)
+        serde_json::from_str::<Vec<serde_json::Value>>(&hits)
             .unwrap()
             .len(),
         1

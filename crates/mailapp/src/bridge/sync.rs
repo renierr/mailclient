@@ -199,14 +199,13 @@ impl qobject::Bridge {
         let folder = folder.to_string();
         spawn_job(self, "Search", move |db, _progress| async move {
             let acc = job_account(db, wanted)?;
-            let tokens = mailcore::search::search_tokens(&query);
-            if tokens.is_empty() {
+            if !mailcore::search::is_searchable(&query) {
                 return Ok(("Search: nothing searchable in that query".to_string(), None));
             }
             let scope = (!folder.is_empty()).then_some(folder.as_str());
             let mut imap = checkout_session(&acc).await?;
             let r = imap
-                .search_server_into_cache(db, acc.id, &tokens, scope)
+                .search_server_into_cache(db, acc.id, &query, scope)
                 .await
                 .map_err(|e| e.to_string())?;
             imap.checkin();

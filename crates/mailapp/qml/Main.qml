@@ -1150,6 +1150,10 @@ ApplicationWindow {
                     onClicked: searchField.text = ""
                 }
                 Keys.onEscapePressed: searchField.text = ""
+                // The search syntax, as mailcore::search reads it.
+                ToolTip.text: qsTr("All words must match, by word start (inv finds invoice)\n\"exact phrase\"   -exclude\nfrom:name   to:address   subject:word")
+                ToolTip.visible: hovered
+                ToolTip.delay: 800
             }
 
             // Folder scope: limits the FTS index and the server backfill

@@ -244,6 +244,12 @@ void openShellMenu(BuildContext context, String value) {
   }
 }
 
+/// The search syntax, as `mailcore::search` reads it (Qt shows the same).
+const searchSyntaxHint =
+    'All words must match, by word start (inv finds invoice)\n'
+    '"exact phrase"   -exclude\n'
+    'from:name   to:address   subject:word';
+
 /// Account-wide FTS from 3+ letters, or this folder only when the scope
 /// toggle is on. Short input keeps the instant folder list — searching the
 /// server on every keystroke would be a very expensive autocomplete.
@@ -283,31 +289,44 @@ class ShellSearchField extends StatelessWidget {
 
     return CallbackShortcuts(
       bindings: {const SingleActivator(LogicalKeyboardKey.escape): clear},
-      child: TextField(
-        controller: controller,
-        focusNode: focus,
-        textInputAction: TextInputAction.search,
-        // A tap anywhere else ends editing; without it the cursor keeps
-        // blinking (and the keyboard stays up) after the user moved on.
-        onTapOutside: (_) => focus.unfocus(),
-        decoration: InputDecoration(
-          hintText: hint,
-          suffixIcon: query.isEmpty
-              ? null
-              : IconButton(
-                  tooltip: 'Clear search',
-                  icon: const Icon(Icons.close, size: 18),
-                  onPressed: clear,
-                ),
-          border: const OutlineInputBorder(),
-          isDense: true,
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 10,
-            vertical: 10,
+      // Hover shows the syntax on desktop; `manual` keeps a long-press on
+      // the field for text selection. Touch gets the help icon instead.
+      child: Tooltip(
+        message: searchSyntaxHint,
+        triggerMode: TooltipTriggerMode.manual,
+        waitDuration: const Duration(milliseconds: 800),
+        child: TextField(
+          controller: controller,
+          focusNode: focus,
+          textInputAction: TextInputAction.search,
+          // A tap anywhere else ends editing; without it the cursor keeps
+          // blinking (and the keyboard stays up) after the user moved on.
+          onTapOutside: (_) => focus.unfocus(),
+          decoration: InputDecoration(
+            hintText: hint,
+            // The empty field's clear slot holds the syntax help (tap).
+            suffixIcon: query.isEmpty
+                ? const Tooltip(
+                    message: searchSyntaxHint,
+                    triggerMode: TooltipTriggerMode.tap,
+                    showDuration: Duration(seconds: 6),
+                    child: Icon(Icons.help_outline, size: 18),
+                  )
+                : IconButton(
+                    tooltip: 'Clear search',
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: clear,
+                  ),
+            border: const OutlineInputBorder(),
+            isDense: true,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 10,
+              vertical: 10,
+            ),
           ),
+          onChanged: (v) => context.read<MailState>().runSearch(v),
+          onSubmitted: (v) => context.read<MailState>().runSearch(v),
         ),
-        onChanged: (v) => context.read<MailState>().runSearch(v),
-        onSubmitted: (v) => context.read<MailState>().runSearch(v),
       ),
     );
   }

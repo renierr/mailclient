@@ -492,7 +492,7 @@ async fn server_search_backfills_missing_uids() {
     let mut sync = ImapSync::new(&account);
     sync.connect("secret").await.unwrap();
     let report = sync
-        .search_server_into_cache(&db, account_id, &["hello".to_string()], None)
+        .search_server_into_cache(&db, account_id, "hello", None)
         .await
         .unwrap();
     assert_eq!(report.folders_searched, 1);

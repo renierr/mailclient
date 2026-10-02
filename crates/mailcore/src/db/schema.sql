@@ -93,20 +93,26 @@ create index if not exists idx_messages_unread
     on messages (folder_id, is_read);
 
 -- --------------------------------------------- full-text search (FTS5, external content)
+-- Recipient columns are the stored JSON address arrays: the tokenizer drops
+-- the brackets and quotes, so only the addresses are indexed.
 create virtual table if not exists messages_fts using fts5 (
     subject,
     from_addr,
+    from_name,
+    to_addrs,
+    cc_addrs,
+    bcc_addrs,
     body_text,
     content = 'messages',
     content_rowid = 'id'
 );
 create trigger if not exists trg_messages_ai after insert on messages begin
-    insert into messages_fts (rowid, subject, from_addr, body_text)
-    values (new.id, new.subject, new.from_addr, new.body_text);
+    insert into messages_fts (rowid, subject, from_addr, from_name, to_addrs, cc_addrs, bcc_addrs, body_text)
+    values (new.id, new.subject, new.from_addr, new.from_name, new.to_addrs, new.cc_addrs, new.bcc_addrs, new.body_text);
 end;
 create trigger if not exists trg_messages_ad after delete on messages begin
-    insert into messages_fts (messages_fts, rowid, subject, from_addr, body_text)
-    values ('delete', old.id, old.subject, old.from_addr, old.body_text);
+    insert into messages_fts (messages_fts, rowid, subject, from_addr, from_name, to_addrs, cc_addrs, bcc_addrs, body_text)
+    values ('delete', old.id, old.subject, old.from_addr, old.from_name, old.to_addrs, old.cc_addrs, old.bcc_addrs, old.body_text);
 end;
 -- Guarded on the indexed columns only. Flag updates (read, starred,
 -- flags_dirty) touch nearly every row on every sync; unguarded, each one
@@ -115,12 +121,16 @@ end;
 create trigger if not exists trg_messages_au after update on messages
 when old.subject is not new.subject
   or old.from_addr is not new.from_addr
+  or old.from_name is not new.from_name
+  or old.to_addrs is not new.to_addrs
+  or old.cc_addrs is not new.cc_addrs
+  or old.bcc_addrs is not new.bcc_addrs
   or old.body_text is not new.body_text
 begin
-    insert into messages_fts (messages_fts, rowid, subject, from_addr, body_text)
-    values ('delete', old.id, old.subject, old.from_addr, old.body_text);
-    insert into messages_fts (rowid, subject, from_addr, body_text)
-    values (new.id, new.subject, new.from_addr, new.body_text);
+    insert into messages_fts (messages_fts, rowid, subject, from_addr, from_name, to_addrs, cc_addrs, bcc_addrs, body_text)
+    values ('delete', old.id, old.subject, old.from_addr, old.from_name, old.to_addrs, old.cc_addrs, old.bcc_addrs, old.body_text);
+    insert into messages_fts (rowid, subject, from_addr, from_name, to_addrs, cc_addrs, bcc_addrs, body_text)
+    values (new.id, new.subject, new.from_addr, new.from_name, new.to_addrs, new.cc_addrs, new.bcc_addrs, new.body_text);
 end;
 
 -- ------------------------------------------------------------- attachments
