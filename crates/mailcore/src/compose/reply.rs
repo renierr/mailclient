@@ -28,7 +28,8 @@ pub fn reply_address(from: &str, reply_to: &str) -> ReplyAddress {
     }
 }
 
-fn bare(addr: &str) -> &str {
+/// The address inside `Name <addr>`, or the whole trimmed string.
+pub(super) fn bare(addr: &str) -> &str {
     let s = addr.trim();
     match (s.find('<'), s.rfind('>')) {
         (Some(lt), Some(gt)) if gt > lt => s[lt + 1..gt].trim(),

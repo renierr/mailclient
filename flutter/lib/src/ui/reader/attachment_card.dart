@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -99,17 +100,31 @@ class AttachmentCard extends StatelessWidget {
   }
 }
 
+/// A download the server or network refused; [message] is the job's error.
+class AttachmentDownloadFailed implements Exception {
+  const AttachmentDownloadFailed(this.message);
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 /// Cached bytes, downloading first when the message arrived without them.
 ///
 /// `downloadAttachments` only queues the job — the bytes land when its
 /// `Attachments` finish event arrives — so the waiter is registered *before*
 /// queueing and awaited. Awaiting the queue call alone races the download:
 /// the re-read below comes back empty and the user has to tap Open twice.
+///
+/// A failed download throws [AttachmentDownloadFailed] instead of queueing
+/// another one (offline, it would fail the same way each time), and no
+/// finish event within [wait] gives up with whatever is cached.
 Future<List<int>?> attachmentBytes(
   MailState state,
   MessageBody message,
-  int attachmentId,
-) async {
+  int attachmentId, {
+  Duration wait = const Duration(minutes: 2),
+}) async {
   var bytes = await MailCore.instance.attachmentBytes(attachmentId);
   if (bytes != null) return bytes;
   // Parallel downloads share the `Attachments` kind, so a finish event may
@@ -129,9 +144,15 @@ Future<List<int>?> attachmentBytes(
       }
       // Otherwise the bytes are on their way already — wait below.
     }
-    await finished;
+    final JobEvent done;
+    try {
+      done = await finished.timeout(wait);
+    } on TimeoutException {
+      return MailCore.instance.attachmentBytes(attachmentId);
+    }
     bytes = await MailCore.instance.attachmentBytes(attachmentId);
     if (bytes != null) return bytes;
+    if (!done.ok) throw AttachmentDownloadFailed(coreErrorText(done.status));
   }
   return null;
 }

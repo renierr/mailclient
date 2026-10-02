@@ -1,9 +1,10 @@
 //! Entity decoding and escaping.
 //!
-//! Only the subset that changes a safety decision or would otherwise show
-//! up as literal `&nbsp;` text — not a full HTML5 entity table.
+//! Numeric entities, every named HTML 4 entity (see `entity_table`) and a
+//! few HTML5 extras newsletters use. The serializer re-escapes text, so an
+//! entity this misses reaches the reader literally (`&auml;` for `ä`).
 
-/// Decode the small entity subset needed for URL decisions + text output.
+/// Decode character entities for URL decisions and text output.
 pub fn decode_entities(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let b = s.as_bytes();
@@ -35,7 +36,7 @@ pub fn decode_entities(s: &str) -> String {
                     "&#60;" | "&#x3C;" | "&#x3c;" => Some('<'),
                     "&#62;" | "&#x3E;" | "&#x3e;" => Some('>'),
                     "&#38;" | "&#x26;" => Some('&'),
-                    _ => None,
+                    _ => super::entity_table::named(&ent[1..ent.len() - 1]),
                 };
                 if let Some(c) = decoded {
                     out.push(c);

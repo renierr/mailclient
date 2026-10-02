@@ -262,3 +262,25 @@ fn oversized_body_truncates_without_splitting_a_character() {
     // than half a character.
     assert_eq!(truncate_on_char_boundary("ä", 1), "");
 }
+
+#[test]
+fn named_entities_decode_to_their_characters() {
+    // German mail generators spell umlauts as named entities; the reader
+    // and the plain twin must show the letters, not "&auml;".
+    assert_eq!(
+        decode_entities("Gr&uuml;&szlig;e aus K&ouml;ln &amp; M&Auml;rz &euro;"),
+        "Grüße aus Köln & MÄrz €"
+    );
+    let s = sanitize(
+        "<p>Sch&ouml;ne Gr&uuml;&szlig;e &ndash; &bdquo;Hallo&ldquo;</p>",
+        false,
+    );
+    assert!(s.html.contains("Schöne Grüße – „Hallo“"), "{s:?}");
+    assert!(!s.html.contains("&amp;"), "{s:?}");
+    assert_eq!(html_to_text("<p>M&uuml;ller</p>"), "Müller");
+    // Names are case-sensitive and unknown ones stay visible as typed.
+    assert_eq!(decode_entities("&AUML; &bogus;"), "&AUML; &bogus;");
+    // Decoded markup characters are still escaped on the way out.
+    let s = sanitize("<p>&lt;script&gt;</p>", false);
+    assert!(!s.html.contains("<script"), "{s:?}");
+}

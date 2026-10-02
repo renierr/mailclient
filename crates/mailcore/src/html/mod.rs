@@ -25,6 +25,7 @@
 
 mod css;
 mod entities;
+mod entity_table;
 mod inline;
 mod sanitize;
 mod tags;

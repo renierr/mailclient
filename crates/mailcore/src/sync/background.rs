@@ -273,7 +273,7 @@ async fn background_tick(db: &Db, db_path: &Path) -> BackgroundReport {
     let started = Utc::now();
     let due = schedule::due_accounts(db, started);
     let report = sync_accounts(db, &due, SyncScope::InboxOnly).await;
-    for result in report.accounts.iter().filter(|r| r.errors.is_empty()) {
+    for result in report.accounts.iter().filter(|r| r.inbox_checked()) {
         schedule::mark_checked(db, result.account_id, started);
     }
     let (new, marks) = collect_new_mail(db);

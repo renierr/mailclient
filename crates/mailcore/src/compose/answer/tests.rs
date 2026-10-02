@@ -159,3 +159,50 @@ fn blank_draft_is_the_signature_alone() {
     assert_eq!(d.subject, "");
     assert_eq!(d.quote_html, "");
 }
+
+fn sent_mail() -> AnswerSource {
+    AnswerSource {
+        from: "me@example.org".into(),
+        from_name: "Me".into(),
+        to: vec![
+            "Bob <bob@example.com>".into(),
+            "ME@example.org".into(),
+            "dave@example.com".into(),
+        ],
+        cc: vec!["carol@example.com".into(), "bob@example.com".into()],
+        ..html_mail()
+    }
+}
+
+#[test]
+fn replying_to_own_mail_answers_its_recipients() {
+    let d = answer_draft(&sent_mail(), AnswerMode::Reply, &opts());
+    assert_eq!(d.to, "Bob <bob@example.com>, dave@example.com");
+    assert_eq!(d.cc, "");
+    assert_eq!(d.notice_addr, "");
+
+    let d = answer_draft(&sent_mail(), AnswerMode::ReplyAll, &opts());
+    assert_eq!(d.to, "Bob <bob@example.com>, dave@example.com");
+    assert_eq!(d.cc, "carol@example.com");
+}
+
+#[test]
+fn own_mail_sent_only_to_ourselves_answers_ourselves() {
+    let src = AnswerSource {
+        to: vec!["me@example.org".into()],
+        cc: Vec::new(),
+        ..sent_mail()
+    };
+    let d = answer_draft(&src, AnswerMode::Reply, &opts());
+    assert_eq!(d.to, "me@example.org");
+}
+
+#[test]
+fn own_mail_with_a_foreign_reply_to_follows_the_reply_to() {
+    let src = AnswerSource {
+        reply_to: "list@example.org".into(),
+        ..sent_mail()
+    };
+    let d = answer_draft(&src, AnswerMode::Reply, &opts());
+    assert_eq!(d.to, "list@example.org");
+}

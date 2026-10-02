@@ -133,7 +133,9 @@ Both pollers end up in the same tick, run natively in the Rust core:
 3. Sync each due account, **inbox only**, over a **fresh connection**
    (never the GUI's pooled session), using the cached folder tree (no
    `LIST`) once it knows the inbox. The outbox and flag push still run.
-4. Stamp each successfully checked account.
+4. Stamp each account whose inbox synced. An outbox or other-folder error
+   alongside it does not count as a failed check, so a stuck queued send
+   cannot make a slow account poll on every tick.
 5. Compare against per-folder high-water marks and build a report of new
    unread mail; the host turns it into a notification (see section 5).
 6. Record the run in the history shown under Settings → background checks.

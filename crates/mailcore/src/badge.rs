@@ -70,17 +70,23 @@ fn initials(name: &str, address: &str) -> String {
     let first = first_alnum(name).or_else(|| first_alnum(address));
     let mut out = first.map_or_else(|| "?".to_string(), String::from);
     if let Some((_, domain)) = address.rsplit_once('@') {
-        if let Some(c) = first_alnum(domain_label(domain)) {
+        let label = domain_label(domain);
+        // A punycode label (`xn--...`) would always give "X"; the ASCII
+        // form says nothing about the real name, so show no domain letter.
+        let punycode = label.len() >= 4 && label[..4].eq_ignore_ascii_case("xn--");
+        if let Some(c) = first_alnum(label).filter(|_| !punycode) {
             out.push(c);
         }
     }
     out
 }
 
+/// The first letter or digit in any script (`Özil` -> `Ö`, not `Z`),
+/// upper-cased to one character (`ß` -> `S`, not `SS`).
 fn first_alnum(s: &str) -> Option<char> {
     s.chars()
-        .find(char::is_ascii_alphanumeric)
-        .map(|c| c.to_ascii_uppercase())
+        .find(|c| c.is_alphanumeric())
+        .and_then(|c| c.to_uppercase().next())
 }
 
 /// The name-bearing label of a domain: `mail.example.co.uk` -> `example`.
@@ -230,5 +236,22 @@ mod tests {
                 assert!(max < 0xf0, "{c} too light");
             }
         }
+    }
+
+    #[test]
+    fn initials_take_the_first_letter_in_any_script() {
+        assert_eq!(initials("Özil", "oe@example.com"), "ÖE");
+        assert_eq!(initials("émile", ""), "É");
+        assert_eq!(initials("Øystein", ""), "Ø");
+        assert_eq!(initials("Иван", ""), "И");
+        assert_eq!(initials("王小明", ""), "王");
+        assert_eq!(initials("ßtrasse", ""), "S");
+        assert_eq!(initials("", "über@example.org"), "ÜE");
+    }
+
+    #[test]
+    fn a_punycode_domain_adds_no_letter() {
+        assert_eq!(initials("Anna", "anna@xn--bcher-kva.example"), "A");
+        assert_eq!(initials("Anna", "anna@mail.xn--bcher-kva.de"), "A");
     }
 }

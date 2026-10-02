@@ -12,7 +12,7 @@
 
 use serde::Serialize;
 
-use super::reply::reply_address;
+use super::reply::{bare, reply_address, ReplyAddress};
 use crate::db::Db;
 use crate::error::{Result, StoreError};
 use crate::html::{escape_text, html_to_text};
@@ -133,11 +133,35 @@ pub fn answer_draft(src: &AnswerSource, mode: AnswerMode, opts: &AnswerOptions) 
         };
     }
 
-    let reply = reply_address(&src.from, &src.reply_to);
-    let cc = if mode == AnswerMode::ReplyAll {
-        reply_all_cc(src, &reply.target, &opts.own_address)
-    } else {
-        String::new()
+    let own = opts.own_address.trim();
+    let (reply, cc) = match own_mail_recipients(src, own) {
+        // Our own mail (Sent): answer the people it went to, not ourselves.
+        Some(to) => {
+            let cc = if mode == AnswerMode::ReplyAll {
+                let mut seen = vec![own.to_lowercase()];
+                seen.extend(to.iter().map(|a| bare(a).to_lowercase()));
+                unique_addrs(&src.cc, &mut seen).join(", ")
+            } else {
+                String::new()
+            };
+            let target = to.join(", ");
+            (
+                ReplyAddress {
+                    target,
+                    differs: false,
+                },
+                cc,
+            )
+        }
+        None => {
+            let reply = reply_address(&src.from, &src.reply_to);
+            let cc = if mode == AnswerMode::ReplyAll {
+                reply_all_cc(src, &reply.target, own)
+            } else {
+                String::new()
+            };
+            (reply, cc)
+        }
     };
     let quote_html = quote(&format!("On {}, {sender} wrote:", src.date), src);
     let body_html = if opts.reply_below_quote {
@@ -262,8 +286,32 @@ fn quote(header: &str, src: &AnswerSource) -> String {
 /// original went to, except us and the reply target, once each.
 fn reply_all_cc(src: &AnswerSource, target: &str, own: &str) -> String {
     let mut seen = vec![bare(target).to_lowercase(), own.trim().to_lowercase()];
+    let all: Vec<String> = std::iter::once(&src.from)
+        .chain(&src.to)
+        .chain(&src.cc)
+        .cloned()
+        .collect();
+    unique_addrs(&all, &mut seen).join(", ")
+}
+
+/// When `src` is mail we sent ourselves (no Reply-To elsewhere), the
+/// recipients a reply goes to: its To list without us. `None` for anyone
+/// else's mail, or when nobody but us is in To (then we answer ourselves).
+fn own_mail_recipients(src: &AnswerSource, own: &str) -> Option<Vec<String>> {
+    let reply_to = bare(&src.reply_to);
+    let ours = |a: &str| !own.is_empty() && a.eq_ignore_ascii_case(own);
+    if !ours(bare(&src.from)) || !(reply_to.is_empty() || ours(reply_to)) {
+        return None;
+    }
+    let to = unique_addrs(&src.to, &mut vec![own.to_lowercase()]);
+    (!to.is_empty()).then_some(to)
+}
+
+/// `addrs` once each (by bare address, case-insensitively), skipping
+/// blanks and everything already in `seen`, which grows as it goes.
+fn unique_addrs(addrs: &[String], seen: &mut Vec<String>) -> Vec<String> {
     let mut out = Vec::new();
-    for addr in std::iter::once(&src.from).chain(&src.to).chain(&src.cc) {
+    for addr in addrs {
         let key = bare(addr).to_lowercase();
         if key.is_empty() || seen.contains(&key) {
             continue;
@@ -271,15 +319,7 @@ fn reply_all_cc(src: &AnswerSource, target: &str, own: &str) -> String {
         seen.push(key);
         out.push(addr.trim().to_string());
     }
-    out.join(", ")
-}
-
-fn bare(addr: &str) -> &str {
-    let s = addr.trim();
-    match (s.find('<'), s.rfind('>')) {
-        (Some(lt), Some(gt)) if gt > lt => s[lt + 1..gt].trim(),
-        _ => s,
-    }
+    out
 }
 
 /// `prefix subject`, unless the subject already starts with one of `known`

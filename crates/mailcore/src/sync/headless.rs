@@ -55,6 +55,19 @@ pub struct AccountSyncResult {
     pub errors: Vec<String>,
 }
 
+impl AccountSyncResult {
+    /// Whether the inbox itself synced. That is what a scheduled check is
+    /// for; an outbox or other-folder failure alongside it must not make
+    /// the account count as unchecked, or it would be retried on every
+    /// tick regardless of its interval.
+    #[must_use]
+    pub fn inbox_checked(&self) -> bool {
+        self.folders
+            .iter()
+            .any(|f| f.role == FolderRole::Inbox.as_str())
+    }
+}
+
 /// Outcome of [`sync_all_accounts`].
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct SyncAllReport {
@@ -505,6 +518,21 @@ pub(crate) mod tests {
     use super::*;
     use crate::models::{FolderRole, NewAccount};
     use crate::store::{accounts, folders, messages};
+
+    #[test]
+    fn an_outbox_error_still_counts_the_inbox_as_checked() {
+        let inbox = FolderSyncSummary {
+            role: FolderRole::Inbox.as_str().to_string(),
+            ..Default::default()
+        };
+        let mut r = AccountSyncResult {
+            errors: vec!["outbox: smtp down".into()],
+            ..Default::default()
+        };
+        assert!(!r.inbox_checked(), "no inbox synced yet");
+        r.folders.push(inbox);
+        assert!(r.inbox_checked());
+    }
 
     pub(crate) fn setup_db() -> (Db, i64, i64, i64) {
         let db = Db::open_in_memory().unwrap();
