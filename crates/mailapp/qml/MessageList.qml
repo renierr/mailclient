@@ -43,6 +43,11 @@ Rectangle {
     // every bridge mutation is scoped to the selected folder.
     property bool searching: false
     property var searchRows: []
+    // The folder a scoped search is limited to ("" = the whole account): its
+    // hits all share one folder, so they get no section headers.
+    property string searchFolder: ""
+    // A server backfill for the current query is running.
+    property bool serverSearching: false
     // `totalCount` is the local cache count; `serverTotal` is the count seen
     // during the last successful IMAP sync. All cached messages are displayed.
     property int totalCount: 0
@@ -388,6 +393,23 @@ Rectangle {
         return m.date_key === "yesterday" ? qsTr("Yesterday") : m.date;
     }
 
+    // Empty states, distinguishing "still looking" from "nothing matched"
+    // and from "nothing here".
+    function emptyText() {
+        if (root.searching) {
+            if (root.serverSearching)
+                return qsTr("Searching the server…");
+            if (root.hasQuickFilter && (root.searchRows || []).length > 0)
+                return qsTr("No match survives this filter");
+            return qsTr("No matches for “%1”").arg(root.filterText.trim());
+        }
+        if (root.hasQuickFilter && root.filterText === "")
+            return qsTr("No message matches this filter");
+        if (root.filterText !== "")
+            return qsTr("No message matches “%1”").arg(root.filterText);
+        return qsTr("This folder is empty");
+    }
+
     function rebuildFiltered() {
         var rows = [];
         if (root.searching) {
@@ -626,7 +648,11 @@ Rectangle {
                         elide: Text.ElideRight
                     }
                     Label {
-                        text: root.searching ? qsTr("%n result(s) across this account", "", filtered.count) :
+                        text: root.searching ? (root.searchFolder !== "" ? qsTr("%n result(s) in %1", "",
+                                                                                filtered.count).arg(
+                                                                               root.searchFolder) : qsTr(
+                                                                               "%n result(s) across this account",
+                                                                               "", filtered.count)) :
                                                !root.hasAnyFilter ? qsTr("%1").arg(filtered.count) : qsTr(
                                                                         "%1 of %2").arg(filtered.count).arg(
                                                                         root.messages ? root.messages.length : 0)
@@ -706,8 +732,8 @@ Rectangle {
             model: filtered
             boundsBehavior: Flickable.StopAtBounds
             onContentYChanged: root.rememberScroll()
-            // Search hits live in many folders: one header per folder.
-            section.property: root.searching ? "folder" : ""
+            // Account-wide hits live in many folders: one header per folder.
+            section.property: root.searching && root.searchFolder === "" ? "folder" : ""
             section.delegate: Rectangle {
                 required property string section
                 width: list.width
@@ -1281,13 +1307,7 @@ Rectangle {
             anchors.horizontalCenter: parent.horizontalCenter
             color: Theme.textMuted
             font.pixelSize: Theme.fontBase
-            text: root.searching ? qsTr("No matches in this account") : root.hasQuickFilter && root.filterText === "" ? qsTr(
-                                                                                                                            "No message matches this filter") :
-                                                                                                                        root.filterText
-                                                                                                                        !== "" ? qsTr(
-                                                                                                                                     "No message matches “%1”").arg(
-                                                                                                                                     root.filterText) :
-                                                                                                                                 qsTr("This folder is empty")
+            text: root.emptyText()
         }
         Label {
             anchors.horizontalCenter: parent.horizontalCenter

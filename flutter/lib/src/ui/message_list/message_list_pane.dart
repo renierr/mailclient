@@ -205,6 +205,14 @@ class MessageListPaneState extends State<MessageListPane> {
     final selectionMode = context.select<MailState, bool>(
       (s) => s.selectionMode,
     );
+    final compact = context.select<MailState, bool>(
+      (s) => s.settings.isCompact,
+    );
+    // The open hit, as Qt marks it: a UID is only unique within its folder.
+    final openFolder = context.select<MailState, String?>(
+      (s) => s.folder?.path,
+    );
+    final openUid = context.select<MailState, int>((s) => s.openUid);
     // Each flag separately: Unread → Unread + Starred keeps `hasListFilter`
     // true but changes which hits are shown.
     final filterUnread = context.select<MailState, bool>((s) => s.filterUnread);
@@ -271,8 +279,10 @@ class MessageListPaneState extends State<MessageListPane> {
                   itemBuilder: (context, i) => switch (rows[i]) {
                     final SearchHit hit => SearchHitTile(
                       hit: hit,
+                      selected: hit.uid == openUid && hit.folder == openFolder,
                       checked: selected.contains(hit.key),
                       selectionMode: selectionMode,
+                      compact: compact,
                       onOpened: widget.onMessageOpened,
                     ),
                     final Object folder => SearchFolderHeader(

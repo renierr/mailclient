@@ -1299,6 +1299,8 @@ ApplicationWindow {
             density: appSettings.list_density
             searching: root.searching
             searchRows: root.searchRows
+            searchFolder: root.searching ? root.searchScope() : ""
+            serverSearching: root.serverSearching
             onMessageSelected: uid => root.openMessage(uid)
             onSearchJump: (path, uid) => root.jumpToSearchResult(path, uid)
             onSearchFolderNeeded: path => root.useSearchFolder(path)

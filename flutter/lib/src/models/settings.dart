@@ -5,6 +5,8 @@
 /// persisting a setting that never applies.
 library;
 
+import 'models.dart';
+
 /// Key names, mirroring `mailcore::store::settings`.
 abstract final class SettingKeys {
   static const sentCopy = 'sent_copy_enabled';
@@ -252,6 +254,8 @@ class SearchHit {
     required this.unread,
     required this.starred,
     required this.hasAttachments,
+    this.fromName = '',
+    this.badge = SenderBadge.none,
   });
 
   final int uid;
@@ -259,6 +263,10 @@ class SearchHit {
   final String folder;
   final String subject;
   final String from;
+
+  /// Sender display name (`""` = address only), named like the list row.
+  final String fromName;
+  final SenderBadge badge;
   final String date;
   final String snippet;
   final bool unread;
@@ -267,12 +275,28 @@ class SearchHit {
 
   HitKey get key => (folder: folder, uid: uid);
 
+  /// The hit as a folder row, so results draw exactly like the list.
+  MessageSummary get summary => MessageSummary(
+    uid: uid,
+    subject: subject,
+    from: from,
+    fromName: fromName,
+    date: date,
+    snippet: snippet,
+    unread: unread,
+    starred: starred,
+    hasAttachments: hasAttachments,
+    badge: badge,
+  );
+
   factory SearchHit.fromJson(Map<String, dynamic> j) => SearchHit(
     uid: _int(j['uid']),
     folderId: _int(j['folder_id']),
     folder: _str(j['folder']),
     subject: _str(j['subject'], orElse: '(no subject)'),
     from: _str(j['from'], orElse: '?'),
+    fromName: _str(j['from_name']),
+    badge: SenderBadge.fromJson(j),
     date: _str(j['date']),
     snippet: _str(j['snippet']),
     unread: _truthy(j['unread']),

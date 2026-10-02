@@ -428,7 +428,8 @@ Future<void> confirmSelectionDelete(
 String subjectOf(MailState state, int uid) =>
     state.messages.where((m) => m.uid == uid).firstOrNull?.subject ?? '';
 
-/// One folder row: avatar, flags, subject and the row action menu.
+/// One folder row: avatar, flags, subject and the row action menu. Search
+/// hits draw with it too, passing their own menu ([menuItems] + [onMenu]).
 class MessageTile extends StatelessWidget {
   const MessageTile({
     super.key,
@@ -439,6 +440,8 @@ class MessageTile extends StatelessWidget {
     required this.compact,
     required this.onTap,
     required this.onToggle,
+    this.menuItems,
+    this.onMenu,
   });
 
   final MessageSummary message;
@@ -448,6 +451,37 @@ class MessageTile extends StatelessWidget {
   final bool compact;
   final VoidCallback onTap;
   final VoidCallback onToggle;
+
+  /// Row menu override; null offers the folder row's actions on [message].
+  final List<PopupMenuEntry<String>> Function()? menuItems;
+  final Future<void> Function(String action)? onMenu;
+
+  List<PopupMenuEntry<String>> _items() =>
+      menuItems?.call() ??
+      messageActionItems(unread: message.unread, starred: message.starred);
+
+  Future<void> _run(BuildContext context, String action) =>
+      onMenu?.call(action) ??
+      runMessageAction(
+        context,
+        action,
+        uid: message.uid,
+        subject: message.subject,
+        unread: message.unread,
+      );
+
+  Future<void> _showContextMenu(BuildContext context, Offset at) async {
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final choice = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromPoints(at, at),
+        Offset.zero & overlay.size,
+      ),
+      items: _items(),
+    );
+    if (choice != null && context.mounted) await _run(context, choice);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -470,8 +504,7 @@ class MessageTile extends StatelessWidget {
         : const SizedBox.shrink();
     return GestureDetector(
       // Desktop parity: right-click opens the same row menu as ⋮.
-      onSecondaryTapDown: (d) =>
-          showMessageContextMenu(context, message, d.globalPosition),
+      onSecondaryTapDown: (d) => _showContextMenu(context, d.globalPosition),
       child: Material(
         color: (selected || checked)
             ? theme.colorScheme.secondaryContainer
@@ -576,17 +609,8 @@ class MessageTile extends StatelessWidget {
                             tooltip: 'Message actions',
                             padding: const EdgeInsets.all(4),
                             icon: const Icon(Icons.more_vert, size: 18),
-                            onSelected: (v) => runMessageAction(
-                              context,
-                              v,
-                              uid: message.uid,
-                              subject: message.subject,
-                              unread: message.unread,
-                            ),
-                            itemBuilder: (context) => messageActionItems(
-                              unread: message.unread,
-                              starred: message.starred,
-                            ),
+                            onSelected: (v) => _run(context, v),
+                            itemBuilder: (context) => _items(),
                           ),
                         ],
                       ),
@@ -652,31 +676,6 @@ List<PopupMenuEntry<String>> messageActionItems({
   ),
 ];
 
-Future<void> showMessageContextMenu(
-  BuildContext context,
-  MessageSummary message,
-  Offset at,
-) async {
-  final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-  final choice = await showMenu<String>(
-    context: context,
-    position: RelativeRect.fromRect(
-      Rect.fromPoints(at, at),
-      Offset.zero & overlay.size,
-    ),
-    items: messageActionItems(unread: message.unread, starred: message.starred),
-  );
-  if (choice != null && context.mounted) {
-    await runMessageAction(
-      context,
-      choice,
-      uid: message.uid,
-      subject: message.subject,
-      unread: message.unread,
-    );
-  }
-}
-
 /// One row action on [uid]. `folderId` is the shown folder unless given;
 /// a search hit passes the folder it lives in.
 Future<void> runMessageAction(
@@ -730,20 +729,25 @@ Future<void> runMessageAction(
   }
 }
 
-/// One search hit. Tapping opens it; the ⋮ / right-click menu offers the
-/// folder row's actions, aimed at the folder the hit lives in.
+/// One search hit, drawn as a folder row. Tapping opens it; the ⋮ /
+/// right-click menu adds "Open message" to the folder row's actions, aimed
+/// at the folder the hit lives in.
 class SearchHitTile extends StatelessWidget {
   const SearchHitTile({
     super.key,
     required this.hit,
+    required this.selected,
     required this.checked,
     required this.selectionMode,
+    required this.compact,
     this.onOpened,
   });
 
   final SearchHit hit;
+  final bool selected;
   final bool checked;
   final bool selectionMode;
+  final bool compact;
   final VoidCallback? onOpened;
 
   @override
@@ -753,6 +757,8 @@ class SearchHitTile extends StatelessWidget {
       context.read<MailState>().jumpToHit(hit);
       onOpened?.call();
     }
+
+    void toggle() => context.read<MailState>().toggleSelectHit(hit);
 
     Future<void> act(String action) async {
       if (action == 'open') return open();
@@ -768,78 +774,23 @@ class SearchHitTile extends StatelessWidget {
       );
     }
 
-    List<PopupMenuEntry<String>> items() => [
-      const PopupMenuItem(
-        value: 'open',
-        child: MenuRow(icon: Icons.open_in_new, text: 'Open message'),
-      ),
-      const PopupMenuDivider(),
-      ...messageActionItems(unread: hit.unread, starred: hit.starred),
-    ];
-
-    final tile = ListTile(
-      title: Row(
-        children: [
-          Expanded(child: Text(hit.subject, overflow: TextOverflow.ellipsis)),
-          if (hit.starred) ...[
-            const SizedBox(width: 4),
-            Icon(Icons.star, size: 14, color: Colors.amber.shade700),
-          ],
-        ],
-      ),
-      leading: selectionMode
-          ? Checkbox(
-              value: checked,
-              onChanged: (_) => context.read<MailState>().toggleSelectHit(hit),
-            )
-          : null,
-      subtitle: Text(
-        '${hit.from}\n${hit.snippet}',
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
-      ),
-      isThreeLine: true,
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (hit.unread)
-            Container(
-              width: 8,
-              height: 8,
-              margin: const EdgeInsets.only(right: 8),
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-            ),
-          PopupMenuButton<String>(
-            tooltip: 'Message actions',
-            icon: const Icon(Icons.more_vert, size: 18),
-            onSelected: act,
-            itemBuilder: (context) => items(),
-          ),
-        ],
-      ),
-      onTap: selectionMode
-          ? () => context.read<MailState>().toggleSelectHit(hit)
-          : open,
-    );
-    return GestureDetector(
-      // Desktop parity with folder rows: right-click opens the same menu.
-      onSecondaryTapDown: (d) async {
-        final overlay =
-            Overlay.of(context).context.findRenderObject() as RenderBox;
-        final choice = await showMenu<String>(
-          context: context,
-          position: RelativeRect.fromRect(
-            Rect.fromPoints(d.globalPosition, d.globalPosition),
-            Offset.zero & overlay.size,
-          ),
-          items: items(),
-        );
-        if (choice != null) await act(choice);
-      },
-      child: tile,
+    return MessageTile(
+      message: hit.summary,
+      selected: selected,
+      checked: checked,
+      selectionMode: selectionMode,
+      compact: compact,
+      onTap: selectionMode ? toggle : open,
+      onToggle: toggle,
+      menuItems: () => [
+        const PopupMenuItem(
+          value: 'open',
+          child: MenuRow(icon: Icons.open_in_new, text: 'Open message'),
+        ),
+        const PopupMenuDivider(),
+        ...messageActionItems(unread: hit.unread, starred: hit.starred),
+      ],
+      onMenu: act,
     );
   }
 }

@@ -38,4 +38,27 @@ void main() {
     expect(hit(5, 'INBOX').key == hit(5, 'Archive').key, isFalse);
     expect(hit(5, 'INBOX').key == hit(5, 'INBOX').key, isTrue);
   });
+
+  test("a hit carries the list row's sender name and badge", () {
+    final h = SearchHit.fromJson({
+      'uid': 7,
+      'folder_id': 3,
+      'folder': 'INBOX',
+      'subject': 'Hello',
+      'from': 'ann@example.com',
+      'from_name': 'Ann Example',
+      'initials': 'AE',
+      'avatar_light': '#112233',
+      'avatar_dark': '#445566',
+      'date': '09:41',
+      'has_attachments': true,
+    });
+    final row = h.summary;
+
+    expect(row.senderName, 'Ann Example');
+    expect(row.badge.initials, 'AE');
+    expect(row.badge.dark, '#445566');
+    expect(row.date, '09:41');
+    expect(row.hasAttachments, isTrue);
+  });
 }
