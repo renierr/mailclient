@@ -37,7 +37,7 @@ Rectangle {
     property bool filterStarred: false
     property bool filterAttachments: false
     // Account-wide FTS mode: `searchRows` are index hits across every folder
-    // (rank order, each with folder/folder_id), shown instead of the folder
+    // (newest first, each with folder/folder_id), shown instead of the folder
     // feed. Opening a hit selects its folder and keeps the search; a row
     // action selects the hit's folder first (`searchFolderNeeded`), since
     // every bridge mutation is scoped to the selected folder.
@@ -414,7 +414,7 @@ Rectangle {
         var rows = [];
         if (root.searching) {
             // Grouped by folder for the section headers: folders in the
-            // order of their best hit, rank order kept inside each.
+            // order of their newest hit, newest first inside each.
             var hits = root.searchRows || [];
             var order = [];
             var groups = {};
@@ -1289,6 +1289,14 @@ Rectangle {
                 Qt.callLater(root.bulkPurgeRequested, uids);
             }
         }
+    }
+
+    // Over the list's bottom-right corner (the list sits in the Column at
+    // the root's origin, so its geometry is root-relative).
+    ScrollJumpButtons {
+        target: list
+        x: list.x + list.width - width - Theme.md
+        y: list.y + list.height - height - Theme.sm
     }
 
     // Empty states, distinguishing "nothing here" from "nothing matched".

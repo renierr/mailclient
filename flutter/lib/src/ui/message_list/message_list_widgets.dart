@@ -184,7 +184,7 @@ class MessageListHeader extends StatelessWidget {
               ],
             ],
           ),
-          // Hits come in rank order (grouped by folder); sorting them is
+          // Hits come in newest-first order (grouped by folder); sorting them is
           // not offered.
           if (!searching)
             PopupMenuButton<String>(
@@ -819,8 +819,8 @@ class SearchFolderHeader extends StatelessWidget {
   }
 }
 
-/// Account-wide hits grouped by folder: folders in the order of their best
-/// hit, rank order kept inside each. Strings are the folder headers.
+/// Account-wide hits grouped by folder: folders in the order of their newest
+/// hit, newest first inside each. Strings are the folder headers.
 List<Object> groupHitsByFolder(List<SearchHit> hits) {
   final groups = <String, List<SearchHit>>{};
   for (final h in hits) {

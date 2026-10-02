@@ -241,7 +241,7 @@ abstract final class QuietTime {
 /// A search hit's identity: a UID is only unique within its folder.
 typedef HitKey = ({String folder, int uid});
 
-/// One account-wide FTS hit, in rank order.
+/// One account-wide FTS hit, newest first.
 class SearchHit {
   const SearchHit({
     required this.uid,

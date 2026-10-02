@@ -401,6 +401,32 @@ fn search_rows_carry_folder_and_plain_snippet() {
 }
 
 #[test]
+fn search_rows_are_newest_first_across_folders() {
+    let (db, acc, f) = setup();
+    let other = folders::upsert(&db, acc, "Archive", "/", FolderRole::Archive).unwrap();
+    // Relevance would rank the subject-and-body hit first; date order wins.
+    for (folder, uid, date, body) in [
+        (f, 91, "2026-01-01T10:00:00Z", "invoice invoice invoice"),
+        (other, 92, "2026-03-01T10:00:00Z", "one invoice"),
+        (f, 93, "2026-02-01T10:00:00Z", "another invoice"),
+    ] {
+        let mut m = msg_store::sample_new(acc, folder, uid);
+        m.date = Some(date.to_string());
+        m.body_text = Some(body.to_string());
+        msg_store::upsert(&db, &m).unwrap();
+    }
+    let hits: serde_json::Value =
+        serde_json::from_str(&search_json(&db, acc, "invoice", 50, "").unwrap()).unwrap();
+    let uids: Vec<_> = hits
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["uid"].clone())
+        .collect();
+    assert_eq!(uids, [92, 93, 91]);
+}
+
+#[test]
 fn short_date_formats() {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     assert_eq!(short_date(Some(&now)).text.len(), 5); // HH:MM

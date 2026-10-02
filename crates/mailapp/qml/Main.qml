@@ -140,7 +140,7 @@ ApplicationWindow {
     // body and attachment records are fetched separately, on demand.
     property var currentMessage: undefined
 
-    // Account-wide FTS results (rank order) for the toolbar search. Short
+    // Account-wide FTS results (newest first) for the toolbar search. Short
     // input keeps the instant current-folder substring filter; 3+ letters
     // query the index across every folder of the account instead.
     property var searchRows: []

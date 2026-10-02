@@ -395,7 +395,8 @@ fn rfc_header(raw: &Option<String>, wanted: &str) -> Option<String> {
 
 /// Account-wide FTS search rows for the search UI: `[{uid, folder_id,
 /// folder, subject, from, date, snippet, unread, starred,
-/// has_attachments}]` in FTS rank order. `folder` scopes the search to one
+/// has_attachments}]`, newest first (like the Date view of a folder list;
+/// relevance order read as random next to it). `folder` scopes the search to one
 /// folder path (empty = whole account). `snippet` is plain match context
 /// (the empty-string `snippet()` markers produce it tag-free — the list
 /// renders plain rows). Blank or operator-only queries yield `[]`, never an
@@ -420,7 +421,7 @@ pub fn search_json(
          where messages_fts match ?1 and m.account_id = ?2
            and (?4 = '' or f.path = ?4)
            and m.id not in (select message_id from pending_moves)
-         order by rank limit ?3",
+         order by m.date desc, m.id desc limit ?3",
     )?;
     let mut arr = Vec::new();
     let rows = stmt.query_map(

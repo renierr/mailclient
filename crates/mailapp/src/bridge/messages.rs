@@ -170,7 +170,7 @@ impl qobject::Bridge {
         mailcore::compose::blank_draft_json(db).map_or_else(|_| qstring("{}"), |j| qstring(&j))
     }
 
-    /// FTS search for the toolbar (up to 50 hits, rank order). `folder`
+    /// FTS search for the toolbar (up to 50 hits, newest first). `folder`
     /// scopes to one folder path (empty = whole account). Local SQLite
     /// read, no network — safe to call per keystroke.
     pub fn search_json(&self, query: &QString, folder: &QString) -> QString {

@@ -7,6 +7,7 @@ import '../../models/settings.dart';
 import '../../state/mail_state.dart';
 import '../composer/composer_dialog.dart';
 import 'message_list_widgets.dart';
+import 'scroll_jump_overlay.dart';
 
 export 'message_list_widgets.dart' show confirmDelete, confirmSelectionDelete;
 
@@ -127,31 +128,34 @@ class MessageListPaneState extends State<MessageListPane> {
                     if (messages.isNotEmpty) const LoadOlderTile(),
                   ],
                 )
-              : ListView.separated(
-                  // The pane is rebuilt from scratch whenever the reader
-                  // takes its place (one and two panes), and an unkeyed
-                  // scrollable shares its PageStorage slot with every other
-                  // one on the route. A per-folder key brings the list back
-                  // where it was, and each folder keeps its own position.
-                  key: PageStorageKey<String>('message-list-$folderId'),
-                  itemCount: shown.length + 1,
-                  separatorBuilder: (_, _) => const Divider(height: 1),
-                  itemBuilder: (context, i) {
-                    // The tail row asks the server for the next older batch.
-                    // It is a button rather than an infinite scroll on
-                    // purpose: each press is a deliberate, sizeable download.
-                    if (i == shown.length) return const LoadOlderTile();
-                    final m = shown[i];
-                    return MessageTile(
-                      message: m,
-                      selected: m.uid == openUid,
-                      checked: selected.contains(m.uid),
-                      selectionMode: selectionMode,
-                      compact: compact,
-                      onTap: () => _onRowTap(m, drafts),
-                      onToggle: () => _onRowToggle(m),
-                    );
-                  },
+              : ScrollJumpOverlay(
+                  builder: (controller) => ListView.separated(
+                    controller: controller,
+                    // The pane is rebuilt from scratch whenever the reader
+                    // takes its place (one and two panes), and an unkeyed
+                    // scrollable shares its PageStorage slot with every other
+                    // one on the route. A per-folder key brings the list back
+                    // where it was, and each folder keeps its own position.
+                    key: PageStorageKey<String>('message-list-$folderId'),
+                    itemCount: shown.length + 1,
+                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    itemBuilder: (context, i) {
+                      // The tail row asks the server for the next older batch.
+                      // It is a button rather than an infinite scroll on
+                      // purpose: each press is a deliberate, sizeable download.
+                      if (i == shown.length) return const LoadOlderTile();
+                      final m = shown[i];
+                      return MessageTile(
+                        message: m,
+                        selected: m.uid == openUid,
+                        checked: selected.contains(m.uid),
+                        selectionMode: selectionMode,
+                        compact: compact,
+                        onTap: () => _onRowTap(m, drafts),
+                        onToggle: () => _onRowToggle(m),
+                      );
+                    },
+                  ),
                 ),
         ),
       ],
@@ -270,25 +274,29 @@ class MessageListPaneState extends State<MessageListPane> {
                       ? 'No match survives this filter'
                       : 'No matches for “$query”',
                 )
-              : ListView.separated(
-                  // Back from a hit's reader rebuilds this pane; the key
-                  // brings the results back where they were.
-                  key: const PageStorageKey<String>('search-results'),
-                  itemCount: rows.length,
-                  separatorBuilder: (_, _) => const Divider(height: 1),
-                  itemBuilder: (context, i) => switch (rows[i]) {
-                    final SearchHit hit => SearchHitTile(
-                      hit: hit,
-                      selected: hit.uid == openUid && hit.folder == openFolder,
-                      checked: selected.contains(hit.key),
-                      selectionMode: selectionMode,
-                      compact: compact,
-                      onOpened: widget.onMessageOpened,
-                    ),
-                    final Object folder => SearchFolderHeader(
-                      folder: folder as String,
-                    ),
-                  },
+              : ScrollJumpOverlay(
+                  builder: (controller) => ListView.separated(
+                    controller: controller,
+                    // Back from a hit's reader rebuilds this pane; the key
+                    // brings the results back where they were.
+                    key: const PageStorageKey<String>('search-results'),
+                    itemCount: rows.length,
+                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    itemBuilder: (context, i) => switch (rows[i]) {
+                      final SearchHit hit => SearchHitTile(
+                        hit: hit,
+                        selected:
+                            hit.uid == openUid && hit.folder == openFolder,
+                        checked: selected.contains(hit.key),
+                        selectionMode: selectionMode,
+                        compact: compact,
+                        onOpened: widget.onMessageOpened,
+                      ),
+                      final Object folder => SearchFolderHeader(
+                        folder: folder as String,
+                      ),
+                    },
+                  ),
                 ),
         ),
       ],

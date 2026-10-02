@@ -356,7 +356,7 @@ class MailCore {
 
   // --- search --------------------------------------------------------------
 
-  /// Local FTS only, in rank order. Cheap enough to run on every keystroke.
+  /// Local FTS only, newest first. Cheap enough to run on every keystroke.
   Future<List<SearchHit>> search(
     int accountId,
     String query, {
