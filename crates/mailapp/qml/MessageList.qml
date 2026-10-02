@@ -85,7 +85,9 @@ Rectangle {
 
     readonly property bool hasQuickFilter: root.filterUnread || root.filterStarred || root.filterAttachments
     readonly property bool hasAnyFilter: root.filterText !== "" || root.hasQuickFilter
-    readonly property bool canLoadOlder: root.folderName !== "" && !root.hasAnyFilter && (root.messages.length > 0
+    // Filters only narrow the loaded rows, so older mail stays reachable
+    // under them (Flutter shows its Load older row the same way).
+    readonly property bool canLoadOlder: root.folderName !== "" && (root.messages.length > 0
                                                                                           || root.serverTotal < 0) && (
                                              root.serverTotal < 0 || root.serverTotal > root.totalCount)
 
@@ -989,12 +991,12 @@ Rectangle {
             }
         }
 
-        // One batch (200) per press, fetched below the oldest cached UID.
+        // One batch (200) per press: the newest server mail the cache lacks.
         // Only shown when older mail remains or when the server has not been checked.
         Rectangle {
             id: loadOlderBar
             width: parent.width
-            implicitHeight: root.folderName !== "" && !root.hasAnyFilter && (root.messages.length > 0
+            implicitHeight: root.folderName !== "" && (root.messages.length > 0
                                                                              || root.serverTotal < 0) ? 56 : 0
             visible: implicitHeight > 0
             color: Theme.bgAlt
@@ -1018,13 +1020,16 @@ Rectangle {
                     text: {
                         if (root.folderName === "")
                             return "";
+                        var s;
                         if (root.serverTotal < 0)
-                            return qsTr("Cached %1 (server not checked)").arg(root.totalCount);
-                        if (root.serverTotal > root.totalCount)
-                            return qsTr("Cached %1 of %2").arg(root.totalCount).arg(root.serverTotal);
-                        if (root.messages.length === 0)
+                            s = qsTr("Cached %1 (server not checked)").arg(root.totalCount);
+                        else if (root.serverTotal > root.totalCount)
+                            s = qsTr("Cached %1 of %2").arg(root.totalCount).arg(root.serverTotal);
+                        else if (root.messages.length === 0)
                             return qsTr("No cached messages");
-                        return qsTr("All %1 messages loaded").arg(root.totalCount);
+                        else
+                            return qsTr("All %1 messages loaded").arg(root.totalCount);
+                        return root.hasAnyFilter ? qsTr("%1 · filters cover loaded mail only").arg(s) : s;
                     }
                     color: Theme.textMuted
                     font.pixelSize: Theme.fontSmall

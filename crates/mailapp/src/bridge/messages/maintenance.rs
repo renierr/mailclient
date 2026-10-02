@@ -8,8 +8,8 @@ use cxx_qt_lib::QString;
 use mailcore::maintenance;
 
 use crate::bridge::qobject;
-use crate::bridge::worker::spawn_job;
-use crate::bridge::{push_feeds, qstring, shared_db};
+use crate::bridge::worker::{spawn_job, JobRefresh};
+use crate::bridge::{qstring, shared_db};
 
 /// Where viewer copies live for this frontend (same folder `open_attachment`
 /// stages into).
@@ -45,33 +45,29 @@ impl qobject::Bridge {
         }
     }
 
-    pub fn trim_cache(mut self: Pin<&mut Self>) -> QString {
-        let db = match shared_db() {
-            Ok(d) => d,
-            Err(e) => return qstring(&e),
-        };
+    // Trim and eviction are mass DELETE / UPDATE statements: on the GUI
+    // thread a large cache freezes the window, and a sync on the net thread
+    // could be writing rows for messages the trim removes. As jobs they run
+    // in turn with sync on the one net thread.
+
+    pub fn trim_cache(self: Pin<&mut Self>) -> QString {
         let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
-        match maintenance::trim_local_cache(db, maintenance::TRIM_KEEP_PER_FOLDER) {
-            Ok(removed) => {
-                // Rows are gone from the feeds: rebuild so the list, counts
-                // and search stop showing deleted mail.
-                push_feeds(&mut self, db, acc_id, folder_id);
-                qstring(&maintenance::trim_status(
-                    removed,
-                    maintenance::TRIM_KEEP_PER_FOLDER,
-                ))
-            }
-            Err(e) => qstring(&e.to_string()),
-        }
+        spawn_job(self, "Maintenance", move |db, _progress| async move {
+            let keep = maintenance::TRIM_KEEP_PER_FOLDER;
+            let removed = maintenance::trim_local_cache(db, keep).map_err(|e| e.to_string())?;
+            // Rows are gone from the feeds: rebuild so the list, counts and
+            // search stop showing deleted mail.
+            Ok((
+                maintenance::trim_status(removed, keep),
+                Some(JobRefresh::feeds(acc_id, folder_id)),
+            ))
+        })
     }
 
-    pub fn evict_attachments(&self) -> QString {
-        let Ok(db) = shared_db() else {
-            return qstring("could not open the database");
-        };
-        match maintenance::evict_cached_attachments(db) {
-            Ok(evicted) => qstring(&maintenance::evict_status(&evicted)),
-            Err(e) => qstring(&e.to_string()),
-        }
+    pub fn evict_attachments(self: Pin<&mut Self>) -> QString {
+        spawn_job(self, "Maintenance", move |db, _progress| async move {
+            let evicted = maintenance::evict_cached_attachments(db).map_err(|e| e.to_string())?;
+            Ok((maintenance::evict_status(&evicted), None))
+        })
     }
 }

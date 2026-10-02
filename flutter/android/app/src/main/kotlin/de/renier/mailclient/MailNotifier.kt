@@ -78,7 +78,8 @@ object MailNotifier {
         ensureChannel(manager)
         val sample = JSONObject()
             .put("tag", TEST_TAG)
-            .put("group", "mail-test")
+            // Ungrouped: a grouped child without its summary posts silently,
+            // and the test is about hearing the alert.
             .put("summary", false)
             .put("title", "Mailclient Test")
             .put("body", "Test notification — tap to open the app")
@@ -134,14 +135,18 @@ object MailNotifier {
             .setAutoCancel(true)
             .setOnlyAlertOnce(!n.optBoolean("alert"))
             .setCategory(Notification.CATEGORY_EMAIL)
-            .setGroup(n.optString("group"))
-            .setGroupSummary(summary)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
             .setPublicVersion(publicVersion(context, n))
             .setContentIntent(openIntent(context, tag, n.optString("payload")))
         if (!n.isNull("when")) builder.setWhen(n.getLong("when")).setShowWhen(true)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            builder.setGroupAlertBehavior(Notification.GROUP_ALERT_SUMMARY)
+        // Only a real group gets group settings: `setGroup("")` still counts
+        // as a group, and GROUP_ALERT_SUMMARY silences every grouped child.
+        val group = n.optString("group")
+        if (group.isNotEmpty()) {
+            builder.setGroup(group).setGroupSummary(summary)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                builder.setGroupAlertBehavior(Notification.GROUP_ALERT_SUMMARY)
+            }
         }
         if (summary) {
             val lines = n.optJSONArray("lines")

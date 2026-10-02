@@ -108,15 +108,24 @@ class MessageListPaneState extends State<MessageListPane> {
           BulkActionBar(onAction: () => setState(() => _anchorUid = null)),
         Expanded(
           child: shown.isEmpty
-              ? EmptyPane(
-                  icon: hasFilter || q.isNotEmpty
-                      ? Icons.search_off_outlined
-                      : Icons.mail_outline,
-                  text: syncing
-                      ? 'Syncing…'
-                      : hasFilter && q.isEmpty
-                      ? 'No message matches this filter'
-                      : 'Nothing here',
+              ? Column(
+                  children: [
+                    Expanded(
+                      child: EmptyPane(
+                        icon: hasFilter || q.isNotEmpty
+                            ? Icons.search_off_outlined
+                            : Icons.mail_outline,
+                        text: syncing
+                            ? 'Syncing…'
+                            : hasFilter && q.isEmpty
+                            ? 'No message matches this filter'
+                            : 'Nothing here',
+                      ),
+                    ),
+                    // Nothing loaded matches, but older mail may: keep the
+                    // way to it, as Qt does.
+                    if (messages.isNotEmpty) const LoadOlderTile(),
+                  ],
                 )
               : ListView.separated(
                   // The pane is rebuilt from scratch whenever the reader

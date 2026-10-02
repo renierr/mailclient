@@ -276,14 +276,16 @@ pub mod qobject {
         /// Delete cached messages past the newest 200 per folder. Local-only:
         /// the server is never contacted, guarded rows (drafts, unpushed
         /// changes, pending undos, queued sends) are kept, and trimmed mail
-        /// returns with the next sync. Returns what was removed.
+        /// returns with the next sync. A net-thread job: returns `""` when
+        /// queued (the result arrives via `job_finished` with kind
+        /// `"Maintenance"`), or a busy message.
         #[qinvokable]
         fn trim_cache(self: Pin<&mut Self>) -> QString;
 
         /// Drop cached attachment bytes, keeping names and sizes. Local-only;
-        /// files download again on the next open. Returns what was removed.
+        /// files download again on the next open. A job like `trim_cache`.
         #[qinvokable]
-        fn evict_attachments(&self) -> QString;
+        fn evict_attachments(self: Pin<&mut Self>) -> QString;
 
         /// Select a folder by path and refresh the message feed.
         #[qinvokable]

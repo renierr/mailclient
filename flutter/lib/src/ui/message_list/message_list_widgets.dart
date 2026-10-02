@@ -34,12 +34,8 @@ class MessageListHeader extends StatelessWidget {
     final sortDescending = context.select<MailState, bool>(
       (s) => s.settings.sortDescending,
     );
-    final hasFilter = context.select<MailState, bool>(
-      (s) => s.hasListFilter,
-    );
-    final filterUnread = context.select<MailState, bool>(
-      (s) => s.filterUnread,
-    );
+    final hasFilter = context.select<MailState, bool>((s) => s.hasListFilter);
+    final filterUnread = context.select<MailState, bool>((s) => s.filterUnread);
     final filterStarred = context.select<MailState, bool>(
       (s) => s.filterStarred,
     );
@@ -139,9 +135,7 @@ class MessageListHeader extends StatelessWidget {
             tooltip: hasFilter ? 'Filter: active' : 'Filter messages',
             icon: Icon(
               Icons.filter_list,
-              color: hasFilter
-                  ? Theme.of(context).colorScheme.primary
-                  : null,
+              color: hasFilter ? Theme.of(context).colorScheme.primary : null,
             ),
             onSelected: (v) {
               final state = context.read<MailState>();
@@ -895,11 +889,20 @@ class LoadOlderTile extends StatelessWidget {
     final server = context.select<MailState, int>((s) => s.serverTotal);
     final syncing = context.select<MailState, bool>((s) => s.isSyncing);
     final canAsk = context.select<MailState, bool>((s) => s.folderId >= 0);
-    final label = server < 0
+    // Filters only narrow the loaded rows (Qt says the same).
+    final filtered = context.select<MailState, bool>(
+      (s) => s.hasListFilter || s.searchQuery.trim().isNotEmpty,
+    );
+    final count = server < 0
         ? 'Cached $cached (server not checked)'
         : cached >= server
-        ? 'All $cached loaded'
+        ? null
         : 'Cached $cached of $server';
+    final label = count == null
+        ? 'All $cached loaded'
+        : filtered
+        ? '$count · filters cover loaded mail only'
+        : count;
     final canLoad = canAsk && (server < 0 || server > cached);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),

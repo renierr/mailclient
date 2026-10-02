@@ -122,12 +122,43 @@ pub fn fallback_attachment_name(id: i64) -> String {
 ///   reaches the device, not a file;
 /// - trailing dots and spaces are stripped, which Windows does silently
 ///   anyway — leaving them would make the saved file's name differ from the
-///   one reported back to the user.
+///   one reported back to the user;
+/// - the name is capped at [`MAX_ATTACHMENT_NAME_BYTES`], keeping a short
+///   extension, since filesystems refuse names past 255 bytes and Windows
+///   paths fail past 260 characters once the folder is added.
 ///
 /// The rules are applied on every platform: an attachment saved on Linux or
 /// Android can land on a shared or FAT/NTFS volume, and consistent names are
 /// easier to reason about than per-OS ones.
 pub fn safe_attachment_name(name: Option<&str>, id: i64) -> String {
+    let named = clean_attachment_name(name, id);
+    cap_name(&named, MAX_ATTACHMENT_NAME_BYTES)
+}
+
+/// Longest attachment file name kept, in bytes. Leaves room for the
+/// `(n)` of a collision and for a staging prefix within common path limits.
+pub const MAX_ATTACHMENT_NAME_BYTES: usize = 150;
+
+/// `name` cut to at most `max` bytes on a character boundary. A short
+/// extension (up to 16 bytes) survives the cut, so the file still opens
+/// with the right application.
+fn cap_name(name: &str, max: usize) -> String {
+    if name.len() <= max {
+        return name.to_string();
+    }
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if i > 0 && name.len() - i <= 17 => (&name[..i], &name[i..]),
+        _ => (name, ""),
+    };
+    let mut cut = max - ext.len();
+    while !stem.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let stem = stem[..cut].trim_end_matches([' ', '.']);
+    format!("{stem}{ext}")
+}
+
+fn clean_attachment_name(name: Option<&str>, id: i64) -> String {
     let base = name
         .unwrap_or("")
         .rsplit(['/', '\\'])
@@ -459,5 +490,20 @@ mod tests {
         prune_stale_draft_dirs(dir.path());
         assert!(other.exists());
         assert!(plain.exists());
+    }
+
+    #[test]
+    fn long_attachment_names_are_capped_keeping_the_extension() {
+        let long = format!("{}.pdf", "ä".repeat(200));
+        let name = safe_attachment_name(Some(&long), 1);
+        assert!(name.len() <= MAX_ATTACHMENT_NAME_BYTES, "{}", name.len());
+        assert!(name.ends_with(".pdf"), "{name}");
+        assert!(name.starts_with("ää"));
+        // No usable extension: plain cut on a character boundary.
+        let name = safe_attachment_name(Some(&"ü".repeat(300)), 1);
+        assert!(name.len() <= MAX_ATTACHMENT_NAME_BYTES);
+        assert!(name.chars().all(|c| c == 'ü'));
+        // Short names are untouched.
+        assert_eq!(safe_attachment_name(Some("report.pdf"), 1), "report.pdf");
     }
 }

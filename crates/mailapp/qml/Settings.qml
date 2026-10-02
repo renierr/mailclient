@@ -292,11 +292,15 @@ AppDialog {
         root.maintStats = FeedJson.parse(root.backend.maintenance_json(), ({}));
     }
 
-    // Run a synchronous maintenance action, report it, re-read the stats.
+    // Run a maintenance action and re-read the stats. Trim and eviction are
+    // net-thread jobs: they return "" when queued and report through
+    // `job_finished` ("Maintenance"); cleanup answers right away.
     function runMaint(action) {
         if (!root.backend || !root.backend[action])
             return;
-        root.statusMessage(root.backend[action]());
+        var r = root.backend[action]();
+        if (r !== "")
+            root.statusMessage(r);
         root.refreshMaintStats();
     }
 
