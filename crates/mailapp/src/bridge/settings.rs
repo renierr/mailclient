@@ -103,6 +103,24 @@ impl qobject::SettingsBridge {
                 .set_link_click_action(qstring(&mailcore::store::settings::get_link_click(db)));
             self.as_mut()
                 .set_sync_interval_minutes(mailcore::store::settings::get_sync_interval(db) as i32);
+            self.as_mut().set_quiet_hours_enabled(
+                mailcore::store::settings::get_bool(
+                    db,
+                    mailcore::store::settings::QUIET_HOURS_ENABLED,
+                )
+                .unwrap_or(false),
+            );
+            self.as_mut().set_quiet_hours_start(qstring(
+                &mailcore::store::settings::get_quiet_time(
+                    db,
+                    mailcore::store::settings::QUIET_HOURS_START,
+                ),
+            ));
+            self.as_mut()
+                .set_quiet_hours_end(qstring(&mailcore::store::settings::get_quiet_time(
+                    db,
+                    mailcore::store::settings::QUIET_HOURS_END,
+                )));
             self.as_mut().set_signature_enabled(
                 mailcore::store::settings::get_bool(
                     db,
@@ -163,6 +181,9 @@ impl qobject::SettingsBridge {
             mailcore::store::settings::normalize_link_click(&self.link_click_action().to_string())
                 .to_string();
         let sync_interval = *self.sync_interval_minutes() as i64;
+        let quiet_enabled = *self.quiet_hours_enabled();
+        let quiet_start = self.quiet_hours_start().to_string();
+        let quiet_end = self.quiet_hours_end().to_string();
         let signature_enabled = *self.signature_enabled();
         let signature_text = self.signature_text().to_string();
         let reply_below_quote = *self.reply_below_quote();
@@ -255,6 +276,30 @@ impl qobject::SettingsBridge {
         note(
             "sync interval",
             mailcore::store::settings::set_sync_interval(db, sync_interval),
+        );
+        note(
+            "quiet hours",
+            mailcore::store::settings::set_bool(
+                db,
+                mailcore::store::settings::QUIET_HOURS_ENABLED,
+                quiet_enabled,
+            ),
+        );
+        note(
+            "quiet hours start",
+            mailcore::store::settings::set_quiet_time(
+                db,
+                mailcore::store::settings::QUIET_HOURS_START,
+                &quiet_start,
+            ),
+        );
+        note(
+            "quiet hours end",
+            mailcore::store::settings::set_quiet_time(
+                db,
+                mailcore::store::settings::QUIET_HOURS_END,
+                &quiet_end,
+            ),
         );
         note(
             "signature toggle",

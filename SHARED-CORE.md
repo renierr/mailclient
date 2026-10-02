@@ -65,7 +65,7 @@ a gap. "Drift" says whether the two versions already behave differently.
 ### 5. Quiet-hours times
 
 - **Where:** `AccountOverrides.qml`,
-  `flutter/lib/src/models/account_settings.dart`, and the core's own parser;
+  `flutter/lib/src/models/settings.dart` (`QuietTime`), and the core's own parser;
   the `00:00`/`07:00` defaults repeated in `Settings.qml` and Dart.
 - **Drift:** three parsers for one format.
 - **Change:** expose the core's time normalising and defaults through the

@@ -447,6 +447,9 @@ pub mod qobject {
         #[qproperty(QString, reader_font_size)]
         #[qproperty(QString, link_click_action)]
         #[qproperty(i32, sync_interval_minutes)]
+        #[qproperty(bool, quiet_hours_enabled)]
+        #[qproperty(QString, quiet_hours_start)]
+        #[qproperty(QString, quiet_hours_end)]
         #[qproperty(bool, signature_enabled)]
         #[qproperty(QString, signature_text)]
         #[qproperty(bool, reply_below_quote)]
@@ -710,6 +713,9 @@ pub struct SettingsBridgeRust {
     reader_font_size: QString,
     link_click_action: QString,
     sync_interval_minutes: i32,
+    quiet_hours_enabled: bool,
+    quiet_hours_start: QString,
+    quiet_hours_end: QString,
     signature_enabled: bool,
     signature_text: QString,
     reply_below_quote: bool,
@@ -732,6 +738,9 @@ impl Default for SettingsBridgeRust {
             reader_font_size: qstring("normal"),
             link_click_action: qstring("examine"),
             sync_interval_minutes: 0,
+            quiet_hours_enabled: false,
+            quiet_hours_start: qstring("00:00"),
+            quiet_hours_end: qstring("07:00"),
             signature_enabled: false,
             signature_text: qstring(""),
             reply_below_quote: false,

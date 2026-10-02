@@ -43,6 +43,9 @@ AppDialog {
     property string localLinkClick: "examine"
     property real localUiScale: 1.0
     property int localSyncInterval: 0
+    property bool localQuietEnabled: false
+    property string localQuietStart: "00:00"
+    property string localQuietEnd: "07:00"
     property bool localSigEnabled: false
     property string localSigText: ""
     property bool localReplyBelow: false
@@ -107,6 +110,59 @@ AppDialog {
             font.pixelSize: Theme.fontSmall
             wrapMode: Text.Wrap
             Layout.fillWidth: true
+        }
+    }
+
+    // "From HH:MM to HH:MM" for a quiet-hours window. Reports a time only
+    // once it reads as one, in its stored form.
+    component QuietTimes: Flow {
+        id: quietTimes
+        property string start: "00:00"
+        property string end: "07:00"
+        signal startEdited(string value)
+        signal endEdited(string value)
+        Layout.fillWidth: true
+        spacing: Theme.sm
+
+        Label {
+            height: quietStart.height
+            verticalAlignment: Text.AlignVCenter
+            text: qsTr("From")
+            color: Theme.text
+        }
+        AppTextField {
+            id: quietStart
+            width: Math.round(80 * Theme.uiScale)
+            text: quietTimes.start
+            placeholderText: "00:00"
+            validator: RegularExpressionValidator {
+                regularExpression: /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/
+            }
+            Accessible.name: qsTr("Quiet hours start")
+            onTextEdited: {
+                if (acceptableInput)
+                    quietTimes.startEdited(AccountOverrides.timeValue(text));
+            }
+        }
+        Label {
+            height: quietEnd.height
+            verticalAlignment: Text.AlignVCenter
+            text: qsTr("to")
+            color: Theme.text
+        }
+        AppTextField {
+            id: quietEnd
+            width: Math.round(80 * Theme.uiScale)
+            text: quietTimes.end
+            placeholderText: "07:00"
+            validator: RegularExpressionValidator {
+                regularExpression: /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/
+            }
+            Accessible.name: qsTr("Quiet hours end")
+            onTextEdited: {
+                if (acceptableInput)
+                    quietTimes.endEdited(AccountOverrides.timeValue(text));
+            }
         }
     }
 
@@ -177,6 +233,11 @@ AppDialog {
     function syncLabels() {
         return [qsTr("Manually"), qsTr("Every 5 minutes"), qsTr("Every 10 minutes"), qsTr("Every 15 minutes"), qsTr("Every 30 minutes"),
                 qsTr("Every hour")];
+    }
+
+    // The app-wide quiet hours, as an account's "Default (...)" choice names them.
+    function quietDefaultLabel() {
+        return root.localQuietEnabled ? root.localQuietStart + "–" + root.localQuietEnd : root.onOffLabel(false);
     }
 
     function onOffLabel(on) {
@@ -356,6 +417,9 @@ AppDialog {
         root.localLinkClick = settingsBridge.link_click_action;
         root.localUiScale = settingsBridge.ui_scale;
         root.localSyncInterval = settingsBridge.sync_interval_minutes;
+        root.localQuietEnabled = settingsBridge.quiet_hours_enabled;
+        root.localQuietStart = settingsBridge.quiet_hours_start;
+        root.localQuietEnd = settingsBridge.quiet_hours_end;
         root.localSigEnabled = settingsBridge.signature_enabled;
         root.localSigText = settingsBridge.signature_text;
         root.localReplyBelow = settingsBridge.reply_below_quote;
@@ -820,6 +884,24 @@ AppDialog {
                                           root.localSyncInterval = syncMins(index);
                                       }
                         }
+                        AppCheckBox {
+                            Layout.fillWidth: true
+                            Layout.topMargin: Theme.sm
+                            checked: root.localQuietEnabled
+                            text: qsTr("Quiet hours")
+                            onToggled: root.localQuietEnabled = checked
+                        }
+                        HintLabel {
+                            text: qsTr(
+                                      "Between these times the automatic check skips accounts while the window is not active. Syncing by hand still checks. Each account can choose its own.")
+                        }
+                        QuietTimes {
+                            visible: root.localQuietEnabled
+                            start: root.localQuietStart
+                            end: root.localQuietEnd
+                            onStartEdited: value => root.localQuietStart = value
+                            onEndEdited: value => root.localQuietEnd = value
+                        }
                     }
 
                     // One account's own values. Rebuilt per account (the
@@ -856,63 +938,29 @@ AppDialog {
                                 onChosen: index => root.setAccountDraft("collect_sent_contacts",
                                                                         AccountOverrides.flagValue(index))
                             }
-                            AppCheckBox {
-                                id: quietBox
-                                Layout.fillWidth: true
-                                Layout.topMargin: Theme.sm
-                                checked: root.accountDraft("quiet_hours_enabled") === "1"
-                                text: qsTr("Quiet hours")
-                                onToggled: root.setAccountDraft("quiet_hours_enabled", checked ? "1" : "")
-                            }
-                            HintLabel {
-                                text: qsTr(
+                            ChoiceRow {
+                                caption: qsTr("Quiet hours")
+                                model: [qsTr("Default (%1)").arg(root.quietDefaultLabel()), qsTr("On"), qsTr("Off")]
+                                currentIndex: AccountOverrides.flagIndex(root.accountDraft("quiet_hours_enabled"))
+                                help: qsTr(
                                           "Between these times the automatic check skips this account while the window is not active. Syncing by hand still checks.")
+                                onChosen: index => {
+                                              root.setAccountDraft("quiet_hours_enabled", AccountOverrides.flagValue(
+                                                                       index));
+                                              // Own times only go with an own window.
+                                              if (index !== 1) {
+                                                  root.setAccountDraft("quiet_hours_start", "");
+                                                  root.setAccountDraft("quiet_hours_end", "");
+                                              }
+                                          }
                             }
-                            Flow {
-                                visible: quietBox.checked
-                                Layout.fillWidth: true
-                                spacing: Theme.sm
-
-                                Label {
-                                    height: quietStart.height
-                                    verticalAlignment: Text.AlignVCenter
-                                    text: qsTr("From")
-                                    color: Theme.text
-                                }
-                                AppTextField {
-                                    id: quietStart
-                                    width: Math.round(80 * Theme.uiScale)
-                                    text: AccountOverrides.timeText(root.accountDraft("quiet_hours_start"), "00:00")
-                                    placeholderText: "00:00"
-                                    validator: RegularExpressionValidator {
-                                        regularExpression: /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/
-                                    }
-                                    Accessible.name: qsTr("Quiet hours start")
-                                    onTextEdited: {
-                                        if (acceptableInput)
-                                            root.setAccountDraft("quiet_hours_start", AccountOverrides.timeValue(text));
-                                    }
-                                }
-                                Label {
-                                    height: quietEnd.height
-                                    verticalAlignment: Text.AlignVCenter
-                                    text: qsTr("to")
-                                    color: Theme.text
-                                }
-                                AppTextField {
-                                    id: quietEnd
-                                    width: Math.round(80 * Theme.uiScale)
-                                    text: AccountOverrides.timeText(root.accountDraft("quiet_hours_end"), "07:00")
-                                    placeholderText: "07:00"
-                                    validator: RegularExpressionValidator {
-                                        regularExpression: /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/
-                                    }
-                                    Accessible.name: qsTr("Quiet hours end")
-                                    onTextEdited: {
-                                        if (acceptableInput)
-                                            root.setAccountDraft("quiet_hours_end", AccountOverrides.timeValue(text));
-                                    }
-                                }
+                            QuietTimes {
+                                visible: root.accountDraft("quiet_hours_enabled") === "1"
+                                start: AccountOverrides.timeText(root.accountDraft("quiet_hours_start"),
+                                                                 root.localQuietStart)
+                                end: AccountOverrides.timeText(root.accountDraft("quiet_hours_end"), root.localQuietEnd)
+                                onStartEdited: value => root.setAccountDraft("quiet_hours_start", value)
+                                onEndEdited: value => root.setAccountDraft("quiet_hours_end", value)
                             }
                         }
                     }
@@ -1219,6 +1267,9 @@ AppDialog {
         settingsBridge.link_click_action = root.localLinkClick;
         settingsBridge.ui_scale = root.localUiScale;
         settingsBridge.sync_interval_minutes = root.localSyncInterval;
+        settingsBridge.quiet_hours_enabled = root.localQuietEnabled;
+        settingsBridge.quiet_hours_start = root.localQuietStart;
+        settingsBridge.quiet_hours_end = root.localQuietEnd;
         settingsBridge.signature_enabled = root.localSigEnabled;
         settingsBridge.signature_text = root.localSigText;
         settingsBridge.reply_below_quote = root.localReplyBelow;

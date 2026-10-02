@@ -7,6 +7,7 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::db::Db;
 use crate::error::Result;
+use crate::store::account_settings::{format_time, parse_time};
 
 /// Save a sent-mail copy into the Sent folder (default: on).
 pub const SENT_COPY_ENABLED: &str = "sent_copy_enabled";
@@ -69,6 +70,15 @@ pub const NOTIFICATIONS_ENABLED: &str = "notifications_enabled";
 /// `workmanager`. Desktop and Qt never read this — the Qt bridge only touches
 /// the keys it displays, so a Flutter-Android-only key is invisible to it.
 pub const BACKGROUND_SCHEDULER: &str = "background_scheduler";
+/// Leave accounts alone in the background between [`QUIET_HOURS_START`] and
+/// [`QUIET_HOURS_END`] (`1`/`0`, default off): no push connection and no
+/// scheduled check. Foreground use is unaffected. Accounts inherit all three
+/// keys unless they override them (`account_settings::quiet_hours`).
+pub const QUIET_HOURS_ENABLED: &str = "quiet_hours_enabled";
+/// Local time the quiet hours start, `HH:MM` (default `00:00`).
+pub const QUIET_HOURS_START: &str = "quiet_hours_start";
+/// Local time the quiet hours end (exclusive), `HH:MM` (default `07:00`).
+pub const QUIET_HOURS_END: &str = "quiet_hours_end";
 /// Last account selected in the UI. Absent/invalid values deliberately leave
 /// startup selection to the normal first-account fallback.
 pub const LAST_ACTIVE_ACCOUNT_ID: &str = "last_active_account_id";
@@ -108,6 +118,9 @@ pub fn defaults(key: &str) -> Option<&'static str> {
         UI_SCALE => Some("1"),
         NOTIFICATIONS_ENABLED => Some("1"),
         BACKGROUND_SCHEDULER => Some("workmanager"),
+        QUIET_HOURS_ENABLED => Some("0"),
+        QUIET_HOURS_START => Some("00:00"),
+        QUIET_HOURS_END => Some("07:00"),
         _ => None,
     }
 }
@@ -149,8 +162,19 @@ pub fn set_many(db: &Db, pairs: &[(String, String)]) -> Result<()> {
             "unknown setting: {k}"
         )));
     }
-    let tx = db.conn().unchecked_transaction()?;
+    let mut values = Vec::with_capacity(pairs.len());
     for (k, v) in pairs {
+        let value = if is_quiet_time(k) {
+            parse_time(v).map(format_time).ok_or_else(|| {
+                crate::error::StoreError::InvalidInput(format!("{k}: not a time (HH:MM): {v}"))
+            })?
+        } else {
+            v.clone()
+        };
+        values.push((k, value));
+    }
+    let tx = db.conn().unchecked_transaction()?;
+    for (k, v) in values {
         tx.execute(
             "insert into settings (key, value) values (?1, ?2)
              on conflict (key) do update set value = excluded.value",
@@ -159,6 +183,28 @@ pub fn set_many(db: &Db, pairs: &[(String, String)]) -> Result<()> {
     }
     tx.commit()?;
     Ok(())
+}
+
+fn is_quiet_time(key: &str) -> bool {
+    key == QUIET_HOURS_START || key == QUIET_HOURS_END
+}
+
+/// App-wide quiet-hours start or end as stored (`HH:MM`); its default for a
+/// missing or unreadable value.
+pub fn get_quiet_time(db: &Db, key: &str) -> String {
+    get(db, key)
+        .ok()
+        .flatten()
+        .and_then(|v| parse_time(&v))
+        .map_or_else(
+            || defaults(key).unwrap_or_default().to_string(),
+            format_time,
+        )
+}
+
+/// Store an app-wide quiet-hours start or end; rejects anything but a time.
+pub fn set_quiet_time(db: &Db, key: &str, value: &str) -> Result<()> {
+    set_many(db, &[(key.to_string(), value.to_string())])
 }
 
 /// Store a boolean value (`1`/`0`).

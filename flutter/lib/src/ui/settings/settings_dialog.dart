@@ -15,6 +15,7 @@ import '../dialogs/mail_dialog.dart';
 import 'account_sync_settings.dart';
 import 'background_check_status.dart';
 import 'maintenance_section.dart';
+import 'quiet_hours_times.dart';
 import 'setting_choice.dart';
 
 /// All preferences, Roundcube-style: sections on the left, the form on the
@@ -414,6 +415,23 @@ class _SettingsDialogState extends State<SettingsDialog> {
               'Each account can choose push or interval checks itself.',
         ),
       _switch(
+        'Quiet hours',
+        _draft.quietEnabled,
+        (v) => setState(() => _draft = _draft.copyWith(quietEnabled: v)),
+        help:
+            'No background checks or push between these times. Opening '
+            'the app or syncing by hand still checks. Each account can '
+            'choose its own.',
+      ),
+      if (_draft.quietEnabled)
+        QuietHoursTimes(
+          start: _draft.quietStart,
+          end: _draft.quietEnd,
+          onStart: (v) =>
+              setState(() => _draft = _draft.copyWith(quietStart: v)),
+          onEnd: (v) => setState(() => _draft = _draft.copyWith(quietEnd: v)),
+        ),
+      _switch(
         'Show notifications for new mail',
         _draft.notificationsEnabled,
         (v) =>
@@ -640,6 +658,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
     SettingKeys.syncInterval: '${d.syncIntervalMinutes}',
     SettingKeys.backgroundScheduler: d.backgroundScheduler,
     SettingKeys.notificationsEnabled: _yn(d.notificationsEnabled),
+    SettingKeys.quietEnabled: _yn(d.quietEnabled),
+    SettingKeys.quietStart: d.quietStart,
+    SettingKeys.quietEnd: d.quietEnd,
     SettingKeys.signatureEnabled: _yn(d.signatureEnabled),
     SettingKeys.signatureText: d.signatureText,
     SettingKeys.replyBelowQuote: _yn(d.replyBelowQuote),

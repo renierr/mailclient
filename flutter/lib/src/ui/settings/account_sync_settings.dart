@@ -90,7 +90,11 @@ class AccountSyncSettings extends StatelessWidget {
           ),
         if (showPush && usesPush && heartbeat != null)
           HeartbeatWarning(seconds: heartbeat),
-        QuietHoursSetting(overrides: overrides, onChanged: onChanged),
+        QuietHoursSetting(
+          defaults: defaults,
+          overrides: overrides,
+          onChanged: onChanged,
+        ),
         _flag(
           'Save a copy of sent mail in Sent',
           SettingKeys.sentCopy,

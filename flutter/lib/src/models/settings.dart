@@ -21,6 +21,12 @@ abstract final class SettingKeys {
   static const syncInterval = 'sync_interval_minutes';
   static const backgroundScheduler = 'background_scheduler';
   static const notificationsEnabled = 'notifications_enabled';
+
+  /// Quiet hours: no background checks between [quietStart] and [quietEnd]
+  /// (`HH:MM`, device local time). Accounts inherit all three.
+  static const quietEnabled = 'quiet_hours_enabled';
+  static const quietStart = 'quiet_hours_start';
+  static const quietEnd = 'quiet_hours_end';
   static const signatureEnabled = 'signature_enabled';
   static const signatureText = 'signature_text';
   static const replyBelowQuote = 'reply_below_quote';
@@ -47,6 +53,9 @@ class AppSettings {
     required this.syncIntervalMinutes,
     required this.backgroundScheduler,
     required this.notificationsEnabled,
+    required this.quietEnabled,
+    required this.quietStart,
+    required this.quietEnd,
     required this.signatureEnabled,
     required this.signatureText,
     required this.replyBelowQuote,
@@ -70,6 +79,9 @@ class AppSettings {
   final int syncIntervalMinutes;
   final String backgroundScheduler;
   final bool notificationsEnabled;
+  final bool quietEnabled;
+  final String quietStart;
+  final String quietEnd;
   final bool signatureEnabled;
   final String signatureText;
   final bool replyBelowQuote;
@@ -95,6 +107,9 @@ class AppSettings {
     syncIntervalMinutes: 0,
     backgroundScheduler: 'workmanager',
     notificationsEnabled: true,
+    quietEnabled: false,
+    quietStart: QuietTime.defaultStart,
+    quietEnd: QuietTime.defaultEnd,
     signatureEnabled: false,
     signatureText: '',
     replyBelowQuote: false,
@@ -122,6 +137,9 @@ class AppSettings {
       j[SettingKeys.notificationsEnabled],
       orElse: true,
     ),
+    quietEnabled: _flag(j[SettingKeys.quietEnabled]),
+    quietStart: _str(j[SettingKeys.quietStart], orElse: QuietTime.defaultStart),
+    quietEnd: _str(j[SettingKeys.quietEnd], orElse: QuietTime.defaultEnd),
     signatureEnabled: _flag(j[SettingKeys.signatureEnabled]),
     signatureText: _str(j[SettingKeys.signatureText]),
     replyBelowQuote: _flag(j[SettingKeys.replyBelowQuote]),
@@ -146,6 +164,9 @@ class AppSettings {
     int? syncIntervalMinutes,
     String? backgroundScheduler,
     bool? notificationsEnabled,
+    bool? quietEnabled,
+    String? quietStart,
+    String? quietEnd,
     bool? signatureEnabled,
     String? signatureText,
     bool? replyBelowQuote,
@@ -168,6 +189,9 @@ class AppSettings {
     syncIntervalMinutes: syncIntervalMinutes ?? this.syncIntervalMinutes,
     backgroundScheduler: backgroundScheduler ?? this.backgroundScheduler,
     notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
+    quietEnabled: quietEnabled ?? this.quietEnabled,
+    quietStart: quietStart ?? this.quietStart,
+    quietEnd: quietEnd ?? this.quietEnd,
     signatureEnabled: signatureEnabled ?? this.signatureEnabled,
     signatureText: signatureText ?? this.signatureText,
     replyBelowQuote: replyBelowQuote ?? this.replyBelowQuote,
@@ -187,6 +211,29 @@ class AppSettings {
 
   /// Compact rows drop the snippet line, like the Qt frontend's density.
   bool get isCompact => density == 'compact';
+}
+
+/// A quiet-hours time as stored: `HH:MM`, 24-hour, device local time.
+/// Mirrors `account_settings::parse_time` / `format_time`.
+abstract final class QuietTime {
+  static const defaultStart = '00:00';
+  static const defaultEnd = '07:00';
+
+  /// `"7:05"` / `"07:05"` as hour and minute; null for anything else.
+  static ({int hour, int minute})? parse(String value) {
+    final parts = value.trim().split(':');
+    if (parts.length != 2) return null;
+    final (h, m) = (parts[0], parts[1]);
+    if (h.isEmpty || h.length > 2 || m.length != 2) return null;
+    final hour = int.tryParse(h);
+    final minute = int.tryParse(m);
+    if (hour == null || minute == null) return null;
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+    return (hour: hour, minute: minute);
+  }
+
+  static String format(int hour, int minute) =>
+      '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
 }
 
 /// A search hit's identity: a UID is only unique within its folder.

@@ -6,17 +6,9 @@ library;
 import 'settings.dart';
 
 /// Keys an account can override, mirroring `account_settings::KEYS`. All but
-/// [pushEnabled] and the quiet hours are app-wide [SettingKeys] too.
+/// [pushEnabled] are app-wide [SettingKeys] too.
 abstract final class AccountSettingKeys {
   static const pushEnabled = 'push_enabled';
-
-  /// Quiet hours: no background checks between [quietStart] and [quietEnd]
-  /// (`HH:MM`, device local time). Off unless `'1'`.
-  static const quietEnabled = 'quiet_hours_enabled';
-  static const quietStart = 'quiet_hours_start';
-  static const quietEnd = 'quiet_hours_end';
-  static const defaultQuietStart = '00:00';
-  static const defaultQuietEnd = '07:00';
 
   static const all = [
     SettingKeys.syncInterval,
@@ -24,30 +16,10 @@ abstract final class AccountSettingKeys {
     SettingKeys.sentCopy,
     SettingKeys.collectContacts,
     SettingKeys.notificationsEnabled,
-    quietEnabled,
-    quietStart,
-    quietEnd,
+    SettingKeys.quietEnabled,
+    SettingKeys.quietStart,
+    SettingKeys.quietEnd,
   ];
-}
-
-/// A quiet-hours end as stored: `HH:MM`, 24-hour, device local time.
-/// Mirrors `account_settings::parse_time` / `format_time`.
-abstract final class QuietTime {
-  /// `"7:05"` / `"07:05"` as hour and minute; null for anything else.
-  static ({int hour, int minute})? parse(String value) {
-    final parts = value.trim().split(':');
-    if (parts.length != 2) return null;
-    final (h, m) = (parts[0], parts[1]);
-    if (h.isEmpty || h.length > 2 || m.length != 2) return null;
-    final hour = int.tryParse(h);
-    final minute = int.tryParse(m);
-    if (hour == null || minute == null) return null;
-    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
-    return (hour: hour, minute: minute);
-  }
-
-  static String format(int hour, int minute) =>
-      '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
 }
 
 /// One account's settings: what it sets itself ([overrides]) and what

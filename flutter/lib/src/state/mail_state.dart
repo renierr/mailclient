@@ -813,14 +813,20 @@ class MailState extends ChangeNotifier {
       setSettings({key: value});
 
   /// Write several settings at once (all or none), then reload once. The
-  /// sync timers are only rescheduled when the interval or the scheduler is
-  /// part of the batch.
+  /// sync timers are only rescheduled when the interval, the scheduler or
+  /// the quiet hours are part of the batch.
   Future<void> setSettings(Map<String, String> values) async {
     if (values.isEmpty) return;
     await _core.setSettings(values);
     await _reloadSettings();
-    if (values.containsKey(SettingKeys.syncInterval) ||
-        values.containsKey(SettingKeys.backgroundScheduler)) {
+    const scheduleKeys = [
+      SettingKeys.syncInterval,
+      SettingKeys.backgroundScheduler,
+      SettingKeys.quietEnabled,
+      SettingKeys.quietStart,
+      SettingKeys.quietEnd,
+    ];
+    if (scheduleKeys.any(values.containsKey)) {
       await _reloadAutoSync();
       unawaited(rescheduleBackgroundSync());
     }

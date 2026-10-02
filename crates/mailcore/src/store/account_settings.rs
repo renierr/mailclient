@@ -26,20 +26,7 @@ pub use quiet_hours::{format_time, parse_time, QuietHours};
 /// background method is `push`.
 pub const PUSH_ENABLED: &str = "push_enabled";
 
-/// Leave the account alone in the background between
-/// [`QUIET_HOURS_START`] and [`QUIET_HOURS_END`] (`1`/`0`): no push
-/// connection and no scheduled check. Foreground use is unaffected. Like
-/// the two times it has no app-wide key; the default is off.
-pub const QUIET_HOURS_ENABLED: &str = "quiet_hours_enabled";
-
-/// Local time the quiet hours start, `HH:MM`.
-pub const QUIET_HOURS_START: &str = "quiet_hours_start";
-
-/// Local time the quiet hours end (exclusive), `HH:MM`.
-pub const QUIET_HOURS_END: &str = "quiet_hours_end";
-
-pub const DEFAULT_QUIET_START: &str = "00:00";
-pub const DEFAULT_QUIET_END: &str = "07:00";
+pub use settings::{QUIET_HOURS_ENABLED, QUIET_HOURS_END, QUIET_HOURS_START};
 
 /// Prefix for the heartbeat interval last observed while the account idled
 /// for push (seconds; `0` = none seen): `idle_heartbeat_secs_{account_id}`.
@@ -171,21 +158,30 @@ pub fn push_enabled(db: &Db, account_id: i64) -> bool {
 }
 
 /// The account's quiet hours, or `None` while they are off (or the window
-/// is empty, start equal to end).
+/// is empty, start equal to end). An account that switches them on itself
+/// may set its own times; otherwise both the switch and the times come from
+/// the app-wide settings.
 pub fn quiet_hours(db: &Db, account_id: i64) -> Option<QuietHours> {
-    if stored(db, account_id, QUIET_HOURS_ENABLED).as_deref() != Some("1") {
-        return None;
-    }
-    let time = |key, default| {
-        stored(db, account_id, key)
-            .and_then(|v| parse_time(&v))
-            .or_else(|| parse_time(default))
+    let own = match stored(db, account_id, QUIET_HOURS_ENABLED).as_deref() {
+        Some("1") => true,
+        Some(_) => return None,
+        None if settings::get_bool(db, QUIET_HOURS_ENABLED).unwrap_or(false) => false,
+        None => return None,
     };
     let window = QuietHours {
-        start: time(QUIET_HOURS_START, DEFAULT_QUIET_START)?,
-        end: time(QUIET_HOURS_END, DEFAULT_QUIET_END)?,
+        start: parse_time(&quiet_time(db, account_id, QUIET_HOURS_START, own))?,
+        end: parse_time(&quiet_time(db, account_id, QUIET_HOURS_END, own))?,
     };
     (window.start != window.end).then_some(window)
+}
+
+/// A quiet-hours start or end: the account's own (`own`) when it set one,
+/// else the app-wide time.
+fn quiet_time(db: &Db, account_id: i64, key: &str, own: bool) -> String {
+    own.then(|| stored(db, account_id, key))
+        .flatten()
+        .and_then(|v| parse_time(&v))
+        .map_or_else(|| settings::get_quiet_time(db, key), format_time)
 }
 
 /// Whether `account_id` is inside its quiet hours at `now` (read in `now`'s
@@ -281,10 +277,9 @@ pub fn effective(db: &Db, account_id: i64) -> BTreeMap<String, String> {
         .map(|&key| {
             let value = if key == settings::SYNC_INTERVAL_MINUTES {
                 sync_interval(db, account_id).to_string()
-            } else if key == QUIET_HOURS_START {
-                stored(db, account_id, key).unwrap_or_else(|| DEFAULT_QUIET_START.to_string())
-            } else if key == QUIET_HOURS_END {
-                stored(db, account_id, key).unwrap_or_else(|| DEFAULT_QUIET_END.to_string())
+            } else if key == QUIET_HOURS_START || key == QUIET_HOURS_END {
+                let own = stored(db, account_id, QUIET_HOURS_ENABLED).as_deref() == Some("1");
+                quiet_time(db, account_id, key, own)
             } else if get_bool(db, account_id, key) {
                 "1".to_string()
             } else {
@@ -401,8 +396,8 @@ mod tests {
             tz.from_local_datetime(&naive).unwrap()
         };
         assert_eq!(quiet_hours(&db, a), None);
-        assert_eq!(effective(&db, a)[QUIET_HOURS_START], DEFAULT_QUIET_START);
-        assert_eq!(effective(&db, a)[QUIET_HOURS_END], DEFAULT_QUIET_END);
+        assert_eq!(effective(&db, a)[QUIET_HOURS_START], "00:00");
+        assert_eq!(effective(&db, a)[QUIET_HOURS_END], "07:00");
         assert!(!is_quiet_at(&db, a, &at(3, 0)));
 
         set_overrides(&db, a, &pairs(&[(QUIET_HOURS_ENABLED, "1")])).unwrap();
@@ -428,6 +423,58 @@ mod tests {
         set_overrides(&db, a, &pairs(&[(QUIET_HOURS_END, "22:30")])).unwrap();
         assert_eq!(quiet_hours(&db, a), None, "an empty window is off");
         assert_eq!(effective(&db, a)[QUIET_HOURS_ENABLED], "0");
+    }
+
+    #[test]
+    fn quiet_hours_follow_the_app_wide_window_unless_the_account_sets_its_own() {
+        use chrono::{FixedOffset, NaiveDate};
+        let (db, a, b) = setup();
+        let tz = FixedOffset::east_opt(3600).unwrap();
+        let at = |h, m| {
+            let naive = NaiveDate::from_ymd_opt(2026, 3, 10)
+                .unwrap()
+                .and_hms_opt(h, m, 0)
+                .unwrap();
+            tz.from_local_datetime(&naive).unwrap()
+        };
+        settings::set_many(
+            &db,
+            &pairs(&[
+                (QUIET_HOURS_ENABLED, "1"),
+                (QUIET_HOURS_START, "22:00"),
+                (QUIET_HOURS_END, "6:30"),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(settings::get_quiet_time(&db, QUIET_HOURS_END), "06:30");
+        assert!(
+            is_quiet_at(&db, a, &at(23, 0)),
+            "inherits the app-wide window"
+        );
+        assert!(!is_quiet_at(&db, a, &at(7, 0)));
+        assert_eq!(effective(&db, a)[QUIET_HOURS_ENABLED], "1");
+        assert_eq!(effective(&db, a)[QUIET_HOURS_START], "22:00");
+
+        set_overrides(&db, a, &pairs(&[(QUIET_HOURS_ENABLED, "0")])).unwrap();
+        assert!(!is_quiet_at(&db, a, &at(23, 0)), "the account opted out");
+        assert!(is_quiet_at(&db, b, &at(23, 0)));
+
+        // Own times count only while the account switches quiet hours on.
+        set_overrides(&db, b, &pairs(&[(QUIET_HOURS_START, "12:00")])).unwrap();
+        assert!(is_quiet_at(&db, b, &at(23, 0)));
+        assert!(!is_quiet_at(&db, b, &at(13, 0)));
+        set_overrides(&db, b, &pairs(&[(QUIET_HOURS_ENABLED, "1")])).unwrap();
+        assert!(is_quiet_at(&db, b, &at(13, 0)), "own start, inherited end");
+        assert_eq!(effective(&db, b)[QUIET_HOURS_END], "06:30");
+
+        settings::set(&db, QUIET_HOURS_ENABLED, "0").unwrap();
+        assert!(!is_quiet_at(&db, a, &at(23, 0)));
+        assert!(
+            is_quiet_at(&db, b, &at(13, 0)),
+            "an own switch outlives the default"
+        );
+
+        assert!(settings::set_many(&db, &pairs(&[(QUIET_HOURS_START, "late")])).is_err());
     }
 
     #[test]

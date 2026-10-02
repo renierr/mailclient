@@ -33,6 +33,9 @@ pub fn settings_json() -> anyhow::Result<String> {
         s::SYNC_INTERVAL_MINUTES: s::get_sync_interval(db),
         s::BACKGROUND_SCHEDULER: s::get_background_scheduler(db),
         s::NOTIFICATIONS_ENABLED: flag(s::NOTIFICATIONS_ENABLED),
+        s::QUIET_HOURS_ENABLED: flag(s::QUIET_HOURS_ENABLED),
+        s::QUIET_HOURS_START: s::get_quiet_time(db, s::QUIET_HOURS_START),
+        s::QUIET_HOURS_END: s::get_quiet_time(db, s::QUIET_HOURS_END),
         s::SIGNATURE_ENABLED: flag(s::SIGNATURE_ENABLED),
         s::SIGNATURE_TEXT: s::get_signature_text(db),
         s::REPLY_BELOW_QUOTE: flag(s::REPLY_BELOW_QUOTE),
@@ -53,7 +56,7 @@ pub fn set_setting(key: String, value: String) -> anyhow::Result<()> {
     if s::defaults(&key).is_none() {
         anyhow::bail!("unknown setting: {key}");
     }
-    Ok(s::set(shared_db()?, &key, &value)?)
+    Ok(s::set_many(shared_db()?, &[(key, value)])?)
 }
 
 /// Write several preferences in one transaction: all apply or none do.

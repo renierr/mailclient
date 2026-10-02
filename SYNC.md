@@ -100,9 +100,11 @@ asks the core for a plan (`sync::background::schedule::plan`) and
 
 ### Quiet hours
 
-Each account can set a daily window of device local time, by default
-00:00–07:00, off until switched on (`account_settings::quiet_hours`; a
-window may wrap past midnight, start equal to end is no window). Inside it:
+A daily window of device local time, by default 00:00–07:00, off until
+switched on. Set app-wide (Settings → Accounts & sync, "All accounts"); each
+account inherits it or chooses Off, or On with times of its own, which fall
+back to the app-wide times (`account_settings::quiet_hours`; a window may
+wrap past midnight, start equal to end is no window). Inside it:
 
 - **Background (Android):** the account is not in the plan. Its IDLE
   connection is dropped and no poller ticks on its behalf; when every
@@ -260,7 +262,7 @@ between the app-wide defaults and one account; an account value of
 | Show notifications for new mail | yes, Flutter | none | Whether the account's new mail alerts |
 | Save a copy of sent mail in Sent | yes | Sent copy after an SMTP send or outbox flush | Same, when a background tick flushes the outbox |
 | Suggest recipients from sent mail | yes | Collects addresses you sent to | Same, during background syncs |
-| Quiet hours (on/off, from, to) | only per account, default off, 00:00–07:00 | Auto-sync timer skips the account while the window is unfocused | No push connection, no poller tick for the account |
+| Quiet hours (on/off, from, to) | app-wide default (off, 00:00–07:00), per-account override | Auto-sync timer skips the account while the window is unfocused | No push connection, no poller tick for the account |
 
 ## 7. Timing at a glance
 

@@ -25,7 +25,15 @@ void main() {
         'ui_scale': 1.25,
         'message_sort_field': 'from',
         'message_sort_desc': false,
+        'quiet_hours_enabled': true,
+        'quiet_hours_start': '22:30',
+        'quiet_hours_end': '06:00',
       });
+      expect(s.quietEnabled, isTrue);
+      expect(s.quietStart, '22:30');
+      expect(s.quietEnd, '06:00');
+      expect(AppSettings.defaults.quietEnabled, isFalse);
+      expect(AppSettings.defaults.quietEnd, QuietTime.defaultEnd);
       expect(s.sendFormat, 'html');
       expect(s.markReadDelaySecs, 5);
       expect(s.confirmDelete, isFalse);
