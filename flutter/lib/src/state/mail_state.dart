@@ -988,6 +988,9 @@ class MailState extends ChangeNotifier {
     // `-1` for the account means the job changed nothing worth re-reading.
     if (e.accountId < 0 || e.accountId != _accountId) return;
     unawaited(_reloadFolders());
+    // A purge or sync can change what the index holds: re-query an active
+    // search so hits never go stale (local only, like Qt's job refresh).
+    unawaited(_refreshHits());
     // A folder of `-1` alongside a real account is a full sync: everything
     // may have changed, including the folder we are looking at.
     if (e.folderId < 0 || e.folderId == _folderId) {
