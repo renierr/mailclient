@@ -26,6 +26,9 @@ class _MailShellState extends State<MailShell> {
   /// Which pane the narrow layouts are showing. Ignored when there is room
   /// for all three.
   _Pane _pane = _Pane.list;
+
+  /// `searching` as of the last build, to catch the moment a search starts.
+  bool _wasSearching = false;
   final _searchFocus = FocusNode();
   final _searchController = TextEditingController();
 
@@ -113,6 +116,18 @@ class _MailShellState extends State<MailShell> {
             final narrow = effective < Breakpoints.compact;
             // A plain assignment, not setState: derived from what this very
             // build reads, and everything below uses it.
+            // Starting a search shows the hits: where the list shares its
+            // place with the folders or the reader, bring it forward. The
+            // close is deferred because it notifies during this build.
+            if (searching && !_wasSearching && effective < Breakpoints.medium) {
+              _pane = _Pane.list;
+              if (openUid >= 0) {
+                WidgetsBinding.instance.addPostFrameCallback(
+                  (_) => state.closeMessage(),
+                );
+              }
+            }
+            _wasSearching = searching;
             if (narrow) _syncPaneToOpen(openUid);
             final body = effective >= Breakpoints.medium
                 ? _threePane(fullscreen, openUid)

@@ -242,6 +242,13 @@ ApplicationWindow {
     function updateSearch(fromTyping) {
         var q = searchField.text.trim();
         if (q.length >= 3) {
+            // Starting a search shows the hits: where the list shares its
+            // place with the folders or the reader, bring it forward.
+            if (!root.searching && !root.wideLayout) {
+                if (root.currentUid >= 0)
+                    root.closeReader();
+                root.narrowPane = "list";
+            }
             root.searching = true;
             root.searchRows = FeedJson.parse(backend.search_json(q, root.searchScope()), []);
             // Thin local hits get topped up from the server once typing
