@@ -51,6 +51,44 @@ pub(crate) fn parse_uids_json(raw: &str) -> Result<Vec<u32>, String> {
     Ok(out)
 }
 
+/// Parse search-hit targets (`[{"folder": path, "uid": n}, ...]` from QML)
+/// into per-folder UID lists, in first-seen folder order. Same caps and
+/// dedup as [`parse_uids_json`], applied to the whole selection.
+pub(crate) fn parse_hits_json(raw: &str) -> Result<Vec<(String, Vec<u32>)>, String> {
+    let invalid = || "invalid selection".to_string();
+    let v: serde_json::Value = serde_json::from_str(raw).map_err(|_| invalid())?;
+    let arr = v.as_array().ok_or_else(invalid)?;
+    if arr.is_empty() {
+        return Err("no messages selected".to_string());
+    }
+    if arr.len() > MAX_MESSAGE_LIMIT as usize {
+        return Err(format!(
+            "too many messages selected (max {})",
+            MAX_MESSAGE_LIMIT
+        ));
+    }
+    let mut groups: Vec<(String, Vec<u32>)> = Vec::new();
+    for x in arr {
+        let folder = x
+            .get("folder")
+            .and_then(|f| f.as_str())
+            .ok_or_else(invalid)?;
+        let uid = x.get("uid").and_then(|u| u.as_u64()).ok_or_else(invalid)?;
+        if folder.is_empty() || uid == 0 || uid > u64::from(u32::MAX) {
+            return Err(invalid());
+        }
+        match groups.iter_mut().find(|(f, _)| f == folder) {
+            Some((_, uids)) => uids.push(uid as u32),
+            None => groups.push((folder.to_string(), vec![uid as u32])),
+        }
+    }
+    for (_, uids) in &mut groups {
+        uids.sort_unstable();
+        uids.dedup();
+    }
+    Ok(groups)
+}
+
 /// Persist a local read/star change. `""` on success, else the error for the
 /// status line -- a swallowed failure would report "Marked as read" while the
 /// flag silently stayed put (the rebuilt feed shows the unchanged DB state).
@@ -280,5 +318,34 @@ impl qobject::Bridge {
         // push_feeds re-reads the settings for the feed and syncs the props.
         push_feeds(&mut self, db, acc_id, folder_id);
         qstring("")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hits_group_by_folder_in_first_seen_order() {
+        let groups = parse_hits_json(
+            r#"[{"folder":"Archive","uid":7},{"folder":"INBOX","uid":3},
+                {"folder":"Archive","uid":2},{"folder":"Archive","uid":7}]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            groups,
+            vec![
+                ("Archive".to_string(), vec![2, 7]),
+                ("INBOX".to_string(), vec![3]),
+            ]
+        );
+    }
+
+    #[test]
+    fn hits_reject_malformed_targets() {
+        assert!(parse_hits_json("[]").is_err());
+        assert!(parse_hits_json("[3]").is_err());
+        assert!(parse_hits_json(r#"[{"folder":"","uid":3}]"#).is_err());
+        assert!(parse_hits_json(r#"[{"folder":"INBOX","uid":0}]"#).is_err());
     }
 }

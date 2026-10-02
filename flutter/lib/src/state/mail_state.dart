@@ -77,39 +77,58 @@ class MailState extends ChangeNotifier {
   bool get hasListFilter =>
       _filterUnread || _filterStarred || _filterAttachments;
 
-  bool matchesListFilter(MessageSummary m) {
-    if (_filterUnread && !m.unread) return false;
-    if (_filterStarred && !m.starred) return false;
-    if (_filterAttachments && !m.hasAttachments) return false;
-    return true;
+  bool _passesQuick(bool unread, bool starred, bool hasAttachments) =>
+      (!_filterUnread || unread) &&
+      (!_filterStarred || starred) &&
+      (!_filterAttachments || hasAttachments);
+
+  /// Whether a folder row is on screen: the quick filters, plus Qt's
+  /// instant substring filter for 1–2 letter input (3+ letters search the
+  /// index instead). The list pane and every selection entry use this, so
+  /// a bulk action never reaches a row the user cannot see.
+  bool isMessageShown(MessageSummary m) {
+    if (!_passesQuick(m.unread, m.starred, m.hasAttachments)) return false;
+    final q = _searchQuery.trim().toLowerCase();
+    if (q.isEmpty) return true;
+    return m.subject.toLowerCase().contains(q) ||
+        m.from.toLowerCase().contains(q) ||
+        m.senderName.toLowerCase().contains(q) ||
+        m.snippet.toLowerCase().contains(q);
   }
 
-  bool matchesHitFilter(SearchHit h) {
-    if (_filterUnread && !h.unread) return false;
-    if (_filterStarred && !h.starred) return false;
-    if (_filterAttachments && !h.hasAttachments) return false;
-    return true;
-  }
+  /// Whether a search hit is on screen (the quick filters).
+  bool isHitShown(SearchHit h) =>
+      _passesQuick(h.unread, h.starred, h.hasAttachments);
+
+  Iterable<MessageSummary> get _shownMessages =>
+      _messages.where(isMessageShown);
+
+  Iterable<SearchHit> get _shownHits => _searchHits.where(isHitShown);
 
   void setFilterUnread(bool on) {
     _filterUnread = on;
-    notifyListeners();
+    _filtersChanged();
   }
 
   void setFilterStarred(bool on) {
     _filterStarred = on;
-    notifyListeners();
+    _filtersChanged();
   }
 
   void setFilterAttachments(bool on) {
     _filterAttachments = on;
-    notifyListeners();
+    _filtersChanged();
   }
 
   void clearListFilters() {
     _filterUnread = false;
     _filterStarred = false;
     _filterAttachments = false;
+    _filtersChanged();
+  }
+
+  void _filtersChanged() {
+    _pruneSelection();
     notifyListeners();
   }
 
@@ -696,7 +715,7 @@ class MailState extends ChangeNotifier {
 
   /// Toggle a contiguous range, for shift-click. Uids are list-ordered.
   void selectRange(int anchorUid, int uid) {
-    final order = [for (final m in _messages) m.uid];
+    final order = [for (final m in _shownMessages) m.uid];
     final a = order.indexOf(anchorUid);
     final b = order.indexOf(uid);
     if (a < 0 || b < 0) {
@@ -723,9 +742,9 @@ class MailState extends ChangeNotifier {
     bool Function(SearchHit) hit,
   ) {
     if (searching) {
-      _selectedHits.addAll(_searchHits.where(hit).map((h) => h.key));
+      _selectedHits.addAll(_shownHits.where(hit).map((h) => h.key));
     } else {
-      _selectedUids.addAll(_messages.where(row).map((m) => m.uid));
+      _selectedUids.addAll(_shownMessages.where(row).map((m) => m.uid));
     }
     _selectionMode = selectedCount > 0;
     notifyListeners();
@@ -733,7 +752,7 @@ class MailState extends ChangeNotifier {
 
   void invertSelection() {
     if (searching) {
-      final inverted = _searchHits
+      final inverted = _shownHits
           .map((h) => h.key)
           .toSet()
           .difference(_selectedHits);
@@ -741,7 +760,7 @@ class MailState extends ChangeNotifier {
         ..clear()
         ..addAll(inverted);
     } else {
-      final all = _messages.map((m) => m.uid).toSet();
+      final all = _shownMessages.map((m) => m.uid).toSet();
       final inverted = all.difference(_selectedUids);
       _selectedUids
         ..clear()
@@ -989,7 +1008,7 @@ class MailState extends ChangeNotifier {
     _searchHits = await _core.search(_accountId, _searchQuery, folder: scope);
     // Hits that left the results (moved, deleted) leave the selection too.
     if (_selectedHits.isNotEmpty) {
-      _selectedHits.retainAll(_searchHits.map((h) => h.key));
+      _selectedHits.retainAll(_shownHits.map((h) => h.key));
       if (_selectedHits.isEmpty) _selectionMode = false;
     }
     notifyListeners();
@@ -1162,13 +1181,19 @@ class MailState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Drop selected uids that are no longer in the list, and leave selection
-  /// mode when nothing remains.
+  /// Drop selected rows that are no longer on screen (gone from the list,
+  /// or hidden by a filter), and leave selection mode when nothing remains.
   void _pruneSelection() {
-    if (_selectedUids.isEmpty) return;
-    final live = _messages.map((m) => m.uid).toSet();
-    _selectedUids.retainAll(live);
-    if (_selectedUids.isEmpty) _selectionMode = false;
+    if (_selectedUids.isEmpty && _selectedHits.isEmpty) return;
+    if (searching) {
+      // The query is a search, not the folder's substring filter: the
+      // folder set only loses rows that left the list.
+      _selectedHits.retainAll(_shownHits.map((h) => h.key).toSet());
+      _selectedUids.retainAll(_messages.map((m) => m.uid).toSet());
+    } else {
+      _selectedUids.retainAll(_shownMessages.map((m) => m.uid).toSet());
+    }
+    if (selectedCount == 0) _selectionMode = false;
   }
 
   void _patchRow(int uid, MessageSummary Function(MessageSummary) f) {

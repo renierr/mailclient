@@ -8,7 +8,7 @@
 use std::pin::Pin;
 
 use cxx_qt_lib::QString;
-use mailcore::store::messages;
+use mailcore::store::{folders, messages};
 use mailcore::undo::{self, MoveTarget, Queued};
 
 use crate::bridge::qobject;
@@ -16,7 +16,7 @@ use crate::bridge::worker::{spawn_flag_push, spawn_job, spawn_push_after_grace, 
 use crate::bridge::{push_feeds, qstring, shared_db};
 use mailcore::sync::pool::{checkout_session, job_account};
 
-use super::parse_uids_json;
+use super::{parse_hits_json, parse_uids_json};
 
 impl qobject::Bridge {
     pub fn mark_read_many(mut self: Pin<&mut Self>, uids_json: &QString, read: bool) -> QString {
@@ -117,22 +117,65 @@ impl qobject::Bridge {
         }
     }
 
+    /// Permanently destroy search hits across folders: one job, one IMAP
+    /// session, no folder switch. Per-folder `purge_many` calls would each
+    /// be a job, and every one after the first is refused while the bridge
+    /// is busy.
+    pub fn purge_hits(self: Pin<&mut Self>, hits_json: &QString) -> QString {
+        let groups = match parse_hits_json(&hits_json.to_string()) {
+            Ok(g) => g,
+            Err(e) => return qstring(&e),
+        };
+        let db = match shared_db() {
+            Ok(d) => d,
+            Err(e) => return qstring(&e),
+        };
+        let acc_id = *self.current_account_id();
+        let mut resolved = Vec::with_capacity(groups.len());
+        for (path, uids) in groups {
+            match folders::get_by_path(db, acc_id, &path) {
+                Ok(f) => resolved.push((f.id, uids)),
+                Err(e) => return qstring(&e.to_string()),
+            }
+        }
+        self.purge_groups(resolved)
+    }
+
     /// Destroy `uids` of the current folder server-side (a job; no undo).
     pub(crate) fn purge_uids(self: Pin<&mut Self>, uids: Vec<u32>) -> QString {
+        let folder_id = *self.current_folder_id();
+        self.purge_groups(vec![(folder_id, uids)])
+    }
+
+    /// Destroy per-folder UID lists of the current account in one job.
+    fn purge_groups(self: Pin<&mut Self>, groups: Vec<(i64, Vec<u32>)>) -> QString {
         let acc_id = *self.current_account_id();
         let folder_id = *self.current_folder_id();
         spawn_job(self, "Delete", move |db, _progress| async move {
             let acc = job_account(db, acc_id)?;
             let mut imap = checkout_session(&acc).await?;
-            let n = imap
-                .purge_uids(db, folder_id, &uids)
-                .await
-                .map_err(|e| e.to_string())?;
-            imap.checkin();
-            Ok((
-                format!("Deleted {n} permanently"),
-                Some(JobRefresh::feeds(acc.id, folder_id)),
-            ))
+            // A failing folder must not hide what the others already
+            // destroyed: report both and still refresh the feeds.
+            let mut n = 0;
+            let mut failed = None;
+            for (group_folder, uids) in &groups {
+                match imap.purge_uids(db, *group_folder, uids).await {
+                    Ok(k) => n += k,
+                    Err(e) => {
+                        failed = Some(e.to_string());
+                        break;
+                    }
+                }
+            }
+            let status = match failed {
+                None => {
+                    imap.checkin();
+                    format!("Deleted {n} permanently")
+                }
+                Some(e) if n == 0 => return Err(e),
+                Some(e) => format!("Deleted {n} permanently, then failed: {e}"),
+            };
+            Ok((status, Some(JobRefresh::feeds(acc.id, folder_id))))
         })
     }
 

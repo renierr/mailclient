@@ -340,7 +340,12 @@ impl ImapSync {
             }
         }
 
-        let min_uid = match messages::min_uid(db, folder_id)? {
+        // Fill every gap below the newest cached UID, not only below the
+        // oldest: server search tops results up with old hits, and deletes
+        // or trims punch holes, so the oldest cached row says nothing about
+        // what is missing above it. Anchoring on it made "Load older"
+        // report "caught up" while thousands of server mails were unloaded.
+        let hi = match messages::max_uid(db, folder_id)? {
             Some(u) => u,
             None => {
                 return self
@@ -349,11 +354,6 @@ impl ImapSync {
             }
         };
 
-        if min_uid <= 1 {
-            return Ok(SyncReport::default());
-        }
-
-        let hi = min_uid.saturating_sub(1);
         let seq = SequenceSet::try_from(format!("1:{hi}").as_str())
             .map_err(|e| StoreError::InvalidInput(format!("seq: {e}")))?;
         let mut server_uids = session.uid_search(vec1![SearchKey::Uid(seq)]).await?;

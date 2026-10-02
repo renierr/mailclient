@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 17;
+pub const SCHEMA_VERSION: u32 = 18;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -221,6 +221,21 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
     if current < 17 {
         // v17: `account_settings`, per-account overrides of sync settings.
         conn.execute_batch(SCHEMA_V17)?;
+    }
+    if current < 18 {
+        // v18: SMTP used to demand STARTTLS even with security `none`, which
+        // older Flutter forms offered without a warning. SMTP now honours
+        // `none`, so such accounts would silently start sending in the
+        // clear. Reset them to STARTTLS; a real plaintext opt-in is made
+        // again in the account form, which warns about it.
+        let reset = conn.execute(
+            "update accounts set smtp_security = 'starttls', updated_at = ?1
+             where lower(trim(smtp_security)) in ('none', 'plain')",
+            [crate::store::now()],
+        )?;
+        if reset > 0 {
+            log::info!("migration v18: {reset} account(s) reset from plaintext SMTP to STARTTLS");
+        }
     }
     if current != SCHEMA_VERSION {
         conn.execute(
@@ -663,5 +678,41 @@ b<c",
             [],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn v18_migration_resets_plaintext_smtp_to_starttls() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_FULL).unwrap();
+        conn.execute(
+            "insert into schema_meta (key, value) values ('version', '17')",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch(
+            "insert into accounts (id, name, email_address, imap_host, imap_port,
+                 imap_security, imap_username, smtp_host, smtp_port,
+                 smtp_security, smtp_username, auth_vault_key, created_at, updated_at)
+             values (1, 'a', 'a@example.com', 'h', 143, 'none', 'u', 'h', 25, 'none', 'u', 'k', 't', 't'),
+                    (2, 'b', 'b@example.com', 'h', 993, 'tls', 'u', 'h', 25, ' Plain ', 'u', 'k', 't', 't'),
+                    (3, 'c', 'c@example.com', 'h', 993, 'tls', 'u', 'h', 465, 'tls', 'u', 'k', 't', 't');",
+        )
+        .unwrap();
+
+        ensure_schema(&conn).unwrap();
+
+        let row = |id: i64| -> (String, String, String) {
+            conn.query_row(
+                "select imap_security, smtp_security, updated_at from accounts where id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap()
+        };
+        let (imap, smtp, updated) = row(1);
+        assert_eq!((imap.as_str(), smtp.as_str()), ("none", "starttls"));
+        assert_ne!(updated, "t");
+        assert_eq!(row(2).1, "starttls");
+        assert_eq!(row(3), ("tls".into(), "tls".into(), "t".into()));
     }
 }

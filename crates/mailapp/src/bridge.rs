@@ -370,6 +370,11 @@ pub mod qobject {
         #[qinvokable]
         fn purge_many(self: Pin<&mut Self>, uids_json: &QString) -> QString;
 
+        /// Permanently destroy search hits across folders in one job
+        /// (`[{"folder": path, "uid": n}, ...]`), without switching folder.
+        #[qinvokable]
+        fn purge_hits(self: Pin<&mut Self>, hits_json: &QString) -> QString;
+
         /// Send a message from a JSON form
         /// (`{from,from_name?,to,cc?,bcc?,subject,body,body_html?,attachments?}`; `body`
         /// holds composer rich HTML source, `body_html` is an optional

@@ -72,7 +72,10 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
   bool _saving = false;
   String? _error;
   final _revealed = <String>{};
-  bool _guessed = false;
+
+  /// The host/user values the last guess wrote, so the next keystroke can
+  /// tell a field still holding a guess from one the user typed.
+  Map<String, String> _lastGuess = const {};
 
   /// Anything typed or changed since open (or since the stored account
   /// loaded) — back and Cancel then ask before dropping it.
@@ -113,24 +116,29 @@ class _AccountSetupDialogState extends State<AccountSetupDialog> {
       // The core already normalized older values ('ssl', 'plain').
       _imapSec = form['imap_sec'] as String? ?? _imapSec;
       _smtpSec = form['smtp_sec'] as String? ?? _smtpSec;
-      _guessed = true;
       // Filling in the stored values is not an edit.
       _dirty = false;
     });
     _refreshWarnings();
   }
 
-  /// Qt parity: typing the address once fills the core's host/user guesses,
-  /// so a standard provider needs only the password. Never overwrites an
-  /// edited field.
+  /// Qt parity: the address fills the core's host/user guesses, so a
+  /// standard provider needs only the password. The guess follows the
+  /// address while it is typed (`a@example.c` must not stick once `.com`
+  /// is complete), but a field the user edited is never overwritten.
   void _maybeGuess() {
-    if (_guessed || widget.accountId != null) return;
+    if (widget.accountId != null) return;
     final g = MailCore.instance.accountGuess(_fields['email']!.text);
-    if (g.isEmpty) return;
-    _guessed = true;
+    final next = <String, String>{};
     for (final key in const ['imap_host', 'smtp_host', 'imap_user']) {
-      if (_fields[key]!.text.isEmpty) _fields[key]!.text = g[key] as String;
+      final field = _fields[key]!;
+      final guess = g[key] as String? ?? '';
+      if (field.text.isEmpty || field.text == _lastGuess[key]) {
+        field.text = guess;
+        next[key] = guess;
+      }
     }
+    _lastGuess = next;
   }
 
   /// Standard ports follow the encryption (the core decides; a port the

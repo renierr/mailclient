@@ -288,7 +288,7 @@ async fn sync_older_backfills_below_local_min() {
         let upper = rest.to_ascii_uppercase();
         if upper.starts_with("SELECT") {
             select_ok(tag, 5, 1, 11)
-        } else if upper.contains("1:5") {
+        } else if upper.contains("1:8") {
             vec![
                 "* SEARCH 3 4 5\r\n".to_string(),
                 format!("{tag} OK UID SEARCH completed\r\n"),
@@ -319,6 +319,52 @@ async fn sync_older_backfills_below_local_min() {
     assert_eq!(report.fetched, 2);
     let uids = messages::list_uids(&db, inbox_id).unwrap();
     assert!(uids.contains(&3) && uids.contains(&4));
+}
+
+#[tokio::test]
+async fn sync_older_fills_the_gap_above_an_old_search_hit() {
+    // Cache: the newest window (7, 8) plus uid 2, which a server search
+    // pulled in. The server holds 1..=8, so 3..=6 and 1 are missing; the
+    // old "below the oldest cached uid" rule only looked at 1 and
+    // reported "caught up".
+    let server = MockImapServer::start("IMAP4rev1", |tag, rest| {
+        let upper = rest.to_ascii_uppercase();
+        if upper.starts_with("SELECT") {
+            select_ok(tag, 8, 1, 9)
+        } else if upper.contains("SEARCH") && upper.contains("1:8") {
+            vec![
+                "* SEARCH 1 2 3 4 5 6 7 8\r\n".to_string(),
+                format!("{tag} OK UID SEARCH completed\r\n"),
+            ]
+        } else if upper.starts_with("UID FETCH") && upper.contains("5:6") {
+            vec![
+                fetch_literal(5, 5, RAW6),
+                fetch_literal(6, 6, RAW7),
+                format!("{tag} OK UID FETCH completed\r\n"),
+            ]
+        } else if upper.starts_with("UID FETCH") {
+            vec![format!("{tag} BAD unexpected fetch\r\n")]
+        } else {
+            vec![format!("{tag} OK completed\r\n")]
+        }
+    })
+    .await;
+
+    let db = Db::open_in_memory().unwrap();
+    let account = test_mock_account(server.port);
+    let account_id = test_account_row(&db, &account);
+    let inbox_id = folders::upsert(&db, account_id, "INBOX", "/", FolderRole::Inbox).unwrap();
+    for uid in [2u32, 7, 8] {
+        messages::upsert(&db, &messages::sample_new(account_id, inbox_id, uid)).unwrap();
+    }
+
+    let mut sync = ImapSync::new(&account);
+    sync.connect("secret").await.unwrap();
+    // A batch of two takes the newest missing uids first.
+    let report = sync.sync_older(&db, inbox_id, 2).await.unwrap();
+    assert_eq!(report.fetched, 2);
+    let uids = messages::list_uids(&db, inbox_id).unwrap();
+    assert!(uids.contains(&5) && uids.contains(&6), "{uids:?}");
 }
 
 #[tokio::test]

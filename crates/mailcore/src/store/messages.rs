@@ -349,11 +349,12 @@ pub fn counts_by_account(db: &Db, account_id: i64) -> Result<HashMap<i64, Folder
     Ok(out)
 }
 
-/// Smallest cached UID in a folder, if any. Older-batch sync fetches server
-/// UIDs below this; `None` means the folder is empty locally.
-pub fn min_uid(db: &Db, folder_id: i64) -> Result<Option<u32>> {
+/// Largest cached UID in a folder, if any. Older-batch sync fills the
+/// server UIDs below this that the cache lacks; `None` means the folder is
+/// empty locally.
+pub fn max_uid(db: &Db, folder_id: i64) -> Result<Option<u32>> {
     let v: Option<i64> = db.conn().query_row(
-        "select min(uid) from messages where folder_id = ?1",
+        "select max(uid) from messages where folder_id = ?1",
         [folder_id],
         |r| r.get(0),
     )?;

@@ -53,9 +53,7 @@ class MessageListPaneState extends State<MessageListPane> {
     );
     final syncing = context.select<MailState, bool>((s) => s.isSyncing);
     final drafts = context.select<MailState, bool>((s) => s.isDraftsFolder);
-    final filterUnread = context.select<MailState, bool>(
-      (s) => s.filterUnread,
-    );
+    final filterUnread = context.select<MailState, bool>((s) => s.filterUnread);
     final filterStarred = context.select<MailState, bool>(
       (s) => s.filterStarred,
     );
@@ -63,24 +61,12 @@ class MessageListPaneState extends State<MessageListPane> {
       (s) => s.filterAttachments,
     );
     final hasFilter = filterUnread || filterStarred || filterAttachments;
-    bool quick(MessageSummary m) =>
-        (!filterUnread || m.unread) &&
-        (!filterStarred || m.starred) &&
-        (!filterAttachments || m.hasAttachments);
     // Qt parity: 1–2 letter input filters the folder instantly (substring);
-    // 3+ letters run the FTS index via `searching`. Without this, short input
-    // shows the whole unfiltered folder.
+    // 3+ letters run the FTS index via `searching`. The rule lives in
+    // MailState so the selection entries see exactly these rows.
     final q = query.trim().toLowerCase();
-    final shown = messages
-        .where((m) {
-          if (!quick(m)) return false;
-          if (q.isEmpty) return true;
-          return m.subject.toLowerCase().contains(q) ||
-              m.from.toLowerCase().contains(q) ||
-              m.senderName.toLowerCase().contains(q) ||
-              m.snippet.toLowerCase().contains(q);
-        })
-        .toList(growable: false);
+    final state = context.read<MailState>();
+    final shown = messages.where(state.isMessageShown).toList(growable: false);
     if (folderId < 0) {
       return const EmptyPane(
         icon: Icons.folder_open_outlined,
@@ -100,7 +86,7 @@ class MessageListPaneState extends State<MessageListPane> {
                   child: Text(
                     q.isNotEmpty
                         ? '${shown.length} match(es) for “${query.trim()}”'
-                            '${hasFilter ? ' · filters active' : ''}'
+                              '${hasFilter ? ' · filters active' : ''}'
                         : '${shown.length} of ${messages.length} · filters active',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
@@ -210,13 +196,19 @@ class MessageListPaneState extends State<MessageListPane> {
     final selectionMode = context.select<MailState, bool>(
       (s) => s.selectionMode,
     );
-    final hasFilter = context.select<MailState, bool>(
-      (s) => s.hasListFilter,
+    // Each flag separately: Unread → Unread + Starred keeps `hasListFilter`
+    // true but changes which hits are shown.
+    final filterUnread = context.select<MailState, bool>((s) => s.filterUnread);
+    final filterStarred = context.select<MailState, bool>(
+      (s) => s.filterStarred,
     );
+    final filterAttachments = context.select<MailState, bool>(
+      (s) => s.filterAttachments,
+    );
+    final hasFilter = filterUnread || filterStarred || filterAttachments;
+    final state = context.read<MailState>();
     final shownHits = hasFilter
-        ? hits.where((h) => context.read<MailState>().matchesHitFilter(h)).toList(
-            growable: false,
-          )
+        ? hits.where(state.isHitShown).toList(growable: false)
         : hits;
     // A folder-scoped search is all one folder: no headers needed.
     final rows = folderOnly
@@ -242,8 +234,7 @@ class MessageListPaneState extends State<MessageListPane> {
                     visualDensity: VisualDensity.compact,
                     padding: const EdgeInsets.symmetric(horizontal: 8),
                   ),
-                  onPressed: () =>
-                      context.read<MailState>().clearListFilters(),
+                  onPressed: () => context.read<MailState>().clearListFilters(),
                   child: const Text('Clear'),
                 ),
               ],

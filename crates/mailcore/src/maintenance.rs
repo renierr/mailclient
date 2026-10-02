@@ -70,7 +70,7 @@ pub fn storage_stats(db: &Db, db_path: &Path, temp_dir: &Path) -> Result<Storage
         .conn()
         .query_row("select count(*) from messages", [], |r| r.get(0))?;
     let (cached_files, cached_bytes): (i64, Option<i64>) = db.conn().query_row(
-        "select count(*), sum(length(data)) from attachments where data is not null",
+        &format!("select count(*), sum(length(data)) from attachments where {EVICTABLE}"),
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
@@ -293,18 +293,25 @@ pub struct AttachmentEviction {
     pub bytes_display: String,
 }
 
+/// Attachment rows whose bytes the cache may drop. Inline (`cid:`) images
+/// are kept: they arrive with the body, and the reader, reply quoting and
+/// re-saved drafts read them locally without an on-demand fetch, so
+/// evicting them would lose them for good (and strip them from a draft the
+/// next save replaces on the server).
+const EVICTABLE: &str = "data is not null and is_inline = 0";
+
 /// Drop cached attachment *bytes* while keeping names, sizes and MIME types.
 /// Returns what went away. Yes, they come back: clearing `data` makes
 /// `attachment_has_data` false again, so the next open or save takes the
 /// normal on-demand download path and `fetch_attachments` rewrites the rows.
 pub fn evict_cached_attachments(db: &Db) -> Result<AttachmentEviction> {
     let (files, bytes): (i64, Option<i64>) = db.conn().query_row(
-        "select count(*), sum(length(data)) from attachments where data is not null",
+        &format!("select count(*), sum(length(data)) from attachments where {EVICTABLE}"),
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     db.conn().execute(
-        "update attachments set data = null where data is not null",
+        &format!("update attachments set data = null where {EVICTABLE}"),
         [],
     )?;
     let bytes = bytes.unwrap_or(0).max(0) as u64;
@@ -389,6 +396,10 @@ mod tests {
     }
 
     fn attach(db: &Db, mid: i64, name: &str) -> i64 {
+        attach_part(db, mid, name, false)
+    }
+
+    fn attach_part(db: &Db, mid: i64, name: &str, is_inline: bool) -> i64 {
         messages::add_attachment(
             db,
             mid,
@@ -396,8 +407,8 @@ mod tests {
                 filename: Some(name.into()),
                 mime_type: Some("application/octet-stream".into()),
                 size: 3,
-                content_id: None,
-                is_inline: false,
+                content_id: is_inline.then(|| format!("{name}@example.com")),
+                is_inline,
                 data: Some(b"abc".to_vec()),
             },
         )
@@ -530,6 +541,18 @@ mod tests {
         // Nothing cached: a second eviction is a no-op.
         let again = evict_cached_attachments(&db).unwrap();
         assert_eq!(again.files, 0);
+    }
+
+    #[test]
+    fn evict_keeps_inline_images() {
+        let (db, folder) = setup();
+        let mid = add_message(&db, folder, 1);
+        let file = attach(&db, mid, "a.pdf");
+        let image = attach_part(&db, mid, "logo.png", true);
+        let evicted = evict_cached_attachments(&db).unwrap();
+        assert_eq!(evicted.files, 1);
+        assert!(!messages::attachment_has_data(&db, file).unwrap());
+        assert!(messages::attachment_has_data(&db, image).unwrap());
     }
 
     #[test]

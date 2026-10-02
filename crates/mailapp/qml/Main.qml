@@ -293,10 +293,13 @@ ApplicationWindow {
     }
 
     // Bridge actions act on the selected folder: a search hit's row action
-    // selects the hit's folder first (the results stay on screen).
+    // selects the hit's folder first (the results stay on screen). That
+    // switch starts no folder sync: its job would leave the bridge busy, and
+    // the action that follows (a permanent delete is a job too) would be
+    // refused.
     function useSearchFolder(path) {
         if (path !== "" && root.currentFolder !== path)
-            root.selectFolder(path);
+            root.selectFolder(path, true);
     }
 
     // --- actions ----------------------------------------------------------
@@ -627,6 +630,19 @@ ApplicationWindow {
     }
 
     function bulkPurge(targets) {
+        if (root.isSearchTargets(targets)) {
+            // One job across folders: per-folder purge jobs would refuse
+            // each other while the first one keeps the bridge busy.
+            for (var i = 0; i < targets.length; i++) {
+                if (targets[i].folder === root.currentFolder)
+                    root.dropPreviewIfGone([targets[i].uid]);
+            }
+            root.statusText = qsTr("Deleting…");
+            var r = backend.purge_hits(JSON.stringify(targets));
+            if (r !== "")
+                root.statusText = r;
+            return;
+        }
         root.runGrouped(targets, function (uids) {
             root.dropPreviewIfGone(uids);
             root.statusText = qsTr("Deleting…");
@@ -648,16 +664,22 @@ ApplicationWindow {
         root.statusText = qsTr("Sorted by %1 (%2)").arg(label).arg(dir);
     }
 
-    function selectFolder(path) {
+    // `underSearch`: switched underneath the search results (see
+    // useSearchFolder) — the results, their checkboxes and the search stay
+    // as they are, and no server sync starts.
+    function selectFolder(path, underSearch) {
         var r = backend.select_folder(path);
         if (r === "") {
             markReadTimer.stop();
-            messageList.setSelectionMode(false);
+            if (underSearch !== true)
+                messageList.setSelectionMode(false);
             root.currentFolder = path;
             root.currentUid = -1;
             // Narrow layouts return to the list; wide ones show it already.
             root.narrowPane = "list";
             reloadMessages();
+            if (underSearch === true)
+                return;
             // A folder-scoped search follows the selection: fresh scope,
             // fresh server top-up for the newly shown folder.
             if (folderScopeCheck.checked)

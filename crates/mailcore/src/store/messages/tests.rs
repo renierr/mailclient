@@ -124,14 +124,14 @@ fn server_flag_refresh_skips_dirty_rows() {
 }
 
 #[test]
-fn count_and_min_uid_track_cache() {
+fn count_and_max_uid_track_cache() {
     let (db, acc, f) = setup();
     assert_eq!(count_by_folder(&db, f).unwrap(), 0);
-    assert_eq!(min_uid(&db, f).unwrap(), None);
+    assert_eq!(max_uid(&db, f).unwrap(), None);
     upsert(&db, &sample_new(acc, f, 5)).unwrap();
     upsert(&db, &sample_new(acc, f, 9)).unwrap();
     assert_eq!(count_by_folder(&db, f).unwrap(), 2);
-    assert_eq!(min_uid(&db, f).unwrap(), Some(5));
+    assert_eq!(max_uid(&db, f).unwrap(), Some(9));
 }
 
 #[test]
