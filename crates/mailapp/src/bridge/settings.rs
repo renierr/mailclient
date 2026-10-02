@@ -41,6 +41,14 @@ impl qobject::SettingsBridge {
         })
     }
 
+    pub fn choices_json(&self) -> QString {
+        qstring(&mailcore::store::settings::choices_json())
+    }
+
+    pub fn quiet_time_value(&self, text: &QString) -> QString {
+        qstring(&account_settings::normalize_time(&text.to_string()).unwrap_or_default())
+    }
+
     fn shared_db() -> Option<&'static mailcore::Db> {
         crate::bridge::shared_db()
             .map_err(|e| {

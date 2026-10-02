@@ -30,6 +30,8 @@ pub mod qobject {
         #[qproperty(i32, message_limit)]
         #[qproperty(i32, messages_total)]
         #[qproperty(i32, messages_server_total)]
+        #[qproperty(QString, messages_older)]
+        #[qproperty(bool, messages_can_load_older)]
         #[qproperty(QString, sort_field)]
         #[qproperty(bool, sort_descending)]
         #[qproperty(bool, busy)]
@@ -193,6 +195,35 @@ pub mod qobject {
         #[qinvokable]
         fn message_json(&self, uid: i32) -> QString;
 
+        /// The reader's paint for one HTML mail (`mailcore::html::reader::
+        /// paint_for`): `theme`, `original` or `darkened`.
+        #[qinvokable]
+        fn reader_paint(&self, colored: bool, dark: bool, keep_original: bool) -> QString;
+
+        /// The colours a reader page is written in, as JSON
+        /// (`{paper, ink, link, quote, rule}`), for `paint` and the theme's
+        /// colours (`theme_json`, the same keys as `#rrggbb`).
+        #[qinvokable]
+        fn reader_palette_json(&self, paint: &QString, theme_json: &QString) -> QString;
+
+        /// Pages narrower than this get a mail's fixed widths loosened; 0
+        /// when it has none. Once per mail, not per resize.
+        #[qinvokable]
+        fn reader_fit_below(&self, body: &QString) -> i32;
+
+        /// The reader's full HTML document around a sanitized body
+        /// (`mailcore::html::reader::document`). `options_json`: `paint`,
+        /// `theme` (see `reader_palette_json`), `allow_remote`, `top_space`,
+        /// `scale`, `fit`, `extra_css`.
+        #[qinvokable]
+        fn reader_document(&self, body: &QString, options_json: &QString) -> QString;
+
+        /// A clicked link split for the examine dialog, and whether it may be
+        /// opened at all, as JSON (`mailcore::html::link_info`: `safe`,
+        /// `scheme`, `host`, `path`).
+        #[qinvokable]
+        fn link_info_json(&self, url: &QString) -> QString;
+
         /// Attachment metadata for one message in the current folder as JSON
         /// (`[{id, filename, mime_type, size, content_id, is_inline}]`, no
         /// bytes). Mirrors the `attachments` array already in the feed; use
@@ -224,6 +255,23 @@ pub mod qobject {
         /// query is blank or has no usable terms.
         #[qinvokable]
         fn search_json(&self, query: &QString, folder: &QString) -> QString;
+
+        /// How the search field runs `query` as JSON (`mailcore::search::plan`:
+        /// `mode` off/filter/index, trimmed `query`, `hit_limit`, `debounce_ms`).
+        #[qinvokable]
+        fn search_plan_json(&self, query: &QString) -> QString;
+
+        /// The short-input filter over one list row
+        /// (`mailcore::search::filter_matches`).
+        #[qinvokable]
+        fn search_filter_matches(
+            &self,
+            query: &QString,
+            subject: &QString,
+            from: &QString,
+            from_name: &QString,
+            snippet: &QString,
+        ) -> bool;
 
         /// Server-side search backfill for thin local results: runs IMAP
         /// `TEXT` search per token across the account's folders — or just one
@@ -377,6 +425,29 @@ pub mod qobject {
         #[qinvokable]
         fn purge_hits(self: Pin<&mut Self>, hits_json: &QString) -> QString;
 
+        /// Mark search hits read or unread across folders (`hits_json` as in
+        /// `purge_hits`), via `mailcore::bulk`.
+        #[qinvokable]
+        fn mark_read_hits(self: Pin<&mut Self>, hits_json: &QString, read: bool) -> QString;
+
+        /// Star or unstar search hits across folders.
+        #[qinvokable]
+        fn set_star_hits(self: Pin<&mut Self>, hits_json: &QString, starred: bool) -> QString;
+
+        /// Delete search hits across folders: one Undo for every folder that
+        /// goes to Trash, one purge job for those that destroy (already
+        /// confirmed as permanent by QML).
+        #[qinvokable]
+        fn delete_hits(self: Pin<&mut Self>, hits_json: &QString) -> QString;
+
+        /// Archive search hits across folders, one Undo.
+        #[qinvokable]
+        fn archive_hits(self: Pin<&mut Self>, hits_json: &QString) -> QString;
+
+        /// Move search hits across folders to `path`, one Undo.
+        #[qinvokable]
+        fn move_hits(self: Pin<&mut Self>, hits_json: &QString, path: &QString) -> QString;
+
         /// Send a message from a JSON form
         /// (`{from,from_name?,to,cc?,bcc?,subject,body,body_html?,attachments?}`; `body`
         /// holds composer rich HTML source, `body_html` is an optional
@@ -403,6 +474,16 @@ pub mod qobject {
         /// Whether a file would be offered as an inline image (by type).
         #[qinvokable]
         fn is_inline_image(&self, path: &QString) -> bool;
+
+        /// An address split for the From field as JSON `{local, domain}`
+        /// (`domain` keeps its `@`), see `mailcore::compose::sender_parts`.
+        #[qinvokable]
+        fn sender_parts_json(&self, address: &QString) -> QString;
+
+        /// The address a From field sends as: `local` on the account's
+        /// domain, or the account address when blank.
+        #[qinvokable]
+        fn effective_from(&self, local: &QString, account_email: &QString) -> QString;
 
         /// Full Composer form for a draft in the current Drafts folder.
         /// Opening a draft explicitly downloads and materializes its files.
@@ -480,6 +561,16 @@ pub mod qobject {
         /// 0 = manually).
         #[qinvokable]
         fn sync_interval_for(&self, account_id: i64) -> i32;
+
+        /// Every preference's default and offered values as JSON
+        /// (`mailcore::store::settings::choices`); the form only labels them.
+        #[qinvokable]
+        fn choices_json(&self) -> QString;
+
+        /// A typed quiet-hours time in its stored form (`"7:05"` →
+        /// `"07:05"`), or `""` when it does not read as one.
+        #[qinvokable]
+        fn quiet_time_value(&self, text: &QString) -> QString;
     }
 
     impl cxx_qt::Threading for Bridge {}
@@ -539,6 +630,9 @@ pub struct BridgeRust {
     message_limit: i32,
     messages_total: i32,
     messages_server_total: i32,
+    /// The current folder's "Show older" state (`mailcore::feed::older_state`).
+    messages_older: QString,
+    messages_can_load_older: bool,
     sort_field: QString,
     sort_descending: bool,
     busy: bool,
@@ -566,6 +660,8 @@ impl Default for BridgeRust {
             message_limit: DEFAULT_MESSAGE_LIMIT,
             messages_total: 0,
             messages_server_total: -1,
+            messages_older: qstring(""),
+            messages_can_load_older: false,
             sort_field: qstring("date"),
             sort_descending: true,
             busy: false,
@@ -591,18 +687,21 @@ pub(crate) fn push_feeds(
     folder_id: i64,
 ) {
     let folders = feed::folders_json(db, account_id).unwrap_or_else(|_| "[]".to_string());
-    let (msgs, total, server_total) = if folder_id >= 0 {
-        let total = store::messages::count_by_folder(db, folder_id).unwrap_or(0) as i32;
-        let server_total = store::folders::get(db, folder_id)
+    let (msgs, total, server_total, older) = if folder_id >= 0 {
+        let cached = store::messages::count_by_folder(db, folder_id).unwrap_or(0);
+        let server = store::folders::get(db, folder_id)
             .ok()
-            .and_then(|folder| folder.server_total)
-            .map(|s| s.min(i32::MAX as u64) as i32)
-            .unwrap_or(-1);
-        let msgs = feed::messages_list_json_paged(db, folder_id, total as u64, 0)
+            .and_then(|folder| folder.server_total);
+        let msgs = feed::messages_list_json_paged(db, folder_id, cached, 0)
             .unwrap_or_else(|_| "[]".to_string());
-        (msgs, total, server_total)
+        (
+            msgs,
+            cached.min(i32::MAX as u64) as i32,
+            server.map_or(-1, |s| s.min(i32::MAX as u64) as i32),
+            Some(feed::older_state(cached, server)),
+        )
     } else {
-        ("[]".to_string(), 0, -1)
+        ("[]".to_string(), 0, -1, None)
     };
     let email = store::accounts::get(db, account_id)
         .map(|a| a.email_address)
@@ -614,6 +713,12 @@ pub(crate) fn push_feeds(
     bridge.as_mut().set_messages_json(qstring(&msgs));
     bridge.as_mut().set_messages_total(total);
     bridge.as_mut().set_messages_server_total(server_total);
+    bridge
+        .as_mut()
+        .set_messages_older(qstring(older.map_or("", feed::OlderState::as_str)));
+    bridge
+        .as_mut()
+        .set_messages_can_load_older(older.is_some_and(feed::OlderState::can_load));
     bridge.as_mut().set_current_account_id(account_id);
     bridge.as_mut().set_current_folder_id(folder_id);
     bridge.as_mut().set_current_account_email(qstring(&email));

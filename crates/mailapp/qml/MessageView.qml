@@ -61,11 +61,18 @@ Rectangle {
     property bool allowRemoteOnce: false
     // A designed mail (own colours) in a dark theme is darkened as a whole;
     // this per-message toggle shows it as sent. Mail without colours just
-    // takes the theme. Same rules as the Flutter reader (mail_paint.dart).
+    // takes the theme. Decided by mailcore (`html::reader::paint_for`).
     readonly property bool htmlColored: message !== undefined && message !== null && message.html_colored === true
     property bool originalColors: false
-    readonly property string paintMode: !root.htmlColored ? "theme" : (Theme.dark && !root.originalColors ? "darkened" :
-                                                                                                            "original")
+    readonly property string paintMode: root.backend ? root.backend.reader_paint(root.htmlColored, Theme.dark,
+                                                                                 root.originalColors) : "theme"
+    // The body as loaded: the one-shot remote copy, else the feed's.
+    readonly property string shownHtml: root.remoteHtml !== "" ? root.remoteHtml : root.htmlBody
+    // Fixed-width newsletters are loosened below this page width (0: the
+    // mail has none); shown as sent, they keep their design.
+    readonly property int fitBelow: root.isHtml && root.backend ? root.backend.reader_fit_below(root.shownHtml) : 0
+    readonly property bool fitLayout: !root.originalColors && root.fitBelow > 0 && bodyLoader.width > 0
+                                      && bodyLoader.width < root.fitBelow
     property bool isFullscreen: false
     signal fullscreenRequested
     // Narrower layouts give the reader the whole content area; the chevron
@@ -99,12 +106,11 @@ Rectangle {
     onLoadRemoteImagesChanged: root.reloadHtml()
     onAllowRemoteOnceChanged: root.reloadHtml()
     onPaintModeChanged: root.reloadHtml()
+    onFitLayoutChanged: root.reloadHtml()
 
     function reloadHtml() {
-        if (root.isHtml && bodyLoader.item) {
-            var body = root.remoteHtml !== "" ? root.remoteHtml : root.htmlBody;
-            bodyLoader.item.loadHtml(root.wrapDoc(body), "");
-        }
+        if (root.isHtml && bodyLoader.item)
+            bodyLoader.item.loadHtml(root.wrapDoc(root.shownHtml), "");
     }
 
     function showRemoteOnce() {
@@ -181,13 +187,17 @@ Rectangle {
     }
 
     // One place deciding what a clicked link does (left, middle and
-    // Ctrl+click all land here). The pure policy (scheme gate, action
-    // normalization) lives in the tested `LinkSafety` singleton; only the
-    // side effects stay here.
+    // Ctrl+click all land here). Whether a link may leave the app at all is
+    // mailcore's (`html::link_info`, the sanitizer's own rule); the setting
+    // arrives normalized. Only the side effects stay here.
+    function linkInfo(url) {
+        return root.backend ? FeedJson.parse(root.backend.link_info_json(url || ""), ({})) : ({});
+    }
+
     function handleLinkUrl(url) {
-        if (!LinkSafety.isWebScheme(url))
+        if (root.linkInfo(url).safe !== true)
             return;
-        if (LinkSafety.actionFor(root.linkClickAction) === "browser") {
+        if (root.linkClickAction === "browser") {
             Qt.openUrlExternally(url);
             root.statusMessage(qsTr("Opened in browser"));
         } else {
@@ -286,61 +296,43 @@ Rectangle {
         headersDialog.open();
     }
 
-    // `#rrggbb` of `invert(1) hue-rotate(180deg)` applied to `c`: the sheet
-    // colour that lands on `c` once a darkened body is inverted.
-    function invertedHex(c) {
-        function ch(v) {
-            var n = Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16);
-            return n.length < 2 ? "0" + n : n;
-        }
-        return "#" + ch(1 - (-0.574 * c.r + 1.430 * c.g + 0.144 * c.b)) + ch(1 - (0.426 * c.r + 0.430 * c.g + 0.144
-                                                                                  * c.b)) + ch(1 - (0.426 * c.r + 1.430
-                                                                                                    * c.g - 0.856
-                                                                                                    * c.b));
+    // The theme colours a reader page is built from (`#rrggbb`).
+    function themeColors() {
+        return {
+            "paper": Theme.bg.toString(),
+            "ink": Theme.text.toString(),
+            "link": Theme.accent.toString(),
+            "quote": Theme.textMuted.toString(),
+            "rule": Theme.border.toString()
+        };
     }
 
     // Behind the document, so nothing flashes a different colour first.
-    readonly property color docBackground: root.paintMode === "original" ? "#ffffff" : Theme.bg
+    readonly property color docBackground: {
+        var p = root.backend ? FeedJson.parse(root.backend.reader_palette_json(root.paintMode, JSON.stringify(
+                                                                                    root.themeColors())), ({})) : ({});
+        return p.paper || Theme.bg;
+    }
 
-    // Trusted wrapper added AFTER Rust sanitizing (so layout CSS is ours).
-    // Three paints (see `paintMode`): theme colours for mail without its
-    // own; the light sheet a designed mail expects; or that sheet inverted
-    // to the dark theme, with images inverted back to their real colours.
+    // The document around the sanitized body is mailcore's
+    // (`html::reader::document`: CSP, base CSS, dark rewrite, width fitting),
+    // the same one the Flutter reader shows. Only the scrollbar styling and
+    // the header spacer's height are Qt's.
     function wrapDoc(inner) {
-        // Same policy as the Flutter reader: no network load at all unless
-        // the user allowed remote images; `cid:` parts arrive as `data:`.
-        var csp = "default-src 'none'; img-src data:" + (root.effectiveAutoLoad() ? " https: http:" : "")
-                + "; style-src 'unsafe-inline'; font-src 'none'; media-src 'none'; frame-src 'none'; "
-                + "form-action 'none'; base-uri 'none'";
-        var themed = root.paintMode === "theme";
-        var paper = themed ? Theme.bg : (root.paintMode === "darkened" ? root.invertedHex(Theme.bg) : "#ffffff");
-        var ink = themed ? Theme.text : "#202124";
-        var link = themed ? Theme.accent : "#1a5fd0";
-        var quote = themed ? Theme.textMuted : "#5f6368";
-        var rule = themed ? Theme.border : "#d0d4da";
-        var sheet = "background:" + paper + ";color:" + ink + ";font-family:sans-serif;font-size:" + Math.round(14
-                                                                                                                * Theme.uiScale)
-                + "px;line-height:1.5;overflow-wrap:break-word";
-        var invert = "invert(1) hue-rotate(180deg)";
-        var layout = root.paintMode === "darkened" ? "html,body{background:" + Theme.bg + ";margin:0}#mail{" + sheet
-                                                     + ";padding:16px;min-height:100vh;box-sizing:border-box;filter:"
-                                                     + invert + "}#mail img{filter:" + invert + "}" :
-                                                     "html,body{background:" + paper + "}body{margin:0 16px 16px;"
-                                                     + sheet + "}#mc-top{margin-bottom:16px}";
-        // Room for the header block, which overlays the top of the page and
-        // scrolls with it (see `syncSpacer`).
-        var spacer = "<div id=\"mc-top\" style=\"height:" + Math.ceil(headerBlock.height) + "px\"></div>";
-        var content = spacer + (root.paintMode === "darkened" ? "<div id=\"mail\">" + inner + "</div>" : inner);
-        return "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
-                + "<meta http-equiv=\"Content-Security-Policy\" content=\"" + csp + "\">"
-                + "<meta http-equiv=\"x-dns-prefetch-control\" content=\"off\">" + "<style>" + layout + "a{color:"
-                + link + "}" + "img{max-width:100%!important;height:auto!important}pre{white-space:pre-wrap}"
-                + "blockquote{margin:8px 0;padding-left:12px;border-left:3px solid " + rule + ";color:" + quote + "}" +
-                // Newsletter tables carry fixed widths: author CSS beats
-                // presentational attributes, so they shrink to the pane
-                // instead of scrolling sideways.
-                "table{max-width:100%!important}td,th{overflow-wrap:anywhere}" + Theme.webScrollbarCss() + "</style>"
-                + "</head><body>" + content + "</body></html>";
+        if (!root.backend)
+            return "";
+        return root.backend.reader_document(inner, JSON.stringify({
+                                                                      "paint": root.paintMode,
+                                                                      "theme": root.themeColors(),
+                                                                      // Room for the header block, which overlays the
+                                                                      // top of the page and scrolls with it (see
+                                                                      // `syncSpacer`).
+                                                                      "top_space": Math.ceil(headerBlock.height),
+                                                                      "allow_remote": root.effectiveAutoLoad(),
+                                                                      "scale": Theme.uiScale,
+                                                                      "fit": root.fitLayout,
+                                                                      "extra_css": Theme.webScrollbarCss()
+                                                                  }));
     }
 
     // Typed handle on the loaded HTML body (the Loader's `item` is a plain
@@ -985,6 +977,7 @@ Rectangle {
         width: Math.min(parent ? parent.width - 80 : 480, 480)
         padding: Theme.lg
         property string url: ""
+        readonly property var info: root.linkInfo(examineLinkDialog.url)
 
         background: Rectangle {
             color: Theme.bg
@@ -1049,7 +1042,7 @@ Rectangle {
             }
             Label {
                 Layout.fillWidth: true
-                text: LinkSafety.schemeOf(examineLinkDialog.url)
+                text: examineLinkDialog.info.scheme || "—"
                 color: Theme.text
                 font.pixelSize: Theme.fontSmall
                 textFormat: Text.PlainText
@@ -1061,7 +1054,7 @@ Rectangle {
             }
             Label {
                 Layout.fillWidth: true
-                text: LinkSafety.hostOf(examineLinkDialog.url)
+                text: examineLinkDialog.info.host || "—"
                 color: Theme.text
                 font.pixelSize: Theme.fontSmall
                 textFormat: Text.PlainText
@@ -1073,7 +1066,7 @@ Rectangle {
             }
             Label {
                 Layout.fillWidth: true
-                text: LinkSafety.pathOf(examineLinkDialog.url)
+                text: examineLinkDialog.info.path || "—"
                 color: Theme.text
                 font.pixelSize: Theme.fontSmall
                 wrapMode: Text.WrapAnywhere

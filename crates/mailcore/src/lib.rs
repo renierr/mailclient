@@ -4,6 +4,7 @@
 //! and talks to this crate.
 
 pub mod badge;
+pub mod bulk;
 pub mod compose;
 pub mod db;
 pub mod error;

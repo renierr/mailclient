@@ -53,11 +53,20 @@ class MailState extends ChangeNotifier {
   /// know whether *its* job worked, which the shared status line cannot say.
   final Map<String, List<Completer<JobEvent>>> _finishWaiters = {};
 
-  AppSettings _settings = AppSettings.defaults;
+  AppSettings _settings = AppSettings.placeholder;
   int _autoSyncMinutes = 0;
 
   // --- search ------------------------------------------------------------
   String _searchQuery = '';
+
+  /// How [_searchQuery] runs, decided by the core (`search::plan`).
+  SearchPlan _searchPlan = _noSearch;
+  static const _noSearch = SearchPlan(
+    mode: SearchMode.off,
+    query: '',
+    hitLimit: 0,
+    debounceMs: 0,
+  );
   bool _searchFolderOnly = false;
   List<SearchHit> _searchHits = const [];
   Timer? _searchBackfillTimer;
@@ -82,18 +91,14 @@ class MailState extends ChangeNotifier {
       (!_filterStarred || starred) &&
       (!_filterAttachments || hasAttachments);
 
-  /// Whether a folder row is on screen: the quick filters, plus Qt's
-  /// instant substring filter for 1–2 letter input (3+ letters search the
-  /// index instead). The list pane and every selection entry use this, so
-  /// a bulk action never reaches a row the user cannot see.
+  /// Whether a folder row is on screen: the quick filters, plus the core's
+  /// instant filter for short input (`search::filter_matches`; longer input
+  /// searches the index instead). The list pane and every selection entry
+  /// use this, so a bulk action never reaches a row the user cannot see.
   bool isMessageShown(MessageSummary m) {
     if (!_passesQuick(m.unread, m.starred, m.hasAttachments)) return false;
-    final q = _searchQuery.trim().toLowerCase();
-    if (q.isEmpty) return true;
-    return m.subject.toLowerCase().contains(q) ||
-        m.from.toLowerCase().contains(q) ||
-        m.senderName.toLowerCase().contains(q) ||
-        m.snippet.toLowerCase().contains(q);
+    if (_searchPlan.query.isEmpty) return true;
+    return _core.searchFilterMatches(_searchPlan.query, m);
   }
 
   /// Whether a search hit is on screen (the quick filters).
@@ -142,7 +147,6 @@ class MailState extends ChangeNotifier {
 
   /// Undo offers collected while one bulk action runs folder by folder,
   /// merged into a single offer when it is done. Null outside such a run.
-  List<({String batch, String label})>? _collectedUndo;
 
   /// The reader takes the whole window, like the Qt fullscreen view. Only
   /// the wide layout uses it — narrower ones already give the reader every
@@ -158,6 +162,8 @@ class MailState extends ChangeNotifier {
   // --- list paging and counts --------------------------------------------
   int _cachedCount = 0;
   int _serverTotal = -1;
+  OlderState? _olderState;
+  bool _canLoadOlder = false;
 
   Timer? _markReadTimer;
   Timer? _autoSyncTimer;
@@ -210,7 +216,7 @@ class MailState extends ChangeNotifier {
   String get searchQuery => _searchQuery;
   bool get searchFolderOnly => _searchFolderOnly;
   List<SearchHit> get searchHits => _searchHits;
-  bool get searching => _searchQuery.length >= 3;
+  bool get searching => _searchPlan.mode == SearchMode.indexed;
 
   // --- multi-select ------------------------------------------------------
 
@@ -251,6 +257,11 @@ class MailState extends ChangeNotifier {
   int get cachedCount => _cachedCount;
   int get serverTotal => _serverTotal;
 
+  /// The shown folder's "Show older" state, decided by the core
+  /// (`feed::older_state`); null without a folder.
+  OlderState? get olderState => _olderState;
+  bool get canLoadOlder => _canLoadOlder;
+
   /// Whether the folder is the account's Drafts: tapping a row edits the
   /// draft instead of previewing it.
   bool get isDraftsFolder => folder?.role == FolderRole.drafts;
@@ -261,12 +272,11 @@ class MailState extends ChangeNotifier {
 
   /// [deleteIsPermanent] for any folder of this account, e.g. a search
   /// hit's.
-  bool deleteIsPermanentIn(int folderId) {
-    final f = _folders.where((o) => o.id == folderId).firstOrNull;
-    if (f == null) return true;
-    if (f.role == FolderRole.junk || f.role == FolderRole.trash) return true;
-    return !_folders.any((o) => o.role == FolderRole.trash);
-  }
+  /// The folder feed says (`undo::delete_is_permanent`); an unknown folder
+  /// asks as if it did.
+  bool deleteIsPermanentIn(int folderId) =>
+      _folders.where((o) => o.id == folderId).firstOrNull?.deleteIsPermanent ??
+      true;
 
   bool get hasTrashFolder => _folders.any((f) => f.role == FolderRole.trash);
 
@@ -457,11 +467,7 @@ class MailState extends ChangeNotifier {
   /// Take back a queued action (Undo on the snackbar, Ctrl+Z).
   Future<void> undo(String batch) async {
     try {
-      var said = '';
-      for (final part in batch.split(_batchSeparator)) {
-        said = await _core.undoMove(part);
-      }
-      showStatus(said);
+      showStatus(await _core.undoMove(batch));
       if (_undoOffer?.batch == batch) _undoOffer = null;
       await _reloadMessages();
       await _reloadFolders();
@@ -508,64 +514,70 @@ class MailState extends ChangeNotifier {
 
   // --- bulk actions on the checkbox set ------------------------------------
   //
-  // Folder mode acts on the shown folder in one call; search mode once per
-  // folder the selected hits live in.
+  // Folder mode acts on the shown folder in one call; search mode hands the
+  // hits to the core in one call too, which groups them by folder and
+  // answers with one Undo and one purge job (`mailcore::bulk`).
 
   Future<void> bulkMarkRead(bool read) => _forSelection(
     (fid, uids) => markReadMany(uids, read, folderId: fid),
+    (hits) => _flagHits(() => _core.markReadHits(_accountId, hits, read)),
     keepSelection: true,
   );
 
   Future<void> bulkStar(bool starred) => _forSelection(
     (fid, uids) => setStarMany(uids, starred, folderId: fid),
+    (hits) => _flagHits(() => _core.setStarHits(_accountId, hits, starred)),
     keepSelection: true,
   );
 
-  Future<void> bulkArchive() =>
-      _forSelection((fid, uids) => archiveMessages(uids, folderId: fid));
+  Future<void> bulkArchive() => _forSelection(
+    (fid, uids) => archiveMessages(uids, folderId: fid),
+    (hits) => _queueUndoable(
+      () => _core.archiveHits(_accountId, hits),
+      _selectedHitsHere,
+    ),
+  );
 
-  Future<void> bulkMove(String destPath) =>
-      _forSelection((fid, uids) => moveMessages(uids, destPath, folderId: fid));
+  Future<void> bulkMove(String destPath) => _forSelection(
+    (fid, uids) => moveMessages(uids, destPath, folderId: fid),
+    (hits) => _queueUndoable(
+      () => _core.moveHits(_accountId, hits, destPath),
+      _selectedHitsHere,
+    ),
+  );
 
-  Future<void> bulkDelete() =>
-      _forSelection((fid, uids) => deleteMessages(uids, folderId: fid));
+  Future<void> bulkDelete() => _forSelection(
+    (fid, uids) => deleteMessages(uids, folderId: fid),
+    (hits) => _queueUndoable(
+      () => _core.deleteHits(_accountId, hits),
+      _selectedHitsHere,
+    ),
+  );
 
-  Future<void> bulkPurge() =>
-      _forSelection((fid, uids) => purgeMessages(uids, folderId: fid));
+  Future<void> bulkPurge() => _forSelection(
+    (fid, uids) => purgeMessages(uids, folderId: fid),
+    (hits) => _queue(
+      'Purge',
+      () => _core.purgeHits(_accountId, hits),
+      closeUid: _selectedHitsHere,
+    ),
+  );
 
   Future<void> _forSelection(
-    Future<void> Function(int folderId, List<int> uids) action, {
+    Future<void> Function(int folderId, List<int> uids) inFolder,
+    Future<void> Function(List<Hit> hits) acrossFolders, {
     bool keepSelection = false,
   }) async {
     if (!searching) {
       if (_selectedUids.isEmpty) return;
-      return action(_folderId, _selectedUids.toList(growable: false));
+      return inFolder(_folderId, _selectedUids.toList(growable: false));
     }
-    final groups = <String, List<int>>{};
-    for (final k in _selectedHits) {
-      (groups[k.folder] ??= []).add(k.uid);
-    }
-    if (groups.isEmpty) return;
-    _collectedUndo = [];
+    if (_selectedHits.isEmpty) return;
     try {
-      for (final g in groups.entries) {
-        final fid =
-            _folderIdByPath(g.key) ??
-            await _core.folderIdForPath(_accountId, g.key);
-        await action(fid, g.value);
-      }
+      await acrossFolders([
+        for (final k in _selectedHits) Hit(folder: k.folder, uid: k.uid),
+      ]);
     } finally {
-      final offers = _collectedUndo!;
-      _collectedUndo = null;
-      if (offers.isNotEmpty) {
-        final label = offers.map((o) => o.label).join(' · ');
-        _undoOffer = (
-          batch: offers.map((o) => o.batch).join(_batchSeparator),
-          label: label,
-          seq: ++_undoSeq,
-        );
-        showStatus(label);
-      }
       if (!keepSelection) {
         _selectedHits.clear();
         _selectionMode = false;
@@ -574,9 +586,26 @@ class MailState extends ChangeNotifier {
     }
   }
 
-  /// Joins the batches of one bulk action that ran per folder (uuids, so
-  /// the separator cannot clash).
-  static const _batchSeparator = ',';
+  /// Selected hits that live in the shown folder: the only ones that can be
+  /// the open message.
+  List<int> get _selectedHitsHere => [
+    for (final k in _selectedHits)
+      if (_folderIdByPath(k.folder) == _folderId) k.uid,
+  ];
+
+  /// A local flag write over hits, then the lists that show those flags.
+  Future<void> _flagHits(Future<int> Function() write) async {
+    try {
+      await write();
+    } catch (e) {
+      showStatus(coreErrorText(e), isError: true);
+      return;
+    }
+    await _reloadMessages();
+    await _refreshHits();
+    notifyListeners();
+    unawaited(_reloadFolders());
+  }
 
   int? _folderIdByPath(String path) =>
       _folders.where((f) => f.path == path).firstOrNull?.id;
@@ -631,6 +660,7 @@ class MailState extends ChangeNotifier {
   Future<void> runSearch(String query, {bool? folderOnly}) async {
     final wasSearching = searching;
     _searchQuery = query;
+    _searchPlan = query.isEmpty ? _noSearch : _core.searchPlan(query);
     // A checkbox set belongs to the list it was made in.
     if (wasSearching != searching) _dropSelection();
     if (folderOnly != null) _searchFolderOnly = folderOnly;
@@ -642,14 +672,15 @@ class MailState extends ChangeNotifier {
       return;
     }
     final scope = _searchFolderOnly ? (folder?.path ?? '') : '';
-    _searchHits = await _core.search(_accountId, query, folder: scope);
+    final plan = _searchPlan;
+    _searchHits = await _core.search(_accountId, plan.query, folder: scope);
     notifyListeners();
-    if (_searchHits.length < 50 && !_serverSearchPending) {
-      _searchBackfillTimer = Timer(const Duration(milliseconds: 800), () {
+    if (_searchHits.length < plan.hitLimit && !_serverSearchPending) {
+      _searchBackfillTimer = Timer(Duration(milliseconds: plan.debounceMs), () {
         _serverSearchPending = true;
         unawaited(
           _core
-              .searchServer(_accountId, _searchQuery, folder: scope)
+              .searchServer(_accountId, plan.query, folder: scope)
               .catchError(_ignoreBusy),
         );
       });
@@ -661,6 +692,7 @@ class MailState extends ChangeNotifier {
     _searchBackfillTimer?.cancel();
     if (searching) _dropSelection();
     _searchQuery = '';
+    _searchPlan = _noSearch;
     _searchHits = const [];
     _serverSearchPending = false;
     notifyListeners();
@@ -1014,7 +1046,11 @@ class MailState extends ChangeNotifier {
 
   Future<void> _rerunSearch() async {
     final scope = _searchFolderOnly ? (folder?.path ?? '') : '';
-    _searchHits = await _core.search(_accountId, _searchQuery, folder: scope);
+    _searchHits = await _core.search(
+      _accountId,
+      _searchPlan.query,
+      folder: scope,
+    );
     // Hits that left the results (moved, deleted) leave the selection too.
     if (_selectedHits.isNotEmpty) {
       _selectedHits.retainAll(_shownHits.map((h) => h.key));
@@ -1172,6 +1208,8 @@ class MailState extends ChangeNotifier {
       _messages = const [];
       _cachedCount = 0;
       _serverTotal = -1;
+      _olderState = null;
+      _canLoadOlder = false;
     } else {
       // Every cached row, like Qt: mail fetched with "Show older" stays on
       // the list when the folder is opened again.
@@ -1180,8 +1218,12 @@ class MailState extends ChangeNotifier {
         final counts = await _core.folderCounts(_folderId);
         cached = counts.cached.toInt();
         _serverTotal = counts.server.toInt();
+        _olderState = counts.older;
+        _canLoadOlder = counts.canLoadOlder;
       } catch (_) {
         _serverTotal = -1;
+        _olderState = null;
+        _canLoadOlder = false;
       }
       _messages = await _core.messages(_folderId, limit: cached ?? 200);
       _cachedCount = cached ?? _messages.length;
@@ -1279,17 +1321,12 @@ class MailState extends ChangeNotifier {
       }
       if (r.batch.isNotEmpty) {
         if (shown.contains(_openUid)) closeMessage();
-        final collect = _collectedUndo;
-        if (collect != null) {
-          collect.add((batch: r.batch, label: r.label));
-        } else {
-          _undoOffer = (batch: r.batch, label: r.label, seq: ++_undoSeq);
-        }
+        _undoOffer = (batch: r.batch, label: r.label, seq: ++_undoSeq);
         await _reloadMessages();
         await _reloadFolders();
         await _refreshHits();
       }
-      if (_collectedUndo == null || r.batch.isEmpty) showStatus(r.label);
+      showStatus(r.label);
     } catch (e) {
       showStatus(coreErrorText(e), isError: true);
       await _closeIfOpenGone(shown);

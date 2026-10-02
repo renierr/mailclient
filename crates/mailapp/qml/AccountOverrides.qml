@@ -9,19 +9,17 @@ import QtQuick
 //
 // No UI here, so it stays headless-testable (`tst_AccountOverrides.qml`).
 QtObject {
-    // Interval choices after the leading "Default" entry, in minutes.
-    readonly property var intervalSteps: [0, 5, 10, 15, 30, 60]
-
-    // Choice index of an interval override: 0 = default, then the steps.
-    function intervalIndex(value) {
+    // Choice index of an interval override: 0 = default, then `steps`, the
+    // minutes the core offers (`settings::choices`).
+    function intervalIndex(value, steps) {
         if (value === undefined || value === null || value === "")
             return 0;
-        var idx = intervalSteps.indexOf(parseInt(value, 10));
+        var idx = steps.indexOf(parseInt(value, 10));
         return idx >= 0 ? idx + 1 : 0;
     }
 
-    function intervalValue(index) {
-        return index <= 0 || index > intervalSteps.length ? "" : String(intervalSteps[index - 1]);
+    function intervalValue(index, steps) {
+        return index <= 0 || index > steps.length ? "" : String(steps[index - 1]);
     }
 
     // Yes/no override: 0 = default, 1 = on, 2 = off.
@@ -50,25 +48,6 @@ QtObject {
                 out[k] = now;
         }
         return out;
-    }
-
-    // A quiet-hours time as stored ("HH:MM"), from "7:05" or "07:05"; ""
-    // for anything else. Mirrors `account_settings::parse_time`.
-    function timeValue(text) {
-        var m = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(text || "");
-        if (!m)
-            return "";
-        var h = parseInt(m[1], 10);
-        var min = parseInt(m[2], 10);
-        if (h > 23 || min > 59)
-            return "";
-        return (h < 10 ? "0" : "") + h + ":" + m[2];
-    }
-
-    // The time to show for a stored value, or `fallback` when unset.
-    function timeText(value, fallback) {
-        var t = timeValue(value);
-        return t !== "" ? t : fallback;
     }
 
     function isEmpty(obj) {

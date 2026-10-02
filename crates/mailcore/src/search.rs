@@ -129,6 +129,77 @@ fn fts_term(t: &SearchTerm) -> String {
     format!("{columns}\"{}\"{prefix}", t.text.replace('"', "\"\""))
 }
 
+/// How the search field runs what is typed into it. Both frontends follow
+/// this, so the same text searches the same way everywhere.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct SearchPlan {
+    pub mode: SearchMode,
+    /// The query as searched: trimmed.
+    pub query: String,
+    /// Most hits the index returns for one query ([`HIT_LIMIT`]); fewer
+    /// local hits than this ask the server too.
+    pub hit_limit: u64,
+    /// How long typing must pause before a thin result asks the server.
+    pub debounce_ms: u64,
+}
+
+/// What the search field does with its text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchMode {
+    /// Nothing typed: the folder as it is.
+    Off,
+    /// One or two letters: an instant filter over the shown folder
+    /// ([`filter_matches`]); too short to be worth the index.
+    Filter,
+    /// Three letters and more: the FTS index, topped up from the server
+    /// when the index runs thin (fewer than [`HIT_LIMIT`] hits).
+    Index,
+}
+
+/// Fewest characters that search the index instead of filtering.
+pub const INDEX_MIN_CHARS: usize = 3;
+/// Most hits one index query returns. Fewer than this and the index ran
+/// thin: the server is asked too.
+pub const HIT_LIMIT: u64 = 50;
+/// Typing pause before a server search, in milliseconds.
+pub const SERVER_DEBOUNCE_MS: u64 = 800;
+
+/// The plan for `raw` as typed.
+#[must_use]
+pub fn plan(raw: &str) -> SearchPlan {
+    let query = raw.trim();
+    let mode = match query.chars().count() {
+        0 => SearchMode::Off,
+        n if n < INDEX_MIN_CHARS => SearchMode::Filter,
+        _ => SearchMode::Index,
+    };
+    SearchPlan {
+        mode,
+        query: query.to_string(),
+        hit_limit: HIT_LIMIT,
+        debounce_ms: SERVER_DEBOUNCE_MS,
+    }
+}
+
+/// The short-input filter: `query` (trimmed, any case) appears in the
+/// subject, the sender address or name, or the preview. An empty query
+/// matches everything.
+#[must_use]
+pub fn filter_matches(
+    query: &str,
+    subject: &str,
+    from: &str,
+    from_name: &str,
+    snippet: &str,
+) -> bool {
+    let q = query.trim().to_lowercase();
+    q.is_empty()
+        || [subject, from, from_name, snippet]
+            .iter()
+            .any(|field| field.to_lowercase().contains(&q))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,6 +233,30 @@ mod tests {
             parse_query("-from:spam@example.com"),
             vec![term(From, "spam@example.com", false, true)]
         );
+    }
+
+    #[test]
+    fn short_input_filters_and_longer_input_searches() {
+        assert_eq!(plan("  ").mode, SearchMode::Off);
+        assert_eq!(plan(" ab ").mode, SearchMode::Filter);
+        assert_eq!(plan(" ab ").query, "ab");
+        assert_eq!(plan("abc").mode, SearchMode::Index);
+        assert_eq!(plan("äöü").mode, SearchMode::Index, "letters, not bytes");
+        assert_eq!(
+            plan("ab ").mode,
+            SearchMode::Filter,
+            "trailing space is not a letter"
+        );
+    }
+
+    #[test]
+    fn the_filter_looks_at_subject_sender_and_preview() {
+        let m = |q| filter_matches(q, "Invoice", "anna@example.com", "Anna", "see attached");
+        assert!(m(""));
+        assert!(m(" IN "));
+        assert!(m("an"));
+        assert!(m("ttach"));
+        assert!(!m("zz"));
     }
 
     #[test]

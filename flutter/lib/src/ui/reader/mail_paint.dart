@@ -1,17 +1,11 @@
 import 'package:flutter/material.dart';
 
-/// How a reader paints one HTML body.
-enum MailPaint {
-  /// The mail sets no colours: app theme colours, like a plain-text mail.
-  theme,
+import '../../ffi/mail_core.dart';
 
-  /// The sender's colours on the light sheet they were designed for.
-  original,
-
-  /// The designed mail, inverted to match a dark theme. Images are inverted
-  /// back, so photos and logos keep their real colours.
-  darkened,
-}
+/// How a reader paints one HTML body: the theme's colours, the sender's, or
+/// the sender's rewritten for a dark theme. Decided by the core
+/// (`mailcore::html::reader`), the same rules as the Qt reader.
+typedef MailPaint = ReaderPaint;
 
 /// Pick the paint for one mail. [colored] is the core's `html_colored`;
 /// [keepOriginal] is the reader's per-message toggle.
@@ -19,13 +13,9 @@ MailPaint mailPaintFor({
   required bool colored,
   required bool dark,
   required bool keepOriginal,
-}) {
-  if (!colored) return MailPaint.theme;
-  return dark && !keepOriginal ? MailPaint.darkened : MailPaint.original;
-}
+}) => MailCore.instance.readerPaint(colored, dark, keepOriginal);
 
-/// Colours a document is written with. For [MailPaint.darkened] these are
-/// the *pre-inversion* values: the whole body goes through [darkInvert].
+/// Colours a page is written in, as the core picks them for a paint.
 class MailPalette {
   const MailPalette({
     required this.paper,
@@ -41,61 +31,33 @@ class MailPalette {
   final Color quote;
   final Color rule;
 
-  /// The light sheet designed mail expects.
-  static const light = MailPalette(
-    paper: Color(0xFFFFFFFF),
-    ink: Color(0xFF202124),
-    link: Color(0xFF1A5FD0),
-    quote: Color(0xFF5F6368),
-    rule: Color(0xFFD0D4DA),
-  );
+  /// The theme colours the core builds a page from: background, text,
+  /// accent, muted text, border.
+  static ReaderPalette themeOf(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ReaderPalette(
+      paper: _rgb(scheme.surface),
+      ink: _rgb(scheme.onSurface),
+      link: _rgb(scheme.primary),
+      quote: _rgb(scheme.onSurfaceVariant),
+      rule: _rgb(scheme.outlineVariant),
+    );
+  }
 
   factory MailPalette.of(BuildContext context, MailPaint paint) {
-    final scheme = Theme.of(context).colorScheme;
-    return switch (paint) {
-      MailPaint.theme => MailPalette(
-        paper: scheme.surface,
-        ink: scheme.onSurface,
-        link: scheme.primary,
-        quote: scheme.onSurfaceVariant,
-        rule: scheme.outlineVariant,
-      ),
-      MailPaint.original => light,
-      // Inverted, the sheet lands exactly on the theme's surface.
-      MailPaint.darkened => MailPalette(
-        paper: invertColor(scheme.surface),
-        ink: light.ink,
-        link: light.link,
-        quote: light.quote,
-        rule: light.rule,
-      ),
-    };
+    final p = MailCore.instance.readerPalette(paint, themeOf(context));
+    return MailPalette(
+      paper: _color(p.paper),
+      ink: _color(p.ink),
+      link: _color(p.link),
+      quote: _color(p.quote),
+      rule: _color(p.rule),
+    );
   }
-}
 
-/// `invert(1) hue-rotate(180deg)` as one colour matrix: lightness flips,
-/// hues stay (red text stays red). Applying it twice gives the original
-/// back, which is how images are restored inside an inverted body.
-const darkInvert = ColorFilter.matrix(<double>[
-  0.574, -1.430, -0.144, 0, 255, //
-  -0.426, -0.430, -0.144, 0, 255, //
-  -0.426, -1.430, 0.856, 0, 255, //
-  0, 0, 0, 1, 0, //
-]);
+  static int _rgb(Color c) => c.toARGB32() & 0xFFFFFF;
 
-/// The same as CSS, for the WebView and Qt documents.
-const darkInvertCss = 'invert(1) hue-rotate(180deg)';
-
-/// [darkInvert] applied to one colour.
-Color invertColor(Color c) {
-  double ch(double v) => v.clamp(0.0, 1.0);
-  final r = c.r, g = c.g, b = c.b;
-  return Color.from(
-    alpha: c.a,
-    red: ch(1 - (-0.574 * r + 1.430 * g + 0.144 * b)),
-    green: ch(1 - (0.426 * r + 0.430 * g + 0.144 * b)),
-    blue: ch(1 - (0.426 * r + 1.430 * g - 0.856 * b)),
-  );
+  static Color _color(int rgb) => Color(0xFF000000 | rgb);
 }
 
 /// `#rrggbb` for CSS.

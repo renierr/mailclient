@@ -9,26 +9,16 @@ TestCase {
     name: "AccountOverrides"
 
     function test_interval_round_trips_through_the_choice_index() {
-        compare(AccountOverrides.intervalIndex(""), 0);
-        compare(AccountOverrides.intervalIndex(undefined), 0);
-        compare(AccountOverrides.intervalIndex("0"), 1);
-        compare(AccountOverrides.intervalIndex("30"), 5);
-        compare(AccountOverrides.intervalIndex("7"), 0, "an unknown step shows the default");
-        compare(AccountOverrides.intervalValue(0), "");
-        compare(AccountOverrides.intervalValue(1), "0");
-        compare(AccountOverrides.intervalValue(6), "60");
-        compare(AccountOverrides.intervalValue(9), "");
-    }
-
-    function test_quiet_times_normalize_like_the_core() {
-        compare(AccountOverrides.timeValue("7:05"), "07:05");
-        compare(AccountOverrides.timeValue(" 23:59 "), "23:59");
-        var bad = ["", "7", "24:00", "07:60", "07:5", "a:00", "007:00"];
-        for (var i = 0; i < bad.length; i++)
-            compare(AccountOverrides.timeValue(bad[i]), "", bad[i]);
-        compare(AccountOverrides.timeValue(undefined), "");
-        compare(AccountOverrides.timeText("", "07:00"), "07:00");
-        compare(AccountOverrides.timeText("6:30", "07:00"), "06:30");
+        var steps = [0, 5, 10, 15, 30, 60];
+        compare(AccountOverrides.intervalIndex("", steps), 0);
+        compare(AccountOverrides.intervalIndex(undefined, steps), 0);
+        compare(AccountOverrides.intervalIndex("0", steps), 1);
+        compare(AccountOverrides.intervalIndex("30", steps), 5);
+        compare(AccountOverrides.intervalIndex("7", steps), 0, "an unknown step shows the default");
+        compare(AccountOverrides.intervalValue(0, steps), "");
+        compare(AccountOverrides.intervalValue(1, steps), "0");
+        compare(AccountOverrides.intervalValue(6, steps), "60");
+        compare(AccountOverrides.intervalValue(9, steps), "");
     }
 
     function test_flags_round_trip_through_the_choice_index() {

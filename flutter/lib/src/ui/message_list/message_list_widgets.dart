@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../ffi/mail_core.dart';
 import '../../models/models.dart';
 import '../../models/settings.dart';
 import '../../state/mail_state.dart';
@@ -819,17 +820,15 @@ class SearchFolderHeader extends StatelessWidget {
   }
 }
 
-/// Account-wide hits grouped by folder: folders in the order of their newest
-/// hit, newest first inside each. Strings are the folder headers.
-List<Object> groupHitsByFolder(List<SearchHit> hits) {
-  final groups = <String, List<SearchHit>>{};
-  for (final h in hits) {
-    (groups[h.folder] ??= []).add(h);
-  }
-  return [
-    for (final g in groups.entries) ...[g.key, ...g.value],
-  ];
-}
+/// Hits with a folder header (a string) wherever the folder changes. The
+/// core sends them grouped (`feed::search_json`: folders in the order of
+/// their newest hit, newest first inside each).
+List<Object> groupHitsByFolder(List<SearchHit> hits) => [
+  for (final (i, h) in hits.indexed) ...[
+    if (i == 0 || hits[i - 1].folder != h.folder) h.folder,
+    h,
+  ],
+];
 
 class LoadOlderTile extends StatelessWidget {
   const LoadOlderTile({super.key});
@@ -838,23 +837,25 @@ class LoadOlderTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final cached = context.select<MailState, int>((s) => s.cachedCount);
     final server = context.select<MailState, int>((s) => s.serverTotal);
+    final older = context.select<MailState, OlderState?>((s) => s.olderState);
     final syncing = context.select<MailState, bool>((s) => s.isSyncing);
-    final canAsk = context.select<MailState, bool>((s) => s.folderId >= 0);
+    final canLoad = context.select<MailState, bool>(
+      (s) => s.folderId >= 0 && s.canLoadOlder,
+    );
     // Filters only narrow the loaded rows (Qt says the same).
     final filtered = context.select<MailState, bool>(
       (s) => s.hasListFilter || s.searchQuery.trim().isNotEmpty,
     );
-    final count = server < 0
-        ? 'Cached $cached (server not checked)'
-        : cached >= server
-        ? null
-        : 'Cached $cached of $server';
+    final count = switch (older) {
+      OlderState.unchecked => 'Cached $cached (server not checked)',
+      OlderState.partial => 'Cached $cached of $server',
+      _ => null,
+    };
     final label = count == null
         ? 'All $cached loaded'
         : filtered
         ? '$count · filters cover loaded mail only'
         : count;
-    final canLoad = canAsk && (server < 0 || server > cached);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Column(

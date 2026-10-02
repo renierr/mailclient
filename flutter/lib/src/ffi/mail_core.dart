@@ -36,12 +36,21 @@ import 'generated/frb_generated.dart';
 import 'generated/api/events.dart' show JobEvent;
 import 'generated/api/folders.dart' show FolderCounts;
 import 'generated/api/init.dart' show AppInfo;
+import 'generated/api/messages.dart' show LinkInfo;
+import 'generated/api/reader.dart' as rust_reader;
+import 'generated/api/reader.dart'
+    show ReaderPaint, ReaderPalette, ReaderDocumentOptions;
+import 'generated/api/search.dart' show SearchPlan;
 
 export 'generated/api/accounts.dart' show Selection;
 export 'generated/api/events.dart' show JobEvent, JobPhase;
-export 'generated/api/folders.dart' show FolderCounts;
+export 'generated/api/folders.dart' show FolderCounts, OlderState;
 export 'generated/api/init.dart' show AppInfo;
-export 'generated/api/mutate.dart' show MoveResult;
+export 'generated/api/messages.dart' show LinkInfo;
+export 'generated/api/mutate.dart' show Hit, MoveResult;
+export 'generated/api/reader.dart'
+    show ReaderPaint, ReaderPalette, ReaderDocumentOptions;
+export 'generated/api/search.dart' show SearchMode, SearchPlan;
 
 /// Status-line text for an error from the core: the message alone, without
 /// the Rust backtrace flutter_rust_bridge appends to an `anyhow` error.
@@ -276,6 +285,54 @@ class MailCore {
     starred: starred,
   )).toInt();
 
+  // --- search hits across folders (`mailcore::bulk`) -----------------------
+
+  Future<int> markReadHits(
+    int accountId,
+    List<rust_mutate.Hit> hits,
+    bool read,
+  ) async => (await rust_messages.markReadHits(
+    accountId: accountId,
+    hits: hits,
+    read: read,
+  )).toInt();
+
+  Future<int> setStarHits(
+    int accountId,
+    List<rust_mutate.Hit> hits,
+    bool starred,
+  ) async => (await rust_messages.setStarHits(
+    accountId: accountId,
+    hits: hits,
+    starred: starred,
+  )).toInt();
+
+  /// One Undo for every folder that goes to Trash; the destroying shares
+  /// start one purge job (`purging`).
+  Future<rust_mutate.MoveResult> deleteHits(
+    int accountId,
+    List<rust_mutate.Hit> hits,
+  ) => rust_mutate.deleteHits(accountId: accountId, hits: hits);
+
+  Future<rust_mutate.MoveResult> archiveHits(
+    int accountId,
+    List<rust_mutate.Hit> hits,
+  ) => rust_mutate.archiveHits(accountId: accountId, hits: hits);
+
+  Future<rust_mutate.MoveResult> moveHits(
+    int accountId,
+    List<rust_mutate.Hit> hits,
+    String destPath,
+  ) => rust_mutate.moveHits(
+    accountId: accountId,
+    hits: hits,
+    destPath: destPath,
+  );
+
+  /// Destroy hits across folders in one job.
+  Future<void> purgeHits(int accountId, List<rust_mutate.Hit> hits) =>
+      rust_mutate.purgeHits(accountId: accountId, hits: hits);
+
   // --- moving and deleting (undoable, or queued when destroying) ---------------------------------------
 
   Future<rust_mutate.MoveResult> deleteMessages(
@@ -356,21 +413,64 @@ class MailCore {
 
   // --- search --------------------------------------------------------------
 
-  /// Local FTS only, newest first. Cheap enough to run on every keystroke.
+  /// Local FTS only, newest first, at most [SearchPlan.hitLimit] hits.
+  /// Cheap enough to run on every keystroke.
   Future<List<SearchHit>> search(
     int accountId,
     String query, {
     String folder = '',
-    int limit = 100,
   }) async => _decodeList(
     await rust_search.searchJson(
       accountId: accountId,
       query: query,
       folder: folder,
-      limit: limit,
     ),
     SearchHit.fromJson,
   );
+
+  // --- reader document (`mailcore::html::reader`) -------------------------
+
+  /// The paint for one HTML mail.
+  ReaderPaint readerPaint(bool colored, bool dark, bool keepOriginal) =>
+      rust_reader.readerPaint(
+        colored: colored,
+        dark: dark,
+        keepOriginal: keepOriginal,
+      );
+
+  /// The colours a page is written in, for [paint] and the theme's colours.
+  ReaderPalette readerPalette(ReaderPaint paint, ReaderPalette theme) =>
+      rust_reader.readerPalette(paint: paint, theme: theme);
+
+  /// Pages narrower than this loosen the mail's fixed widths; 0 when it
+  /// has none. Once per mail.
+  int readerFitBelow(String body) => rust_reader.readerFitBelow(body: body);
+
+  /// The body as [paint] shows it, for the desktop widget renderer.
+  String readerBody(String body, ReaderPaint paint, {bool fit = false}) =>
+      rust_reader.readerBody(body: body, paint: paint, fit: fit);
+
+  /// The full document for a web view: CSP, base CSS, spacer, body.
+  String readerDocument(String body, ReaderDocumentOptions options) =>
+      rust_reader.readerDocument(body: body, options: options);
+
+  /// A link split for the examine dialog, and whether it may be opened at
+  /// all (`mailcore::html::link_info`).
+  LinkInfo linkInfo(String url) => rust_messages.linkInfo(url: url);
+
+  /// How the search field runs `query` (`mailcore::search::plan`).
+  SearchPlan searchPlan(String query) => rust_search.searchPlan(query: query);
+
+  /// The short-input filter over one list row
+  /// (`mailcore::search::filter_matches`).
+  bool searchFilterMatches(String query, MessageSummary m) =>
+      rust_search.searchFilterMatches(
+        query: query,
+        subject: m.subject,
+        from: m.from,
+        fromName: m.fromName,
+        snippet: m.snippet,
+      );
 
   /// Top up thin local results from the server. Queued; re-run [search] when
   /// the `"Search"` job finishes.
@@ -407,6 +507,18 @@ class MailCore {
 
   /// Whether a file would be offered as an inline image (by type).
   bool isInlineImage(String path) => rust_composer.isInlineImage(path: path);
+
+  /// An address split for the From field: the editable local part and the
+  /// locked domain with its `@` (`compose::sender_parts`).
+  ({String local, String domain}) senderParts(String address) {
+    final p = rust_composer.senderParts(address: address);
+    return (local: p.local, domain: p.domain);
+  }
+
+  /// The address a From field sends as: `local` on the account's domain, or
+  /// the account address when blank (`compose::effective_from`).
+  String effectiveFrom(String local, String accountEmail) =>
+      rust_composer.effectiveFrom(local: local, accountEmail: accountEmail);
 
   /// Reply (`reply`, `reply_all`) or `forward` draft for one message.
   Future<AnswerDraft> answerDraft(int folderId, int uid, String mode) async =>
@@ -514,6 +626,23 @@ class MailCore {
   Future<AppSettings> settings() async => AppSettings.fromJson(
     await _decodeMap(await rust_settings.settingsJson()),
   );
+
+  /// Every preference's default and offered values
+  /// (`mailcore::store::settings::choices`). Fixed for the app's lifetime.
+  late final SettingChoices settingChoices = SettingChoices.fromJson(
+    jsonDecode(rust_settings.settingChoicesJson()) as Map<String, dynamic>,
+  );
+
+  /// A quiet-hours time as hour and minute, read the way the core reads it;
+  /// null when it does not read as one.
+  ({int hour, int minute})? quietTime(String text) {
+    final t = rust_settings.quietTime(text: text);
+    return t == null ? null : (hour: t.hour, minute: t.minute);
+  }
+
+  /// The stored form (`HH:MM`) of a picked time.
+  String quietTimeAt(int hour, int minute) =>
+      rust_settings.quietTimeAt(hour: hour, minute: minute) ?? '';
 
   Future<void> setSetting(String key, String value) =>
       rust_settings.setSetting(key: key, value: value);

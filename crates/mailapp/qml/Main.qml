@@ -151,6 +151,9 @@ ApplicationWindow {
     // Query the last backfill ran for: the same text is never searched
     // twice, so a finished job cannot re-arm another one (the loop).
     property string lastServerQuery: ""
+    // How the search field runs its text, decided by mailcore
+    // (`search::plan`: mode, trimmed query, hit limit, debounce).
+    property var searchPlan: ({})
 
     // --- feed plumbing ----------------------------------------------------
 
@@ -240,8 +243,8 @@ ApplicationWindow {
     // server-search debounce — a job-finish refresh must not, or the
     // finished job would retrigger itself forever.
     function updateSearch(fromTyping) {
-        var q = searchField.text.trim();
-        if (q.length >= 3) {
+        root.searchPlan = FeedJson.parse(backend.search_plan_json(searchField.text), ({}));
+        if (root.searchPlan.mode === "index") {
             // Starting a search shows the hits: where the list shares its
             // place with the folders or the reader, bring it forward.
             if (!root.searching && !root.wideLayout) {
@@ -250,7 +253,7 @@ ApplicationWindow {
                 root.narrowPane = "list";
             }
             root.searching = true;
-            root.searchRows = FeedJson.parse(backend.search_json(q, root.searchScope()), []);
+            root.searchRows = FeedJson.parse(backend.search_json(root.searchPlan.query, root.searchScope()), []);
             // Thin local hits get topped up from the server once typing
             // settles (debounced below); the job refresh re-runs this.
             if (fromTyping)
@@ -278,8 +281,8 @@ ApplicationWindow {
     function kickServerSearch() {
         if (!root.searching || root.serverSearching)
             return;
-        var q = searchField.text.trim();
-        if (q.length < 3 || q === root.lastServerQuery || root.searchRows.length >= 50)
+        var q = root.searchPlan.query;
+        if (root.searchPlan.mode !== "index" || q === root.lastServerQuery || root.searchRows.length >= root.searchPlan.hit_limit)
             return;
         var r = backend.search_server(q, root.searchScope());
         if (r === "") {
@@ -402,20 +405,16 @@ ApplicationWindow {
     // Trash) and Trash itself (deleting there is permanent). The bridge
     // reports which it did because "moved" and "destroyed" differ.
     // Goes through the delete-confirm gate first (setting `confirm_delete`).
-    // Whether delete destroys mirrors the backend `trash_message` rules:
-    // source folder Junk or Trash, or no Trash folder at all.
+    // Whether delete destroys is the folder feed's `delete_is_permanent`
+    // (`mailcore::undo::delete_is_permanent`); an unknown folder asks as if
+    // it did.
     function deleteIsPermanent(path) {
         var folder = path !== undefined ? path : root.currentFolder;
-        var role = "";
-        var hasTrash = false;
         for (var i = 0; i < folderModel.count; i++) {
-            var r = folderModel.get(i).role;
-            if (r === "trash")
-                hasTrash = true;
             if (folderModel.get(i).name === folder)
-                role = r;
+                return folderModel.get(i).delete_is_permanent !== false;
         }
-        return role === "junk" || role === "trash" || !hasTrash;
+        return true;
     }
 
     // A bulk delete destroys when any target's folder would (search
@@ -523,93 +522,70 @@ ApplicationWindow {
     // --- bulk selection actions (Roundcube-style, one backend call) --------
 
     // Bulk targets are plain UIDs from a folder list, or {folder, uid} from
-    // search results. Bridge calls act on the selected folder, so search
-    // targets run once per folder with that folder selected; the Undo
-    // offers of those runs merge into one toast.
-    property var collectedUndo: null
-
+    // search results. Search targets go to the bridge's `*_hits` calls in one
+    // piece: mailcore groups them by folder and answers with one Undo and
+    // one purge job (`mailcore::bulk`), so no folder is switched underneath.
     function isSearchTargets(targets) {
         return targets.length > 0 && typeof targets[0] === "object";
     }
 
-    function runGrouped(targets, fn) {
-        if (!targets || targets.length === 0)
+    // The reader's message is among `targets` (search targets count only in
+    // the folder it is open in).
+    function dropPreviewIfGone(targets) {
+        if (root.currentUid < 0)
             return;
-        if (!root.isSearchTargets(targets)) {
-            fn(targets);
-            return;
-        }
-        var order = [];
-        var groups = {};
         for (var i = 0; i < targets.length; i++) {
             var t = targets[i];
-            if (groups[t.folder] === undefined) {
-                groups[t.folder] = [];
-                order.push(t.folder);
+            var hit = typeof t === "object" ? (t.folder === root.currentFolder && t.uid === root.currentUid) : t
+                                              === root.currentUid;
+            if (hit) {
+                root.currentUid = -1;
+                return;
             }
-            groups[t.folder].push(t.uid);
         }
-        root.collectedUndo = [];
-        for (var j = 0; j < order.length; j++) {
-            root.useSearchFolder(order[j]);
-            if (root.currentFolder === order[j])
-                fn(groups[order[j]]);
-        }
-        var offers = root.collectedUndo;
-        root.collectedUndo = null;
-        if (offers.length > 0) {
-            var batches = [];
-            var labels = [];
-            for (var k = 0; k < offers.length; k++) {
-                batches.push(offers[k].batch);
-                labels.push(offers[k].label);
-            }
-            undoToast.show(batches.join(","), labels.join(" · "));
-            root.statusText = labels.join(" · ");
-        }
-        root.updateSearch(false);
     }
 
-    function dropPreviewIfGone(uids) {
-        if (root.currentUid >= 0 && uids.indexOf(root.currentUid) !== -1)
-            root.currentUid = -1;
+    // One bridge call for the whole selection: `hits` for search targets,
+    // `many` for UIDs of the shown folder. Search results re-read after.
+    function runBulk(targets, many, hits) {
+        if (!targets || targets.length === 0)
+            return "";
+        var json = JSON.stringify(targets);
+        var r = root.isSearchTargets(targets) ? hits(json) : many(json);
+        if (root.searching)
+            root.updateSearch(false);
+        return r;
     }
 
     function bulkMarkRead(targets, read) {
-        root.runGrouped(targets, function (uids) {
-            var r = backend.mark_read_many(JSON.stringify(uids), read);
-            reloadFolders();
-            reloadMessages();
-            root.statusText = r;
-        });
+        var r = root.runBulk(targets, json => backend.mark_read_many(json, read), json => backend.mark_read_hits(json,
+                                                                                                                 read));
+        reloadFolders();
+        reloadMessages();
+        root.statusText = r;
     }
 
     function bulkStar(targets, starred) {
-        root.runGrouped(targets, function (uids) {
-            var r = backend.set_star_many(JSON.stringify(uids), starred);
-            reloadMessages();
-            root.statusText = r;
-        });
+        var r = root.runBulk(targets, json => backend.set_star_many(json, starred), json => backend.set_star_hits(json,
+                                                                                                                  starred));
+        reloadMessages();
+        root.statusText = r;
     }
 
     function bulkArchive(targets) {
-        root.runGrouped(targets, function (uids) {
-            root.dropPreviewIfGone(uids);
-            root.statusText = qsTr("Archiving…");
-            var r = backend.archive_many(JSON.stringify(uids));
-            if (r !== "")
-                root.statusText = r;
-        });
+        root.dropPreviewIfGone(targets);
+        root.statusText = qsTr("Archiving…");
+        var r = root.runBulk(targets, json => backend.archive_many(json), json => backend.archive_hits(json));
+        if (r !== "")
+            root.statusText = r;
     }
 
     function bulkMoveTo(targets, path) {
-        root.runGrouped(targets, function (uids) {
-            root.dropPreviewIfGone(uids);
-            root.statusText = qsTr("Moving…");
-            var r = backend.move_many(JSON.stringify(uids), path);
-            if (r !== "")
-                root.statusText = r;
-        });
+        root.dropPreviewIfGone(targets);
+        root.statusText = qsTr("Moving…");
+        var r = root.runBulk(targets, json => backend.move_many(json, path), json => backend.move_hits(json, path));
+        if (r !== "")
+            root.statusText = r;
     }
 
     function bulkDelete(targets) {
@@ -627,36 +603,19 @@ ApplicationWindow {
     }
 
     function doBulkDelete(targets) {
-        root.runGrouped(targets, function (uids) {
-            root.dropPreviewIfGone(uids);
-            root.statusText = qsTr("Deleting…");
-            var r = backend.delete_many(JSON.stringify(uids));
-            if (r !== "")
-                root.statusText = r;
-        });
+        root.dropPreviewIfGone(targets);
+        root.statusText = qsTr("Deleting…");
+        var r = root.runBulk(targets, json => backend.delete_many(json), json => backend.delete_hits(json));
+        if (r !== "")
+            root.statusText = r;
     }
 
     function bulkPurge(targets) {
-        if (root.isSearchTargets(targets)) {
-            // One job across folders: per-folder purge jobs would refuse
-            // each other while the first one keeps the bridge busy.
-            for (var i = 0; i < targets.length; i++) {
-                if (targets[i].folder === root.currentFolder)
-                    root.dropPreviewIfGone([targets[i].uid]);
-            }
-            root.statusText = qsTr("Deleting…");
-            var r = backend.purge_hits(JSON.stringify(targets));
-            if (r !== "")
-                root.statusText = r;
-            return;
-        }
-        root.runGrouped(targets, function (uids) {
-            root.dropPreviewIfGone(uids);
-            root.statusText = qsTr("Deleting…");
-            var r = backend.purge_many(JSON.stringify(uids));
-            if (r !== "")
-                root.statusText = r;
-        });
+        root.dropPreviewIfGone(targets);
+        root.statusText = qsTr("Deleting…");
+        var r = root.runBulk(targets, json => backend.purge_many(json), json => backend.purge_hits(json));
+        if (r !== "")
+            root.statusText = r;
     }
 
     function changeSort(field, descending) {
@@ -812,14 +771,6 @@ ApplicationWindow {
         function onUndo_available(batch, label) {
             reloadFolders();
             reloadMessages();
-            if (root.collectedUndo !== null) {
-                // Part of a per-folder bulk run: shown once it is done.
-                root.collectedUndo.push({
-                                            batch: batch,
-                                            label: label
-                                        });
-                return;
-            }
             if (root.searching)
                 root.updateSearch(false);
             undoToast.show(batch, label);
@@ -919,7 +870,7 @@ ApplicationWindow {
     // does not buy a full multi-folder IMAP round.
     Timer {
         id: serverSearchTimer
-        interval: 800
+        interval: root.searchPlan.debounce_ms || 0
         repeat: false
         onTriggered: root.kickServerSearch()
     }
@@ -1301,8 +1252,11 @@ ApplicationWindow {
             currentUid: root.currentUid
             folderName: root.currentFolder
             filterText: searchField.text
+            backend: backend
             totalCount: backend.messages_total
             serverTotal: backend.messages_server_total
+            olderState: backend.messages_older
+            olderCanLoad: backend.messages_can_load_older
             limit: backend.message_limit
             busy: root.busy
             sortField: backend.sort_field

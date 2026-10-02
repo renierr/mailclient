@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../../ffi/mail_core.dart';
 import '../../models/models.dart';
 import '../../models/settings.dart';
 import '../../state/mail_state.dart';
@@ -123,9 +124,15 @@ class MessageListPaneState extends State<MessageListPane> {
                             : 'Nothing here',
                       ),
                     ),
-                    // Nothing loaded matches, but older mail may: keep the
-                    // way to it, as Qt does.
-                    if (messages.isNotEmpty) const LoadOlderTile(),
+                    // Nothing shown, but older mail may exist: keep the way
+                    // to it, as Qt does. Not for a folder the server agrees
+                    // is empty.
+                    if (context.select<MailState, bool>(
+                      (s) =>
+                          s.olderState != null &&
+                          s.olderState != OlderState.empty,
+                    ))
+                      const LoadOlderTile(),
                   ],
                 )
               : ScrollJumpOverlay(

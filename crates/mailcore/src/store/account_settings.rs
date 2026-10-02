@@ -19,7 +19,7 @@ use crate::db::Db;
 use crate::error::{Result, StoreError};
 use crate::store::{now, settings};
 
-pub use quiet_hours::{format_time, parse_time, QuietHours};
+pub use quiet_hours::{format_time, normalize_time, parse_time, time_at, time_parts, QuietHours};
 
 /// Keep this account connected in IMAP IDLE for push mail (`1`/`0`). It has
 /// no app-wide key of its own: the default is whether the app-wide

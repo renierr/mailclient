@@ -131,16 +131,16 @@ Dialog {
     // The domain is fixed to the account: only the local part is editable,
     // since sending as another domain breaks SPF and domain-aligned
     // DKIM/DMARC authentication.
-    readonly property string accountDomain: {
-        var at = root.accountEmail.indexOf("@");
-        return at < 0 ? "" : root.accountEmail.substring(at);
+    // The split and the join are mailcore's (`compose::sender_parts` /
+    // `effective_from`), so the address shown is the address sent.
+    readonly property var accountParts: root.senderParts(root.accountEmail)
+    readonly property string accountDomain: root.accountParts.domain || ""
+    readonly property string accountLocalPart: root.accountParts.local || ""
+    readonly property string effectiveFrom: root.backend ? root.backend.effective_from(fromLocal.text, root.accountEmail) : root.accountEmail
+
+    function senderParts(address) {
+        return root.backend ? FeedJson.parse(root.backend.sender_parts_json(address), ({})) : ({});
     }
-    readonly property string accountLocalPart: {
-        var at = root.accountEmail.indexOf("@");
-        return at < 0 ? root.accountEmail : root.accountEmail.substring(0, at);
-    }
-    readonly property string effectiveFrom: fromLocal.text.trim() === "" ? root.accountEmail : fromLocal.text.trim()
-                                                                           + root.accountDomain
 
     background: Rectangle {
         color: Theme.bg
@@ -293,9 +293,7 @@ Dialog {
         root.sourceMode = false;
         root.resetHeaders();
         root.draftUid = draft.draft_uid === undefined ? -1 : draft.draft_uid;
-        var from = draft.from || root.accountEmail;
-        var at = from.indexOf("@");
-        fromLocal.text = at < 0 ? from : from.substring(0, at);
+        fromLocal.text = root.senderParts(draft.from || root.accountEmail).local || "";
         toField.text = draft.to || "";
         ccField.text = draft.cc || "";
         bccField.text = draft.bcc || "";
@@ -502,6 +500,11 @@ Dialog {
                             rightPadding: 0
                             background: null
                             horizontalAlignment: TextInput.AlignRight
+                            // The domain is the account's: an `@` typed here
+                            // would show an address that is not the one sent.
+                            validator: RegularExpressionValidator {
+                                regularExpression: /[^@]*/
+                            }
                             onTextChanged: root.dirty = true
                         }
                         Label {

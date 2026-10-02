@@ -11,6 +11,7 @@
 //! commands underneath (`UID MOVE`, `UID STORE`+`UID EXPUNGE`) are set-shaped
 //! anyway, so a hundred selected mails cost one round trip, not a hundred.
 
+use mailcore::bulk;
 use mailcore::store::folders;
 use mailcore::undo::{self, MoveTarget, Queued};
 
@@ -48,24 +49,95 @@ pub fn delete_messages(
 /// an explicit "delete permanently".
 pub fn purge_messages(account_id: i64, folder_id: i64, uids: Vec<u32>) -> anyhow::Result<()> {
     require_selection(&uids)?;
-    spawn(
-        "Purge",
+    purge_groups(
+        account_id,
         format!("purge:{folder_id}"),
-        move |db, _progress| async move {
-            let acc = resolve_account(db, account_id)?;
-            owned_folder(db, &acc, folder_id)?;
-            let mut imap = checkout_session(&acc).await?;
-            let n = imap
-                .purge_uids(db, folder_id, &uids)
-                .await
-                .map_err(|e| e.to_string())?;
-            imap.checkin();
-            Ok((
-                format!("Deleted {n} permanently"),
-                Some(JobRefresh::folder(acc.id, folder_id)),
-            ))
-        },
+        vec![(folder_id, uids)],
+        Some(folder_id),
     )
+}
+
+/// One search hit: the folder it lives in and its UID there.
+pub struct Hit {
+    pub folder: String,
+    pub uid: u32,
+}
+
+/// Search hits of one account grouped by folder (`mailcore::bulk`).
+pub(crate) fn groups(
+    db: &mailcore::Db,
+    account_id: i64,
+    hits: Vec<Hit>,
+) -> anyhow::Result<bulk::Groups> {
+    if hits.is_empty() {
+        anyhow::bail!("no messages selected");
+    }
+    let hits: Vec<(String, u32)> = hits.into_iter().map(|h| (h.folder, h.uid)).collect();
+    bulk::resolve_hits(db, account_id, &hits).map_err(anyhow::Error::msg)
+}
+
+/// Delete search hits across folders: one Undo for what goes to Trash, one
+/// purge job for the shares that destroy (the UI confirmed those first).
+pub fn delete_hits(account_id: i64, hits: Vec<Hit>) -> anyhow::Result<MoveResult> {
+    queue_hits(account_id, hits, MoveTarget::Trash)
+}
+
+/// Archive search hits across folders, one Undo.
+pub fn archive_hits(account_id: i64, hits: Vec<Hit>) -> anyhow::Result<MoveResult> {
+    queue_hits(account_id, hits, MoveTarget::Archive)
+}
+
+/// Move search hits across folders to `dest_path`, one Undo.
+pub fn move_hits(account_id: i64, hits: Vec<Hit>, dest_path: String) -> anyhow::Result<MoveResult> {
+    queue_hits(account_id, hits, MoveTarget::Folder(dest_path))
+}
+
+/// Destroy search hits across folders in one job, over one session.
+pub fn purge_hits(account_id: i64, hits: Vec<Hit>) -> anyhow::Result<()> {
+    let groups = groups(shared_db()?, account_id, hits)?;
+    purge_groups(account_id, format!("purge-hits:{account_id}"), groups, None)
+}
+
+fn queue_hits(account_id: i64, hits: Vec<Hit>, target: MoveTarget) -> anyhow::Result<MoveResult> {
+    let db = shared_db()?;
+    let groups = groups(db, account_id, hits)?;
+    let moved = bulk::queue_move(db, account_id, &groups, target).map_err(anyhow::Error::msg)?;
+    if moved.batch.is_some() {
+        spawn_push_after_grace(account_id);
+    }
+    let purging = !moved.permanent.is_empty();
+    if purging {
+        purge_groups(
+            account_id,
+            format!("purge-hits:{account_id}"),
+            moved.permanent,
+            None,
+        )?;
+    }
+    Ok(MoveResult {
+        batch: moved.batch.unwrap_or_default(),
+        label: moved.label,
+        purging,
+    })
+}
+
+/// The `Purge` job over `groups` (`mailcore::bulk::purge`). `folder` is the
+/// one to refresh, or the whole account when the groups span folders.
+fn purge_groups(
+    account_id: i64,
+    key: String,
+    groups: bulk::Groups,
+    folder: Option<i64>,
+) -> anyhow::Result<()> {
+    spawn("Purge", key, move |db, _progress| async move {
+        let acc = resolve_account(db, account_id)?;
+        let purged = bulk::purge(db, &acc, &groups).await?;
+        let refresh = match folder {
+            Some(f) => JobRefresh::folder(acc.id, f),
+            None => JobRefresh::account(acc.id),
+        };
+        Ok((purged.status(), Some(refresh)))
+    })
 }
 
 /// Move a selection to the Archive folder, undoable. The folder is created
@@ -175,19 +247,4 @@ fn require_selection(uids: &[u32]) -> anyhow::Result<()> {
         anyhow::bail!("no messages selected");
     }
     Ok(())
-}
-
-/// A folder id is worthless without the account it belongs to: ids are
-/// per-database, and a UI that switched accounts mid-action would otherwise
-/// delete mail out of the wrong mailbox.
-fn owned_folder(
-    db: &mailcore::Db,
-    account: &mailcore::models::Account,
-    folder_id: i64,
-) -> Result<mailcore::models::Folder, String> {
-    let folder = folders::get(db, folder_id).map_err(|e| e.to_string())?;
-    if folder.account_id != account.id {
-        return Err("folder does not belong to this account".to_string());
-    }
-    Ok(folder)
 }

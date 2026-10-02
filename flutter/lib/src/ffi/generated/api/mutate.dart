@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `owned_folder`, `queue`, `require_selection`
+// These functions are ignored because they are not marked as `pub`: `groups`, `purge_groups`, `queue_hits`, `queue`, `require_selection`
 
 /// Delete a selection — which means Trash, undoable, except where it cannot.
 ///
@@ -35,6 +35,45 @@ Future<void> purgeMessages({
   accountId: accountId,
   folderId: folderId,
   uids: uids,
+);
+
+/// Delete search hits across folders: one Undo for what goes to Trash, one
+/// purge job for the shares that destroy (the UI confirmed those first).
+Future<MoveResult> deleteHits({
+  required PlatformInt64 accountId,
+  required List<Hit> hits,
+}) => MailCoreApi.instance.api.crateApiMutateDeleteHits(
+  accountId: accountId,
+  hits: hits,
+);
+
+/// Archive search hits across folders, one Undo.
+Future<MoveResult> archiveHits({
+  required PlatformInt64 accountId,
+  required List<Hit> hits,
+}) => MailCoreApi.instance.api.crateApiMutateArchiveHits(
+  accountId: accountId,
+  hits: hits,
+);
+
+/// Move search hits across folders to `dest_path`, one Undo.
+Future<MoveResult> moveHits({
+  required PlatformInt64 accountId,
+  required List<Hit> hits,
+  required String destPath,
+}) => MailCoreApi.instance.api.crateApiMutateMoveHits(
+  accountId: accountId,
+  hits: hits,
+  destPath: destPath,
+);
+
+/// Destroy search hits across folders in one job, over one session.
+Future<void> purgeHits({
+  required PlatformInt64 accountId,
+  required List<Hit> hits,
+}) => MailCoreApi.instance.api.crateApiMutatePurgeHits(
+  accountId: accountId,
+  hits: hits,
 );
 
 /// Move a selection to the Archive folder, undoable. The folder is created
@@ -82,6 +121,25 @@ Future<void> createFolder({
   accountId: accountId,
   path: path,
 );
+
+/// One search hit: the folder it lives in and its UID there.
+class Hit {
+  final String folder;
+  final int uid;
+
+  const Hit({required this.folder, required this.uid});
+
+  @override
+  int get hashCode => folder.hashCode ^ uid.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Hit &&
+          runtimeType == other.runtimeType &&
+          folder == other.folder &&
+          uid == other.uid;
+}
 
 /// Result of an undoable action.
 ///

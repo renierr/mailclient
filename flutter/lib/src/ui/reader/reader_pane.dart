@@ -98,11 +98,13 @@ class ReaderPaneState extends State<ReaderPane> {
 
     final theme = Theme.of(context);
     final dark = theme.brightness == Brightness.dark;
-    final paint = mailPaintFor(
-      colored: message.htmlColored,
-      dark: dark,
-      keepOriginal: _originalColors,
-    );
+    final paint = message.isHtml
+        ? mailPaintFor(
+            colored: message.htmlColored,
+            dark: dark,
+            keepOriginal: _originalColors,
+          )
+        : MailPaint.theme;
     final canToggleColors = message.isHtml && message.htmlColored && dark;
     // Header, image notice and attachments scroll away with the body: on a
     // phone the mail gets the whole pane as soon as the reader scrolls.
@@ -237,10 +239,9 @@ class ReaderPaneState extends State<ReaderPane> {
   }
 
   Future<void> _handleLinkUrl(BuildContext context, String url) async {
-    if (!LinkSafety.isWebScheme(url)) return;
-    final action = LinkSafety.actionFor(
-      context.read<MailState>().settings.linkClickAction,
-    );
+    if (!MailCore.instance.linkInfo(url).safe) return;
+    // The setting arrives normalized by the core.
+    final action = context.read<MailState>().settings.linkClickAction;
     if (action == 'browser') {
       await LinkSafety.openUrl(url);
       if (context.mounted) {

@@ -69,9 +69,6 @@ fn main() {
             // One contract for parsing bridge payloads, so a malformed one
             // cannot abandon a reload half-way (see qml/FeedJson.qml).
             .qml_file(QmlFile::from("qml/FeedJson.qml").singleton(true))
-            // Pure link-safety helpers, shared by the reader and its
-            // headless tests (see qml/LinkSafety.qml).
-            .qml_file(QmlFile::from("qml/LinkSafety.qml").singleton(true))
             // Pure per-account settings form helpers, shared by Settings and
             // its headless tests (see qml/AccountOverrides.qml).
             .qml_file(QmlFile::from("qml/AccountOverrides.qml").singleton(true))

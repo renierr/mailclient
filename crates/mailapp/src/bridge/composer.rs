@@ -86,6 +86,18 @@ impl qobject::Bridge {
         compose::is_inline_image_file(&path.to_string())
     }
 
+    pub fn sender_parts_json(&self, address: &QString) -> QString {
+        let parts = compose::sender_parts(&address.to_string());
+        qstring(&serde_json::to_string(&parts).unwrap_or_default())
+    }
+
+    pub fn effective_from(&self, local: &QString, account_email: &QString) -> QString {
+        qstring(&compose::effective_from(
+            &local.to_string(),
+            &account_email.to_string(),
+        ))
+    }
+
     pub fn draft_form(self: Pin<&mut Self>, uid: i32) -> QString {
         let folder_id = *self.current_folder_id();
         spawn_job(self, "Open draft", move |db, _progress| async move {

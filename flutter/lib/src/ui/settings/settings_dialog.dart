@@ -17,6 +17,7 @@ import 'background_check_status.dart';
 import 'maintenance_section.dart';
 import 'quiet_hours_times.dart';
 import 'setting_choice.dart';
+import 'setting_labels.dart';
 
 /// All preferences, Roundcube-style: sections on the left, the form on the
 /// right. Everything edits a local copy; Save writes it through, Cancel
@@ -53,6 +54,9 @@ enum _Section {
 class _SettingsDialogState extends State<SettingsDialog> {
   _Section _section = _Section.interface;
   late AppSettings _draft;
+
+  /// What each choice offers, from the core; this form only labels it.
+  final SettingChoices _choices = MailCore.instance.settingChoices;
   late final TextEditingController _signature;
   bool _saving = false;
   String? _error;
@@ -178,18 +182,16 @@ class _SettingsDialogState extends State<SettingsDialog> {
   Widget _interface() => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      _choice<double>(
+      _offered<double>(
         'Interface scale',
+        SettingKeys.uiScale,
         _draft.uiScale,
-        const [1.0, 1.1, 1.25, 1.5],
-        (v) => '${(v * 100).round()}%',
         (v) => setState(() => _draft = _draft.copyWith(uiScale: v)),
       ),
-      _choice<String>(
+      _offered<String>(
         'Mail text size',
+        SettingKeys.readerFontSize,
         _draft.readerFontSize,
-        const ['small', 'normal', 'large'],
-        (v) => v[0].toUpperCase() + v.substring(1),
         (v) => setState(() => _draft = _draft.copyWith(readerFontSize: v)),
       ),
     ],
@@ -198,11 +200,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
   Widget _mailbox() => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      _choice<String>(
+      _offered<String>(
         'Sort messages by',
+        SettingKeys.sortField,
         _draft.sortField,
-        const ['date', 'from', 'subject'],
-        (v) => {'date': 'Date', 'from': 'Sender', 'subject': 'Subject'}[v]!,
         (v) => setState(() => _draft = _draft.copyWith(sortField: v)),
       ),
       _choice<bool>(
@@ -212,11 +213,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
         (v) => v ? 'Newest first' : 'Oldest first',
         (v) => setState(() => _draft = _draft.copyWith(sortDescending: v)),
       ),
-      _choice<String>(
+      _offered<String>(
         'Density',
+        SettingKeys.listDensity,
         _draft.density,
-        const ['comfortable', 'compact'],
-        (v) => v[0].toUpperCase() + v.substring(1),
         (v) => setState(() => _draft = _draft.copyWith(density: v)),
       ),
       _switch(
@@ -235,11 +235,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
         _draft.autoMarkRead,
         (v) => setState(() => _draft = _draft.copyWith(autoMarkRead: v)),
       ),
-      _choice<int>(
+      _offered<int>(
         'Mark as read',
+        SettingKeys.markReadDelay,
         _draft.markReadDelaySecs,
-        const [0, 3, 5, 10, 30],
-        (v) => v == 0 ? 'Immediately' : 'After ${v}s',
         (v) => setState(() => _draft = _draft.copyWith(markReadDelaySecs: v)),
         enabled: _draft.autoMarkRead,
       ),
@@ -248,14 +247,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
         _draft.loadRemoteImages,
         (v) => setState(() => _draft = _draft.copyWith(loadRemoteImages: v)),
       ),
-      _choice<String>(
+      _offered<String>(
         'Clicking a link in a message',
+        SettingKeys.linkClickAction,
         _draft.linkClickAction,
-        const ['examine', 'browser'],
-        (v) => switch (v) {
-          'browser' => 'Open directly in browser',
-          _ => 'Show safety dialog first (recommended)',
-        },
         (v) => setState(() => _draft = _draft.copyWith(linkClickAction: v)),
       ),
     ],
@@ -264,16 +259,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
   Widget _composing() => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      _choice<String>(
+      _offered<String>(
         'Send mail as',
+        SettingKeys.sendFormat,
         _draft.sendFormat,
-        const ['auto', 'plain', 'multipart', 'html'],
-        (v) => {
-          'auto': 'Automatic (recommended)',
-          'plain': 'Plain text (safest)',
-          'multipart': 'Multipart plain+HTML',
-          'html': 'HTML only',
-        }[v]!,
         (v) => setState(() => _draft = _draft.copyWith(sendFormat: v)),
       ),
       _switch(
@@ -285,7 +274,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
         'Replies start',
         _draft.replyBelowQuote,
         const [false, true],
-        (v) => v ? 'Below quote' : 'Above quote',
+        (v) => v ? 'Below the quote' : 'Above the quote',
         (v) => setState(() => _draft = _draft.copyWith(replyBelowQuote: v)),
       ),
       _switch(
@@ -346,6 +335,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     }
     return AccountSyncSettings(
       defaults: _draft,
+      intervals: _choices.values<int>(SettingKeys.syncInterval),
       overrides: draft,
       showPush: Platform.isAndroid,
       frequentHeartbeatSecs: _accountSaved[accountId]?.frequentHeartbeatSecs,
@@ -384,11 +374,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
         _draft.collectContacts,
         (v) => setState(() => _draft = _draft.copyWith(collectContacts: v)),
       ),
-      _choice<int>(
+      _offered<int>(
         'Check for new mail',
+        SettingKeys.syncInterval,
         _draft.syncIntervalMinutes,
-        const [0, 5, 10, 15, 30, 60],
-        (v) => v == 0 ? 'Manually' : 'Every ${v}m',
         (v) => setState(() => _draft = _draft.copyWith(syncIntervalMinutes: v)),
         help: Platform.isAndroid
             ? 'Battery-saving checks run at most every 15 minutes. With '
@@ -398,15 +387,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
       // The scheduler is an Android-only capability: only there Doze
       // defers the battery-saving worker until the phone is unlocked.
       if (Platform.isAndroid)
-        _choice<String>(
+        _offered<String>(
           'Background check method',
+          SettingKeys.backgroundScheduler,
           _draft.backgroundScheduler,
-          const [schedulerWorkmanager, schedulerAlarm, schedulerPush],
-          (v) => switch (v) {
-            schedulerAlarm => 'On-time alarm',
-            schedulerPush => 'Push (IMAP IDLE)',
-            _ => 'Battery-saving (recommended)',
-          },
           (v) =>
               setState(() => _draft = _draft.copyWith(backgroundScheduler: v)),
           help:
@@ -709,6 +693,24 @@ class _SettingsDialogState extends State<SettingsDialog> {
       contentPadding: EdgeInsets.zero,
     );
   }
+
+  /// A choice among the values the core offers for [key].
+  Widget _offered<T>(
+    String title,
+    String key,
+    T value,
+    ValueChanged<T> onChanged, {
+    String? help,
+    bool enabled = true,
+  }) => _choice<T>(
+    title,
+    value,
+    _choices.values<T>(key),
+    (v) => SettingLabels.of(key, v as Object),
+    onChanged,
+    help: help,
+    enabled: enabled,
+  );
 
   Widget _choice<T>(
     String title,

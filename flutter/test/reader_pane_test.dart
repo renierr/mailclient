@@ -25,6 +25,22 @@ class _OneMessageCore implements MailCore {
   Future<MessageHeaders> messageHeaders(int folderId, int uid) =>
       Future.error(StateError('no headers in this test'));
 
+  // The reader document is the core's; these stand-ins only keep the
+  // widgets building.
+  @override
+  ReaderPaint readerPaint(bool colored, bool dark, bool keepOriginal) =>
+      !colored
+      ? ReaderPaint.theme
+      : dark && !keepOriginal
+      ? ReaderPaint.darkened
+      : ReaderPaint.original;
+
+  @override
+  ReaderPalette readerPalette(ReaderPaint paint, ReaderPalette theme) => theme;
+
+  @override
+  String readerBody(String body, ReaderPaint paint, {bool fit = false}) => body;
+
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

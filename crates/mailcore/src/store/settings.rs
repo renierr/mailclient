@@ -9,6 +9,10 @@ use crate::db::Db;
 use crate::error::Result;
 use crate::store::account_settings::{format_time, parse_time};
 
+mod choices;
+
+pub use choices::{choices, choices_json, Choice};
+
 /// Save a sent-mail copy into the Sent folder (default: on).
 pub const SENT_COPY_ENABLED: &str = "sent_copy_enabled";
 /// Load remote images in HTML mail (default: off — privacy).

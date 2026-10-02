@@ -47,6 +47,32 @@ pub fn settings_json() -> anyhow::Result<String> {
     .to_string())
 }
 
+/// Every preference's default and offered values as JSON
+/// (`mailcore::store::settings::choices`); the form only labels them.
+#[flutter_rust_bridge::frb(sync)]
+pub fn setting_choices_json() -> String {
+    s::choices_json()
+}
+
+/// A quiet-hours time as hour and minute, read the way the core reads it
+/// (`"7:05"` and `"07:05"` alike); `None` when it does not read as one.
+#[flutter_rust_bridge::frb(sync)]
+pub fn quiet_time(text: String) -> Option<QuietTime> {
+    account_settings::time_parts(&text).map(|(hour, minute)| QuietTime { hour, minute })
+}
+
+/// The stored form (`"HH:MM"`) of a picked time; `None` when out of range.
+#[flutter_rust_bridge::frb(sync)]
+pub fn quiet_time_at(hour: u32, minute: u32) -> Option<String> {
+    account_settings::time_at(hour, minute)
+}
+
+/// A quiet-hours time, in parts for a time picker.
+pub struct QuietTime {
+    pub hour: u32,
+    pub minute: u32,
+}
+
 /// Write one preference. `value` is the raw string form (`"1"`/`"0"` for
 /// flags); `mailcore` clamps and normalizes on the way back out.
 ///

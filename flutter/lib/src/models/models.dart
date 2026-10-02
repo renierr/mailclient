@@ -104,6 +104,7 @@ class Folder {
     required this.total,
     required this.subscribed,
     required this.delimiter,
+    this.deleteIsPermanent = true,
   });
 
   final int id;
@@ -122,6 +123,10 @@ class Folder {
   /// The server's hierarchy separator, usually `/` or `.`.
   final String delimiter;
 
+  /// Deleting here destroys instead of moving to Trash (the core's
+  /// `undo::delete_is_permanent`).
+  final bool deleteIsPermanent;
+
   factory Folder.fromJson(Map<String, dynamic> j) => Folder(
     id: _int(j['id']),
     path: _str(j['name']),
@@ -130,6 +135,7 @@ class Folder {
     total: _int(j['count']),
     subscribed: _bool(j['subscribed'], orElse: true),
     delimiter: _str(j['delimiter'], orElse: '/'),
+    deleteIsPermanent: _bool(j['delete_is_permanent'], orElse: true),
   );
 
   int get depth => delimiter.isEmpty ? 0 : path.split(delimiter).length - 1;

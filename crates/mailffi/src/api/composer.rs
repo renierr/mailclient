@@ -110,6 +110,30 @@ pub fn is_inline_image(path: String) -> bool {
     compose::is_inline_image_file(&path)
 }
 
+/// An address split for the From field: the editable local part and the
+/// locked domain (with its `@`), see `mailcore::compose::sender_parts`.
+#[flutter_rust_bridge::frb(sync)]
+pub fn sender_parts(address: String) -> SenderParts {
+    let p = compose::sender_parts(&address);
+    SenderParts {
+        local: p.local,
+        domain: p.domain,
+    }
+}
+
+/// The address a From field sends as: `local` on the account's domain, or
+/// the account address when blank.
+#[flutter_rust_bridge::frb(sync)]
+pub fn effective_from(local: String, account_email: String) -> String {
+    compose::effective_from(&local, &account_email)
+}
+
+/// [`sender_parts`] as a generated struct.
+pub struct SenderParts {
+    pub local: String,
+    pub domain: String,
+}
+
 /// Destroy a server draft (`\Deleted` + expunge, never filed to Trash) —
 /// what Discard means for a draft opened from the Drafts folder.
 pub fn delete_draft(account_id: i64, uid: u32) -> anyhow::Result<()> {

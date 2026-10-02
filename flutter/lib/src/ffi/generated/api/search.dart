@@ -11,17 +11,36 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 ///
 /// Pure SQLite, no network, safe to call on every keystroke. `folder` scopes
 /// to one IMAP path; empty searches the whole account. A blank or
-/// operator-only query yields `[]` rather than an error.
+/// operator-only query yields `[]` rather than an error. At most
+/// [`SearchPlan::hit_limit`] hits.
 Future<String> searchJson({
   required PlatformInt64 accountId,
   required String query,
   required String folder,
-  required PlatformInt64 limit,
 }) => MailCoreApi.instance.api.crateApiSearchSearchJson(
   accountId: accountId,
   query: query,
   folder: folder,
-  limit: limit,
+);
+
+/// How the search field runs `query` (`mailcore::search::plan`).
+SearchPlan searchPlan({required String query}) =>
+    MailCoreApi.instance.api.crateApiSearchSearchPlan(query: query);
+
+/// The short-input filter over one list row
+/// (`mailcore::search::filter_matches`).
+bool searchFilterMatches({
+  required String query,
+  required String subject,
+  required String from,
+  required String fromName,
+  required String snippet,
+}) => MailCoreApi.instance.api.crateApiSearchSearchFilterMatches(
+  query: query,
+  subject: subject,
+  from: from,
+  fromName: fromName,
+  snippet: snippet,
 );
 
 /// Backfill thin local results from the server.
@@ -40,3 +59,51 @@ Future<void> searchServer({
   query: query,
   folder: folder,
 );
+
+/// What the search field does with its text.
+enum SearchMode {
+  /// Nothing typed.
+  off,
+
+  /// One or two letters: filter the shown folder.
+  filter,
+
+  /// Three and more: the index, topped up from the server. (`Index`
+  /// in the core; Dart enums cannot name a value `index`.)
+  indexed,
+}
+
+/// [`mailcore::search::SearchPlan`] as a generated struct.
+class SearchPlan {
+  final SearchMode mode;
+
+  /// The query as searched: trimmed.
+  final String query;
+
+  /// Most hits per query; fewer local hits ask the server too.
+  final int hitLimit;
+
+  /// Typing pause before a server search.
+  final int debounceMs;
+
+  const SearchPlan({
+    required this.mode,
+    required this.query,
+    required this.hitLimit,
+    required this.debounceMs,
+  });
+
+  @override
+  int get hashCode =>
+      mode.hashCode ^ query.hashCode ^ hitLimit.hashCode ^ debounceMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SearchPlan &&
+          runtimeType == other.runtimeType &&
+          mode == other.mode &&
+          query == other.query &&
+          hitLimit == other.hitLimit &&
+          debounceMs == other.debounceMs;
+}

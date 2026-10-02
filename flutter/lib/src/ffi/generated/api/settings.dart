@@ -11,6 +11,22 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 Future<String> settingsJson() =>
     MailCoreApi.instance.api.crateApiSettingsSettingsJson();
 
+/// Every preference's default and offered values as JSON
+/// (`mailcore::store::settings::choices`); the form only labels them.
+String settingChoicesJson() =>
+    MailCoreApi.instance.api.crateApiSettingsSettingChoicesJson();
+
+/// A quiet-hours time as hour and minute, read the way the core reads it
+/// (`"7:05"` and `"07:05"` alike); `None` when it does not read as one.
+QuietTime? quietTime({required String text}) =>
+    MailCoreApi.instance.api.crateApiSettingsQuietTime(text: text);
+
+/// The stored form (`"HH:MM"`) of a picked time; `None` when out of range.
+String? quietTimeAt({required int hour, required int minute}) => MailCoreApi
+    .instance
+    .api
+    .crateApiSettingsQuietTimeAt(hour: hour, minute: minute);
+
 /// Write one preference. `value` is the raw string form (`"1"`/`"0"` for
 /// flags); `mailcore` clamps and normalizes on the way back out.
 ///
@@ -54,3 +70,22 @@ Future<void> setAccountSettings({
 /// (`push`, `poll_minutes`, `poll_scheduler`).
 Future<String> backgroundPlanJson() =>
     MailCoreApi.instance.api.crateApiSettingsBackgroundPlanJson();
+
+/// A quiet-hours time, in parts for a time picker.
+class QuietTime {
+  final int hour;
+  final int minute;
+
+  const QuietTime({required this.hour, required this.minute});
+
+  @override
+  int get hashCode => hour.hashCode ^ minute.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is QuietTime &&
+          runtimeType == other.runtimeType &&
+          hour == other.hour &&
+          minute == other.minute;
+}

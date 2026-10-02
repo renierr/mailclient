@@ -16,6 +16,7 @@ import 'api/init.dart';
 import 'api/maintenance.dart';
 import 'api/messages.dart';
 import 'api/mutate.dart';
+import 'api/reader.dart';
 import 'api/search.dart';
 import 'api/settings.dart';
 import 'api/sync.dart';
@@ -54,7 +55,24 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   bool dco_decode_bool(dynamic raw);
 
   @protected
+  QuietTime dco_decode_box_autoadd_quiet_time(dynamic raw);
+
+  @protected
+  ReaderDocumentOptions dco_decode_box_autoadd_reader_document_options(
+    dynamic raw,
+  );
+
+  @protected
+  ReaderPalette dco_decode_box_autoadd_reader_palette(dynamic raw);
+
+  @protected
+  double dco_decode_f_64(dynamic raw);
+
+  @protected
   FolderCounts dco_decode_folder_counts(dynamic raw);
+
+  @protected
+  Hit dco_decode_hit(dynamic raw);
 
   @protected
   int dco_decode_i_32(dynamic raw);
@@ -67,6 +85,12 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
 
   @protected
   JobPhase dco_decode_job_phase(dynamic raw);
+
+  @protected
+  LinkInfo dco_decode_link_info(dynamic raw);
+
+  @protected
+  List<Hit> dco_decode_list_hit(dynamic raw);
 
   @protected
   List<int> dco_decode_list_prim_u_32_loose(dynamic raw);
@@ -84,16 +108,43 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   MoveResult dco_decode_move_result(dynamic raw);
 
   @protected
+  OlderState dco_decode_older_state(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
+
+  @protected
+  QuietTime? dco_decode_opt_box_autoadd_quiet_time(dynamic raw);
 
   @protected
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  QuietTime dco_decode_quiet_time(dynamic raw);
+
+  @protected
+  ReaderDocumentOptions dco_decode_reader_document_options(dynamic raw);
+
+  @protected
+  ReaderPaint dco_decode_reader_paint(dynamic raw);
+
+  @protected
+  ReaderPalette dco_decode_reader_palette(dynamic raw);
+
+  @protected
   (String, String) dco_decode_record_string_string(dynamic raw);
 
   @protected
+  SearchMode dco_decode_search_mode(dynamic raw);
+
+  @protected
+  SearchPlan dco_decode_search_plan(dynamic raw);
+
+  @protected
   Selection dco_decode_selection(dynamic raw);
+
+  @protected
+  SenderParts dco_decode_sender_parts(dynamic raw);
 
   @protected
   int dco_decode_u_32(dynamic raw);
@@ -130,7 +181,26 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
+  QuietTime sse_decode_box_autoadd_quiet_time(SseDeserializer deserializer);
+
+  @protected
+  ReaderDocumentOptions sse_decode_box_autoadd_reader_document_options(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ReaderPalette sse_decode_box_autoadd_reader_palette(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  double sse_decode_f_64(SseDeserializer deserializer);
+
+  @protected
   FolderCounts sse_decode_folder_counts(SseDeserializer deserializer);
+
+  @protected
+  Hit sse_decode_hit(SseDeserializer deserializer);
 
   @protected
   int sse_decode_i_32(SseDeserializer deserializer);
@@ -143,6 +213,12 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
 
   @protected
   JobPhase sse_decode_job_phase(SseDeserializer deserializer);
+
+  @protected
+  LinkInfo sse_decode_link_info(SseDeserializer deserializer);
+
+  @protected
+  List<Hit> sse_decode_list_hit(SseDeserializer deserializer);
 
   @protected
   List<int> sse_decode_list_prim_u_32_loose(SseDeserializer deserializer);
@@ -162,10 +238,32 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   MoveResult sse_decode_move_result(SseDeserializer deserializer);
 
   @protected
+  OlderState sse_decode_older_state(SseDeserializer deserializer);
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
+  QuietTime? sse_decode_opt_box_autoadd_quiet_time(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  QuietTime sse_decode_quiet_time(SseDeserializer deserializer);
+
+  @protected
+  ReaderDocumentOptions sse_decode_reader_document_options(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ReaderPaint sse_decode_reader_paint(SseDeserializer deserializer);
+
+  @protected
+  ReaderPalette sse_decode_reader_palette(SseDeserializer deserializer);
 
   @protected
   (String, String) sse_decode_record_string_string(
@@ -173,7 +271,16 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   );
 
   @protected
+  SearchMode sse_decode_search_mode(SseDeserializer deserializer);
+
+  @protected
+  SearchPlan sse_decode_search_plan(SseDeserializer deserializer);
+
+  @protected
   Selection sse_decode_selection(SseDeserializer deserializer);
+
+  @protected
+  SenderParts sse_decode_sender_parts(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_32(SseDeserializer deserializer);
@@ -215,7 +322,31 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_quiet_time(
+    QuietTime self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_reader_document_options(
+    ReaderDocumentOptions self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_reader_palette(
+    ReaderPalette self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_f_64(double self, SseSerializer serializer);
+
+  @protected
   void sse_encode_folder_counts(FolderCounts self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_hit(Hit self, SseSerializer serializer);
 
   @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
@@ -228,6 +359,12 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
 
   @protected
   void sse_encode_job_phase(JobPhase self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_link_info(LinkInfo self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_hit(List<Hit> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_prim_u_32_loose(
@@ -257,7 +394,16 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   void sse_encode_move_result(MoveResult self, SseSerializer serializer);
 
   @protected
+  void sse_encode_older_state(OlderState self, SseSerializer serializer);
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_quiet_time(
+    QuietTime? self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_opt_list_prim_u_8_strict(
@@ -266,13 +412,37 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   );
 
   @protected
+  void sse_encode_quiet_time(QuietTime self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_reader_document_options(
+    ReaderDocumentOptions self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_reader_paint(ReaderPaint self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_reader_palette(ReaderPalette self, SseSerializer serializer);
+
+  @protected
   void sse_encode_record_string_string(
     (String, String) self,
     SseSerializer serializer,
   );
 
   @protected
+  void sse_encode_search_mode(SearchMode self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_search_plan(SearchPlan self, SseSerializer serializer);
+
+  @protected
   void sse_encode_selection(Selection self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_sender_parts(SenderParts self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_32(int self, SseSerializer serializer);

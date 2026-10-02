@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `fmt`, `fmt`
 
 /// The account's folder tree as JSON: `[{id, name, role, unread, count,
 /// subscribed, delimiter}]`. `name` is the full IMAP path; the sidebar
@@ -40,9 +40,9 @@ Future<void> setFolderSubscribed({
   subscribed: subscribed,
 );
 
-/// How many messages this folder holds locally, and how many the server last
-/// reported. A gap is what makes "load older" worth offering; `-1` for the
-/// server count means it has never been selected.
+/// How many messages this folder holds locally, how many the server last
+/// reported (`-1`: never selected), and what its "Show older" row says
+/// (`mailcore::feed::older_state`).
 Future<FolderCounts> folderCounts({required PlatformInt64 folderId}) =>
     MailCoreApi.instance.api.crateApiFoldersFolderCounts(folderId: folderId);
 
@@ -51,11 +51,24 @@ class FolderCounts {
 
   /// `-1` when the server has not reported a count yet.
   final PlatformInt64 server;
+  final OlderState older;
 
-  const FolderCounts({required this.cached, required this.server});
+  /// Asking the server could bring more mail.
+  final bool canLoadOlder;
+
+  const FolderCounts({
+    required this.cached,
+    required this.server,
+    required this.older,
+    required this.canLoadOlder,
+  });
 
   @override
-  int get hashCode => cached.hashCode ^ server.hashCode;
+  int get hashCode =>
+      cached.hashCode ^
+      server.hashCode ^
+      older.hashCode ^
+      canLoadOlder.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -63,5 +76,22 @@ class FolderCounts {
       other is FolderCounts &&
           runtimeType == other.runtimeType &&
           cached == other.cached &&
-          server == other.server;
+          server == other.server &&
+          older == other.older &&
+          canLoadOlder == other.canLoadOlder;
+}
+
+/// What a folder's "Show older" row says.
+enum OlderState {
+  /// The server never reported a count: offer to ask it.
+  unchecked,
+
+  /// The server holds more than the cache.
+  partial,
+
+  /// Nothing here, on either side.
+  empty,
+
+  /// Everything the server has is cached.
+  complete,
 }

@@ -61,6 +61,19 @@ Future<String> imageDataUrl({required String path}) =>
 bool isInlineImage({required String path}) =>
     MailCoreApi.instance.api.crateApiComposerIsInlineImage(path: path);
 
+/// An address split for the From field: the editable local part and the
+/// locked domain (with its `@`), see `mailcore::compose::sender_parts`.
+SenderParts senderParts({required String address}) =>
+    MailCoreApi.instance.api.crateApiComposerSenderParts(address: address);
+
+/// The address a From field sends as: `local` on the account's domain, or
+/// the account address when blank.
+String effectiveFrom({required String local, required String accountEmail}) =>
+    MailCoreApi.instance.api.crateApiComposerEffectiveFrom(
+      local: local,
+      accountEmail: accountEmail,
+    );
+
 /// Destroy a server draft (`\Deleted` + expunge, never filed to Trash) —
 /// what Discard means for a draft opened from the Drafts folder.
 Future<void> deleteDraft({
@@ -88,3 +101,22 @@ Future<String> answerDraft({
 /// [`answer_draft`].
 Future<String> blankDraft() =>
     MailCoreApi.instance.api.crateApiComposerBlankDraft();
+
+/// [`sender_parts`] as a generated struct.
+class SenderParts {
+  final String local;
+  final String domain;
+
+  const SenderParts({required this.local, required this.domain});
+
+  @override
+  int get hashCode => local.hashCode ^ domain.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SenderParts &&
+          runtimeType == other.runtimeType &&
+          local == other.local &&
+          domain == other.domain;
+}

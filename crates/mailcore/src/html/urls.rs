@@ -83,6 +83,54 @@ pub(super) fn safe_href(href: &str) -> Option<String> {
     }
 }
 
+/// A link as the reader's examine dialog shows it, and whether it may
+/// leave the app at all. The same rule as the sanitizer's [`safe_href`], so
+/// the reader never offers to open what the sanitizer would have dropped.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct LinkInfo {
+    /// `http`, `https` or `mailto`: may be opened (user-gated). Everything
+    /// else (`javascript:`, `data:`, `file:`, fragments, …) stays inert.
+    pub safe: bool,
+    /// Lowercase scheme, `""` when there is none.
+    pub scheme: String,
+    /// The host without user info and port; for `mailto:` the address's
+    /// domain. `""` when there is none.
+    pub host: String,
+    /// Path, query and fragment after the host, `""` when there is none.
+    pub path: String,
+}
+
+/// Split `url` for display and decide whether it is safe to open.
+pub fn link_info(url: &str) -> LinkInfo {
+    let s = url.trim();
+    let safe = safe_href(s).is_some();
+    let (scheme, rest) = match s.find("://") {
+        Some(i) if i > 0 => (s[..i].to_ascii_lowercase(), &s[i + 3..]),
+        _ => match s.split_once(':') {
+            Some((sc, r)) if sc.eq_ignore_ascii_case("mailto") => ("mailto".to_string(), r),
+            _ => (String::new(), s),
+        },
+    };
+    let (authority, path) = if scheme == "mailto" {
+        // `a@example.com?subject=x`: the address up to its query.
+        let end = rest.find(['?', '#']).unwrap_or(rest.len());
+        (&rest[..end], "")
+    } else {
+        match rest.find('/') {
+            Some(i) => (&rest[..i], &rest[i..]),
+            None => (rest, ""),
+        }
+    };
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    let host = host.split(':').next().unwrap_or_default();
+    LinkInfo {
+        safe,
+        scheme,
+        host: host.to_string(),
+        path: path.to_string(),
+    }
+}
+
 pub(super) fn safe_img_src(src: &str, allow_remote: bool) -> Option<String> {
     let d = urldecode_trim(src);
     if d.is_empty() {

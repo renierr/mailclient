@@ -210,14 +210,3 @@ pub fn text_to_html(text: &str) -> String {
     out.push_str("</p>");
     out
 }
-
-/// Wrap sanitized inner HTML in a small readable document (added *after*
-/// sanitizing so the wrapper is trusted).
-pub fn wrap_document(inner_sanitized: &str) -> String {
-    format!(
-        "<!DOCTYPE html><html><head><meta charset=\"utf-8\">\
-        <style>body{{font-family:sans-serif;font-size:14px;line-height:1.5;max-width:72ch;margin:12px;word-wrap:break-word}}\
-        img{{max-width:100%;height:auto}}pre{{white-space:pre-wrap}}table{{border-collapse:collapse}}td,th{{padding:4px 8px}}</style>\
-        </head><body>{inner_sanitized}</body></html>"
-    )
-}

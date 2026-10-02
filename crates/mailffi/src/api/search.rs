@@ -2,26 +2,74 @@
 
 use crate::db::shared_db;
 use crate::net::{spawn, JobRefresh};
+use mailcore::search;
 use mailcore::sync::pool::{checkout_session, resolve_account};
 
 /// FTS5 search over subject / sender / recipients / body for one account.
 ///
 /// Pure SQLite, no network, safe to call on every keystroke. `folder` scopes
 /// to one IMAP path; empty searches the whole account. A blank or
-/// operator-only query yields `[]` rather than an error.
-pub fn search_json(
-    account_id: i64,
-    query: String,
-    folder: String,
-    limit: i64,
-) -> anyhow::Result<String> {
+/// operator-only query yields `[]` rather than an error. At most
+/// [`SearchPlan::hit_limit`] hits.
+pub fn search_json(account_id: i64, query: String, folder: String) -> anyhow::Result<String> {
     Ok(mailcore::feed::search_json(
         shared_db()?,
         account_id,
         &query,
-        limit.max(0) as u64,
+        search::HIT_LIMIT,
         &folder,
     )?)
+}
+
+/// How the search field runs `query` (`mailcore::search::plan`).
+#[flutter_rust_bridge::frb(sync)]
+pub fn search_plan(query: String) -> SearchPlan {
+    let p = search::plan(&query);
+    SearchPlan {
+        mode: match p.mode {
+            search::SearchMode::Off => SearchMode::Off,
+            search::SearchMode::Filter => SearchMode::Filter,
+            search::SearchMode::Index => SearchMode::Indexed,
+        },
+        query: p.query,
+        hit_limit: p.hit_limit as u32,
+        debounce_ms: p.debounce_ms as u32,
+    }
+}
+
+/// The short-input filter over one list row
+/// (`mailcore::search::filter_matches`).
+#[flutter_rust_bridge::frb(sync)]
+pub fn search_filter_matches(
+    query: String,
+    subject: String,
+    from: String,
+    from_name: String,
+    snippet: String,
+) -> bool {
+    search::filter_matches(&query, &subject, &from, &from_name, &snippet)
+}
+
+/// [`mailcore::search::SearchPlan`] as a generated struct.
+pub struct SearchPlan {
+    pub mode: SearchMode,
+    /// The query as searched: trimmed.
+    pub query: String,
+    /// Most hits per query; fewer local hits ask the server too.
+    pub hit_limit: u32,
+    /// Typing pause before a server search.
+    pub debounce_ms: u32,
+}
+
+/// What the search field does with its text.
+pub enum SearchMode {
+    /// Nothing typed.
+    Off,
+    /// One or two letters: filter the shown folder.
+    Filter,
+    /// Three and more: the index, topped up from the server. (`Index`
+    /// in the core; Dart enums cannot name a value `index`.)
+    Indexed,
 }
 
 /// Backfill thin local results from the server.

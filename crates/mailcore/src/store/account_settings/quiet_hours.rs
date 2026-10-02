@@ -76,6 +76,27 @@ pub fn format_time(t: NaiveTime) -> String {
     t.format("%H:%M").to_string()
 }
 
+/// A typed time in its stored form (`"7:05"` → `"07:05"`); `None` when it
+/// does not read as one. What both settings forms check typed times with.
+#[must_use]
+pub fn normalize_time(value: &str) -> Option<String> {
+    parse_time(value).map(format_time)
+}
+
+/// A time as `(hour, minute)` for a time picker; `None` when it does not
+/// read as one.
+#[must_use]
+pub fn time_parts(value: &str) -> Option<(u32, u32)> {
+    use chrono::Timelike;
+    parse_time(value).map(|t| (t.hour(), t.minute()))
+}
+
+/// The stored form of a picked time; `None` when out of range.
+#[must_use]
+pub fn time_at(hour: u32, minute: u32) -> Option<String> {
+    NaiveTime::from_hms_opt(hour, minute, 0).map(format_time)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,7 +124,12 @@ mod tests {
         assert_eq!(format_time(t(" 23:59 ")), "23:59");
         for bad in ["", "7", "24:00", "07:60", "07:5", "a:00", "007:00"] {
             assert!(parse_time(bad).is_none(), "{bad:?}");
+            assert_eq!(normalize_time(bad), None, "{bad:?}");
         }
+        assert_eq!(normalize_time("6:30").as_deref(), Some("06:30"));
+        assert_eq!(time_parts("6:30"), Some((6, 30)));
+        assert_eq!(time_at(6, 5).as_deref(), Some("06:05"));
+        assert_eq!(time_at(24, 0), None);
     }
 
     #[test]

@@ -10,7 +10,7 @@
 //! from Trash, or with no Trash folder) is reported as
 //! [`Queued::Permanent`]: the caller confirms and purges as before.
 
-use crate::models::FolderRole;
+use crate::models::{Folder, FolderRole};
 use crate::store::pending_moves::{self, PendingAction};
 use crate::store::{folders, messages};
 use crate::sync::pool::{checkout_session, job_account};
@@ -45,6 +45,18 @@ pub enum Queued {
     AlreadyThere,
 }
 
+/// Whether deleting from `src` destroys instead of moving to Trash: from
+/// Junk (spam never touches Trash), from Trash itself, or when the account
+/// has no Trash folder. `folders` is the account's folder list. Both
+/// frontends' confirm dialogs say which, because only one is undoable.
+#[must_use]
+pub fn delete_is_permanent(src: &Folder, folders: &[Folder]) -> bool {
+    src.role == FolderRole::Junk
+        || !folders
+            .iter()
+            .any(|f| f.role == FolderRole::Trash && f.id != src.id)
+}
+
 /// Queue an undoable action on `uids` of `folder_id`.
 pub fn queue_move(
     db: &Db,
@@ -53,6 +65,53 @@ pub fn queue_move(
     uids: &[u32],
     target: MoveTarget,
 ) -> Result<Queued, String> {
+    let batch = uuid::Uuid::new_v4().to_string();
+    Ok(
+        match queue_into(db, account_id, folder_id, uids, &target, &batch)? {
+            Share::Pending {
+                count,
+                action,
+                place,
+            } => Queued::Pending {
+                batch,
+                count,
+                label: label(action, count, &place),
+            },
+            Share::Permanent => Queued::Permanent,
+            Share::AlreadyThere => Queued::AlreadyThere,
+        },
+    )
+}
+
+/// What one folder's share of a queued action came to.
+pub(crate) enum Share {
+    Pending {
+        count: u64,
+        action: PendingAction,
+        place: String,
+    },
+    Permanent,
+    AlreadyThere,
+}
+
+/// The Undo toast's text.
+pub(crate) fn label(action: PendingAction, count: u64, place: &str) -> String {
+    match action {
+        PendingAction::Archive => format!("Archived {count} to {place}"),
+        PendingAction::Trash | PendingAction::Move => format!("Moved {count} to {place}"),
+    }
+}
+
+/// [`queue_move`] into an existing `batch`, so one Undo can take back an
+/// action that spans folders (see [`crate::bulk`]).
+pub(crate) fn queue_into(
+    db: &Db,
+    account_id: i64,
+    folder_id: i64,
+    uids: &[u32],
+    target: &MoveTarget,
+    batch: &str,
+) -> Result<Share, String> {
     if uids.is_empty() {
         return Err("no messages selected".to_string());
     }
@@ -61,18 +120,19 @@ pub fn queue_move(
         return Err("folder does not belong to this account".to_string());
     }
     let known = folders::list_by_account(db, account_id).map_err(|e| e.to_string())?;
-    let (action, dest_id, place) = match &target {
+    let (action, dest_id, place) = match target {
         MoveTarget::Trash => {
-            let trash = known.iter().find(|f| f.role == FolderRole::Trash);
-            match trash {
-                Some(t) if src.role != FolderRole::Junk && t.id != src.id => {
-                    (PendingAction::Trash, None, t.path.clone())
-                }
-                _ => return Ok(Queued::Permanent),
+            if delete_is_permanent(&src, &known) {
+                return Ok(Share::Permanent);
             }
+            let trash = known
+                .iter()
+                .find(|f| f.role == FolderRole::Trash && f.id != src.id)
+                .map_or_else(String::new, |t| t.path.clone());
+            (PendingAction::Trash, None, trash)
         }
         MoveTarget::Archive => match known.iter().find(|f| f.role == FolderRole::Archive) {
-            Some(a) if a.id == src.id => return Ok(Queued::AlreadyThere),
+            Some(a) if a.id == src.id => return Ok(Share::AlreadyThere),
             Some(a) => (PendingAction::Archive, Some(a.id), a.path.clone()),
             None => (PendingAction::Archive, None, "Archive".to_string()),
         },
@@ -82,7 +142,7 @@ pub fn queue_move(
                 .find(|f| &f.path == path)
                 .ok_or_else(|| format!("unknown folder {path}"))?;
             if dest.id == src.id {
-                return Ok(Queued::AlreadyThere);
+                return Ok(Share::AlreadyThere);
             }
             (PendingAction::Move, Some(dest.id), dest.path.clone())
         }
@@ -95,19 +155,14 @@ pub fn queue_move(
     if ids.is_empty() {
         return Err("message is no longer available".to_string());
     }
-    let batch = uuid::Uuid::new_v4().to_string();
     let due = (chrono::Utc::now() + chrono::Duration::seconds(UNDO_GRACE_SECS))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let count =
-        pending_moves::queue(db, &ids, action, dest_id, &batch, &due).map_err(|e| e.to_string())?;
-    let label = match action {
-        PendingAction::Archive => format!("Archived {count} to {place}"),
-        PendingAction::Trash | PendingAction::Move => format!("Moved {count} to {place}"),
-    };
-    Ok(Queued::Pending {
-        batch,
+        pending_moves::queue(db, &ids, action, dest_id, batch, &due).map_err(|e| e.to_string())?;
+    Ok(Share::Pending {
         count,
-        label,
+        action,
+        place,
     })
 }
 

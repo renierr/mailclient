@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../ffi/mail_core.dart';
@@ -271,16 +272,6 @@ class _ComposerDialogState extends State<ComposerDialog> {
   late final int _folderId;
   late final Account? _account;
 
-  static String _localPartOf(String address) {
-    final at = address.indexOf('@');
-    return at < 0 ? address : address.substring(0, at);
-  }
-
-  static String _domainOf(String address) {
-    final at = address.indexOf('@');
-    return at < 0 ? '' : address.substring(at);
-  }
-
   @override
   void initState() {
     super.initState();
@@ -312,7 +303,7 @@ class _ComposerDialogState extends State<ComposerDialog> {
     if (_prefilled) return;
     _prefilled = true;
     final accountEmail = _account?.email ?? '';
-    _domain = _domainOf(accountEmail);
+    _domain = MailCore.instance.senderParts(accountEmail).domain;
     // Prefill must not mark the composer dirty: listeners are attached in
     // initState, so detach, fill, re-attach, then explicitly mark clean.
     // Otherwise every fresh composer instantly prompts "Unsent changes".
@@ -321,9 +312,13 @@ class _ComposerDialogState extends State<ComposerDialog> {
     }
     // A reopened draft keeps its own local part; anything new starts from
     // the account address.
-    _fromLocal.text = widget.initial.fromAddr.isNotEmpty
-        ? _localPartOf(widget.initial.fromAddr)
-        : _localPartOf(accountEmail);
+    _fromLocal.text = MailCore.instance
+        .senderParts(
+          widget.initial.fromAddr.isNotEmpty
+              ? widget.initial.fromAddr
+              : accountEmail,
+        )
+        .local;
     _senderName.text = _account?.fromName ?? '';
     for (final c in [_fromLocal, _senderName]) {
       c.addListener(_edited);
@@ -530,6 +525,9 @@ class _ComposerDialogState extends State<ComposerDialog> {
       controller: _fromLocal,
       keyboardType: TextInputType.emailAddress,
       textInputAction: TextInputAction.next,
+      // The domain is the account's: an `@` typed here would show an
+      // address that is not the one sent.
+      inputFormatters: [FilteringTextInputFormatter.deny('@')],
       // Right-aligned so the local part sits neatly beside the fixed
       // domain suffix, like the Qt composer.
       textAlign: TextAlign.end,
@@ -669,14 +667,10 @@ class _ComposerDialogState extends State<ComposerDialog> {
     ),
   );
 
-  /// The address as the core will see it: edited local part, locked domain —
-  /// or the whole account address when the field is blank.
-  String _effectiveFrom(String accountEmail) {
-    final local = _fromLocal.text.trim();
-    if (local.isEmpty) return accountEmail;
-    if (local.contains('@')) return local;
-    return '$local$_domain';
-  }
+  /// The address sent: edited local part on the locked domain, or the whole
+  /// account address when the field is blank (`compose::effective_from`).
+  String _effectiveFrom(String accountEmail) =>
+      MailCore.instance.effectiveFrom(_fromLocal.text, accountEmail);
 
   bool get _quoteShown => _keepQuote && widget.initial.quoteHtml.isNotEmpty;
 

@@ -32,8 +32,6 @@ void main() {
       expect(s.quietEnabled, isTrue);
       expect(s.quietStart, '22:30');
       expect(s.quietEnd, '06:00');
-      expect(AppSettings.defaults.quietEnabled, isFalse);
-      expect(AppSettings.defaults.quietEnd, QuietTime.defaultEnd);
       expect(s.sendFormat, 'html');
       expect(s.markReadDelaySecs, 5);
       expect(s.confirmDelete, isFalse);
@@ -47,17 +45,37 @@ void main() {
       expect(s.sortDescending, isFalse);
     });
 
-    test('missing fields fall back to the core defaults', () {
-      final s = AppSettings.fromJson({});
-      expect(s.sendFormat, 'auto');
-      expect(s.autoMarkRead, isTrue);
-      expect(s.confirmDelete, isTrue);
-      expect(s.isCompact, isFalse);
-      expect(s.readerScale, 1.0);
-      expect(s.linkClickAction, 'examine');
-      expect(s.backgroundScheduler, 'workmanager');
-      expect(s.uiScale, 1.0);
-      expect(s.sortDescending, isTrue);
+    test('defaults and offered values come from the core feed', () {
+      final c = SettingChoices.fromJson({
+        'ui_scale': {
+          'default': 1,
+          'values': [1, 1.1, 1.25, 1.5],
+        },
+        'sync_interval_minutes': {
+          'default': 0,
+          'values': [0, 5, 60],
+        },
+        'list_density': {
+          'default': 'comfortable',
+          'values': ['comfortable', 'compact'],
+        },
+        'confirm_delete': {'default': true},
+        'quiet_hours_end': {'default': '07:00'},
+      });
+      expect(c.values<double>('ui_scale'), [1.0, 1.1, 1.25, 1.5]);
+      expect(c.values<int>('sync_interval_minutes'), [0, 5, 60]);
+      expect(c.values<String>('confirm_delete'), isEmpty);
+      expect(c.defaultOf<String>('list_density'), 'comfortable');
+      final d = c.defaults;
+      expect(d.uiScale, 1.0);
+      expect(d.confirmDelete, isTrue);
+      expect(d.isCompact, isFalse);
+      expect(d.quietEnd, '07:00');
+    });
+
+    test('the placeholder before loading paints at identity scale', () {
+      expect(AppSettings.placeholder.uiScale, 1.0);
+      expect(AppSettings.placeholder.readerScale, 1.0);
     });
 
     test('numeric booleans decode like the SQLite-backed feeds produce', () {
@@ -182,15 +200,6 @@ void main() {
       });
       expect(s.quietNow, isTrue);
       expect(AccountSettings.empty.quietNow, isFalse);
-    });
-
-    test('quiet-hours times parse like the core and store padded', () {
-      expect(QuietTime.parse('7:05'), (hour: 7, minute: 5));
-      expect(QuietTime.parse(' 23:59 '), (hour: 23, minute: 59));
-      for (final bad in ['', '7', '24:00', '07:60', '07:5', 'a:00', '007:00']) {
-        expect(QuietTime.parse(bad), isNull, reason: bad);
-      }
-      expect(QuietTime.format(7, 5), '07:05');
     });
   });
 }

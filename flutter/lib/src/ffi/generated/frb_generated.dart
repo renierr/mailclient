@@ -13,6 +13,7 @@ import 'api/init.dart';
 import 'api/maintenance.dart';
 import 'api/messages.dart';
 import 'api/mutate.dart';
+import 'api/reader.dart';
 import 'api/search.dart';
 import 'api/settings.dart';
 import 'api/sync.dart';
@@ -83,7 +84,7 @@ class MailCoreApi
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 275607325;
+  int get rustContentHash => -475421843;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -123,6 +124,11 @@ abstract class MailCoreApiApi extends BaseApi {
     required PlatformInt64 folderId,
     required int uid,
     required String mode,
+  });
+
+  Future<MoveResult> crateApiMutateArchiveHits({
+    required PlatformInt64 accountId,
+    required List<Hit> hits,
   });
 
   Future<MoveResult> crateApiMutateArchiveMessages({
@@ -170,6 +176,11 @@ abstract class MailCoreApiApi extends BaseApi {
     required int uid,
   });
 
+  Future<MoveResult> crateApiMutateDeleteHits({
+    required PlatformInt64 accountId,
+    required List<Hit> hits,
+  });
+
   Future<MoveResult> crateApiMutateDeleteMessages({
     required PlatformInt64 accountId,
     required PlatformInt64 folderId,
@@ -185,6 +196,11 @@ abstract class MailCoreApiApi extends BaseApi {
   Future<String> crateApiComposerDraftForm({
     required PlatformInt64 accountId,
     required int uid,
+  });
+
+  String crateApiComposerEffectiveFrom({
+    required String local,
+    required String accountEmail,
   });
 
   Future<String> crateApiMaintenanceEvictCachedAttachmentsJson();
@@ -221,6 +237,8 @@ abstract class MailCoreApiApi extends BaseApi {
 
   Stream<JobEvent> crateApiEventsJobEvents();
 
+  LinkInfo crateApiMessagesLinkInfo({required String url});
+
   Future<void> crateApiSyncLoadOlderMessages({
     required PlatformInt64 accountId,
     required PlatformInt64 folderId,
@@ -230,6 +248,12 @@ abstract class MailCoreApiApi extends BaseApi {
     required PlatformInt64 accountId,
     required PlatformInt64 folderId,
     required int uid,
+    required bool read,
+  });
+
+  Future<BigInt> crateApiMessagesMarkReadHits({
+    required PlatformInt64 accountId,
+    required List<Hit> hits,
     required bool read,
   });
 
@@ -257,6 +281,12 @@ abstract class MailCoreApiApi extends BaseApi {
     required PlatformInt64 offset,
   });
 
+  Future<MoveResult> crateApiMutateMoveHits({
+    required PlatformInt64 accountId,
+    required List<Hit> hits,
+    required String destPath,
+  });
+
   Future<MoveResult> crateApiMutateMoveMessages({
     required PlatformInt64 accountId,
     required PlatformInt64 folderId,
@@ -264,10 +294,43 @@ abstract class MailCoreApiApi extends BaseApi {
     required String destPath,
   });
 
+  Future<void> crateApiMutatePurgeHits({
+    required PlatformInt64 accountId,
+    required List<Hit> hits,
+  });
+
   Future<void> crateApiMutatePurgeMessages({
     required PlatformInt64 accountId,
     required PlatformInt64 folderId,
     required List<int> uids,
+  });
+
+  QuietTime? crateApiSettingsQuietTime({required String text});
+
+  String? crateApiSettingsQuietTimeAt({required int hour, required int minute});
+
+  String crateApiReaderReaderBody({
+    required String body,
+    required ReaderPaint paint,
+    required bool fit,
+  });
+
+  String crateApiReaderReaderDocument({
+    required String body,
+    required ReaderDocumentOptions options,
+  });
+
+  int crateApiReaderReaderFitBelow({required String body});
+
+  ReaderPaint crateApiReaderReaderPaint({
+    required bool colored,
+    required bool dark,
+    required bool keepOriginal,
+  });
+
+  ReaderPalette crateApiReaderReaderPalette({
+    required ReaderPaint paint,
+    required ReaderPalette theme,
   });
 
   Future<void> crateApiSyncRefreshFolders({required PlatformInt64 accountId});
@@ -294,12 +357,21 @@ abstract class MailCoreApiApi extends BaseApi {
     required String form,
   });
 
+  bool crateApiSearchSearchFilterMatches({
+    required String query,
+    required String subject,
+    required String from,
+    required String fromName,
+    required String snippet,
+  });
+
   Future<String> crateApiSearchSearchJson({
     required PlatformInt64 accountId,
     required String query,
     required String folder,
-    required PlatformInt64 limit,
   });
+
+  SearchPlan crateApiSearchSearchPlan({required String query});
 
   Future<void> crateApiSearchSearchServer({
     required PlatformInt64 accountId,
@@ -314,6 +386,8 @@ abstract class MailCoreApiApi extends BaseApi {
     required PlatformInt64 folderId,
     required String form,
   });
+
+  SenderParts crateApiComposerSenderParts({required String address});
 
   Future<void> crateApiSettingsSetAccountSettings({
     required PlatformInt64 accountId,
@@ -344,12 +418,20 @@ abstract class MailCoreApiApi extends BaseApi {
     required bool descending,
   });
 
+  Future<BigInt> crateApiMessagesSetStarHits({
+    required PlatformInt64 accountId,
+    required List<Hit> hits,
+    required bool starred,
+  });
+
   Future<BigInt> crateApiMessagesSetStarMany({
     required PlatformInt64 accountId,
     required PlatformInt64 folderId,
     required List<int> uids,
     required bool starred,
   });
+
+  String crateApiSettingsSettingChoicesJson();
 
   Future<String> crateApiSettingsSettingsJson();
 
@@ -631,6 +713,40 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
       );
 
   @override
+  Future<MoveResult> crateApiMutateArchiveHits({
+    required PlatformInt64 accountId,
+    required List<Hit> hits,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_i_64(accountId, serializer);
+          sse_encode_list_hit(hits, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 9,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_move_result,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiMutateArchiveHitsConstMeta,
+        argValues: [accountId, hits],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMutateArchiveHitsConstMeta => const TaskConstMeta(
+    debugName: "archive_hits",
+    argNames: ["accountId", "hits"],
+  );
+
+  @override
   Future<MoveResult> crateApiMutateArchiveMessages({
     required PlatformInt64 accountId,
     required PlatformInt64 folderId,
@@ -646,7 +762,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 10,
             port: port_,
           );
         },
@@ -681,7 +797,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 11,
             port: port_,
           );
         },
@@ -711,7 +827,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 12,
             port: port_,
           );
         },
@@ -738,7 +854,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 13,
             port: port_,
           );
         },
@@ -765,7 +881,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 14,
             port: port_,
           );
         },
@@ -792,7 +908,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 15,
             port: port_,
           );
         },
@@ -822,7 +938,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 16,
             port: port_,
           );
         },
@@ -855,7 +971,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 16,
+            funcId: 17,
             port: port_,
           );
         },
@@ -886,7 +1002,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 18,
             port: port_,
           );
         },
@@ -918,7 +1034,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 19,
             port: port_,
           );
         },
@@ -950,7 +1066,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 20,
             port: port_,
           );
         },
@@ -978,7 +1094,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 21,
             port: port_,
           );
         },
@@ -1010,7 +1126,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 22,
             port: port_,
           );
         },
@@ -1032,6 +1148,40 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
       );
 
   @override
+  Future<MoveResult> crateApiMutateDeleteHits({
+    required PlatformInt64 accountId,
+    required List<Hit> hits,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_i_64(accountId, serializer);
+          sse_encode_list_hit(hits, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 23,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_move_result,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiMutateDeleteHitsConstMeta,
+        argValues: [accountId, hits],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMutateDeleteHitsConstMeta => const TaskConstMeta(
+    debugName: "delete_hits",
+    argNames: ["accountId", "hits"],
+  );
+
+  @override
   Future<MoveResult> crateApiMutateDeleteMessages({
     required PlatformInt64 accountId,
     required PlatformInt64 folderId,
@@ -1047,7 +1197,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 22,
+            funcId: 24,
             port: port_,
           );
         },
@@ -1084,7 +1234,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 25,
             port: port_,
           );
         },
@@ -1119,7 +1269,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 26,
             port: port_,
           );
         },
@@ -1140,6 +1290,36 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   );
 
   @override
+  String crateApiComposerEffectiveFrom({
+    required String local,
+    required String accountEmail,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(local, serializer);
+          sse_encode_String(accountEmail, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 27)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiComposerEffectiveFromConstMeta,
+        argValues: [local, accountEmail],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiComposerEffectiveFromConstMeta =>
+      const TaskConstMeta(
+        debugName: "effective_from",
+        argNames: ["local", "accountEmail"],
+      );
+
+  @override
   Future<String> crateApiMaintenanceEvictCachedAttachmentsJson() {
     return handler.executeNormal(
       NormalTask(
@@ -1148,7 +1328,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 28,
             port: port_,
           );
         },
@@ -1179,7 +1359,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 26,
+            funcId: 29,
             port: port_,
           );
         },
@@ -1209,7 +1389,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 27,
+            funcId: 30,
             port: port_,
           );
         },
@@ -1241,7 +1421,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 28,
+            funcId: 31,
             port: port_,
           );
         },
@@ -1272,7 +1452,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 29,
+            funcId: 32,
             port: port_,
           );
         },
@@ -1302,7 +1482,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 30,
+            funcId: 33,
             port: port_,
           );
         },
@@ -1334,7 +1514,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 31,
+            funcId: 34,
             port: port_,
           );
         },
@@ -1365,7 +1545,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 32,
+            funcId: 35,
             port: port_,
           );
         },
@@ -1393,7 +1573,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 33,
+            funcId: 36,
             port: port_,
           );
         },
@@ -1420,7 +1600,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 34,
+            funcId: 37,
             port: port_,
           );
         },
@@ -1447,7 +1627,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 35,
+            funcId: 38,
             port: port_,
           );
         },
@@ -1472,7 +1652,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(path, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 36)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 39)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_bool,
@@ -1500,7 +1680,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 37,
+              funcId: 40,
               port: port_,
             );
           },
@@ -1521,6 +1701,29 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
       const TaskConstMeta(debugName: "job_events", argNames: ["sink"]);
 
   @override
+  LinkInfo crateApiMessagesLinkInfo({required String url}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(url, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 41)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_link_info,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiMessagesLinkInfoConstMeta,
+        argValues: [url],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMessagesLinkInfoConstMeta =>
+      const TaskConstMeta(debugName: "link_info", argNames: ["url"]);
+
+  @override
   Future<void> crateApiSyncLoadOlderMessages({
     required PlatformInt64 accountId,
     required PlatformInt64 folderId,
@@ -1534,7 +1737,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 38,
+            funcId: 42,
             port: port_,
           );
         },
@@ -1573,7 +1776,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 39,
+            funcId: 43,
             port: port_,
           );
         },
@@ -1594,6 +1797,43 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   );
 
   @override
+  Future<BigInt> crateApiMessagesMarkReadHits({
+    required PlatformInt64 accountId,
+    required List<Hit> hits,
+    required bool read,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_i_64(accountId, serializer);
+          sse_encode_list_hit(hits, serializer);
+          sse_encode_bool(read, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 44,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_u_64,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiMessagesMarkReadHitsConstMeta,
+        argValues: [accountId, hits, read],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMessagesMarkReadHitsConstMeta =>
+      const TaskConstMeta(
+        debugName: "mark_read_hits",
+        argNames: ["accountId", "hits", "read"],
+      );
+
+  @override
   Future<BigInt> crateApiMessagesMarkReadMany({
     required PlatformInt64 accountId,
     required PlatformInt64 folderId,
@@ -1611,7 +1851,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 40,
+            funcId: 45,
             port: port_,
           );
         },
@@ -1648,7 +1888,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 41,
+            funcId: 46,
             port: port_,
           );
         },
@@ -1683,7 +1923,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 42,
+            funcId: 47,
             port: port_,
           );
         },
@@ -1720,7 +1960,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 43,
+            funcId: 48,
             port: port_,
           );
         },
@@ -1742,6 +1982,42 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
       );
 
   @override
+  Future<MoveResult> crateApiMutateMoveHits({
+    required PlatformInt64 accountId,
+    required List<Hit> hits,
+    required String destPath,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_i_64(accountId, serializer);
+          sse_encode_list_hit(hits, serializer);
+          sse_encode_String(destPath, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 49,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_move_result,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiMutateMoveHitsConstMeta,
+        argValues: [accountId, hits, destPath],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMutateMoveHitsConstMeta => const TaskConstMeta(
+    debugName: "move_hits",
+    argNames: ["accountId", "hits", "destPath"],
+  );
+
+  @override
   Future<MoveResult> crateApiMutateMoveMessages({
     required PlatformInt64 accountId,
     required PlatformInt64 folderId,
@@ -1759,7 +2035,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 44,
+            funcId: 50,
             port: port_,
           );
         },
@@ -1780,6 +2056,40 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   );
 
   @override
+  Future<void> crateApiMutatePurgeHits({
+    required PlatformInt64 accountId,
+    required List<Hit> hits,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_i_64(accountId, serializer);
+          sse_encode_list_hit(hits, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 51,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiMutatePurgeHitsConstMeta,
+        argValues: [accountId, hits],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMutatePurgeHitsConstMeta => const TaskConstMeta(
+    debugName: "purge_hits",
+    argNames: ["accountId", "hits"],
+  );
+
+  @override
   Future<void> crateApiMutatePurgeMessages({
     required PlatformInt64 accountId,
     required PlatformInt64 folderId,
@@ -1795,7 +2105,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 45,
+            funcId: 52,
             port: port_,
           );
         },
@@ -1817,6 +2127,204 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
       );
 
   @override
+  QuietTime? crateApiSettingsQuietTime({required String text}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(text, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 53)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_box_autoadd_quiet_time,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSettingsQuietTimeConstMeta,
+        argValues: [text],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSettingsQuietTimeConstMeta =>
+      const TaskConstMeta(debugName: "quiet_time", argNames: ["text"]);
+
+  @override
+  String? crateApiSettingsQuietTimeAt({
+    required int hour,
+    required int minute,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_32(hour, serializer);
+          sse_encode_u_32(minute, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 54)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSettingsQuietTimeAtConstMeta,
+        argValues: [hour, minute],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSettingsQuietTimeAtConstMeta =>
+      const TaskConstMeta(
+        debugName: "quiet_time_at",
+        argNames: ["hour", "minute"],
+      );
+
+  @override
+  String crateApiReaderReaderBody({
+    required String body,
+    required ReaderPaint paint,
+    required bool fit,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(body, serializer);
+          sse_encode_reader_paint(paint, serializer);
+          sse_encode_bool(fit, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 55)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiReaderReaderBodyConstMeta,
+        argValues: [body, paint, fit],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiReaderReaderBodyConstMeta => const TaskConstMeta(
+    debugName: "reader_body",
+    argNames: ["body", "paint", "fit"],
+  );
+
+  @override
+  String crateApiReaderReaderDocument({
+    required String body,
+    required ReaderDocumentOptions options,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(body, serializer);
+          sse_encode_box_autoadd_reader_document_options(options, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 56)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiReaderReaderDocumentConstMeta,
+        argValues: [body, options],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiReaderReaderDocumentConstMeta =>
+      const TaskConstMeta(
+        debugName: "reader_document",
+        argNames: ["body", "options"],
+      );
+
+  @override
+  int crateApiReaderReaderFitBelow({required String body}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(body, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 57)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_u_32,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiReaderReaderFitBelowConstMeta,
+        argValues: [body],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiReaderReaderFitBelowConstMeta =>
+      const TaskConstMeta(debugName: "reader_fit_below", argNames: ["body"]);
+
+  @override
+  ReaderPaint crateApiReaderReaderPaint({
+    required bool colored,
+    required bool dark,
+    required bool keepOriginal,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_bool(colored, serializer);
+          sse_encode_bool(dark, serializer);
+          sse_encode_bool(keepOriginal, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 58)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_reader_paint,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiReaderReaderPaintConstMeta,
+        argValues: [colored, dark, keepOriginal],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiReaderReaderPaintConstMeta => const TaskConstMeta(
+    debugName: "reader_paint",
+    argNames: ["colored", "dark", "keepOriginal"],
+  );
+
+  @override
+  ReaderPalette crateApiReaderReaderPalette({
+    required ReaderPaint paint,
+    required ReaderPalette theme,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_reader_paint(paint, serializer);
+          sse_encode_box_autoadd_reader_palette(theme, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 59)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_reader_palette,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiReaderReaderPaletteConstMeta,
+        argValues: [paint, theme],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiReaderReaderPaletteConstMeta =>
+      const TaskConstMeta(
+        debugName: "reader_palette",
+        argNames: ["paint", "theme"],
+      );
+
+  @override
   Future<void> crateApiSyncRefreshFolders({required PlatformInt64 accountId}) {
     return handler.executeNormal(
       NormalTask(
@@ -1826,7 +2334,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 46,
+            funcId: 60,
             port: port_,
           );
         },
@@ -1858,7 +2366,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 47,
+            funcId: 61,
             port: port_,
           );
         },
@@ -1889,7 +2397,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 48,
+            funcId: 62,
             port: port_,
           );
         },
@@ -1923,7 +2431,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 49,
+            funcId: 63,
             port: port_,
           );
         },
@@ -1958,7 +2466,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 50,
+            funcId: 64,
             port: port_,
           );
         },
@@ -1993,7 +2501,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 51,
+            funcId: 65,
             port: port_,
           );
         },
@@ -2014,11 +2522,46 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   );
 
   @override
+  bool crateApiSearchSearchFilterMatches({
+    required String query,
+    required String subject,
+    required String from,
+    required String fromName,
+    required String snippet,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(query, serializer);
+          sse_encode_String(subject, serializer);
+          sse_encode_String(from, serializer);
+          sse_encode_String(fromName, serializer);
+          sse_encode_String(snippet, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 66)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_bool,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSearchSearchFilterMatchesConstMeta,
+        argValues: [query, subject, from, fromName, snippet],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSearchSearchFilterMatchesConstMeta =>
+      const TaskConstMeta(
+        debugName: "search_filter_matches",
+        argNames: ["query", "subject", "from", "fromName", "snippet"],
+      );
+
+  @override
   Future<String> crateApiSearchSearchJson({
     required PlatformInt64 accountId,
     required String query,
     required String folder,
-    required PlatformInt64 limit,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -2027,11 +2570,10 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           sse_encode_i_64(accountId, serializer);
           sse_encode_String(query, serializer);
           sse_encode_String(folder, serializer);
-          sse_encode_i_64(limit, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 52,
+            funcId: 67,
             port: port_,
           );
         },
@@ -2040,7 +2582,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiSearchSearchJsonConstMeta,
-        argValues: [accountId, query, folder, limit],
+        argValues: [accountId, query, folder],
         apiImpl: this,
       ),
     );
@@ -2048,8 +2590,31 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
 
   TaskConstMeta get kCrateApiSearchSearchJsonConstMeta => const TaskConstMeta(
     debugName: "search_json",
-    argNames: ["accountId", "query", "folder", "limit"],
+    argNames: ["accountId", "query", "folder"],
   );
+
+  @override
+  SearchPlan crateApiSearchSearchPlan({required String query}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(query, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 68)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_search_plan,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSearchSearchPlanConstMeta,
+        argValues: [query],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSearchSearchPlanConstMeta =>
+      const TaskConstMeta(debugName: "search_plan", argNames: ["query"]);
 
   @override
   Future<void> crateApiSearchSearchServer({
@@ -2067,7 +2632,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 53,
+            funcId: 69,
             port: port_,
           );
         },
@@ -2097,7 +2662,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 54,
+            funcId: 70,
             port: port_,
           );
         },
@@ -2131,7 +2696,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 55,
+            funcId: 71,
             port: port_,
           );
         },
@@ -2152,6 +2717,29 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   );
 
   @override
+  SenderParts crateApiComposerSenderParts({required String address}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(address, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 72)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_sender_parts,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiComposerSenderPartsConstMeta,
+        argValues: [address],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiComposerSenderPartsConstMeta =>
+      const TaskConstMeta(debugName: "sender_parts", argNames: ["address"]);
+
+  @override
   Future<void> crateApiSettingsSetAccountSettings({
     required PlatformInt64 accountId,
     required Map<String, String> values,
@@ -2165,7 +2753,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 56,
+            funcId: 73,
             port: port_,
           );
         },
@@ -2200,7 +2788,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 57,
+            funcId: 74,
             port: port_,
           );
         },
@@ -2235,7 +2823,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 58,
+            funcId: 75,
             port: port_,
           );
         },
@@ -2270,7 +2858,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 59,
+            funcId: 76,
             port: port_,
           );
         },
@@ -2300,7 +2888,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 60,
+            funcId: 77,
             port: port_,
           );
         },
@@ -2332,7 +2920,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 61,
+            funcId: 78,
             port: port_,
           );
         },
@@ -2353,6 +2941,43 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   );
 
   @override
+  Future<BigInt> crateApiMessagesSetStarHits({
+    required PlatformInt64 accountId,
+    required List<Hit> hits,
+    required bool starred,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_i_64(accountId, serializer);
+          sse_encode_list_hit(hits, serializer);
+          sse_encode_bool(starred, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 79,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_u_64,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiMessagesSetStarHitsConstMeta,
+        argValues: [accountId, hits, starred],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMessagesSetStarHitsConstMeta =>
+      const TaskConstMeta(
+        debugName: "set_star_hits",
+        argNames: ["accountId", "hits", "starred"],
+      );
+
+  @override
   Future<BigInt> crateApiMessagesSetStarMany({
     required PlatformInt64 accountId,
     required PlatformInt64 folderId,
@@ -2370,7 +2995,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 62,
+            funcId: 80,
             port: port_,
           );
         },
@@ -2392,6 +3017,28 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
       );
 
   @override
+  String crateApiSettingsSettingChoicesJson() {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 81)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSettingsSettingChoicesJsonConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSettingsSettingChoicesJsonConstMeta =>
+      const TaskConstMeta(debugName: "setting_choices_json", argNames: []);
+
+  @override
   Future<String> crateApiSettingsSettingsJson() {
     return handler.executeNormal(
       NormalTask(
@@ -2400,7 +3047,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 63,
+            funcId: 82,
             port: port_,
           );
         },
@@ -2427,7 +3074,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 64,
+            funcId: 83,
             port: port_,
           );
         },
@@ -2459,7 +3106,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 65,
+            funcId: 84,
             port: port_,
           );
         },
@@ -2490,7 +3137,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 66,
+            funcId: 85,
             port: port_,
           );
         },
@@ -2522,7 +3169,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 67,
+            funcId: 86,
             port: port_,
           );
         },
@@ -2558,7 +3205,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 68,
+            funcId: 87,
             port: port_,
           );
         },
@@ -2587,7 +3234,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 69,
+            funcId: 88,
             port: port_,
           );
         },
@@ -2615,7 +3262,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 70,
+            funcId: 89,
             port: port_,
           );
         },
@@ -2639,7 +3286,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 71)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 90)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_i_32,
@@ -2665,7 +3312,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 72,
+            funcId: 91,
             port: port_,
           );
         },
@@ -2697,7 +3344,7 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 73,
+            funcId: 92,
             port: port_,
           );
         },
@@ -2765,15 +3412,52 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   }
 
   @protected
+  QuietTime dco_decode_box_autoadd_quiet_time(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_quiet_time(raw);
+  }
+
+  @protected
+  ReaderDocumentOptions dco_decode_box_autoadd_reader_document_options(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_reader_document_options(raw);
+  }
+
+  @protected
+  ReaderPalette dco_decode_box_autoadd_reader_palette(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_reader_palette(raw);
+  }
+
+  @protected
+  double dco_decode_f_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as double;
+  }
+
+  @protected
   FolderCounts dco_decode_folder_counts(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return FolderCounts(
+      cached: dco_decode_i_64(arr[0]),
+      server: dco_decode_i_64(arr[1]),
+      older: dco_decode_older_state(arr[2]),
+      canLoadOlder: dco_decode_bool(arr[3]),
+    );
+  }
+
+  @protected
+  Hit dco_decode_hit(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
     if (arr.length != 2)
       throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
-    return FolderCounts(
-      cached: dco_decode_i_64(arr[0]),
-      server: dco_decode_i_64(arr[1]),
-    );
+    return Hit(folder: dco_decode_String(arr[0]), uid: dco_decode_u_32(arr[1]));
   }
 
   @protected
@@ -2808,6 +3492,26 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   JobPhase dco_decode_job_phase(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return JobPhase.values[raw as int];
+  }
+
+  @protected
+  LinkInfo dco_decode_link_info(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return LinkInfo(
+      safe: dco_decode_bool(arr[0]),
+      scheme: dco_decode_String(arr[1]),
+      host: dco_decode_String(arr[2]),
+      path: dco_decode_String(arr[3]),
+    );
+  }
+
+  @protected
+  List<Hit> dco_decode_list_hit(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_hit).toList();
   }
 
   @protected
@@ -2848,15 +3552,76 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   }
 
   @protected
+  OlderState dco_decode_older_state(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return OlderState.values[raw as int];
+  }
+
+  @protected
   String? dco_decode_opt_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_String(raw);
   }
 
   @protected
+  QuietTime? dco_decode_opt_box_autoadd_quiet_time(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_quiet_time(raw);
+  }
+
+  @protected
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_list_prim_u_8_strict(raw);
+  }
+
+  @protected
+  QuietTime dco_decode_quiet_time(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return QuietTime(
+      hour: dco_decode_u_32(arr[0]),
+      minute: dco_decode_u_32(arr[1]),
+    );
+  }
+
+  @protected
+  ReaderDocumentOptions dco_decode_reader_document_options(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 6)
+      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    return ReaderDocumentOptions(
+      paint: dco_decode_reader_paint(arr[0]),
+      theme: dco_decode_reader_palette(arr[1]),
+      allowRemote: dco_decode_bool(arr[2]),
+      topSpace: dco_decode_u_32(arr[3]),
+      scale: dco_decode_f_64(arr[4]),
+      fit: dco_decode_bool(arr[5]),
+    );
+  }
+
+  @protected
+  ReaderPaint dco_decode_reader_paint(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return ReaderPaint.values[raw as int];
+  }
+
+  @protected
+  ReaderPalette dco_decode_reader_palette(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    return ReaderPalette(
+      paper: dco_decode_u_32(arr[0]),
+      ink: dco_decode_u_32(arr[1]),
+      link: dco_decode_u_32(arr[2]),
+      quote: dco_decode_u_32(arr[3]),
+      rule: dco_decode_u_32(arr[4]),
+    );
   }
 
   @protected
@@ -2870,6 +3635,26 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   }
 
   @protected
+  SearchMode dco_decode_search_mode(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return SearchMode.values[raw as int];
+  }
+
+  @protected
+  SearchPlan dco_decode_search_plan(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return SearchPlan(
+      mode: dco_decode_search_mode(arr[0]),
+      query: dco_decode_String(arr[1]),
+      hitLimit: dco_decode_u_32(arr[2]),
+      debounceMs: dco_decode_u_32(arr[3]),
+    );
+  }
+
+  @protected
   Selection dco_decode_selection(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -2878,6 +3663,18 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
     return Selection(
       accountId: dco_decode_i_64(arr[0]),
       folderId: dco_decode_i_64(arr[1]),
+    );
+  }
+
+  @protected
+  SenderParts dco_decode_sender_parts(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return SenderParts(
+      local: dco_decode_String(arr[0]),
+      domain: dco_decode_String(arr[1]),
     );
   }
 
@@ -2956,11 +3753,54 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   }
 
   @protected
+  QuietTime sse_decode_box_autoadd_quiet_time(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_quiet_time(deserializer));
+  }
+
+  @protected
+  ReaderDocumentOptions sse_decode_box_autoadd_reader_document_options(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_reader_document_options(deserializer));
+  }
+
+  @protected
+  ReaderPalette sse_decode_box_autoadd_reader_palette(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_reader_palette(deserializer));
+  }
+
+  @protected
+  double sse_decode_f_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getFloat64();
+  }
+
+  @protected
   FolderCounts sse_decode_folder_counts(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_cached = sse_decode_i_64(deserializer);
     var var_server = sse_decode_i_64(deserializer);
-    return FolderCounts(cached: var_cached, server: var_server);
+    var var_older = sse_decode_older_state(deserializer);
+    var var_canLoadOlder = sse_decode_bool(deserializer);
+    return FolderCounts(
+      cached: var_cached,
+      server: var_server,
+      older: var_older,
+      canLoadOlder: var_canLoadOlder,
+    );
+  }
+
+  @protected
+  Hit sse_decode_hit(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_folder = sse_decode_String(deserializer);
+    var var_uid = sse_decode_u_32(deserializer);
+    return Hit(folder: var_folder, uid: var_uid);
   }
 
   @protected
@@ -2999,6 +3839,33 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_i_32(deserializer);
     return JobPhase.values[inner];
+  }
+
+  @protected
+  LinkInfo sse_decode_link_info(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_safe = sse_decode_bool(deserializer);
+    var var_scheme = sse_decode_String(deserializer);
+    var var_host = sse_decode_String(deserializer);
+    var var_path = sse_decode_String(deserializer);
+    return LinkInfo(
+      safe: var_safe,
+      scheme: var_scheme,
+      host: var_host,
+      path: var_path,
+    );
+  }
+
+  @protected
+  List<Hit> sse_decode_list_hit(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <Hit>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_hit(deserializer));
+    }
+    return ans_;
   }
 
   @protected
@@ -3046,11 +3913,31 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   }
 
   @protected
+  OlderState sse_decode_older_state(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return OlderState.values[inner];
+  }
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
       return (sse_decode_String(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  QuietTime? sse_decode_opt_box_autoadd_quiet_time(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_quiet_time(deserializer));
     } else {
       return null;
     }
@@ -3068,6 +3955,59 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   }
 
   @protected
+  QuietTime sse_decode_quiet_time(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_hour = sse_decode_u_32(deserializer);
+    var var_minute = sse_decode_u_32(deserializer);
+    return QuietTime(hour: var_hour, minute: var_minute);
+  }
+
+  @protected
+  ReaderDocumentOptions sse_decode_reader_document_options(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_paint = sse_decode_reader_paint(deserializer);
+    var var_theme = sse_decode_reader_palette(deserializer);
+    var var_allowRemote = sse_decode_bool(deserializer);
+    var var_topSpace = sse_decode_u_32(deserializer);
+    var var_scale = sse_decode_f_64(deserializer);
+    var var_fit = sse_decode_bool(deserializer);
+    return ReaderDocumentOptions(
+      paint: var_paint,
+      theme: var_theme,
+      allowRemote: var_allowRemote,
+      topSpace: var_topSpace,
+      scale: var_scale,
+      fit: var_fit,
+    );
+  }
+
+  @protected
+  ReaderPaint sse_decode_reader_paint(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return ReaderPaint.values[inner];
+  }
+
+  @protected
+  ReaderPalette sse_decode_reader_palette(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_paper = sse_decode_u_32(deserializer);
+    var var_ink = sse_decode_u_32(deserializer);
+    var var_link = sse_decode_u_32(deserializer);
+    var var_quote = sse_decode_u_32(deserializer);
+    var var_rule = sse_decode_u_32(deserializer);
+    return ReaderPalette(
+      paper: var_paper,
+      ink: var_ink,
+      link: var_link,
+      quote: var_quote,
+      rule: var_rule,
+    );
+  }
+
+  @protected
   (String, String) sse_decode_record_string_string(
     SseDeserializer deserializer,
   ) {
@@ -3078,11 +4018,41 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   }
 
   @protected
+  SearchMode sse_decode_search_mode(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return SearchMode.values[inner];
+  }
+
+  @protected
+  SearchPlan sse_decode_search_plan(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_mode = sse_decode_search_mode(deserializer);
+    var var_query = sse_decode_String(deserializer);
+    var var_hitLimit = sse_decode_u_32(deserializer);
+    var var_debounceMs = sse_decode_u_32(deserializer);
+    return SearchPlan(
+      mode: var_mode,
+      query: var_query,
+      hitLimit: var_hitLimit,
+      debounceMs: var_debounceMs,
+    );
+  }
+
+  @protected
   Selection sse_decode_selection(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_accountId = sse_decode_i_64(deserializer);
     var var_folderId = sse_decode_i_64(deserializer);
     return Selection(accountId: var_accountId, folderId: var_folderId);
+  }
+
+  @protected
+  SenderParts sse_decode_sender_parts(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_local = sse_decode_String(deserializer);
+    var var_domain = sse_decode_String(deserializer);
+    return SenderParts(local: var_local, domain: var_domain);
   }
 
   @protected
@@ -3167,10 +4137,52 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   }
 
   @protected
+  void sse_encode_box_autoadd_quiet_time(
+    QuietTime self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_quiet_time(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_reader_document_options(
+    ReaderDocumentOptions self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_reader_document_options(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_reader_palette(
+    ReaderPalette self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_reader_palette(self, serializer);
+  }
+
+  @protected
+  void sse_encode_f_64(double self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putFloat64(self);
+  }
+
+  @protected
   void sse_encode_folder_counts(FolderCounts self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_64(self.cached, serializer);
     sse_encode_i_64(self.server, serializer);
+    sse_encode_older_state(self.older, serializer);
+    sse_encode_bool(self.canLoadOlder, serializer);
+  }
+
+  @protected
+  void sse_encode_hit(Hit self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.folder, serializer);
+    sse_encode_u_32(self.uid, serializer);
   }
 
   @protected
@@ -3200,6 +4212,24 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   void sse_encode_job_phase(JobPhase self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_link_info(LinkInfo self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_bool(self.safe, serializer);
+    sse_encode_String(self.scheme, serializer);
+    sse_encode_String(self.host, serializer);
+    sse_encode_String(self.path, serializer);
+  }
+
+  @protected
+  void sse_encode_list_hit(List<Hit> self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_hit(item, serializer);
+    }
   }
 
   @protected
@@ -3255,12 +4285,31 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   }
 
   @protected
+  void sse_encode_older_state(OlderState self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     sse_encode_bool(self != null, serializer);
     if (self != null) {
       sse_encode_String(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_quiet_time(
+    QuietTime? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_quiet_time(self, serializer);
     }
   }
 
@@ -3278,6 +4327,43 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   }
 
   @protected
+  void sse_encode_quiet_time(QuietTime self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_u_32(self.hour, serializer);
+    sse_encode_u_32(self.minute, serializer);
+  }
+
+  @protected
+  void sse_encode_reader_document_options(
+    ReaderDocumentOptions self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_reader_paint(self.paint, serializer);
+    sse_encode_reader_palette(self.theme, serializer);
+    sse_encode_bool(self.allowRemote, serializer);
+    sse_encode_u_32(self.topSpace, serializer);
+    sse_encode_f_64(self.scale, serializer);
+    sse_encode_bool(self.fit, serializer);
+  }
+
+  @protected
+  void sse_encode_reader_paint(ReaderPaint self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_reader_palette(ReaderPalette self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_u_32(self.paper, serializer);
+    sse_encode_u_32(self.ink, serializer);
+    sse_encode_u_32(self.link, serializer);
+    sse_encode_u_32(self.quote, serializer);
+    sse_encode_u_32(self.rule, serializer);
+  }
+
+  @protected
   void sse_encode_record_string_string(
     (String, String) self,
     SseSerializer serializer,
@@ -3288,10 +4374,32 @@ class MailCoreApiApiImpl extends MailCoreApiApiImplPlatform
   }
 
   @protected
+  void sse_encode_search_mode(SearchMode self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_search_plan(SearchPlan self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_search_mode(self.mode, serializer);
+    sse_encode_String(self.query, serializer);
+    sse_encode_u_32(self.hitLimit, serializer);
+    sse_encode_u_32(self.debounceMs, serializer);
+  }
+
+  @protected
   void sse_encode_selection(Selection self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_64(self.accountId, serializer);
     sse_encode_i_64(self.folderId, serializer);
+  }
+
+  @protected
+  void sse_encode_sender_parts(SenderParts self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.local, serializer);
+    sse_encode_String(self.domain, serializer);
   }
 
   @protected

@@ -11,11 +11,58 @@ use crate::html::{self, Sanitized};
 use crate::models::FolderRole;
 use crate::store::{accounts, folders, messages, settings};
 
-/// `[{name, role, unread}]` ordered by path.
+/// What a folder's "Show older" row says and offers, from the cached count
+/// and the count the server last reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OlderState {
+    /// The server never reported a count: offer to ask it.
+    Unchecked,
+    /// The server holds more than the cache: offer to load older mail.
+    Partial,
+    /// Nothing here, on either side.
+    Empty,
+    /// Everything the server has is cached.
+    Complete,
+}
+
+impl OlderState {
+    /// Whether asking the server could bring more mail.
+    #[must_use]
+    pub fn can_load(self) -> bool {
+        matches!(self, OlderState::Unchecked | OlderState::Partial)
+    }
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OlderState::Unchecked => "unchecked",
+            OlderState::Partial => "partial",
+            OlderState::Empty => "empty",
+            OlderState::Complete => "complete",
+        }
+    }
+}
+
+/// The "Show older" state for `cached` local rows against the server's
+/// last count (`None`: never reported).
+#[must_use]
+pub fn older_state(cached: u64, server: Option<u64>) -> OlderState {
+    match server {
+        None => OlderState::Unchecked,
+        Some(s) if s > cached => OlderState::Partial,
+        Some(_) if cached == 0 => OlderState::Empty,
+        Some(_) => OlderState::Complete,
+    }
+}
+
+/// `[{id, name, role, unread, subscribed, count, delimiter, server_total,
+/// older, can_load_older, delete_is_permanent}]` ordered by path.
 pub fn folders_json(db: &Db, account_id: i64) -> Result<String> {
     let counts = messages::counts_by_account(db, account_id)?;
+    let list = folders::list_by_account(db, account_id)?;
     let mut arr = Vec::new();
-    for f in folders::list_by_account(db, account_id)? {
+    for f in &list {
         let c = counts.get(&f.id).copied().unwrap_or_default();
         let unread = if f.role == FolderRole::Trash {
             0
@@ -33,6 +80,11 @@ pub fn folders_json(db: &Db, account_id: i64) -> Result<String> {
             "subscribed": f.subscribed,
             "count": c.total,
             "delimiter": f.delimiter,
+            // `-1`: the server never reported a count.
+            "server_total": f.server_total.map_or(-1, |s| s as i64),
+            "older": older_state(c.total, f.server_total).as_str(),
+            "can_load_older": older_state(c.total, f.server_total).can_load(),
+            "delete_is_permanent": crate::undo::delete_is_permanent(f, &list),
         }));
     }
     Ok(serde_json::to_string(&arr)?)
@@ -396,7 +448,9 @@ fn rfc_header(raw: &Option<String>, wanted: &str) -> Option<String> {
 /// Account-wide FTS search rows for the search UI: `[{uid, folder_id,
 /// folder, subject, from, date, snippet, unread, starred,
 /// has_attachments}]`, newest first (like the Date view of a folder list;
-/// relevance order read as random next to it). `folder` scopes the search to one
+/// relevance order read as random next to it), grouped by folder: folders in
+/// the order of their newest hit, so both lists only start a section where
+/// `folder` changes. `folder` scopes the search to one
 /// folder path (empty = whole account). `snippet` is plain match context
 /// (the empty-string `snippet()` markers produce it tag-free — the list
 /// renders plain rows). The query language is [`crate::search`]'s. Blank,
@@ -455,6 +509,18 @@ pub fn search_json(
     for row in rows {
         arr.push(row?);
     }
+    // Stable: newest first inside each folder.
+    let mut order: Vec<String> = Vec::new();
+    for hit in &arr {
+        let f = hit["folder"].as_str().unwrap_or_default();
+        if !order.iter().any(|o| o == f) {
+            order.push(f.to_string());
+        }
+    }
+    arr.sort_by_key(|hit| {
+        let f = hit["folder"].as_str().unwrap_or_default();
+        order.iter().position(|o| o == f)
+    });
     Ok(serde_json::to_string(&arr)?)
 }
 

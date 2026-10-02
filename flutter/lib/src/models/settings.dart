@@ -92,63 +92,40 @@ class AppSettings {
   final String sortField;
   final bool sortDescending;
 
-  /// The core's own defaults, for a settings row that was never written and
-  /// for tests that never opened a database.
-  static const defaults = AppSettings(
-    sentCopy: true,
-    loadRemoteImages: false,
-    sendFormat: 'auto',
-    includePlain: true,
-    autoMarkRead: true,
-    markReadDelaySecs: 0,
-    collectContacts: true,
-    confirmDelete: true,
-    density: 'comfortable',
-    readerFontSize: 'normal',
-    linkClickAction: 'examine',
-    syncIntervalMinutes: 0,
-    backgroundScheduler: 'workmanager',
-    notificationsEnabled: true,
-    quietEnabled: false,
-    quietStart: QuietTime.defaultStart,
-    quietEnd: QuietTime.defaultEnd,
-    signatureEnabled: false,
-    signatureText: '',
-    replyBelowQuote: false,
-    requestMdn: false,
-    uiScale: 1.0,
-    sortField: 'date',
-    sortDescending: true,
-  );
+  /// Before the core's settings have loaded (the first frames of startup,
+  /// and widget tests without a database). Neutral, not the defaults: those
+  /// are the core's (`SettingChoices`), and the real values replace this
+  /// before anything acts on it.
+  static final placeholder = AppSettings.fromJson(const {});
 
+  /// The core sends every key, normalized (`settings_json`); a missing one
+  /// reads as off / empty / zero rather than as a default kept here.
   factory AppSettings.fromJson(Map<String, dynamic> j) => AppSettings(
-    sentCopy: _flag(j[SettingKeys.sentCopy], orElse: true),
+    sentCopy: _flag(j[SettingKeys.sentCopy]),
     loadRemoteImages: _flag(j[SettingKeys.loadRemoteImages]),
-    sendFormat: _str(j[SettingKeys.sendFormat], orElse: 'auto'),
-    includePlain: _flag(j[SettingKeys.includePlain], orElse: true),
-    autoMarkRead: _flag(j[SettingKeys.autoMarkRead], orElse: true),
+    sendFormat: _str(j[SettingKeys.sendFormat]),
+    includePlain: _flag(j[SettingKeys.includePlain]),
+    autoMarkRead: _flag(j[SettingKeys.autoMarkRead]),
     markReadDelaySecs: _int(j[SettingKeys.markReadDelay]),
-    collectContacts: _flag(j[SettingKeys.collectContacts], orElse: true),
-    confirmDelete: _flag(j[SettingKeys.confirmDelete], orElse: true),
-    density: _str(j[SettingKeys.listDensity], orElse: 'comfortable'),
-    readerFontSize: _str(j[SettingKeys.readerFontSize], orElse: 'normal'),
-    linkClickAction: _str(j[SettingKeys.linkClickAction], orElse: 'examine'),
+    collectContacts: _flag(j[SettingKeys.collectContacts]),
+    confirmDelete: _flag(j[SettingKeys.confirmDelete]),
+    density: _str(j[SettingKeys.listDensity]),
+    readerFontSize: _str(j[SettingKeys.readerFontSize]),
+    linkClickAction: _str(j[SettingKeys.linkClickAction]),
     syncIntervalMinutes: _int(j[SettingKeys.syncInterval]),
     backgroundScheduler: _scheduler(j[SettingKeys.backgroundScheduler]),
-    notificationsEnabled: _flag(
-      j[SettingKeys.notificationsEnabled],
-      orElse: true,
-    ),
+    notificationsEnabled: _flag(j[SettingKeys.notificationsEnabled]),
     quietEnabled: _flag(j[SettingKeys.quietEnabled]),
-    quietStart: _str(j[SettingKeys.quietStart], orElse: QuietTime.defaultStart),
-    quietEnd: _str(j[SettingKeys.quietEnd], orElse: QuietTime.defaultEnd),
+    quietStart: _str(j[SettingKeys.quietStart]),
+    quietEnd: _str(j[SettingKeys.quietEnd]),
     signatureEnabled: _flag(j[SettingKeys.signatureEnabled]),
     signatureText: _str(j[SettingKeys.signatureText]),
     replyBelowQuote: _flag(j[SettingKeys.replyBelowQuote]),
     requestMdn: _flag(j[SettingKeys.requestMdn]),
+    // 1.0 is the identity scale, not a preference: zero would paint nothing.
     uiScale: _dbl(j[SettingKeys.uiScale], orElse: 1.0),
-    sortField: _str(j[SettingKeys.sortField], orElse: 'date'),
-    sortDescending: _flag(j[SettingKeys.sortDescending], orElse: true),
+    sortField: _str(j[SettingKeys.sortField]),
+    sortDescending: _flag(j[SettingKeys.sortDescending]),
   );
 
   AppSettings copyWith({
@@ -215,27 +192,46 @@ class AppSettings {
   bool get isCompact => density == 'compact';
 }
 
-/// A quiet-hours time as stored: `HH:MM`, 24-hour, device local time.
-/// Mirrors `account_settings::parse_time` / `format_time`.
-abstract final class QuietTime {
-  static const defaultStart = '00:00';
-  static const defaultEnd = '07:00';
+/// What each preference may hold and what it starts as, from the core
+/// (`mailcore::store::settings::choices`). Forms list [values] and label
+/// them; they never keep a list or a default of their own.
+class SettingChoices {
+  const SettingChoices(this._choices);
 
-  /// `"7:05"` / `"07:05"` as hour and minute; null for anything else.
-  static ({int hour, int minute})? parse(String value) {
-    final parts = value.trim().split(':');
-    if (parts.length != 2) return null;
-    final (h, m) = (parts[0], parts[1]);
-    if (h.isEmpty || h.length > 2 || m.length != 2) return null;
-    final hour = int.tryParse(h);
-    final minute = int.tryParse(m);
-    if (hour == null || minute == null) return null;
-    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
-    return (hour: hour, minute: minute);
-  }
+  final Map<String, ({Object? defaultValue, List<Object> values})> _choices;
 
-  static String format(int hour, int minute) =>
-      '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
+  factory SettingChoices.fromJson(Map<String, dynamic> j) => SettingChoices({
+    for (final e in j.entries)
+      if (e.value is Map)
+        e.key: (
+          defaultValue: (e.value as Map)['default'],
+          values: [
+            for (final v in ((e.value as Map)['values'] as List?) ?? const [])
+              if (v != null) v as Object,
+          ],
+        ),
+  });
+
+  /// The values `key` offers, in display order (empty for a switch or text).
+  List<T> values<T>(String key) => [
+    for (final v in _choices[key]?.values ?? const <Object>[])
+      if (_as<T>(v) case final T t) t,
+  ];
+
+  /// The built-in default of `key`, typed like [AppSettings] holds it.
+  T? defaultOf<T>(String key) => _as<T>(_choices[key]?.defaultValue);
+
+  /// Every default as one settings object.
+  AppSettings get defaults => AppSettings.fromJson({
+    for (final e in _choices.entries) e.key: e.value.defaultValue,
+  });
+
+  static T? _as<T>(Object? v) => switch (v) {
+    final T t => t,
+    // JSON keeps `1.0` as `1`: a double setting still reads as a double.
+    final num n when T == double => n.toDouble() as T,
+    _ => null,
+  };
 }
 
 /// A search hit's identity: a UID is only unique within its folder.

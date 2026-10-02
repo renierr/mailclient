@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -7,8 +6,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
-import 'mail_dark.dart';
-import 'mail_fit.dart';
+import '../../ffi/mail_core.dart';
 import 'mail_paint.dart';
 import 'measure_size.dart';
 
@@ -46,8 +44,8 @@ class MailWebView extends StatefulWidget {
 
   final Widget? header;
 
-  /// Narrow pages loosen fixed-width newsletter layouts to fit (see
-  /// [fitMailWidths]). False keeps the mail's original fixed-width layout,
+  /// Narrow pages loosen fixed-width newsletter layouts to fit (the core's
+  /// `html::reader::fit_widths`). False keeps the mail's original fixed-width layout,
   /// sideways scroll included — used with the reader's "show original
   /// colours" toggle, where the mail is shown as sent in both respects.
   final bool fitWidths;
@@ -92,9 +90,10 @@ class _MailWebViewState extends State<MailWebView>
   /// Page width in logical (= CSS) pixels; null until laid out.
   double? _width;
 
-  /// [mailLayoutWidth] of [MailWebView.html], computed once per mail.
+  /// Page width below which [MailWebView.html] is fitted (the core's
+  /// `fit_below`), computed once per mail.
   String? _layoutFor;
-  int _layoutWidth = 0;
+  int _fitBelow = 0;
 
   /// [MailWebView.headerReady] has completed for the shown mail.
   bool _headerReady = false;
@@ -247,33 +246,29 @@ class _MailWebViewState extends State<MailWebView>
       _zoom = zoom;
       platform.setTextZoom(zoom);
     }
-    final surface = Theme.of(context).colorScheme.surface;
+    final theme = MailPalette.themeOf(context);
     final palette = MailPalette.of(context, widget.paint);
     // Behind the document, so nothing flashes white before it paints.
-    final background = widget.paint == MailPaint.darkened
-        ? surface
-        : palette.paper;
-    if (background != _background) {
-      _background = background;
-      _controller.setBackgroundColor(background);
+    if (palette.paper != _background) {
+      _background = palette.paper;
+      _controller.setBackgroundColor(palette.paper);
     }
     final top = widget.header == null ? 0.0 : _headerHeight;
     final width = _width;
     if (top == null || width == null || !_headerReady) return;
+    final core = MailCore.instance;
     if (!identical(_layoutFor, widget.html)) {
       _layoutFor = widget.html;
-      _layoutWidth = mailLayoutWidth(widget.html);
+      _fitBelow = core.readerFitBelow(widget.html);
     }
-    // The page's own side margins (16px each) are not the mail's to use.
     // With [MailWebView.fitWidths] off the mail keeps its original fixed
     // widths and scrolls sideways, like the sender laid it out.
-    final fit = widget.fitWidths && _layoutWidth > width - 32;
-    final darkenedOn = widget.paint == MailPaint.darkened ? surface : null;
+    final fit = widget.fitWidths && _fitBelow > 0 && width < _fitBelow;
     final key = (
       widget.html,
       widget.allowRemote,
-      (palette.paper, palette.ink, palette.link, palette.quote, palette.rule),
-      darkenedOn,
+      widget.paint,
+      (theme.paper, theme.ink, theme.link, theme.quote, theme.rule),
       top.ceil(),
       fit,
     );
@@ -282,13 +277,17 @@ class _MailWebViewState extends State<MailWebView>
     _loaded = key;
     _pagePx = 0;
     _controller.loadHtmlString(
-      mailDocument(
+      core.readerDocument(
         widget.html,
-        allowRemote: widget.allowRemote,
-        palette: palette,
-        darkenedOn: darkenedOn,
-        topSpace: top,
-        fit: fit,
+        ReaderDocumentOptions(
+          paint: widget.paint,
+          theme: theme,
+          allowRemote: widget.allowRemote,
+          topSpace: top.ceil(),
+          // Text size goes through the WebView's own text zoom above.
+          scale: 1,
+          fit: fit,
+        ),
       ),
     );
   }
@@ -411,79 +410,4 @@ class _MailWebViewState extends State<MailWebView>
       ],
     );
   }
-}
-
-/// The full document handed to the WebView: CSP first, then the sheet
-/// styling, then the sanitized body.
-///
-/// With [darkenedOn] set, the page sits directly on that dark colour with
-/// pre-inverted defaults and sender colours (see [darkenMailColors]) —
-/// deliberately no runtime `filter`, which would re-render every scrolled
-/// frame. Images keep their real colours without any double inversion.
-///
-/// Nothing from the mail can reach `<head>` — the sanitizer drops `head`,
-/// `meta` and `style` — and a second CSP could only narrow this one anyway.
-String mailDocument(
-  String body, {
-  required bool allowRemote,
-  MailPalette palette = MailPalette.light,
-  Color? darkenedOn,
-  double topSpace = 0,
-  bool fit = false,
-}) {
-  // `cid:` images arrive already embedded as `data:` by the core.
-  final img = allowRemote ? "data: https: http:" : "data:";
-  final csp = [
-    "default-src 'none'",
-    "img-src $img",
-    "style-src 'unsafe-inline'",
-    "font-src 'none'",
-    "media-src 'none'",
-    "frame-src 'none'",
-    "form-action 'none'",
-    "base-uri 'none'",
-  ].join('; ');
-  // A darkened page carries no runtime `filter` (see [darkenMailColors]):
-  // it sits directly on the dark surface with pre-inverted defaults, so
-  // scrolling repaints nothing through a filter. The inverted defaults
-  // use the same matrix as the old filter, hence the same colours.
-  final darkened = darkenedOn != null;
-  final paper = darkened ? darkenedOn : palette.paper;
-  final ink = darkened ? invertColor(palette.ink) : palette.ink;
-  final link = darkened ? invertColor(palette.link) : palette.link;
-  final quote = darkened ? invertColor(palette.quote) : palette.quote;
-  final rule = darkened ? invertColor(palette.rule) : palette.rule;
-  final layout =
-      'html,body{background:${cssHex(paper)}}'
-      'body{margin:0 16px 16px;'
-      'background:${cssHex(paper)};color:${cssHex(ink)};'
-      'font-family:sans-serif;font-size:15px;line-height:1.5;'
-      'overflow-wrap:break-word}'
-      '#mc-top{margin-bottom:16px}';
-  // Room for the header overlaying the top of the page (see [MailWebView]).
-  final spacer = '<div id="mc-top" style="height:${topSpace.ceil()}px"></div>';
-  // A layout wider than the page is loosened to fit it (see [fitMailWidths]).
-  final shown = fit ? fitMailWidths(body) : body;
-  final content = spacer + (darkened ? darkenMailColors(shown) : shown);
-  return '<!DOCTYPE html><html><head><meta charset="utf-8">'
-      '<meta http-equiv="Content-Security-Policy" '
-      'content="${const HtmlEscape(HtmlEscapeMode.attribute).convert(csp)}">'
-      // CSP does not cover DNS prefetching of link hosts; this does.
-      '<meta http-equiv="x-dns-prefetch-control" content="off">'
-      '<meta name="viewport" content="width=device-width, initial-scale=1">'
-      '<style>$layout'
-      'a{color:${cssHex(link)}}'
-      // Fixed-width newsletter tables and images shrink to the screen
-      // instead of scrolling sideways; author CSS beats their attributes.
-      'img{max-width:100%!important;height:auto!important}'
-      'table{max-width:100%!important}'
-      // A long URL in a cell would otherwise set the cell's minimum width.
-      'td,th{overflow-wrap:anywhere}'
-      // Loosened widths are caps; padding must fit inside them.
-      '${fit ? 'div,table{box-sizing:border-box}' : ''}'
-      'pre{white-space:pre-wrap}'
-      'blockquote{margin:8px 0;padding-left:12px;'
-      'border-left:3px solid ${cssHex(rule)};'
-      'color:${cssHex(quote)}}'
-      '</style></head><body>$content</body></html>';
 }

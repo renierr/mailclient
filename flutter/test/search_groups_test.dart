@@ -16,11 +16,12 @@ SearchHit hit(int uid, String folder) => SearchHit(
 );
 
 void main() {
-  test('hits group by folder in order of each folder\'s best hit', () {
+  test('a header starts each folder of the grouped hits', () {
+    // Grouped by the core already (`feed::search_json`).
     final rows = groupHitsByFolder([
       hit(1, 'INBOX'),
-      hit(2, 'Archive'),
       hit(3, 'INBOX'),
+      hit(2, 'Archive'),
       hit(4, 'Archive'),
     ]);
 

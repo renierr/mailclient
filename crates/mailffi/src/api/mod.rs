@@ -29,6 +29,7 @@ pub mod init;
 pub mod maintenance;
 pub mod messages;
 pub mod mutate;
+pub mod reader;
 pub mod search;
 pub mod settings;
 pub mod sync;

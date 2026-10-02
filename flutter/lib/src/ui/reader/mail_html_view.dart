@@ -5,6 +5,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
 
+import '../../ffi/mail_core.dart';
 import 'image_baseline.dart';
 import 'mail_paint.dart';
 import 'mail_web_view.dart';
@@ -107,7 +108,11 @@ class _MailHtmlViewState extends State<MailHtmlView> {
     final key = (widget.html, style, widget.paint, palette.paper, palette.link);
     if (_body == null || _bodyKey != key) {
       _bodyKey = key;
-      _body = _build(style, palette);
+      // A darkened mail arrives with its colours rewritten by the core.
+      final html = widget.paint == MailPaint.darkened
+          ? MailCore.instance.readerBody(widget.html, widget.paint)
+          : widget.html;
+      _body = _build(html, style, palette);
     }
     // The header rebuilds freely; the body sliver is the cached instance.
     return SelectionArea(
@@ -117,30 +122,25 @@ class _MailHtmlViewState extends State<MailHtmlView> {
             SliverToBoxAdapter(child: header),
           _body!,
           // Paper down to the bottom of a short mail.
-          if (widget.paint != MailPaint.darkened)
-            SliverFillRemaining(
-              hasScrollBody: false,
-              child: ColoredBox(color: palette.paper),
-            ),
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: ColoredBox(color: palette.paper),
+          ),
         ],
       ),
     );
   }
 
-  /// The body as a sliver. Normal paints build it lazily (sliver list);
-  /// the darkened paint needs one box to invert as a whole, so it lays the
-  /// mail out as a column.
-  Widget _build(TextStyle? style, MailPalette palette) {
+  /// The body as a sliver, built lazily as it scrolls into view.
+  Widget _build(String body, TextStyle? style, MailPalette palette) {
     final outline = Theme.of(context).colorScheme.outline;
-    final darkened = widget.paint == MailPaint.darkened;
-    Widget html(RenderMode mode) => HtmlWidget(
-      widget.html,
+    final html = HtmlWidget(
+      body,
       // A new paint needs a new factory, which only initState builds.
       key: ValueKey(widget.paint),
-      renderMode: mode,
+      renderMode: RenderMode.sliverList,
       factoryBuilder: () => _LinkHoverWidgetFactory(
         onHoverUrl: (url) => widget.onHoverUrl?.call(url),
-        restoreImages: darkened,
       ),
       textStyle: style,
       customStylesBuilder: (element) =>
@@ -160,50 +160,28 @@ class _MailHtmlViewState extends State<MailHtmlView> {
       onErrorBuilder: (context, element, error) =>
           Text('[unrenderable content]', style: TextStyle(color: outline)),
     );
-    if (darkened) {
-      // See [MailPaint.darkened]: the whole body inverts, images twice.
-      return SliverToBoxAdapter(
-        child: ColorFiltered(
-          colorFilter: darkInvert,
-          child: ColoredBox(
-            color: palette.paper,
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: html(RenderMode.column),
-            ),
-          ),
-        ),
-      );
-    }
     return DecoratedSliver(
       decoration: BoxDecoration(color: palette.paper),
       sliver: SliverPadding(
         padding: const EdgeInsets.all(16),
         // Sliver mode builds top-level blocks lazily as they scroll into
         // view instead of laying out the whole mail up front.
-        sliver: html(RenderMode.sliverList),
+        sliver: html,
       ),
     );
   }
 }
 
 class _LinkHoverWidgetFactory extends WidgetFactory {
-  _LinkHoverWidgetFactory({this.onHoverUrl, this.restoreImages = false});
+  _LinkHoverWidgetFactory({this.onHoverUrl});
 
   final void Function(String? url)? onHoverUrl;
-
-  /// Inside an inverted body: invert images again so they look real.
-  final bool restoreImages;
 
   @override
   Widget? buildImageWidget(BuildTree tree, ImageSource src) {
     final image = super.buildImageWidget(tree, src);
     if (image == null) return null;
-    return ImageBaseline(
-      child: restoreImages
-          ? ColorFiltered(colorFilter: darkInvert, child: image)
-          : image,
-    );
+    return ImageBaseline(child: image);
   }
 
   final Expando<String> _recognizerUrls = Expando<String>();

@@ -284,3 +284,50 @@ fn named_entities_decode_to_their_characters() {
     let s = sanitize("<p>&lt;script&gt;</p>", false);
     assert!(!s.html.contains("<script"), "{s:?}");
 }
+
+#[test]
+fn links_open_only_on_web_schemes() {
+    for url in [
+        "https://example.com/x",
+        "http://example.com/",
+        "mailto:a@example.com",
+        "MAILTO:a@example.com",
+        "  HTTPS://example.com  ",
+    ] {
+        assert!(link_info(url).safe, "{url}");
+    }
+    for url in [
+        "javascript:alert(1)",
+        "JaVaScRiPt:alert(1)",
+        "java	script:alert(1)",
+        "data:text/html,<p>x</p>",
+        "file:///etc/passwd",
+        "vbscript:msgbox(1)",
+        "ftp://example.com/x",
+        "",
+        "#fragment",
+    ] {
+        assert!(!link_info(url).safe, "{url}");
+    }
+}
+
+#[test]
+fn links_split_for_the_examine_dialog() {
+    let i = link_info("https://user@example.com:443/a/b?x=1");
+    assert_eq!(
+        (i.scheme.as_str(), i.host.as_str(), i.path.as_str()),
+        ("https", "example.com", "/a/b?x=1")
+    );
+    let m = link_info("Mailto:a@example.com?subject=hi");
+    assert_eq!(
+        (m.scheme.as_str(), m.host.as_str()),
+        ("mailto", "example.com")
+    );
+    assert_eq!(m.path, "");
+    assert_eq!(link_info("https://example.com").path, "");
+    let empty = link_info("");
+    assert_eq!(
+        (empty.scheme, empty.host, empty.path),
+        (String::new(), String::new(), String::new())
+    );
+}

@@ -2,6 +2,7 @@ use std::pin::Pin;
 
 use cxx_qt_lib::QString;
 use mailcore::feed;
+use mailcore::html::reader;
 use mailcore::store::{messages, settings};
 use mailcore::undo::MoveTarget;
 
@@ -54,7 +55,7 @@ pub(crate) fn parse_uids_json(raw: &str) -> Result<Vec<u32>, String> {
 /// Parse search-hit targets (`[{"folder": path, "uid": n}, ...]` from QML)
 /// into per-folder UID lists, in first-seen folder order. Same caps and
 /// dedup as [`parse_uids_json`], applied to the whole selection.
-pub(crate) fn parse_hits_json(raw: &str) -> Result<Vec<(String, Vec<u32>)>, String> {
+pub(crate) fn parse_hits_json(raw: &str) -> Result<Vec<(String, u32)>, String> {
     let invalid = || "invalid selection".to_string();
     let v: serde_json::Value = serde_json::from_str(raw).map_err(|_| invalid())?;
     let arr = v.as_array().ok_or_else(invalid)?;
@@ -67,7 +68,7 @@ pub(crate) fn parse_hits_json(raw: &str) -> Result<Vec<(String, Vec<u32>)>, Stri
             MAX_MESSAGE_LIMIT
         ));
     }
-    let mut groups: Vec<(String, Vec<u32>)> = Vec::new();
+    let mut hits = Vec::with_capacity(arr.len());
     for x in arr {
         let folder = x
             .get("folder")
@@ -77,16 +78,9 @@ pub(crate) fn parse_hits_json(raw: &str) -> Result<Vec<(String, Vec<u32>)>, Stri
         if folder.is_empty() || uid == 0 || uid > u64::from(u32::MAX) {
             return Err(invalid());
         }
-        match groups.iter_mut().find(|(f, _)| f == folder) {
-            Some((_, uids)) => uids.push(uid as u32),
-            None => groups.push((folder.to_string(), vec![uid as u32])),
-        }
+        hits.push((folder.to_string(), uid as u32));
     }
-    for (_, uids) in &mut groups {
-        uids.sort_unstable();
-        uids.dedup();
-    }
-    Ok(groups)
+    Ok(hits)
 }
 
 /// Persist a local read/star change. `""` on success, else the error for the
@@ -181,8 +175,88 @@ impl qobject::Bridge {
         if acc_id < 0 {
             return qstring("[]");
         }
-        feed::search_json(db, acc_id, &query.to_string(), 50, &folder.to_string())
-            .map_or_else(|_| qstring("[]"), |j| qstring(&j))
+        feed::search_json(
+            db,
+            acc_id,
+            &query.to_string(),
+            mailcore::search::HIT_LIMIT,
+            &folder.to_string(),
+        )
+        .map_or_else(|_| qstring("[]"), |j| qstring(&j))
+    }
+
+    pub fn reader_paint(&self, colored: bool, dark: bool, keep_original: bool) -> QString {
+        qstring(reader::paint_for(colored, dark, keep_original).as_str())
+    }
+
+    pub fn reader_palette_json(&self, paint: &QString, theme_json: &QString) -> QString {
+        let theme =
+            reader_theme(&serde_json::from_str(&theme_json.to_string()).unwrap_or_default());
+        let palette = reader::palette(reader::Paint::parse(&paint.to_string()), &theme);
+        qstring(&serde_json::to_string(&palette).unwrap_or_else(|_| "{}".to_string()))
+    }
+
+    pub fn reader_fit_below(&self, body: &QString) -> i32 {
+        i32::try_from(reader::fit_below(&body.to_string())).unwrap_or(i32::MAX)
+    }
+
+    pub fn reader_document(&self, body: &QString, options_json: &QString) -> QString {
+        let o: serde_json::Value =
+            serde_json::from_str(&options_json.to_string()).unwrap_or_default();
+        let flag = |k: &str| {
+            o.get(k)
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        };
+        let extra_css = o
+            .get("extra_css")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        let options = reader::DocumentOptions {
+            paint: reader::Paint::parse(
+                o.get("paint").and_then(|v| v.as_str()).unwrap_or_default(),
+            ),
+            theme: reader_theme(o.get("theme").unwrap_or(&serde_json::Value::Null)),
+            allow_remote: flag("allow_remote"),
+            top_space: o
+                .get("top_space")
+                .and_then(serde_json::Value::as_f64)
+                .map_or(0, |v| v.max(0.0).ceil() as u32),
+            scale: o
+                .get("scale")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(1.0) as f32,
+            fit: flag("fit"),
+            extra_css,
+        };
+        qstring(&reader::document(&body.to_string(), &options))
+    }
+
+    pub fn link_info_json(&self, url: &QString) -> QString {
+        let info = mailcore::html::link_info(&url.to_string());
+        qstring(&serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string()))
+    }
+
+    pub fn search_plan_json(&self, query: &QString) -> QString {
+        let plan = mailcore::search::plan(&query.to_string());
+        qstring(&serde_json::to_string(&plan).unwrap_or_else(|_| "{}".to_string()))
+    }
+
+    pub fn search_filter_matches(
+        &self,
+        query: &QString,
+        subject: &QString,
+        from: &QString,
+        from_name: &QString,
+        snippet: &QString,
+    ) -> bool {
+        mailcore::search::filter_matches(
+            &query.to_string(),
+            &subject.to_string(),
+            &from.to_string(),
+            &from_name.to_string(),
+            &snippet.to_string(),
+        )
     }
 
     pub fn open_attachment(self: Pin<&mut Self>, attachment_id: i32) -> QString {
@@ -321,23 +395,30 @@ impl qobject::Bridge {
     }
 }
 
+/// The theme colours QML sends (`{paper, ink, link, quote, rule}` as
+/// `#rrggbb`); a missing or unreadable one keeps the light sheet's.
+fn reader_theme(v: &serde_json::Value) -> reader::Palette {
+    let css = |k: &str| v.get(k).and_then(|c| c.as_str()).unwrap_or_default();
+    reader::Palette::from_css(
+        css("paper"),
+        css("ink"),
+        css("link"),
+        css("quote"),
+        css("rule"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn hits_group_by_folder_in_first_seen_order() {
-        let groups = parse_hits_json(
-            r#"[{"folder":"Archive","uid":7},{"folder":"INBOX","uid":3},
-                {"folder":"Archive","uid":2},{"folder":"Archive","uid":7}]"#,
-        )
-        .unwrap();
+    fn hits_parse_as_sent_and_group_in_the_core() {
+        let hits = parse_hits_json(r#"[{"folder":"Archive","uid":7},{"folder":"INBOX","uid":3}]"#)
+            .unwrap();
         assert_eq!(
-            groups,
-            vec![
-                ("Archive".to_string(), vec![2, 7]),
-                ("INBOX".to_string(), vec![3]),
-            ]
+            hits,
+            vec![("Archive".to_string(), 7), ("INBOX".to_string(), 3)]
         );
     }
 

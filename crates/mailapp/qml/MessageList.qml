@@ -31,6 +31,8 @@ Rectangle {
     property int currentUid: -1
     property string folderName: ""
     property string filterText: ""
+    // The app bridge, for the core's list filter (`search::filter_matches`).
+    property var backend
     // Quick filters for the current list: each checked entry narrows the
     // visible rows (AND-combined). They apply in folder and search modes.
     property bool filterUnread: false
@@ -52,6 +54,10 @@ Rectangle {
     // during the last successful IMAP sync. All cached messages are displayed.
     property int totalCount: 0
     property int serverTotal: -1
+    // The "Show older" state and whether loading can bring more, decided
+    // by mailcore (`feed::older_state`).
+    property string olderState: ""
+    property bool olderCanLoad: false
     property int limit: 200
     property bool busy: false
 
@@ -92,9 +98,7 @@ Rectangle {
     readonly property bool hasAnyFilter: root.filterText !== "" || root.hasQuickFilter
     // Filters only narrow the loaded rows, so older mail stays reachable
     // under them (Flutter shows its Load older row the same way).
-    readonly property bool canLoadOlder: root.folderName !== "" && (root.messages.length > 0
-                                                                                          || root.serverTotal < 0) && (
-                                             root.serverTotal < 0 || root.serverTotal > root.totalCount)
+    readonly property bool canLoadOlder: root.folderName !== "" && root.olderCanLoad
 
     // Row actions rebuild the feed, which destroys the delegates. Emitting
     // straight from a delegate's click handler therefore deletes the item
@@ -352,12 +356,10 @@ Rectangle {
     function matches(m) {
         if (!root.matchesQuick(m))
             return false;
-        if (root.filterText === "")
+        if (root.filterText === "" || !root.backend)
             return true;
-        var q = root.filterText.toLowerCase();
-        var sender = (m.from_name || "") !== "" ? m.from_name : (m.from || "");
-        return (m.subject || "").toLowerCase().indexOf(q) !== -1 || (m.from || "").toLowerCase().indexOf(q) !== -1
-                || sender.toLowerCase().indexOf(q) !== -1 || (m.snippet || "").toLowerCase().indexOf(q) !== -1;
+        return root.backend.search_filter_matches(root.filterText, m.subject || "", m.from || "", m.from_name || "",
+                                                  m.snippet || "");
     }
 
     // Only the roles a row actually draws. `sender` is the sent display
@@ -413,24 +415,16 @@ Rectangle {
     function rebuildFiltered() {
         var rows = [];
         if (root.searching) {
-            // Grouped by folder for the section headers: folders in the
-            // order of their newest hit, newest first inside each.
+            // The feed arrives grouped by folder for the section headers
+            // (mailcore `feed::search_json`): folders in the order of their
+            // newest hit, newest first inside each.
             var hits = root.searchRows || [];
-            var order = [];
-            var groups = {};
             for (var i = 0; i < hits.length; i++) {
                 if (!root.matchesQuick(hits[i]))
                     continue;
                 hits[i].key = hits[i].folder_id + ":" + hits[i].uid;
-                var f = hits[i].folder || "";
-                if (groups[f] === undefined) {
-                    groups[f] = [];
-                    order.push(f);
-                }
-                groups[f].push(root.displayRow(hits[i]));
+                rows.push(root.displayRow(hits[i]));
             }
-            for (var g = 0; g < order.length; g++)
-                rows = rows.concat(groups[order[g]]);
             ModelSync.sync(filtered, rows, "key");
             return;
         }
@@ -1022,8 +1016,9 @@ Rectangle {
         Rectangle {
             id: loadOlderBar
             width: parent.width
-            implicitHeight: root.folderName !== "" && (root.messages.length > 0
-                                                                             || root.serverTotal < 0) ? 56 : 0
+            // Hidden for an empty folder the server agrees is empty: the
+            // list's own empty text says so.
+            implicitHeight: root.folderName !== "" && root.olderState !== "" && root.olderState !== "empty" ? 56 : 0
             visible: implicitHeight > 0
             color: Theme.bgAlt
             clip: true
@@ -1047,12 +1042,10 @@ Rectangle {
                         if (root.folderName === "")
                             return "";
                         var s;
-                        if (root.serverTotal < 0)
+                        if (root.olderState === "unchecked")
                             s = qsTr("Cached %1 (server not checked)").arg(root.totalCount);
-                        else if (root.serverTotal > root.totalCount)
+                        else if (root.olderState === "partial")
                             s = qsTr("Cached %1 of %2").arg(root.totalCount).arg(root.serverTotal);
-                        else if (root.messages.length === 0)
-                            return qsTr("No cached messages");
                         else
                             return qsTr("All %1 messages loaded").arg(root.totalCount);
                         return root.hasAnyFilter ? qsTr("%1 · filters cover loaded mail only").arg(s) : s;
@@ -1065,8 +1058,8 @@ Rectangle {
                     id: loadOlderButton
                     Layout.alignment: Qt.AlignVCenter
                     visible: root.canLoadOlder
-                    text: root.busy ? qsTr("Loading…") : (root.serverTotal < 0 ? qsTr("Check server") : qsTr(
-                                                                                     "Load older"))
+                    text: root.busy ? qsTr("Loading…") : (root.olderState === "unchecked" ? qsTr("Check server") :
+                                                                                             qsTr("Load older"))
                     enabled: !root.busy
                     onClicked: root.loadOlderRequested()
                 }

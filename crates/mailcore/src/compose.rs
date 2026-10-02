@@ -10,6 +10,7 @@
 mod answer;
 mod drafts;
 mod form;
+mod from;
 mod reply;
 mod send;
 
@@ -19,6 +20,7 @@ pub use answer::{
 };
 pub use drafts::{delete_draft, draft_html, drafts_folder, open_draft, save_draft, DraftSaved};
 pub use form::ComposeForm;
+pub use from::{effective_from, sender_parts, SenderParts};
 pub use reply::{reply_address, ReplyAddress};
 pub use send::{deliver, prepare_send, PreparedSend, SendOutcome};
 

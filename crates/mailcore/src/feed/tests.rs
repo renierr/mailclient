@@ -456,14 +456,16 @@ fn search_reads_names_recipients_phrases_and_fields() {
 }
 
 #[test]
-fn search_rows_are_newest_first_across_folders() {
+fn search_rows_are_newest_first_grouped_by_folder() {
     let (db, acc, f) = setup();
     let other = folders::upsert(&db, acc, "Archive", "/", FolderRole::Archive).unwrap();
-    // Relevance would rank the subject-and-body hit first; date order wins.
+    // Relevance would rank the subject-and-body hit first; date order wins,
+    // and each folder's hits stay together behind its newest one.
     for (folder, uid, date, body) in [
         (f, 91, "2026-01-01T10:00:00Z", "invoice invoice invoice"),
         (other, 92, "2026-03-01T10:00:00Z", "one invoice"),
         (f, 93, "2026-02-01T10:00:00Z", "another invoice"),
+        (other, 94, "2026-01-15T10:00:00Z", "older invoice"),
     ] {
         let mut m = msg_store::sample_new(acc, folder, uid);
         m.date = Some(date.to_string());
@@ -478,7 +480,7 @@ fn search_rows_are_newest_first_across_folders() {
         .iter()
         .map(|h| h["uid"].clone())
         .collect();
-    assert_eq!(uids, [92, 93, 91]);
+    assert_eq!(uids, [92, 94, 93, 91]);
 }
 
 #[test]
@@ -552,4 +554,42 @@ fn answer_draft_json_reads_the_stored_message_and_settings() {
     assert!(quote.contains(&full_local_date(Some("2026-09-07T10:00:00+00:00"))));
 
     assert!(crate::compose::answer_draft_json(&db, f, 5, "bogus").is_err());
+}
+
+#[test]
+fn folders_say_whether_delete_destroys() {
+    let (db, acc, _inbox) = setup();
+    let row = |db: &Db, name: &str| -> serde_json::Value {
+        let all: serde_json::Value = serde_json::from_str(&folders_json(db, acc).unwrap()).unwrap();
+        all.as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == name)
+            .cloned()
+            .unwrap()
+    };
+    // No Trash yet: every delete destroys.
+    assert_eq!(row(&db, "INBOX")["delete_is_permanent"], true);
+    folders::upsert(&db, acc, "Trash", "/", FolderRole::Trash).unwrap();
+    folders::upsert(&db, acc, "Junk", "/", FolderRole::Junk).unwrap();
+    assert_eq!(row(&db, "INBOX")["delete_is_permanent"], false);
+    assert_eq!(row(&db, "Trash")["delete_is_permanent"], true);
+    assert_eq!(row(&db, "Junk")["delete_is_permanent"], true);
+}
+
+#[test]
+fn show_older_follows_cache_and_server_counts() {
+    assert_eq!(older_state(10, None), OlderState::Unchecked);
+    assert_eq!(older_state(10, Some(25)), OlderState::Partial);
+    assert_eq!(older_state(0, Some(25)), OlderState::Partial);
+    assert_eq!(older_state(0, Some(0)), OlderState::Empty);
+    assert_eq!(older_state(25, Some(25)), OlderState::Complete);
+    assert!(OlderState::Unchecked.can_load() && OlderState::Partial.can_load());
+    assert!(!OlderState::Empty.can_load() && !OlderState::Complete.can_load());
+
+    let (db, acc, _inbox) = setup();
+    let all: serde_json::Value = serde_json::from_str(&folders_json(&db, acc).unwrap()).unwrap();
+    assert_eq!(all[0]["server_total"], -1);
+    assert_eq!(all[0]["older"], "unchecked");
+    assert_eq!(all[0]["can_load_older"], true);
 }

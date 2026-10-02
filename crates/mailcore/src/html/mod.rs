@@ -21,12 +21,15 @@
 //! - [`inline`] swaps `cid:` references for the message's own image bytes;
 //! - [`sanitize`](sanitize()) walks the input and serialises the safe result;
 //! - [`text`] covers the other directions: HTML → plain, plain → HTML, and
-//!   the "does this need HTML at all" heuristics the send path asks about.
+//!   the "does this need HTML at all" heuristics the send path asks about;
+//! - [`reader`] builds the reader's document around a sanitized body: paint,
+//!   dark rewrite, width fitting, CSP and base CSS, for both frontends.
 
 mod css;
 mod entities;
 mod entity_table;
 mod inline;
+pub mod reader;
 mod sanitize;
 mod tags;
 mod text;
@@ -43,7 +46,8 @@ pub use inline::{
     MAX_INLINE_IMAGE_BYTES,
 };
 pub use sanitize::{sanitize, sanitize_for_send};
-pub use text::{html_to_text, looks_like_html, needs_html_formatting, text_to_html, wrap_document};
+pub use text::{html_to_text, looks_like_html, needs_html_formatting, text_to_html};
+pub use urls::{link_info, LinkInfo};
 
 /// Max input bytes examined (DoS cap for the GUI thread).
 pub const MAX_HTML_BYTES: usize = 512_000;

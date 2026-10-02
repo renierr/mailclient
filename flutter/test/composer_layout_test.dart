@@ -12,6 +12,14 @@ class _NoCore implements MailCore {
   Stream<JobEvent> jobEvents() => const Stream.empty();
 
   @override
+  ({String local, String domain}) senderParts(String address) {
+    final at = address.lastIndexOf('@');
+    return at < 0
+        ? (local: address, domain: '')
+        : (local: address.substring(0, at), domain: address.substring(at));
+  }
+
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
@@ -42,9 +50,11 @@ Future<void> _pumpComposer(
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
+  final core = _NoCore();
+  MailCore.debugInstance = core;
   await tester.pumpWidget(
     ChangeNotifierProvider(
-      create: (_) => MailState(_NoCore()),
+      create: (_) => MailState(core),
       child: MaterialApp(
         home: MediaQuery(
           data: MediaQueryData(

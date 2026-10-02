@@ -91,6 +91,32 @@ pub fn set_star_many(
     Ok(n)
 }
 
+/// Set the read flag on search hits across folders (`mailcore::bulk`).
+pub fn mark_read_hits(
+    account_id: i64,
+    hits: Vec<crate::api::mutate::Hit>,
+    read: bool,
+) -> anyhow::Result<u64> {
+    let db = shared_db()?;
+    let groups = crate::api::mutate::groups(db, account_id, hits)?;
+    let n = mailcore::bulk::set_read(db, &groups, read)?;
+    spawn_flag_push(account_id);
+    Ok(n)
+}
+
+/// Set the starred flag on search hits across folders.
+pub fn set_star_hits(
+    account_id: i64,
+    hits: Vec<crate::api::mutate::Hit>,
+    starred: bool,
+) -> anyhow::Result<u64> {
+    let db = shared_db()?;
+    let groups = crate::api::mutate::groups(db, account_id, hits)?;
+    let n = mailcore::bulk::set_starred(db, &groups, starred)?;
+    spawn_flag_push(account_id);
+    Ok(n)
+}
+
 /// Flip one message's starred flag and report the new state.
 pub fn toggle_star(account_id: i64, folder_id: i64, uid: u32) -> anyhow::Result<bool> {
     let db = shared_db()?;
@@ -98,4 +124,26 @@ pub fn toggle_star(account_id: i64, folder_id: i64, uid: u32) -> anyhow::Result<
     messages::set_star_many_by_uids(db, folder_id, &[uid], now_starred)?;
     spawn_flag_push(account_id);
     Ok(now_starred)
+}
+
+/// A clicked link split for the examine dialog, and whether it may be opened
+/// at all (`mailcore::html::link_info`, the sanitizer's own rule).
+#[flutter_rust_bridge::frb(sync)]
+pub fn link_info(url: String) -> LinkInfo {
+    let i = mailcore::html::link_info(&url);
+    LinkInfo {
+        safe: i.safe,
+        scheme: i.scheme,
+        host: i.host,
+        path: i.path,
+    }
+}
+
+/// [`mailcore::html::LinkInfo`] as a generated struct; `""` = none.
+pub struct LinkInfo {
+    /// `http`, `https` or `mailto`: may be opened (user-gated).
+    pub safe: bool,
+    pub scheme: String,
+    pub host: String,
+    pub path: String,
 }

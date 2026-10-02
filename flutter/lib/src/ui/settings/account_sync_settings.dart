@@ -6,6 +6,7 @@ import '../../sync/background_alarm.dart';
 import 'heartbeat_warning.dart';
 import 'quiet_hours_setting.dart';
 import 'setting_choice.dart';
+import 'setting_labels.dart';
 
 /// One account's sync settings: every row offers "Default (…)", which
 /// inherits the app-wide value in [defaults], or a value of its own.
@@ -16,6 +17,7 @@ class AccountSyncSettings extends StatelessWidget {
   const AccountSyncSettings({
     super.key,
     required this.defaults,
+    required this.intervals,
     required this.overrides,
     required this.onChanged,
     required this.showPush,
@@ -23,6 +25,9 @@ class AccountSyncSettings extends StatelessWidget {
   });
 
   final AppSettings defaults;
+
+  /// The check intervals the core offers, in minutes.
+  final List<int> intervals;
   final Map<String, String> overrides;
   final void Function(String key, String value) onChanged;
 
@@ -34,10 +39,8 @@ class AccountSyncSettings extends StatelessWidget {
   /// account uses push.
   final int? frequentHeartbeatSecs;
 
-  static const _intervals = ['', '0', '5', '10', '15', '30', '60'];
-
   static String _interval(int minutes) =>
-      minutes == 0 ? 'Manually' : 'Every ${minutes}m';
+      SettingLabels.of(SettingKeys.syncInterval, minutes);
 
   static String _onOff(bool on) => on ? 'On' : 'Off';
 
@@ -66,7 +69,7 @@ class AccountSyncSettings extends StatelessWidget {
         SettingChoice<String>(
           title: 'Check for new mail',
           value: overrides[SettingKeys.syncInterval] ?? '',
-          options: _intervals,
+          options: ['', for (final m in intervals) '$m'],
           label: (v) => v.isEmpty
               ? 'Default (${_interval(defaults.syncIntervalMinutes)})'
               : _interval(int.parse(v)),

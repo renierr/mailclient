@@ -29,29 +29,34 @@ AppDialog {
     // Passed in from Main: the DB path lives on Bridge, not SettingsBridge.
     property string dbPath: ""
 
-    // Local edit copies (committed on Save only).
-    property bool localSentCopy: true
-    property bool localRemoteImages: false
-    property string localSendFormat: "auto"
-    property bool localIncludePlain: true
-    property bool localAutoMark: true
-    property int localMarkDelay: 0
-    property bool localCollectContacts: true
-    property bool localConfirmDelete: true
-    property string localDensity: "comfortable"
-    property string localReaderFont: "normal"
-    property string localLinkClick: "examine"
+    // Local edit copies (committed on Save only), filled from the bridge on
+    // open.
+    property bool localSentCopy
+    property bool localRemoteImages
+    property string localSendFormat
+    property bool localIncludePlain
+    property bool localAutoMark
+    property int localMarkDelay
+    property bool localCollectContacts
+    property bool localConfirmDelete
+    property string localDensity
+    property string localReaderFont
+    property string localLinkClick
     property real localUiScale: 1.0
-    property int localSyncInterval: 0
-    property bool localQuietEnabled: false
-    property string localQuietStart: "00:00"
-    property string localQuietEnd: "07:00"
-    property bool localSigEnabled: false
-    property string localSigText: ""
-    property bool localReplyBelow: false
-    property bool localRequestMdn: false
-    property string localSortField: "date"
-    property bool localSortDesc: true
+    property int localSyncInterval
+    property bool localQuietEnabled
+    property string localQuietStart
+    property string localQuietEnd
+    property bool localSigEnabled
+    property string localSigText
+    property bool localReplyBelow
+    property bool localRequestMdn
+    property string localSortField
+    property bool localSortDesc
+
+    // What each preference may hold and its default, from mailcore
+    // (`settings::choices`): this form only labels the values.
+    property var choices: ({})
 
     // Accounts & sync edits every account's defaults (-1) or one account's
     // own values. Drafts map account id -> { key: value }, "" = default.
@@ -114,11 +119,13 @@ AppDialog {
     }
 
     // "From HH:MM to HH:MM" for a quiet-hours window. Reports a time only
-    // once it reads as one, in its stored form.
+    // once it reads as one; the caller stores it via `root.quietTime`.
     component QuietTimes: Flow {
         id: quietTimes
-        property string start: "00:00"
-        property string end: "07:00"
+        property string start
+        property string end
+        property string startHint
+        property string endHint
         signal startEdited(string value)
         signal endEdited(string value)
         Layout.fillWidth: true
@@ -134,14 +141,14 @@ AppDialog {
             id: quietStart
             width: Math.round(80 * Theme.uiScale)
             text: quietTimes.start
-            placeholderText: "00:00"
+            placeholderText: quietTimes.startHint
             validator: RegularExpressionValidator {
                 regularExpression: /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/
             }
             Accessible.name: qsTr("Quiet hours start")
             onTextEdited: {
                 if (acceptableInput)
-                    quietTimes.startEdited(AccountOverrides.timeValue(text));
+                    quietTimes.startEdited(text);
             }
         }
         Label {
@@ -154,14 +161,14 @@ AppDialog {
             id: quietEnd
             width: Math.round(80 * Theme.uiScale)
             text: quietTimes.end
-            placeholderText: "07:00"
+            placeholderText: quietTimes.endHint
             validator: RegularExpressionValidator {
                 regularExpression: /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/
             }
             Accessible.name: qsTr("Quiet hours end")
             onTextEdited: {
                 if (acceptableInput)
-                    quietTimes.endEdited(AccountOverrides.timeValue(text));
+                    quietTimes.endEdited(text);
             }
         }
     }
@@ -200,39 +207,77 @@ AppDialog {
         }
     }
 
-    function formatIndex(v) {
-        if (v === "plain")
-            return 1;
-        if (v === "multipart")
-            return 2;
-        if (v === "html")
-            return 3;
+    // A typed time in its stored form (`HH:MM`), normalized by the core.
+    function quietTime(text) {
+        return settingsBridge.quiet_time_value(text);
+    }
+
+    // The values `key` offers, in display order.
+    function values(key) {
+        var c = root.choices[key];
+        return c && c.values ? c.values : [];
+    }
+
+    function defaultOf(key) {
+        var c = root.choices[key];
+        return c ? c["default"] : undefined;
+    }
+
+    // Numbers compare loosely: the scale arrives as a float property.
+    function sameValue(a, b) {
+        return typeof a === "number" && typeof b === "number" ? Math.abs(a - b) < 0.001 : a === b;
+    }
+
+    // Index of `value` among the offered values, else of the default.
+    function choiceIndex(key, value) {
+        var vs = root.values(key);
+        for (var i = 0; i < vs.length; i++) {
+            if (root.sameValue(vs[i], value))
+                return i;
+        }
+        for (var j = 0; j < vs.length; j++) {
+            if (root.sameValue(vs[j], root.defaultOf(key)))
+                return j;
+        }
         return 0;
     }
 
-    function delayIndex(secs) {
-        var steps = [0, 3, 5, 10, 30];
-        var idx = steps.indexOf(secs);
-        return idx >= 0 ? idx : 0;
+    function choiceValue(key, index) {
+        var vs = root.values(key);
+        return index >= 0 && index < vs.length ? vs[index] : root.defaultOf(key);
     }
 
-    function delaySecs(idx) {
-        return [0, 3, 5, 10, 30][idx] || 0;
+    function choiceLabels(key) {
+        return root.values(key).map(v => root.choiceLabel(key, v));
     }
 
-    function syncIndex(mins) {
-        var steps = [0, 5, 10, 15, 30, 60];
-        var idx = steps.indexOf(mins);
-        return idx >= 0 ? idx : 0;
-    }
-
-    function syncMins(idx) {
-        return [0, 5, 10, 15, 30, 60][idx] || 0;
-    }
-
-    function syncLabels() {
-        return [qsTr("Manually"), qsTr("Every 5 minutes"), qsTr("Every 10 minutes"), qsTr("Every 15 minutes"), qsTr("Every 30 minutes"),
-                qsTr("Every hour")];
+    // How a value reads in the form, worded like the Flutter form.
+    function choiceLabel(key, v) {
+        switch (key) {
+        case "ui_scale":
+            return qsTr("%1%").arg(Math.round(v * 100));
+        case "reader_font_size":
+            return v === "small" ? qsTr("Small") : (v === "large" ? qsTr("Large") : qsTr("Normal"));
+        case "message_sort_field":
+            return v === "from" ? qsTr("Sender") : (v === "subject" ? qsTr("Subject") : qsTr("Date"));
+        case "list_density":
+            return v === "compact" ? qsTr("Compact") : qsTr("Comfortable");
+        case "mark_read_delay_secs":
+            return v === 0 ? qsTr("Immediately") : qsTr("After %1 seconds").arg(v);
+        case "link_click_action":
+            return v === "browser" ? qsTr("Open directly in browser") : qsTr("Show safety dialog first (recommended)");
+        case "compose_send_format":
+            if (v === "plain")
+                return qsTr("Plain text (safest)");
+            if (v === "multipart")
+                return qsTr("Multipart plain + HTML");
+            return v === "html" ? qsTr("HTML only") : qsTr("Automatic (recommended)");
+        case "sync_interval_minutes":
+            if (v === 0)
+                return qsTr("Manually");
+            return v === 60 ? qsTr("Every hour") : qsTr("Every %1 minutes").arg(v);
+        }
+        return String(v);
     }
 
     // The app-wide quiet hours, as an account's "Default (...)" choice names them.
@@ -290,22 +335,6 @@ AppDialog {
                 return err;
         }
         return "";
-    }
-
-    function indexOr(list, value, fallback) {
-        var idx = list.indexOf(value);
-        return idx >= 0 ? idx : fallback;
-    }
-
-    // Nearest supported interface-scale step (float-safe: no exact compare).
-    function scaleIndex(v) {
-        var steps = [1.0, 1.1, 1.25, 1.5];
-        var best = 0;
-        for (var i = 1; i < steps.length; i++) {
-            if (Math.abs(v - steps[i]) < Math.abs(v - steps[best]))
-                best = i;
-        }
-        return best;
     }
 
     function loadCapsAccounts() {
@@ -404,6 +433,7 @@ AppDialog {
 
     onOpened: {
         settingsBridge.load();
+        root.choices = FeedJson.parse(settingsBridge.choices_json(), ({}));
         root.localSentCopy = settingsBridge.sent_copy_enabled;
         root.localRemoteImages = settingsBridge.load_remote_images;
         root.localSendFormat = settingsBridge.compose_send_format;
@@ -424,8 +454,8 @@ AppDialog {
         root.localSigText = settingsBridge.signature_text;
         root.localReplyBelow = settingsBridge.reply_below_quote;
         root.localRequestMdn = settingsBridge.request_mdn;
-        root.localSortField = root.backend ? root.backend.sort_field : "date";
-        root.localSortDesc = root.backend ? root.backend.sort_descending : true;
+        root.localSortField = root.backend ? root.backend.sort_field : root.defaultOf("message_sort_field");
+        root.localSortDesc = root.backend ? root.backend.sort_descending : root.defaultOf("message_sort_desc");
         root.loadCapsAccounts();
         root.syncScopeId = -1;
         root.accountSaved = {};
@@ -609,21 +639,21 @@ AppDialog {
 
                     ChoiceRow {
                         caption: qsTr("Interface scale")
-                        model: [qsTr("100%"), qsTr("110%"), qsTr("125%"), qsTr("150%")]
-                        currentIndex: scaleIndex(root.localUiScale)
+                        model: root.choiceLabels("ui_scale")
+                        currentIndex: root.choiceIndex("ui_scale", root.localUiScale)
                         help: qsTr(
                                   "Scales type and controls across the whole app. The desktop zoom still applies on top of this.")
                         onChosen: index => {
-                                      root.localUiScale = [1.0, 1.1, 1.25, 1.5][index];
+                                      root.localUiScale = root.choiceValue("ui_scale", index);
                                   }
                     }
                     ChoiceRow {
                         caption: qsTr("Mail text size")
-                        model: [qsTr("Small"), qsTr("Normal"), qsTr("Large")]
-                        currentIndex: indexOr(["small", "normal", "large"], root.localReaderFont, 1)
+                        model: root.choiceLabels("reader_font_size")
+                        currentIndex: root.choiceIndex("reader_font_size", root.localReaderFont)
                         help: qsTr("Applies to plain-text mail; HTML mail brings its own sizes.")
                         onChosen: index => {
-                                      root.localReaderFont = ["small", "normal", "large"][index];
+                                      root.localReaderFont = root.choiceValue("reader_font_size", index);
                                   }
                     }
                 }
@@ -647,10 +677,10 @@ AppDialog {
 
                     ChoiceRow {
                         caption: qsTr("Sort messages by")
-                        model: [qsTr("Date"), qsTr("Sender"), qsTr("Subject")]
-                        currentIndex: indexOr(["date", "from", "subject"], root.localSortField, 0)
+                        model: root.choiceLabels("message_sort_field")
+                        currentIndex: root.choiceIndex("message_sort_field", root.localSortField)
                         onChosen: index => {
-                                      root.localSortField = ["date", "from", "subject"][index];
+                                      root.localSortField = root.choiceValue("message_sort_field", index);
                                   }
                     }
                     ChoiceRow {
@@ -663,11 +693,11 @@ AppDialog {
                     }
                     ChoiceRow {
                         caption: qsTr("Density")
-                        model: [qsTr("Comfortable"), qsTr("Compact")]
-                        currentIndex: root.localDensity === "compact" ? 1 : 0
+                        model: root.choiceLabels("list_density")
+                        currentIndex: root.choiceIndex("list_density", root.localDensity)
                         help: qsTr("Compact hides the preview line and tightens the rows.")
                         onChosen: index => {
-                                      root.localDensity = index === 1 ? "compact" : "comfortable";
+                                      root.localDensity = root.choiceValue("list_density", index);
                                   }
                     }
                     AppCheckBox {
@@ -709,13 +739,12 @@ AppDialog {
                     ChoiceRow {
                         caption: qsTr("Mark as read")
                         enabled: root.localAutoMark
-                        model: [qsTr("Immediately"), qsTr("After 3 seconds"), qsTr("After 5 seconds"), qsTr(
-                                "After 10 seconds"), qsTr("After 30 seconds")]
-                        currentIndex: delayIndex(root.localMarkDelay)
+                        model: root.choiceLabels("mark_read_delay_secs")
+                        currentIndex: root.choiceIndex("mark_read_delay_secs", root.localMarkDelay)
                         help: qsTr(
                                   "With a delay, only messages still open when the timer elapses count as read. Right-click any message to mark it read or unread manually.")
                         onChosen: index => {
-                                      root.localMarkDelay = delaySecs(index);
+                                      root.localMarkDelay = root.choiceValue("mark_read_delay_secs", index);
                                   }
                     }
                     AppCheckBox {
@@ -731,12 +760,12 @@ AppDialog {
                     }
                     ChoiceRow {
                         caption: qsTr("Clicking a link in a message")
-                        model: [qsTr("Show safety dialog first (recommended)"), qsTr("Open directly in browser")]
-                        currentIndex: root.localLinkClick === "browser" ? 1 : 0
+                        model: root.choiceLabels("link_click_action")
+                        currentIndex: root.choiceIndex("link_click_action", root.localLinkClick)
                         help: qsTr(
                                    "The safety dialog shows the link's real address before anything opens, so disguised links cannot surprise you.")
                         onChosen: index => {
-                                      root.localLinkClick = index === 1 ? "browser" : "examine";
+                                      root.localLinkClick = root.choiceValue("link_click_action", index);
                                   }
                     }
                 }
@@ -760,11 +789,10 @@ AppDialog {
 
                     ChoiceRow {
                         caption: qsTr("Send mail as")
-                        model: [qsTr("Automatic (recommended)"), qsTr("Plain text (safest)"), qsTr(
-                                "Multipart plain + HTML"), qsTr("HTML only")]
-                        currentIndex: formatIndex(root.localSendFormat)
+                        model: root.choiceLabels("compose_send_format")
+                        currentIndex: root.choiceIndex("compose_send_format", root.localSendFormat)
                         onChosen: index => {
-                                      root.localSendFormat = ["auto", "plain", "multipart", "html"][index];
+                                      root.localSendFormat = root.choiceValue("compose_send_format", index);
                                   }
                     }
                     AppCheckBox {
@@ -877,11 +905,11 @@ AppDialog {
                         }
                         ChoiceRow {
                             caption: qsTr("Check for new mail")
-                            model: root.syncLabels()
-                            currentIndex: syncIndex(root.localSyncInterval)
+                            model: root.choiceLabels("sync_interval_minutes")
+                            currentIndex: root.choiceIndex("sync_interval_minutes", root.localSyncInterval)
                             help: qsTr("Automatic checks only run while the app is idle, never mid-action.")
                             onChosen: index => {
-                                          root.localSyncInterval = syncMins(index);
+                                          root.localSyncInterval = root.choiceValue("sync_interval_minutes", index);
                                       }
                         }
                         AppCheckBox {
@@ -899,8 +927,10 @@ AppDialog {
                             visible: root.localQuietEnabled
                             start: root.localQuietStart
                             end: root.localQuietEnd
-                            onStartEdited: value => root.localQuietStart = value
-                            onEndEdited: value => root.localQuietEnd = value
+                            startHint: root.defaultOf("quiet_hours_start") || ""
+                            endHint: root.defaultOf("quiet_hours_end") || ""
+                            onStartEdited: value => root.localQuietStart = root.quietTime(value)
+                            onEndEdited: value => root.localQuietEnd = root.quietTime(value)
                         }
                     }
 
@@ -914,13 +944,15 @@ AppDialog {
 
                             ChoiceRow {
                                 caption: qsTr("Check for new mail")
-                                model: [qsTr("Default (%1)").arg(root.syncLabels()[syncIndex(
-                                                                                       root.localSyncInterval)])].concat(
-                                    root.syncLabels())
-                                currentIndex: AccountOverrides.intervalIndex(root.accountDraft("sync_interval_minutes"))
+                                model: [qsTr("Default (%1)").arg(root.choiceLabel("sync_interval_minutes",
+                                                                                  root.localSyncInterval))].concat(
+                                    root.choiceLabels("sync_interval_minutes"))
+                                currentIndex: AccountOverrides.intervalIndex(root.accountDraft("sync_interval_minutes"),
+                                                                             root.values("sync_interval_minutes"))
                                 help: qsTr("Automatic checks only run while the app is idle, never mid-action.")
                                 onChosen: index => root.setAccountDraft("sync_interval_minutes",
-                                                                        AccountOverrides.intervalValue(index))
+                                                                        AccountOverrides.intervalValue(index, root.values(
+                                                                                                           "sync_interval_minutes")))
                             }
                             ChoiceRow {
                                 caption: qsTr("Save a copy of sent mail in Sent")
@@ -956,11 +988,13 @@ AppDialog {
                             }
                             QuietTimes {
                                 visible: root.accountDraft("quiet_hours_enabled") === "1"
-                                start: AccountOverrides.timeText(root.accountDraft("quiet_hours_start"),
-                                                                 root.localQuietStart)
-                                end: AccountOverrides.timeText(root.accountDraft("quiet_hours_end"), root.localQuietEnd)
-                                onStartEdited: value => root.setAccountDraft("quiet_hours_start", value)
-                                onEndEdited: value => root.setAccountDraft("quiet_hours_end", value)
+                                // Overrides are stored normalized (`HH:MM`) by the core.
+                                start: root.accountDraft("quiet_hours_start") || root.localQuietStart
+                                end: root.accountDraft("quiet_hours_end") || root.localQuietEnd
+                                startHint: root.localQuietStart
+                                endHint: root.localQuietEnd
+                                onStartEdited: value => root.setAccountDraft("quiet_hours_start", root.quietTime(value))
+                                onEndEdited: value => root.setAccountDraft("quiet_hours_end", root.quietTime(value))
                             }
                         }
                     }

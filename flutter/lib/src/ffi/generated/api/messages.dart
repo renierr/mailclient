@@ -4,6 +4,7 @@
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
 import '../frb_generated.dart';
+import 'mutate.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
@@ -105,6 +106,28 @@ Future<BigInt> setStarMany({
   starred: starred,
 );
 
+/// Set the read flag on search hits across folders (`mailcore::bulk`).
+Future<BigInt> markReadHits({
+  required PlatformInt64 accountId,
+  required List<Hit> hits,
+  required bool read,
+}) => MailCoreApi.instance.api.crateApiMessagesMarkReadHits(
+  accountId: accountId,
+  hits: hits,
+  read: read,
+);
+
+/// Set the starred flag on search hits across folders.
+Future<BigInt> setStarHits({
+  required PlatformInt64 accountId,
+  required List<Hit> hits,
+  required bool starred,
+}) => MailCoreApi.instance.api.crateApiMessagesSetStarHits(
+  accountId: accountId,
+  hits: hits,
+  starred: starred,
+);
+
 /// Flip one message's starred flag and report the new state.
 Future<bool> toggleStar({
   required PlatformInt64 accountId,
@@ -115,3 +138,38 @@ Future<bool> toggleStar({
   folderId: folderId,
   uid: uid,
 );
+
+/// A clicked link split for the examine dialog, and whether it may be opened
+/// at all (`mailcore::html::link_info`, the sanitizer's own rule).
+LinkInfo linkInfo({required String url}) =>
+    MailCoreApi.instance.api.crateApiMessagesLinkInfo(url: url);
+
+/// [`mailcore::html::LinkInfo`] as a generated struct; `""` = none.
+class LinkInfo {
+  /// `http`, `https` or `mailto`: may be opened (user-gated).
+  final bool safe;
+  final String scheme;
+  final String host;
+  final String path;
+
+  const LinkInfo({
+    required this.safe,
+    required this.scheme,
+    required this.host,
+    required this.path,
+  });
+
+  @override
+  int get hashCode =>
+      safe.hashCode ^ scheme.hashCode ^ host.hashCode ^ path.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LinkInfo &&
+          runtimeType == other.runtimeType &&
+          safe == other.safe &&
+          scheme == other.scheme &&
+          host == other.host &&
+          path == other.path;
+}
