@@ -7,6 +7,7 @@ import '../../models/models.dart';
 import '../../models/settings.dart';
 import '../../state/mail_state.dart';
 import '../composer/composer_dialog.dart';
+import 'filter_chips_bar.dart';
 import 'message_list_widgets.dart';
 import 'scroll_jump_overlay.dart';
 
@@ -78,6 +79,7 @@ class MessageListPaneState extends State<MessageListPane> {
     return Column(
       children: [
         const MessageListHeader(),
+        const FilterChipsBar(),
         if (q.isNotEmpty || hasFilter)
           Container(
             width: double.infinity,
@@ -266,6 +268,7 @@ class MessageListPaneState extends State<MessageListPane> {
               ),
             ),
           ),
+        const FilterChipsBar(),
         if (hasFilter)
           Container(
             width: double.infinity,

@@ -3,11 +3,11 @@
 
 use super::*;
 
-use crate::search::{parse_query, SearchField, SearchTerm};
+use crate::search::{parse_query_full, ParsedQuery, SearchField, SearchTerm};
 use imap_types::core::Vec1;
 
 impl ImapSync {
-    /// `query` is read by [`parse_query`] like the local search, and sent as
+    /// `query` is read by [`parse_query_full`] like the local search, and sent as
     /// one SEARCH per folder (see [`imap_criteria`]).
     pub async fn search_server_into_cache(
         &mut self,
@@ -19,7 +19,7 @@ impl ImapSync {
         const PER_FOLDER_CAP: usize = 50;
         const TOTAL_CAP: u64 = 100;
         let mut report = ServerSearchReport::default();
-        let Some(criteria) = imap_criteria(&parse_query(query)) else {
+        let Some(criteria) = imap_criteria(&parse_query_full(query)) else {
             return Ok(report);
         };
         let account = accounts::get(db, account_id)?;
@@ -71,17 +71,54 @@ impl ImapSync {
     }
 }
 
-/// The SEARCH keys for `terms` (the server ANDs them): words and phrases
+/// The SEARCH keys for `terms` and filter tokens (the server ANDs them): words and phrases
 /// are `TEXT`, `from:` is `FROM`, `to:` is any of `TO`/`CC`/`BCC`,
-/// `subject:` is `SUBJECT`, and exclusions wrap their key in `NOT`.
+/// `subject:` is `SUBJECT`, exclusions wrap their key in `NOT`,
+/// `is:unread` maps to `UNSEEN`, `is:starred` maps to `FLAGGED`, etc.
 /// Non-ASCII terms stay local-only (servers disagree on SEARCH charsets).
 /// `None` when no positive term is left to send.
-fn imap_criteria(terms: &[SearchTerm]) -> Option<Vec1<SearchKey<'static>>> {
-    let keys: Vec<(bool, SearchKey<'static>)> = terms
+fn imap_criteria(parsed: &ParsedQuery) -> Option<Vec1<SearchKey<'static>>> {
+    let mut keys: Vec<(bool, SearchKey<'static>)> = parsed
+        .terms
         .iter()
         .filter_map(|t| Some((t.negated, imap_key(t)?)))
         .collect();
-    if keys.iter().all(|(negated, _)| *negated) {
+
+    if let Some(unread) = parsed.filters.unread {
+        let key = if unread {
+            SearchKey::Unseen
+        } else {
+            SearchKey::Seen
+        };
+        keys.push((false, key));
+    }
+
+    if let Some(starred) = parsed.filters.starred {
+        let key = if starred {
+            SearchKey::Flagged
+        } else {
+            SearchKey::Unflagged
+        };
+        keys.push((false, key));
+    }
+
+    if let Some(ref after) = parsed.filters.after {
+        if let Ok(d) = chrono::NaiveDate::parse_from_str(after, "%Y-%m-%d") {
+            if let Ok(imap_d) = imap_types::datetime::NaiveDate::try_from(d) {
+                keys.push((false, SearchKey::Since(imap_d)));
+            }
+        }
+    }
+
+    if let Some(ref before) = parsed.filters.before {
+        if let Ok(d) = chrono::NaiveDate::parse_from_str(before, "%Y-%m-%d") {
+            if let Ok(imap_d) = imap_types::datetime::NaiveDate::try_from(d) {
+                keys.push((false, SearchKey::Before(imap_d)));
+            }
+        }
+    }
+
+    if keys.is_empty() || keys.iter().all(|(negated, _)| *negated) {
         return None;
     }
     Vec1::try_from(keys.into_iter().map(|(_, k)| k).collect::<Vec<_>>()).ok()
@@ -116,7 +153,7 @@ mod tests {
     use super::*;
 
     fn criteria(raw: &str) -> Option<Vec<SearchKey<'static>>> {
-        imap_criteria(&parse_query(raw)).map(Vec1::into_inner)
+        imap_criteria(&parse_query_full(raw)).map(Vec1::into_inner)
     }
 
     fn astr(s: &str) -> AString<'static> {
@@ -144,6 +181,19 @@ mod tests {
                     Box::new(SearchKey::Bcc(astr("bob"))),
                 )),
             )]
+        );
+        assert_eq!(
+            criteria("is:unread is:starred after:2026-06-01").unwrap(),
+            vec![
+                SearchKey::Unseen,
+                SearchKey::Flagged,
+                SearchKey::Since(
+                    imap_types::datetime::NaiveDate::try_from(
+                        chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap(),
+                    )
+                    .unwrap(),
+                ),
+            ]
         );
     }
 

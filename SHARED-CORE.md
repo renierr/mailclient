@@ -39,7 +39,7 @@ still to promote") points here instead of keeping its own list.
 | Locked From domain: split for the field, joined for sending | `mailcore::compose::{sender_parts, effective_from}`; both fields refuse a typed `@` |
 | Settings choice lists and defaults | `mailcore::store::settings::choices` (per key: default and offered values); frontends only label them, in the same words |
 | Quiet-hours times: reading a typed time, picker parts, defaults | `mailcore::store::account_settings::{normalize_time, time_parts, time_at}`; defaults from `settings::choices` |
-| Search: index threshold, trimmed query, hit limit, debounce, short-input filter | `mailcore::search::{plan, filter_matches, HIT_LIMIT}` |
+| Search: index threshold, advanced filter tokens, structured query planning, hit limit, debounce, short-input filter | `mailcore::search::{plan, filter_matches, parse_query_full, SearchFilters, ParsedQuery, HIT_LIMIT}`, `feed::search_json` |
 | Link safety: may a link open, scheme / domain / path for the examine dialog | `mailcore::html::link_info` (the sanitizer's `safe_href` rule) |
 | Reader HTML document: paint decision, palette, dark rewrite, width fitting, CSP and base CSS | `mailcore::html::reader`; Qt dropped its CSS `filter`, Flutter desktop its `ColorFiltered` — all three renderers show the same rewritten colours |
 | Folder rules: permanent delete, "Show older" state | `mailcore::undo::delete_is_permanent`, `mailcore::feed::older_state`; folder feed fields `delete_is_permanent`, `server_total`, `older`, `can_load_older` |

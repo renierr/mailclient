@@ -32,20 +32,117 @@ pub struct SearchTerm {
     pub negated: bool,
 }
 
+/// Structured filters extracted from query tokens (`is:unread`, `has:attachment`, `after:...`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SearchFilters {
+    /// `Some(true)` for unread, `Some(false)` for read.
+    pub unread: Option<bool>,
+    /// `Some(true)` for starred/flagged, `Some(false)` for unstarred.
+    pub starred: Option<bool>,
+    /// `Some(true)` for messages with attachments, `Some(false)` for messages without.
+    pub has_attachments: Option<bool>,
+    /// `after:` / `since:` date in `YYYY-MM-DD` format (inclusive).
+    pub after: Option<String>,
+    /// `before:` date in `YYYY-MM-DD` format (exclusive).
+    pub before: Option<String>,
+}
+
+impl SearchFilters {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.unread.is_none()
+            && self.starred.is_none()
+            && self.has_attachments.is_none()
+            && self.after.is_none()
+            && self.before.is_none()
+    }
+}
+
+/// The result of parsing a raw query into text search terms and structured filters.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ParsedQuery {
+    pub terms: Vec<SearchTerm>,
+    pub filters: SearchFilters,
+}
+
 const FIELDS: [(&str, SearchField); 3] = [
     ("from:", SearchField::From),
     ("to:", SearchField::To),
     ("subject:", SearchField::Subject),
 ];
 
-/// Split free-text input into terms. Never fails: whatever cannot be a
-/// term (a lone `-`, `***`, an empty phrase) is dropped.
+fn is_valid_date(s: &str) -> bool {
+    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok()
+}
+
+fn try_parse_filter_pair(key: &str, val: &str, negated: bool, filters: &mut SearchFilters) -> bool {
+    if key.eq_ignore_ascii_case("is") {
+        if val.eq_ignore_ascii_case("unread") {
+            filters.unread = Some(!negated);
+            return true;
+        } else if val.eq_ignore_ascii_case("read") {
+            filters.unread = Some(negated);
+            return true;
+        } else if val.eq_ignore_ascii_case("starred") || val.eq_ignore_ascii_case("flagged") {
+            filters.starred = Some(!negated);
+            return true;
+        } else if val.eq_ignore_ascii_case("unstarred") || val.eq_ignore_ascii_case("unflagged") {
+            filters.starred = Some(negated);
+            return true;
+        }
+    } else if key.eq_ignore_ascii_case("has") {
+        if val.eq_ignore_ascii_case("attachment") || val.eq_ignore_ascii_case("attachments") {
+            filters.has_attachments = Some(!negated);
+            return true;
+        }
+    } else if (key.eq_ignore_ascii_case("after") || key.eq_ignore_ascii_case("since"))
+        && is_valid_date(val)
+    {
+        filters.after = Some(val.to_string());
+        return true;
+    } else if key.eq_ignore_ascii_case("before") && is_valid_date(val) {
+        filters.before = Some(val.to_string());
+        return true;
+    }
+    false
+}
+
+/// Split free-text input into terms and structured filters.
 #[must_use]
-pub fn parse_query(raw: &str) -> Vec<SearchTerm> {
+pub fn parse_query_full(raw: &str) -> ParsedQuery {
     let mut terms = Vec::new();
+    let mut filters = SearchFilters::default();
     let mut rest = raw.trim_start();
     while !rest.is_empty() {
         let negated = rest.starts_with('-');
+        let candidate = if negated { &rest[1..] } else { rest };
+
+        // Quoted phrase is always text.
+        if !candidate.starts_with('"') {
+            let end = candidate
+                .find(char::is_whitespace)
+                .unwrap_or(candidate.len());
+            let word = &candidate[..end];
+            if let Some((k, v)) = word.split_once(':') {
+                if v.is_empty() {
+                    let after_colon = candidate[end..].trim_start();
+                    let val_end = after_colon
+                        .find(char::is_whitespace)
+                        .unwrap_or(after_colon.len());
+                    let next_word = &after_colon[..val_end];
+                    if !next_word.is_empty()
+                        && try_parse_filter_pair(k, next_word, negated, &mut filters)
+                    {
+                        rest = after_colon[val_end..].trim_start();
+                        continue;
+                    }
+                } else if try_parse_filter_pair(k, v, negated, &mut filters) {
+                    rest = candidate[end..].trim_start();
+                    continue;
+                }
+            }
+        }
+
         if negated {
             rest = &rest[1..];
         }
@@ -74,7 +171,14 @@ pub fn parse_query(raw: &str) -> Vec<SearchTerm> {
             });
         }
     }
-    terms
+    ParsedQuery { terms, filters }
+}
+
+/// Split free-text input into terms. Never fails: whatever cannot be a
+/// term (a lone `-`, `***`, an empty phrase) is dropped.
+#[must_use]
+pub fn parse_query(raw: &str) -> Vec<SearchTerm> {
+    parse_query_full(raw).terms
 }
 
 fn strip_field(s: &str) -> Option<(SearchField, &str)> {
@@ -94,7 +198,8 @@ fn clean(word: &str) -> String {
 /// nothing (there is no "everything except" search).
 #[must_use]
 pub fn is_searchable(raw: &str) -> bool {
-    parse_query(raw).iter().any(|t| !t.negated)
+    let q = parse_query_full(raw);
+    q.terms.iter().any(|t| !t.negated) || !q.filters.is_empty()
 }
 
 /// The FTS5 MATCH expression for `raw`, or `None` when nothing is
@@ -169,10 +274,17 @@ pub const SERVER_DEBOUNCE_MS: u64 = 800;
 #[must_use]
 pub fn plan(raw: &str) -> SearchPlan {
     let query = raw.trim();
-    let mode = match query.chars().count() {
-        0 => SearchMode::Off,
-        n if n < INDEX_MIN_CHARS => SearchMode::Filter,
-        _ => SearchMode::Index,
+    let parsed = parse_query_full(query);
+    let mode = if query.is_empty() {
+        SearchMode::Off
+    } else if !parsed.filters.is_empty() {
+        SearchMode::Index
+    } else {
+        match query.chars().count() {
+            0 => SearchMode::Off,
+            n if n < INDEX_MIN_CHARS => SearchMode::Filter,
+            _ => SearchMode::Index,
+        }
     };
     SearchPlan {
         mode,
@@ -291,5 +403,54 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn filter_tokens_extracted_and_negations_handled() {
+        let q = parse_query_full("is:unread has:attachment after:2026-01-01 before:2026-02-01");
+        assert!(q.terms.is_empty());
+        assert_eq!(q.filters.unread, Some(true));
+        assert_eq!(q.filters.has_attachments, Some(true));
+        assert_eq!(q.filters.after.as_deref(), Some("2026-01-01"));
+        assert_eq!(q.filters.before.as_deref(), Some("2026-02-01"));
+
+        let q2 = parse_query_full("is:read -is:starred -has:attachments is:flagged");
+        assert_eq!(q2.filters.unread, Some(false));
+        // Later tokens overwrite earlier ones
+        assert_eq!(q2.filters.starred, Some(true));
+        assert_eq!(q2.filters.has_attachments, Some(false));
+
+        let q3 = parse_query_full("-is:unread is:unstarred since:2026-05-10");
+        assert_eq!(q3.filters.unread, Some(false));
+        assert_eq!(q3.filters.starred, Some(false));
+        assert_eq!(q3.filters.after.as_deref(), Some("2026-05-10"));
+
+        let q4 = parse_query_full(r#"invoice is:unread "is:read" from:bob"#);
+        assert_eq!(q4.terms.len(), 3);
+        assert_eq!(q4.terms[0].text, "invoice");
+        assert_eq!(q4.terms[1].text, "is:read"); // quoted stays literal text
+        assert!(q4.terms[1].phrase);
+        assert_eq!(q4.terms[2].text, "bob");
+        assert_eq!(q4.terms[2].field, SearchField::From);
+        assert_eq!(q4.filters.unread, Some(true));
+
+        // Spaced variants
+        let q5 = parse_query_full("is: unread has: attachments");
+        assert!(q5.terms.is_empty());
+        assert_eq!(q5.filters.unread, Some(true));
+        assert_eq!(q5.filters.has_attachments, Some(true));
+    }
+
+    #[test]
+    fn filter_tokens_trigger_searchable_and_index_mode() {
+        assert!(is_searchable("is:unread"));
+        assert!(is_searchable("-is:unread"));
+        assert!(is_searchable("has:attachment"));
+        assert!(is_searchable("after:2026-01-01"));
+
+        // Mode is Index even when query text alone would be short
+        assert_eq!(plan("is:read").mode, SearchMode::Index);
+        assert_eq!(plan("has:attachment").mode, SearchMode::Index);
+        assert_eq!(plan("a is:unread").mode, SearchMode::Index);
     }
 }

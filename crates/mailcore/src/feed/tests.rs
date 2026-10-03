@@ -590,6 +590,49 @@ fn search_rows_are_newest_first_grouped_by_folder() {
 }
 
 #[test]
+fn search_with_filter_tokens() {
+    let (db, acc, f) = setup();
+
+    // 101: unread, starred, has_attachments, 2026-08-15
+    let mut m1 = msg_store::sample_new(acc, f, 101);
+    m1.subject = Some("Invoice for August".to_string());
+    m1.is_read = false;
+    m1.is_starred = true;
+    m1.has_attachments = true;
+    m1.date = Some("2026-08-15T10:00:00Z".to_string());
+    msg_store::upsert(&db, &m1).unwrap();
+
+    // 102: read, unstarred, no attachments, 2026-09-10
+    let mut m2 = msg_store::sample_new(acc, f, 102);
+    m2.subject = Some("Invoice for September".to_string());
+    m2.is_read = true;
+    m2.is_starred = false;
+    m2.has_attachments = false;
+    m2.date = Some("2026-09-10T10:00:00Z".to_string());
+    msg_store::upsert(&db, &m2).unwrap();
+
+    // 103: unread, unstarred, no attachments, 2026-09-20
+    let mut m3 = msg_store::sample_new(acc, f, 103);
+    m3.subject = Some("Newsletter".to_string());
+    m3.is_read = false;
+    m3.is_starred = false;
+    m3.has_attachments = false;
+    m3.date = Some("2026-09-20T10:00:00Z".to_string());
+    msg_store::upsert(&db, &m3).unwrap();
+
+    assert_eq!(hit_uids(&db, acc, "is:unread"), [101, 103]);
+    assert_eq!(hit_uids(&db, acc, "is:read"), [102]);
+    assert_eq!(hit_uids(&db, acc, "is:starred"), [101]);
+    assert_eq!(hit_uids(&db, acc, "is:unstarred"), [102, 103]);
+    assert_eq!(hit_uids(&db, acc, "has:attachment"), [101]);
+    assert_eq!(hit_uids(&db, acc, "after:2026-09-01"), [102, 103]);
+    assert_eq!(hit_uids(&db, acc, "before:2026-09-01"), [101]);
+    assert_eq!(hit_uids(&db, acc, "invoice is:unread"), [101]);
+    assert_eq!(hit_uids(&db, acc, "invoice is:read"), [102]);
+    assert_eq!(hit_uids(&db, acc, "is:unread after:2026-09-01"), [103]);
+}
+
+#[test]
 fn short_date_formats() {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     assert_eq!(short_date(Some(&now)).text.len(), 5); // HH:MM

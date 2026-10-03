@@ -551,53 +551,128 @@ pub fn search_json(
     limit: u64,
     folder: &str,
 ) -> Result<String> {
-    let Some(match_query) = crate::search::fts_query(query) else {
+    let parsed = crate::search::parse_query_full(query);
+    let match_query = crate::search::fts_query(query);
+
+    if match_query.is_none() && parsed.filters.is_empty() {
         return Ok("[]".to_string());
-    };
-    let mut stmt = db.conn().prepare(
-        "select m.uid, m.folder_id, f.path, m.subject, m.from_addr, m.date,
-                snippet(messages_fts, 6, '', '', '…', 12),
-                m.is_read, m.is_starred, m.has_attachments, m.from_name
-         from messages_fts
-         join messages m on m.id = messages_fts.rowid
-         join folders f on f.id = m.folder_id
-         where messages_fts match ?1 and m.account_id = ?2
-           and (?4 = '' or f.path = ?4)
-           and m.id not in (select message_id from pending_moves)
-         order by m.date desc, m.id desc limit ?3",
-    )?;
-    let mut arr = Vec::new();
-    let rows = stmt.query_map(
-        rusqlite::params![match_query, account_id, limit as i64, folder],
-        |row| {
-            let date = short_date(row.get::<_, Option<String>>(5)?.as_deref());
-            let from = row
-                .get::<_, Option<String>>(4)?
-                .unwrap_or_else(|| "?".to_string());
-            // Named like the list row, so a hit keeps the row's badge.
-            let from_name = row.get::<_, Option<String>>(10)?.unwrap_or_default();
-            let badge = sender_badge(&from_name, &from);
-            let mut hit = json!({
-                "uid": row.get::<_, u32>(0)?,
-                "folder_id": row.get::<_, i64>(1)?,
-                "folder": row.get::<_, String>(2)?,
-                "subject": row.get::<_, Option<String>>(3)?.unwrap_or_else(|| "(no subject)".to_string()),
-                "from": from,
-                "from_name": from_name,
-                "date": date.text,
-                "date_key": date.key,
-                "snippet": one_line(&row.get::<_, String>(6)?),
-                "unread": row.get::<_, i64>(7)? == 0,
-                "starred": row.get::<_, i64>(8)? != 0,
-                "has_attachments": row.get::<_, i64>(9)? != 0,
-            });
-            badge.extend(&mut hit);
-            Ok(hit)
-        },
-    )?;
-    for row in rows {
-        arr.push(row?);
     }
+
+    let is_read_param: Option<i64> = match parsed.filters.unread {
+        Some(true) => Some(0),  // unread
+        Some(false) => Some(1), // read
+        None => None,
+    };
+    let is_starred_param: Option<i64> = match parsed.filters.starred {
+        Some(true) => Some(1),
+        Some(false) => Some(0),
+        None => None,
+    };
+    let has_attachments_param: Option<i64> = match parsed.filters.has_attachments {
+        Some(true) => Some(1),
+        Some(false) => Some(0),
+        None => None,
+    };
+    let after_param = parsed.filters.after.as_deref().unwrap_or("");
+    let before_param = parsed.filters.before.as_deref().unwrap_or("");
+
+    let map_row = |row: &rusqlite::Row| -> rusqlite::Result<serde_json::Value> {
+        let date = short_date(row.get::<_, Option<String>>(5)?.as_deref());
+        let from = row
+            .get::<_, Option<String>>(4)?
+            .unwrap_or_else(|| "?".to_string());
+        // Named like the list row, so a hit keeps the row's badge.
+        let from_name = row.get::<_, Option<String>>(10)?.unwrap_or_default();
+        let badge = sender_badge(&from_name, &from);
+        let mut hit = json!({
+            "uid": row.get::<_, u32>(0)?,
+            "folder_id": row.get::<_, i64>(1)?,
+            "folder": row.get::<_, String>(2)?,
+            "subject": row.get::<_, Option<String>>(3)?.unwrap_or_else(|| "(no subject)".to_string()),
+            "from": from,
+            "from_name": from_name,
+            "date": date.text,
+            "date_key": date.key,
+            "snippet": one_line(&row.get::<_, String>(6)?),
+            "unread": row.get::<_, i64>(7)? == 0,
+            "starred": row.get::<_, i64>(8)? != 0,
+            "has_attachments": row.get::<_, i64>(9)? != 0,
+        });
+        badge.extend(&mut hit);
+        Ok(hit)
+    };
+
+    let mut arr = Vec::new();
+    if let Some(fts_match) = match_query {
+        let mut stmt = db.conn().prepare(
+            "select m.uid, m.folder_id, f.path, m.subject, m.from_addr, m.date,
+                    snippet(messages_fts, 6, '', '', '…', 12),
+                    m.is_read, m.is_starred, m.has_attachments, m.from_name
+             from messages_fts
+             join messages m on m.id = messages_fts.rowid
+             join folders f on f.id = m.folder_id
+             where messages_fts match ?1 and m.account_id = ?2
+               and (?4 = '' or f.path = ?4)
+               and m.id not in (select message_id from pending_moves)
+               and (?5 is null or m.is_read = ?5)
+               and (?6 is null or m.is_starred = ?6)
+               and (?7 is null or m.has_attachments = ?7)
+               and (?8 = '' or m.date >= ?8)
+               and (?9 = '' or m.date < ?9)
+             order by m.date desc, m.id desc limit ?3",
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![
+                fts_match,
+                account_id,
+                limit as i64,
+                folder,
+                is_read_param,
+                is_starred_param,
+                has_attachments_param,
+                after_param,
+                before_param,
+            ],
+            map_row,
+        )?;
+        for row in rows {
+            arr.push(row?);
+        }
+    } else {
+        let mut stmt = db.conn().prepare(
+            "select m.uid, m.folder_id, f.path, m.subject, m.from_addr, m.date,
+                    coalesce(m.snippet, ''),
+                    m.is_read, m.is_starred, m.has_attachments, m.from_name
+             from messages m
+             join folders f on f.id = m.folder_id
+             where m.account_id = ?1
+               and (?3 = '' or f.path = ?3)
+               and m.id not in (select message_id from pending_moves)
+               and (?4 is null or m.is_read = ?4)
+               and (?5 is null or m.is_starred = ?5)
+               and (?6 is null or m.has_attachments = ?6)
+               and (?7 = '' or m.date >= ?7)
+               and (?8 = '' or m.date < ?8)
+             order by m.date desc, m.id desc limit ?2",
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![
+                account_id,
+                limit as i64,
+                folder,
+                is_read_param,
+                is_starred_param,
+                has_attachments_param,
+                after_param,
+                before_param,
+            ],
+            map_row,
+        )?;
+        for row in rows {
+            arr.push(row?);
+        }
+    }
+
     // Stable: newest first inside each folder.
     let mut order: Vec<String> = Vec::new();
     for hit in &arr {
