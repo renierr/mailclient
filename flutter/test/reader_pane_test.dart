@@ -4,7 +4,10 @@ import 'package:mailclient/src/ffi/mail_core.dart';
 import 'package:mailclient/src/models/models.dart';
 import 'package:mailclient/src/models/settings.dart';
 import 'package:mailclient/src/state/mail_state.dart';
+import 'package:mailclient/src/ui/reader/attachment_card.dart';
+import 'package:mailclient/src/ui/reader/inline_images_banner.dart';
 import 'package:mailclient/src/ui/reader/mail_html_view.dart';
+import 'package:mailclient/src/ui/reader/reader_header.dart';
 import 'package:mailclient/src/ui/reader/reader_pane.dart';
 import 'package:provider/provider.dart';
 
@@ -159,5 +162,119 @@ void main() {
     await tester.tap(find.byTooltip('Darken to match the theme'));
     await tester.pump();
     expect(view().fitWidths, isTrue);
+  });
+
+  // Over a WebView (Android) the header passes touches through to the page:
+  // display text sits under IgnorePointer so drags and flings starting on
+  // it are the WebView's own, while the buttons stay tappable. Elsewhere
+  // the header handles touches as before.
+  testWidgets('pass-through header keeps buttons live, text untouchable', (
+    tester,
+  ) async {
+    final body = {
+      'uid': 10,
+      'subject': 'Through subject',
+      'from': 'someone@example.com',
+      'body_text': 'x',
+      'is_html': false,
+    };
+    MailCore.debugInstance = _OneMessageCore(body);
+    Widget header(bool passThrough) {
+      return ChangeNotifierProvider.value(
+        value: MailState(MailCore.instance),
+        child: MaterialApp(
+          home: Scaffold(
+            body: ReaderHeader(
+              message: MessageBody.fromJson(body),
+              headersFuture: Future<MessageHeaders?>.value(null),
+              details: true,
+              onToggleDetails: () {},
+              onClose: () {},
+              passThrough: passThrough,
+            ),
+          ),
+        ),
+      );
+    }
+
+    await tester.pumpWidget(header(true));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    // Subject, sender block and details all pass through: an ignoring
+    // IgnorePointer above the text. (The framework adds its own
+    // non-ignoring ones higher up; those stay out of this match.)
+    final ignoring = find.byWidgetPredicate(
+      (w) => w is IgnorePointer && w.ignoring,
+    );
+    expect(
+      find.ancestor(of: find.text('Through subject'), matching: ignoring),
+      findsOneWidget,
+    );
+    // … while the buttons keep their taps.
+    expect(find.byTooltip('Back to the list'), findsOneWidget);
+    expect(find.byTooltip('Reply'), findsOneWidget);
+
+    await tester.pumpWidget(header(false));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect(
+      find.ancestor(of: find.text('Through subject'), matching: ignoring),
+      findsNothing,
+    );
+    expect(find.byTooltip('Reply'), findsOneWidget);
+  });
+
+  // The banner and card pass through the same way: labels fall to the page,
+  // actions stay tappable.
+  testWidgets('pass-through banner and card keep actions live', (tester) async {
+    var downloaded = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              InlineImagesBanner(
+                count: 2,
+                busy: false,
+                onDownload: () => downloaded = true,
+                passThrough: true,
+              ),
+              AttachmentCard(
+                message: MessageBody.fromJson({
+                  'uid': 11,
+                  'subject': 'Files',
+                  'from': 'someone@example.com',
+                  'body_text': 'x',
+                  'is_html': false,
+                  'attachments': [
+                    {'id': 1, 'filename': 'a.pdf', 'size': 10},
+                  ],
+                }),
+                passThrough: true,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    final ignoring = find.byWidgetPredicate(
+      (w) => w is IgnorePointer && w.ignoring,
+    );
+    expect(
+      find.ancestor(
+        of: find.textContaining('embedded images'),
+        matching: ignoring,
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.ancestor(of: find.text('a.pdf'), matching: ignoring),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Download'));
+    await tester.pump();
+    expect(downloaded, isTrue);
   });
 }

@@ -19,9 +19,18 @@ import '../../state/mail_state.dart';
 /// directory into the system viewer (`open_filex`), Save asks where
 /// (`file_picker`). A missing download is fetched first, on demand.
 class AttachmentCard extends StatelessWidget {
-  const AttachmentCard({super.key, required this.message});
+  const AttachmentCard({
+    super.key,
+    required this.message,
+    this.passThrough = false,
+  });
 
   final MessageBody message;
+
+  /// The card overlays a WebView that owns the scroll (Android): labels let
+  /// touches fall through to the page underneath, so drags and flings
+  /// starting on them stay native. Open / Save stay tappable.
+  final bool passThrough;
 
   @override
   Widget build(BuildContext context) {
@@ -34,24 +43,22 @@ class AttachmentCard extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8),
       minimumSize: const Size(40, 32),
     );
-    return Container(
-      margin: const EdgeInsets.all(12),
-      padding: const EdgeInsets.fromLTRB(10, 4, 4, 4),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerLow,
-        border: Border.all(color: scheme.outlineVariant),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
+    // Labels never handle a touch when passing through — semantics on.
+    Widget flow(Widget child) =>
+        passThrough ? IgnorePointer(child: child) : child;
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            flow(
               Icon(Icons.attach_file, size: 16, color: scheme.onSurfaceVariant),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: flow(
+                Text(
                   files.length == 1
                       ? '1 attachment'
                       : '${files.length} attachments',
@@ -59,41 +66,72 @@ class AttachmentCard extends StatelessWidget {
                   style: small?.copyWith(fontWeight: FontWeight.w600),
                 ),
               ),
-              if (files.length > 1)
-                TextButton(
-                  style: compact,
-                  onPressed: () => saveAll(context, message),
-                  child: const Text('Save all'),
-                ),
-            ],
-          ),
-          for (final a in files)
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
+            ),
+            if (files.length > 1)
+              TextButton(
+                style: compact,
+                onPressed: () => saveAll(context, message),
+                child: const Text('Save all'),
+              ),
+          ],
+        ),
+        for (final a in files)
+          Row(
+            children: [
+              Expanded(
+                child: flow(
+                  Text(
                     a.filename,
                     overflow: TextOverflow.ellipsis,
                     style: small,
                   ),
                 ),
-                const SizedBox(width: 8),
+              ),
+              const SizedBox(width: 8),
+              flow(
                 Text(
                   formatBytes(a.size),
                   style: small?.copyWith(color: scheme.onSurfaceVariant),
                 ),
-                TextButton(
-                  style: compact,
-                  onPressed: () => openAttachment(context, message, a),
-                  child: const Text('Open'),
-                ),
-                TextButton(
-                  style: compact,
-                  onPressed: () => saveAttachment(context, message, a),
-                  child: const Text('Save'),
-                ),
-              ],
-            ),
+              ),
+              TextButton(
+                style: compact,
+                onPressed: () => openAttachment(context, message, a),
+                child: const Text('Open'),
+              ),
+              TextButton(
+                style: compact,
+                onPressed: () => saveAttachment(context, message, a),
+                child: const Text('Save'),
+              ),
+            ],
+          ),
+      ],
+    );
+    const margin = EdgeInsets.all(12);
+    const padding = EdgeInsets.fromLTRB(10, 4, 4, 4);
+    final decoration = BoxDecoration(
+      color: scheme.surfaceContainerLow,
+      border: Border.all(color: scheme.outlineVariant),
+      borderRadius: BorderRadius.circular(8),
+    );
+    if (!passThrough) {
+      return Container(
+        margin: margin,
+        padding: padding,
+        decoration: decoration,
+        child: content,
+      );
+    }
+    // The card paints under an IgnorePointer so it never claims a touch.
+    return Padding(
+      padding: margin,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: IgnorePointer(child: DecoratedBox(decoration: decoration)),
+          ),
+          Padding(padding: padding, child: content),
         ],
       ),
     );

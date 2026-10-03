@@ -108,6 +108,9 @@ class ReaderPaneState extends State<ReaderPane> {
     final canToggleColors = message.isHtml && message.htmlColored && dark;
     // Header, image notice and attachments scroll away with the body: on a
     // phone the mail gets the whole pane as soon as the reader scrolls.
+    // Over a WebView (Android) their display text passes touches through
+    // to the page, so one native scroller owns every drag and fling.
+    final passThrough = MailHtmlView.usesWebView;
     final header = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
@@ -128,15 +131,17 @@ class ReaderPaneState extends State<ReaderPane> {
                   !loadRemote
               ? () => _showRemoteImages(message)
               : null,
+          passThrough: passThrough,
         ),
         if (message.isHtml && message.missingInlineImages > 0)
           InlineImagesBanner(
             count: message.missingInlineImages,
             busy: _inlineRequested,
             onDownload: () => _downloadInlineImages(message),
+            passThrough: passThrough,
           ),
         if (message.attachments.any((a) => !a.isInline))
-          AttachmentCard(message: message),
+          AttachmentCard(message: message, passThrough: passThrough),
       ],
     );
     final body = message.isHtml
