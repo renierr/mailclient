@@ -699,3 +699,40 @@ fn show_older_follows_cache_and_server_counts() {
     assert_eq!(all[0]["older"], "unchecked");
     assert_eq!(all[0]["can_load_older"], true);
 }
+
+#[test]
+fn message_json_includes_calendar_event() {
+    let (db, acc, f) = setup();
+    let m = msg_store::sample_new(acc, f, 101);
+    let msg_id = msg_store::upsert(&db, &m).unwrap();
+
+    let ics_bytes = b"BEGIN:VCALENDAR\r\n\
+BEGIN:VEVENT\r\n\
+DTSTART:20261006T140000Z\r\n\
+DTEND:20261006T150000Z\r\n\
+SUMMARY:Quarterly Review\r\n\
+LOCATION:Room 1\r\n\
+ORGANIZER;CN=Host:mailto:host@example.org\r\n\
+STATUS:CONFIRMED\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let att = crate::models::NewAttachment {
+        filename: Some("invite.ics".to_string()),
+        mime_type: Some("text/calendar".to_string()),
+        content_id: None,
+        size: ics_bytes.len() as u64,
+        data: Some(ics_bytes.to_vec()),
+        is_inline: false,
+    };
+    let att_id = msg_store::add_attachment(&db, msg_id, &att).unwrap();
+
+    let reader: serde_json::Value =
+        serde_json::from_str(&message_json(&db, f, 101).unwrap()).unwrap();
+    assert!(!reader["event"].is_null());
+    assert_eq!(reader["event"]["summary"], "Quarterly Review");
+    assert_eq!(reader["event"]["location"], "Room 1");
+    assert_eq!(reader["event"]["organizer"], "Host <host@example.org>");
+    assert_eq!(reader["event"]["attachment_id"], att_id);
+    assert_eq!(reader["event"]["is_cancelled"], false);
+}

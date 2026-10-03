@@ -347,6 +347,7 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
     let from = m.from_addr.as_deref().unwrap_or("?");
     let from_name = m.from_name.as_deref().unwrap_or("");
     let reply = crate::compose::reply_address(from, m.reply_to.as_deref().unwrap_or(""));
+    let event = find_calendar_event(db, &m);
     let mut out = json!({
         "uid": m.uid,
         "subject": m.subject.as_deref().unwrap_or("(no subject)"),
@@ -365,9 +366,49 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
         "missing_inline_images": missing_inline,
         "html_colored": is_html && html::has_own_colors(&body_html),
         "body": legacy_body,
+        "event": event,
     });
     sender_badge(from_name, from).extend(&mut out);
     Ok(serde_json::to_string(&out)?)
+}
+
+/// Try to extract a calendar event from message attachments or body.
+pub fn find_calendar_event(
+    db: &Db,
+    message: &crate::models::Message,
+) -> Option<crate::calendar::CalendarEvent> {
+    if let Ok(attachments) = messages::list_attachments(db, message.id) {
+        for att in attachments {
+            let is_ics = att
+                .filename
+                .as_deref()
+                .is_some_and(|f| f.to_ascii_lowercase().ends_with(".ics"));
+            let is_cal = att.mime_type.as_deref().is_some_and(|m| {
+                let m = m.to_ascii_lowercase();
+                m == "text/calendar" || m == "application/ics"
+            });
+            if is_ics || is_cal {
+                if let Ok(full) = messages::get_attachment(db, att.id) {
+                    if let Some(bytes) = full.data.as_deref() {
+                        if let Some(mut event) = crate::calendar::parse_ics_bytes(bytes) {
+                            event.attachment_id = Some(att.id);
+                            return Some(event);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(text) = message.body_text.as_deref() {
+        if text.contains("BEGIN:VEVENT") {
+            if let Some(event) = crate::calendar::parse_ics(text) {
+                return Some(event);
+            }
+        }
+    }
+
+    None
 }
 
 /// Attachment metadata for one message (`[{id, filename, display_name,

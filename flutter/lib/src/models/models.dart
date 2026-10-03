@@ -255,6 +255,7 @@ class MessageBody {
     this.fromName = '',
     this.replyTarget = '',
     this.replyToDiffers = false,
+    this.event,
   });
 
   final int uid;
@@ -308,6 +309,9 @@ class MessageBody {
   final bool htmlColored;
   final List<AttachmentInfo> attachments;
 
+  /// Parsed calendar event invitation metadata for reader preview card.
+  final CalendarEventInfo? event;
+
   factory MessageBody.fromJson(Map<String, dynamic> j) => MessageBody(
     uid: _int(j['uid']),
     subject: _str(j['subject'], orElse: '(no subject)'),
@@ -330,7 +334,57 @@ class MessageBody {
     fromName: _str(j['from_name']),
     replyTarget: _str(j['reply_target']),
     replyToDiffers: _bool(j['reply_to_differs']),
+    event: j['event'] is Map<String, dynamic>
+        ? CalendarEventInfo.fromJson(j['event'] as Map<String, dynamic>)
+        : null,
   );
+}
+
+/// Parsed calendar event metadata for reader preview card.
+class CalendarEventInfo {
+  const CalendarEventInfo({
+    required this.summary,
+    this.description,
+    this.location,
+    this.organizer,
+    this.startIso,
+    this.endIso,
+    required this.formattedTime,
+    this.isAllDay = false,
+    this.status,
+    this.isCancelled = false,
+    this.method,
+    this.attachmentId,
+  });
+
+  final String summary;
+  final String? description;
+  final String? location;
+  final String? organizer;
+  final String? startIso;
+  final String? endIso;
+  final String formattedTime;
+  final bool isAllDay;
+  final String? status;
+  final bool isCancelled;
+  final String? method;
+  final int? attachmentId;
+
+  factory CalendarEventInfo.fromJson(Map<String, dynamic> j) =>
+      CalendarEventInfo(
+        summary: _str(j['summary'], orElse: '(Event)'),
+        description: j['description'] as String?,
+        location: j['location'] as String?,
+        organizer: j['organizer'] as String?,
+        startIso: j['start_iso'] as String?,
+        endIso: j['end_iso'] as String?,
+        formattedTime: _str(j['formatted_time']),
+        isAllDay: _bool(j['is_all_day']),
+        status: j['status'] as String?,
+        isCancelled: _bool(j['is_cancelled']),
+        method: j['method'] as String?,
+        attachmentId: j['attachment_id'] == null ? null : _int(j['attachment_id']),
+      );
 }
 
 /// A new, reply or forward draft prepared by `mailcore::compose::answer`,

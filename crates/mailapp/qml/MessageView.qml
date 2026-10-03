@@ -701,6 +701,32 @@ Rectangle {
                     }
                 }
 
+                // --- calendar event card -----------------------------------------
+                EventCard {
+                    Layout.fillWidth: true
+                    Layout.margins: Theme.md
+                    visible: !!root.message && !!root.message.event
+                    event: root.message ? root.message.event : null
+                    onOpenClicked: {
+                        if (root.message && root.message.event && root.message.event.attachment_id !== undefined
+                                && root.message.event.attachment_id !== null) {
+                            root.openOne({
+                                             "id": root.message.event.attachment_id,
+                                             "file_name": (root.message.event.summary || "invite") + ".ics"
+                                         });
+                        }
+                    }
+                    onSaveClicked: {
+                        if (root.message && root.message.event && root.message.event.attachment_id !== undefined
+                                && root.message.event.attachment_id !== null) {
+                            root.saveOne({
+                                             "id": root.message.event.attachment_id,
+                                             "file_name": (root.message.event.summary || "invite") + ".ics"
+                                         });
+                        }
+                    }
+                }
+
                 // --- attachments --------------------------------------------------
                 // Names/sizes sync with the mail; bytes stay on the server until the
                 // user explicitly opens or saves a file (offline-first). Opening

@@ -5,6 +5,7 @@
 
 pub mod badge;
 pub mod bulk;
+pub mod calendar;
 pub mod compose;
 pub mod db;
 pub mod error;

@@ -6,10 +6,11 @@ import '../../ffi/mail_core.dart';
 import '../../models/models.dart';
 import '../../models/settings.dart';
 import '../../state/mail_state.dart';
+import 'attachment_card.dart';
+import 'event_card.dart';
 import 'inline_images_banner.dart';
 import 'link_safety.dart';
 import 'mail_html_view.dart';
-import 'attachment_card.dart';
 import 'mail_paint.dart';
 import 'reader_header.dart';
 import 'reader_widgets.dart';
@@ -133,6 +134,12 @@ class ReaderPaneState extends State<ReaderPane> {
               : null,
           passThrough: passThrough,
         ),
+        if (message.event != null)
+          EventCard(
+            message: message,
+            event: message.event!,
+            passThrough: passThrough,
+          ),
         if (message.isHtml && message.missingInlineImages > 0)
           InlineImagesBanner(
             count: message.missingInlineImages,

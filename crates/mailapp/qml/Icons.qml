@@ -43,6 +43,7 @@ QtObject {
     readonly property string driveFileMove: "\ue675"
     readonly property string edit: "\ue3c9"
     readonly property string editNote: "\ue745"
+    readonly property string event: "\ue878"
     readonly property string expandLess: "\ue5ce"
     readonly property string expandMore: "\ue5cf"
     readonly property string fileDownload: "\ue2c4"
@@ -69,6 +70,7 @@ QtObject {
     readonly property string outbox: "\uef5f"
     readonly property string personAdd: "\ue7fe"
     readonly property string person: "\ue7ff"
+    readonly property string place: "\ue0c8"
     // `print` is reserved (the logging function); unused, kept for
     // completeness under a safe name.
     readonly property string printer: "\ue8ad"

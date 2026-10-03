@@ -169,7 +169,10 @@ pub(crate) fn extract_attachments(
             None => ct.c_type.to_ascii_lowercase(),
         });
         let content_id = part.content_id().map(str::to_string);
-        let data: Option<Vec<u8>> = if with_bytes || is_inline_image(&content_id, &mime_type, len) {
+        let data: Option<Vec<u8>> = if with_bytes
+            || is_inline_image(&content_id, &mime_type, len)
+            || is_calendar_part(part.attachment_name(), mime_type.as_deref(), len)
+        {
             match &part.body {
                 PartType::Binary(b) | PartType::InlineBinary(b) => Some(b.to_vec()),
                 PartType::Text(t) | PartType::Html(t) => Some(t.as_bytes().to_vec()),
@@ -221,8 +224,24 @@ fn is_inline_image(content_id: &Option<String>, mime: &Option<String>, len: usiz
         && len <= MAX_INLINE_IMAGE_BYTES
 }
 
+/// An iCalendar part (.ics / text/calendar) kept at sync time so the reader
+/// can render the calendar event preview card offline without on-demand download.
+fn is_calendar_part(filename: Option<&str>, mime: Option<&str>, len: usize) -> bool {
+    const MAX_CALENDAR_BYTES: usize = 64 * 1024;
+    if len > MAX_CALENDAR_BYTES {
+        return false;
+    }
+    let is_ics = filename.is_some_and(|f| f.to_ascii_lowercase().ends_with(".ics"));
+    let is_cal_mime = mime.is_some_and(|m| {
+        let m = m.to_ascii_lowercase();
+        m == "text/calendar" || m == "application/ics"
+    });
+    is_ics || is_cal_mime
+}
+
 /// Store attachment rows for a freshly synced message: names and sizes,
-/// plus the bytes of inline images up to the per-message budget.
+/// plus the bytes of inline images up to the per-message budget and small
+/// calendar parts for instant offline preview cards.
 pub(crate) fn store_attachment_meta(db: &Db, message_id: i64, files: Vec<NewAttachment>) {
     if files.is_empty() {
         return;
@@ -237,13 +256,17 @@ pub(crate) fn store_attachment_meta(db: &Db, message_id: i64, files: Vec<NewAtta
     }
     let mut budget = MAX_INLINE_BYTES_PER_MESSAGE;
     for f in &files {
-        let keep = f
+        let is_cal = f.data.as_ref().is_some_and(|d| {
+            is_calendar_part(f.filename.as_deref(), f.mime_type.as_deref(), d.len())
+        });
+        let keep_inline = f
             .data
             .as_ref()
             .filter(|d| is_inline_image(&f.content_id, &f.mime_type, d.len()) && d.len() <= budget);
-        if let Some(d) = keep {
+        if let Some(d) = keep_inline {
             budget -= d.len();
         }
+        let keep = if is_cal { f.data.as_ref() } else { keep_inline };
         let meta = NewAttachment {
             data: keep.cloned(),
             ..f.clone()
@@ -359,6 +382,49 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn sync_keeps_calendar_bytes_for_preview() {
+        let db = Db::open_in_memory().unwrap();
+        let account_id = accounts::create(
+            &db,
+            &crate::models::NewAccount {
+                name: "Test".to_string(),
+                email_address: "alice@example.com".to_string(),
+                from_name: String::new(),
+                imap_host: "imap.example.com".to_string(),
+                imap_port: 993,
+                imap_security: "tls".to_string(),
+                imap_username: "alice@example.com".to_string(),
+                smtp_host: "smtp.example.com".to_string(),
+                smtp_port: 465,
+                smtp_security: "tls".to_string(),
+                smtp_username: "alice@example.com".to_string(),
+                auth_vault_key: "test".to_string(),
+                check_interval_secs: 60,
+            },
+        )
+        .unwrap();
+        let folder_id = folders::upsert(&db, account_id, "INBOX", "/", FolderRole::Inbox).unwrap();
+        let message_id =
+            messages::upsert(&db, &messages::sample_new(account_id, folder_id, 2)).unwrap();
+        let ics_bytes =
+            b"BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nSUMMARY:Test\r\nEND:VEVENT\r\nEND:VCALENDAR"
+                .to_vec();
+        let files = vec![NewAttachment {
+            filename: Some("meeting.ics".to_string()),
+            mime_type: Some("text/calendar".to_string()),
+            content_id: None,
+            size: ics_bytes.len() as u64,
+            data: Some(ics_bytes.clone()),
+            is_inline: false,
+        }];
+        store_attachment_meta(&db, message_id, files);
+        let list = messages::list_attachments(&db, message_id).unwrap();
+        assert_eq!(list.len(), 1);
+        let full = messages::get_attachment(&db, list[0].id).unwrap();
+        assert_eq!(full.data, Some(ics_bytes));
     }
 
     #[test]

@@ -5,6 +5,7 @@ import 'package:mailclient/src/models/models.dart';
 import 'package:mailclient/src/models/settings.dart';
 import 'package:mailclient/src/state/mail_state.dart';
 import 'package:mailclient/src/ui/reader/attachment_card.dart';
+import 'package:mailclient/src/ui/reader/event_card.dart';
 import 'package:mailclient/src/ui/reader/inline_images_banner.dart';
 import 'package:mailclient/src/ui/reader/mail_html_view.dart';
 import 'package:mailclient/src/ui/reader/reader_header.dart';
@@ -276,5 +277,57 @@ void main() {
     await tester.tap(find.text('Download'));
     await tester.pump();
     expect(downloaded, isTrue);
+  });
+
+  testWidgets('renders calendar event card when invite is present', (
+    tester,
+  ) async {
+    final core = _OneMessageCore({
+      'uid': 12,
+      'subject': 'Sprint Review',
+      'from': 'alice@example.org',
+      'body_text': 'Meeting agenda...',
+      'is_html': false,
+      'event': {
+        'summary': 'Sprint Review',
+        'location': 'Room 101',
+        'organizer': 'Alice <alice@example.org>',
+        'formatted_time': 'Tue, Oct 6, 2026 · 14:00 – 15:00',
+        'is_all_day': false,
+        'is_cancelled': false,
+        'attachment_id': 99,
+      },
+      'attachments': [
+        {
+          'id': 99,
+          'filename': 'invite.ics',
+          'mime_type': 'text/calendar',
+          'size': 120,
+        },
+      ],
+    });
+    MailCore.debugInstance = core;
+    final state = MailState(core);
+    addTearDown(state.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ChangeNotifierProvider<MailState>.value(
+            value: state,
+            child: const ReaderPane(),
+          ),
+        ),
+      ),
+    );
+    await state.openMessage(12);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.byType(EventCard), findsOneWidget);
+    expect(find.text('Sprint Review'), findsWidgets);
+    expect(find.text('Tue, Oct 6, 2026 · 14:00 – 15:00'), findsOneWidget);
+    expect(find.text('Room 101'), findsOneWidget);
+    expect(find.text('Open in Calendar'), findsOneWidget);
+    expect(find.text('Save .ics'), findsOneWidget);
   });
 }

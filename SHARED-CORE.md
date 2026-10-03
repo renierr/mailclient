@@ -53,6 +53,7 @@ still to promote") points here instead of keeping its own list.
 | Outbox rows: counts, list, dismiss, one-line row state | `mailcore::outbox` (`status`, `list_json`, `dismiss`, `state_line`); retry is the next sync (`flush_outbox`), both dialogs only start one |
 | Similar messages: 3-tier match, subject normalize, keywords | `mailcore::similar` (`similar_json`, `target_subject`, `normalize_subject`, `extract_keywords`); frontends are UI only |
 | Message EML export: RFC 5322 MIME assembly, headers, safe filename | `mailcore::export` (`assemble_eml`, `export_eml_to`, `suggested_eml_name`); frontends are UI only |
+| Calendar invite parsing: RFC 5545 VEVENT extraction, line unfolding, unescaping, date formatting | `mailcore::calendar` (`parse_ics`, `parse_ics_bytes`, `CalendarEvent`); `feed::message_json` supplies `"event"` directly; frontends are UI only |
 
 ## Open
 
