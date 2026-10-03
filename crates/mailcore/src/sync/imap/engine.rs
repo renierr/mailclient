@@ -36,7 +36,7 @@ use super::{
     folders::discover_folders,
     parse::{
         collect_contacts_from_headers, extract_attachments, flag_state, parse_to_new,
-        store_attachment_meta, store_attachments,
+        real_html_body, store_attachment_meta, store_attachments,
     },
     roles::{is_already_exists, normalize_folder_path},
     search::search_recent_uids,

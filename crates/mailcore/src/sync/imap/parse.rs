@@ -62,8 +62,16 @@ pub(crate) fn parse_to_new(
                 .map(str::to_string)
         });
 
-    let files = extract_attachments(&parsed, with_bytes);
-    let has_attachments = parsed.attachment_count() > 0 || !files.is_empty();
+    let body_html = real_html_body(&parsed);
+    // `extract_attachments` marks `cid:`-shown parts inline (even under
+    // `Content-Disposition: attachment`, as newsletters send logos), so the
+    // same image neither lists as a file nor raises the flag.
+    let files = extract_attachments(&parsed, with_bytes, body_html.as_deref());
+    // `attachment_count` is the untruncated part total, so parts skipped
+    // above (over the count/size caps) still raise the flag — while a mail
+    // of only body images does not.
+    let has_attachments =
+        files.iter().any(|f| !f.is_inline) || parsed.attachment_count() > files.len();
 
     let header_end = raw
         .windows(4)
@@ -107,7 +115,7 @@ pub(crate) fn parse_to_new(
             date,
             snippet,
             body_text,
-            body_html: real_html_body(&parsed),
+            body_html,
             raw_headers: (!raw_headers.is_empty()).then_some(raw_headers),
             is_read,
             is_starred,
@@ -125,7 +133,7 @@ pub(crate) fn parse_to_new(
 /// for a plain-text mail mail-parser converts the text part into
 /// `<html><body>…<br/>` on the fly, and storing that made every plain mail
 /// render as HTML.
-fn real_html_body(parsed: &mail_parser::Message<'_>) -> Option<String> {
+pub(crate) fn real_html_body(parsed: &mail_parser::Message<'_>) -> Option<String> {
     let part = parsed.html_part(0)?;
     matches!(part.body, mail_parser::PartType::Html(_))
         .then(|| parsed.body_html(0).map(|c| c.into_owned()))
@@ -135,6 +143,7 @@ fn real_html_body(parsed: &mail_parser::Message<'_>) -> Option<String> {
 pub(crate) fn extract_attachments(
     parsed: &mail_parser::Message<'_>,
     with_bytes: bool,
+    body_html: Option<&str>,
 ) -> Vec<NewAttachment> {
     use mail_parser::{MimeHeaders, PartType};
     let mut out = Vec::new();
@@ -173,7 +182,20 @@ pub(crate) fn extract_attachments(
         if with_bytes && data.as_ref().is_none_or(|b| b.is_empty()) {
             continue;
         }
-        let is_inline = matches!(part.body, PartType::InlineBinary(_));
+        // Bytes in hand beat the header: a confident `image/jpeg` on PNG
+        // bytes (or `octet-stream` on anything) is corrected, so the file
+        // written later opens with the right application.
+        let mime_type = match data.as_deref() {
+            Some(bytes) => crate::mime::corrected_mime(mime_type.as_deref(), bytes).or(mime_type),
+            None => mime_type,
+        };
+        let mut is_inline = matches!(part.body, PartType::InlineBinary(_));
+        // Same rule as `parse_to_new`, for callers holding no message row
+        // (the on-demand download): a `cid:`-shown part must not flip back
+        // to a listed file on re-fetch.
+        if !is_inline && crate::html::is_body_referenced(content_id.as_deref(), body_html) {
+            is_inline = true;
+        }
         out.push(NewAttachment {
             filename: part.attachment_name().map(str::to_string),
             mime_type,
@@ -511,5 +533,114 @@ Content-Type: text/html
         let (_, full_files) = parse_to_new(1, 1, 7, &[], raw, true).unwrap();
         assert_eq!(full_files.len(), 1);
         assert_eq!(full_files[0].data.as_deref(), Some(b"hi".as_slice()));
+    }
+
+    #[test]
+    fn download_time_mime_fix_keeps_stable_ids() {
+        let db = Db::open_in_memory().unwrap();
+        let account_id = accounts::create(
+            &db,
+            &crate::models::NewAccount {
+                name: "Test".to_string(),
+                email_address: "alice@example.com".to_string(),
+                from_name: String::new(),
+                imap_host: "imap.example.com".to_string(),
+                imap_port: 993,
+                imap_security: "tls".to_string(),
+                imap_username: "alice@example.com".to_string(),
+                smtp_host: "smtp.example.com".to_string(),
+                smtp_port: 465,
+                smtp_security: "tls".to_string(),
+                smtp_username: "alice@example.com".to_string(),
+                auth_vault_key: "test".to_string(),
+                check_interval_secs: 60,
+            },
+        )
+        .unwrap();
+        let folder_id = folders::upsert(&db, account_id, "INBOX", "/", FolderRole::Inbox).unwrap();
+        let message_id =
+            messages::upsert(&db, &messages::sample_new(account_id, folder_id, 1)).unwrap();
+        // Sync-time metadata: header said octet-stream, no bytes to check.
+        store_attachment_meta(
+            &db,
+            message_id,
+            vec![NewAttachment {
+                filename: Some("scan".to_string()),
+                mime_type: Some("application/octet-stream".to_string()),
+                content_id: None,
+                size: 8,
+                data: None,
+                is_inline: false,
+            }],
+        );
+        let before = messages::list_attachments(&db, message_id).unwrap();
+        assert_eq!(before.len(), 1);
+        // Download: magic says PDF. The row keeps its ID (the reader may
+        // hold it), only the type is corrected in place.
+        store_attachments(
+            &db,
+            message_id,
+            vec![NewAttachment {
+                filename: Some("scan".to_string()),
+                mime_type: Some("application/pdf".to_string()),
+                content_id: None,
+                size: 8,
+                data: Some(b"%PDF-1.7".to_vec()),
+                is_inline: false,
+            }],
+        )
+        .unwrap();
+        let after = messages::list_attachments(&db, message_id).unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].id, before[0].id);
+        assert_eq!(after[0].mime_type.as_deref(), Some("application/pdf"));
+    }
+
+    #[test]
+    fn attachment_disposition_shown_by_cid_is_a_body_part() {
+        // The newsletter shape: logos declared `attachment` (filename
+        // `inline`) but shown in the body via `cid:`. They must neither
+        // list as files nor raise the list icon.
+        let raw = b"From: info-noreply@example.com\r\nTo: a@x.y\r\nSubject: doc\r\n\
+Content-Type: multipart/related; boundary=\"R\"\r\n\r\n\
+--R\r\nContent-Type: text/html\r\n\r\n<p><img src=\"cid:yellowLogo\"></p>\r\n\
+--R\r\nContent-Type: image/png\r\nContent-ID: yellowLogo\r\n\
+Content-Disposition: attachment; filename=\"inline\"\r\n\
+Content-Transfer-Encoding: base64\r\n\r\nZm9v\r\n\
+--R--\r\n";
+        let (msg, files) = parse_to_new(1, 1, 7, &[], raw, false).unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].is_inline);
+        assert!(!msg.has_attachments);
+    }
+
+    #[test]
+    fn unreferenced_attachment_stays_a_file() {
+        let raw = b"From: a@x.y\r\nTo: b@x.y\r\nSubject: files\r\n\
+Content-Type: multipart/related; boundary=\"R\"\r\n\r\n\
+--R\r\nContent-Type: text/html\r\n\r\n<p>no images here</p>\r\n\
+--R\r\nContent-Type: image/png\r\nContent-ID: <logo@example.com>\r\n\
+Content-Disposition: attachment; filename=\"inline\"\r\n\
+Content-Transfer-Encoding: base64\r\n\r\nZm9v\r\n\
+--R--\r\n";
+        let (msg, files) = parse_to_new(1, 1, 7, &[], raw, false).unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(!files[0].is_inline);
+        assert!(msg.has_attachments);
+    }
+
+    #[test]
+    fn magic_bytes_correct_a_wrong_mime_header() {
+        // Declared JPEG, actually PNG (`iVBORw0KGgo=` = the PNG signature).
+        let raw = b"From: a@x.y\r\nTo: b@x.y\r\nSubject: photo\r\n\
+Content-Type: multipart/mixed; boundary=\"B\"\r\n\r\n\
+--B\r\nContent-Type: text/plain\r\n\r\nsee attached\r\n\
+--B\r\nContent-Type: image/jpeg; name=\"photo.jpg\"\r\n\
+Content-Disposition: attachment; filename=\"photo.jpg\"\r\n\
+Content-Transfer-Encoding: base64\r\n\r\niVBORw0KGgo=\r\n\
+--B--\r\n";
+        let (_, files) = parse_to_new(1, 1, 7, &[], raw, true).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].mime_type.as_deref(), Some("image/png"));
     }
 }

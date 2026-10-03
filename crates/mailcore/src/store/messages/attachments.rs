@@ -37,17 +37,21 @@ pub fn add_attachment(db: &Db, message_id: i64, a: &NewAttachment) -> Result<i64
 }
 
 /// Replace a message's attachments with a freshly parsed set while keeping
-/// stable row IDs: matches on filename/mime/content-id/size/inline, fills
+/// stable row IDs: matches on filename/content-id/size/inline, fills
 /// bytes in place, inserts truly new parts, deletes vanished ones — all in
 /// one transaction so an open/save click holding a pre-download ID still
 /// resolves afterwards (`unchecked_` because `Db::conn()` is shared `&`).
+///
+/// The MIME type is deliberately not part of the match: the download-time
+/// magic check (`mime::corrected_mime`) may fix a header the sync-time
+/// metadata row got wrong, and that correction must update the row in
+/// place rather than orphan the ID the reader holds.
 pub fn replace_attachments(db: &Db, message_id: i64, files: &[NewAttachment]) -> Result<()> {
     let tx = db.conn().unchecked_transaction()?;
     let mut existing = list_attachments(db, message_id)?;
     for file in files {
         let matched = existing.iter().position(|a| {
             a.filename == file.filename
-                && a.mime_type == file.mime_type
                 && a.content_id == file.content_id
                 && a.size == file.size
                 && a.is_inline == file.is_inline
@@ -56,9 +60,10 @@ pub fn replace_attachments(db: &Db, message_id: i64, files: &[NewAttachment]) ->
             let attachment = existing.remove(index);
             tx.execute(
                 "update attachments set data = coalesce(?1, data),
+                    mime_type = coalesce(?2, mime_type),
                     storage_path = case when ?1 is not null then null else storage_path end
-                 where id = ?2",
-                params![file.data.as_deref(), attachment.id],
+                 where id = ?3",
+                params![file.data.as_deref(), file.mime_type, attachment.id],
             )?;
         } else {
             tx.execute(

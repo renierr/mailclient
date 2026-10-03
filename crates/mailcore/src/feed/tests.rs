@@ -161,6 +161,82 @@ fn feed_carries_attachment_metadata_without_bytes() {
 }
 
 #[test]
+fn reader_hides_cid_shown_images_predating_the_inline_flag() {
+    use crate::models::NewAttachment;
+    let (db, acc, f) = setup();
+    let mut m = msg_store::sample_new(acc, f, 72);
+    m.body_html = Some("<p><img src=\"cid:yellowLogo\"></p>".to_string());
+    // Stored before the `cid:` rule: disposition attachment, flag raised.
+    m.has_attachments = true;
+    let id = msg_store::upsert(&db, &m).unwrap();
+    msg_store::add_attachment(
+        &db,
+        id,
+        &NewAttachment {
+            filename: Some("inline".to_string()),
+            mime_type: Some("image/png".to_string()),
+            content_id: Some("yellowLogo".to_string()),
+            size: 8,
+            data: Some(b"\x89PNG\r\n\x1a\nxx".to_vec()),
+            is_inline: false,
+        },
+    )
+    .unwrap();
+    let row: serde_json::Value = serde_json::from_str(&message_json(&db, f, 72).unwrap()).unwrap();
+    assert!(!row["has_attachments"].as_bool().unwrap());
+    assert_eq!(row["attachments"].as_array().unwrap().len(), 0);
+    let only: serde_json::Value =
+        serde_json::from_str(&attachments_json(&db, f, 72).unwrap()).unwrap();
+    assert_eq!(only.as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn extensionless_files_gain_theirs_from_the_mime_type() {
+    use crate::models::NewAttachment;
+    let (db, acc, f) = setup();
+    let mut m = msg_store::sample_new(acc, f, 73);
+    m.has_attachments = true;
+    let id = msg_store::upsert(&db, &m).unwrap();
+    msg_store::add_attachment(
+        &db,
+        id,
+        &NewAttachment {
+            filename: Some("inline".to_string()),
+            mime_type: Some("image/png".to_string()),
+            content_id: None,
+            size: 8,
+            data: None,
+            is_inline: false,
+        },
+    )
+    .unwrap();
+    let aid = msg_store::add_attachment(
+        &db,
+        id,
+        &NewAttachment {
+            filename: None,
+            mime_type: Some("application/pdf".to_string()),
+            content_id: None,
+            size: 4,
+            data: None,
+            is_inline: false,
+        },
+    )
+    .unwrap();
+    let only: serde_json::Value =
+        serde_json::from_str(&attachments_json(&db, f, 73).unwrap()).unwrap();
+    assert_eq!(only[0]["file_name"], "inline.png");
+    assert_eq!(
+        only[1]["file_name"],
+        format!("attachment-{aid}.pdf").as_str()
+    );
+    assert_eq!(
+        only[1]["display_name"],
+        format!("attachment-{aid}.pdf").as_str()
+    );
+}
+
+#[test]
 fn every_sender_row_carries_one_badge() {
     let (db, acc, f) = setup();
     msg_store::upsert(&db, &msg_store::sample_new(acc, f, 9)).unwrap();

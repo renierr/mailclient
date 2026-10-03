@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use super::attachments::{get_attachment, list_attachments, save_attachment_to_path};
 use crate::db::Db;
 use crate::error::{Result, StoreError};
-use crate::paths::{file_url_to_path, free_path, safe_attachment_name};
+use crate::paths::{file_url_to_path, free_path, safe_attachment_name_for_mime};
 
 /// Write one attachment to a save-dialog target (`file://` URL or path).
 /// A directory — existing, or written with a trailing separator — gets the
@@ -26,7 +26,11 @@ pub fn save_attachment_to(db: &Db, attachment_id: i64, target: &str) -> Result<P
     let mut dest = file_url_to_path(trimmed);
     if dest.is_dir() || trimmed.ends_with('/') || trimmed.ends_with('\\') {
         let a = get_attachment(db, attachment_id)?;
-        dest.push(safe_attachment_name(a.filename.as_deref(), attachment_id));
+        dest.push(safe_attachment_name_for_mime(
+            a.filename.as_deref(),
+            a.mime_type.as_deref(),
+            attachment_id,
+        ));
     }
     if let Some(parent) = dest.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
@@ -53,7 +57,10 @@ pub fn save_all_attachments_to(db: &Db, message_id: i64, dir: &str) -> Result<u3
     let mut saved = 0;
     let mut last_err = None;
     for a in &files {
-        let dest = free_path(&dir, &safe_attachment_name(a.filename.as_deref(), a.id));
+        let dest = free_path(
+            &dir,
+            &safe_attachment_name_for_mime(a.filename.as_deref(), a.mime_type.as_deref(), a.id),
+        );
         match save_attachment_to_path(db, a.id, &dest) {
             Ok(_) => saved += 1,
             Err(e) => {
@@ -83,7 +90,7 @@ pub fn write_attachment_copy(db: &Db, attachment_id: i64, dir: &Path) -> Result<
         "{}-{}-{}",
         a.message_id,
         attachment_id,
-        safe_attachment_name(a.filename.as_deref(), attachment_id)
+        safe_attachment_name_for_mime(a.filename.as_deref(), a.mime_type.as_deref(), attachment_id)
     ));
     save_attachment_to_path(db, attachment_id, &dest)?;
     crate::paths::prune_temp_copies(dir, Some(&dest));

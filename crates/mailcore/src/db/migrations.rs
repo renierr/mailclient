@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 19;
+pub const SCHEMA_VERSION: u32 = 20;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -283,6 +283,17 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         // v19: sender name and recipients join the search index.
         conn.execute_batch(SCHEMA_V19)?;
     }
+    if current < 20 {
+        // v20: no DDL — repairs rows. Senders (newsletters) declare body
+        // images as `Content-Disposition: attachment` with a `Content-ID`
+        // the HTML shows via `cid:`; those listed as files and raised the
+        // list icon. Mark them inline and clear flags left without a real
+        // file, and fix stored MIME types against magic bytes. New mail is
+        // parsed this way from now on (see `parse_to_new`).
+        if let Err(e) = migrate_cid_inline_attachments(conn) {
+            log::warn!("migration v20: inline attachment repair failed: {e}");
+        }
+    }
     if current != SCHEMA_VERSION {
         conn.execute(
             "update schema_meta set value = ?1 where key = 'version'",
@@ -317,6 +328,75 @@ fn backfill_from_names(conn: &Connection) -> Result<()> {
     }
     tx.commit()?;
     log::info!("migration v16: sender name backfilled for {filled} messages");
+    Ok(())
+}
+
+/// Mark `cid:`-shown body images inline and repair stored MIME types (see
+/// v20). Only messages whose body mentions `cid:` and still list a
+/// non-inline `Content-ID` part are touched; the magic check reads just
+/// the first 12 bytes (`substr`), never whole BLOBs.
+fn migrate_cid_inline_attachments(conn: &Connection) -> Result<()> {
+    let msgs: Vec<(i64, String)> = {
+        let mut stmt = conn.prepare(
+            "select m.id, m.body_html from messages m
+              where m.body_html like '%cid:%'
+                and exists (select 1 from attachments a
+                            where a.message_id = m.id and a.is_inline = 0
+                              and a.content_id is not null
+                              and trim(a.content_id) != '')",
+        )?;
+        let mapped = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        mapped.collect::<std::result::Result<Vec<_>, _>>()?
+    };
+    let (mut marked, mut cleared) = (0, 0);
+    for (id, html) in &msgs {
+        let parts: Vec<(i64, Option<String>)> = conn
+            .prepare(
+                "select id, content_id from attachments
+                  where message_id = ?1 and is_inline = 0",
+            )?
+            .query_map([id], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for (aid, cid) in &parts {
+            if crate::html::is_body_referenced(cid.as_deref(), Some(html)) {
+                conn.execute("update attachments set is_inline = 1 where id = ?1", [aid])?;
+                marked += 1;
+            }
+        }
+        let remaining: i64 = conn.query_row(
+            "select count(*) from attachments where message_id = ?1 and is_inline = 0",
+            [id],
+            |row| row.get(0),
+        )?;
+        if remaining == 0 {
+            conn.execute(
+                "update messages set has_attachments = 0 where id = ?1",
+                [id],
+            )?;
+            cleared += 1;
+        }
+    }
+    let mut fixed = 0;
+    let blobs: Vec<(i64, Option<String>, Vec<u8>)> = conn
+        .prepare(
+            "select id, mime_type, substr(data, 1, 12) from attachments
+              where data is not null",
+        )?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    for (aid, mime, head) in &blobs {
+        if let Some(better) = crate::mime::corrected_mime(mime.as_deref(), head) {
+            conn.execute(
+                "update attachments set mime_type = ?1 where id = ?2",
+                rusqlite::params![better, aid],
+            )?;
+            fixed += 1;
+        }
+    }
+    log::info!(
+        "migration v20: {marked} cid: part(s) marked inline, \
+         {fixed} mime type(s) fixed, {cleared} flag(s) cleared"
+    );
     Ok(())
 }
 
@@ -771,6 +851,67 @@ b<c",
                 .unwrap();
             assert_eq!(n, 1, "{q}");
         }
+    }
+
+    #[test]
+    fn v20_migration_marks_cid_shown_parts_inline_and_fixes_mime() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_FULL).unwrap();
+        conn.execute(
+            "insert into schema_meta (key, value) values ('version', '19')",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch(
+            "insert into accounts (id, name, email_address, imap_host, smtp_host,
+                 auth_vault_key, created_at, updated_at)
+             values (1, 'a', 'a@example.com', 'i', 's', 'k', 't', 't');
+             insert into folders (id, account_id, path, delimiter, role, created_at, updated_at)
+             values (1, 1, 'INBOX', '/', 'inbox', 't', 't');
+             insert into messages (id, account_id, folder_id, uid, body_html,
+                 has_attachments, created_at, updated_at)
+             values (1, 1, 1, 1, '<p><img src=\"cid:yellowLogo\"></p>', 1, 't', 't'),
+                    (2, 1, 1, 2, '<p>no images</p>', 1, 't', 't');
+             insert into attachments (id, message_id, filename, mime_type, size,
+                 content_id, data, is_inline, created_at)
+             values (1, 1, 'inline', 'application/octet-stream', 10,
+                 'yellowLogo', X'89504E470D0A1A0A7878', 0, 't'),
+                    (2, 2, 'a.pdf', 'application/pdf', 4, null, null, 0, 't');",
+        )
+        .unwrap();
+
+        ensure_schema(&conn).unwrap();
+
+        let version: String = conn
+            .query_row(
+                "select value from schema_meta where key = 'version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION.to_string());
+        // Body-shown part: inline, MIME fixed from magic, flag cleared.
+        let logo: (i64, String, i64) = conn
+            .query_row(
+                "select is_inline, mime_type,
+                    (select has_attachments from messages where id = 1)
+                 from attachments where id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(logo, (1, "image/png".to_string(), 0));
+        // A real file is untouched, and its flag stays raised.
+        let file: (i64, i64) = conn
+            .query_row(
+                "select is_inline,
+                    (select has_attachments from messages where id = 2)
+                 from attachments where id = 2",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(file, (0, 1));
     }
 
     #[test]

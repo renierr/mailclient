@@ -55,6 +55,62 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// `<img>` sources that point at body parts: the normalized content-IDs
+/// referenced as `cid:` in raw HTML. Only `<img src>` counts — a file
+/// linked from an `<a href="cid:…">` stays a real attachment, since the
+/// reader embeds just images (see [`inline_cid_images`]).
+///
+/// Tolerant on purpose: stored bodies are raw sender HTML (single quotes,
+/// no quotes, any case), not sanitized output.
+pub fn img_cid_references(html: &str) -> Vec<String> {
+    let lower = html.to_ascii_lowercase();
+    let mut out = Vec::new();
+    let mut rest = &lower[..];
+    // Byte slicing is safe: every byte consumed is ASCII (`<`, `img`).
+    while let Some(tag) = rest.find("<img") {
+        let after = &rest[tag + 4..];
+        let end = after.find('>').unwrap_or(after.len());
+        let tag = &after[..end];
+        rest = &after[end..];
+        let Some(from) = tag.find("src") else {
+            continue;
+        };
+        let mut val = tag[from + 3..].trim_start();
+        if let Some(v) = val.strip_prefix('=') {
+            val = v.trim_start();
+        } else {
+            continue;
+        }
+        val = val.strip_prefix(['\'', '"']).unwrap_or(val);
+        let token: String = val
+            .chars()
+            .take_while(|c| !c.is_whitespace() && !matches!(c, '"' | '\'' | '>' | '<'))
+            .collect();
+        let token = token.trim_end_matches("/>");
+        if token.to_ascii_lowercase().starts_with("cid:") {
+            let id = normalize_content_id(token);
+            if !id.is_empty() && !out.contains(&id) {
+                out.push(id);
+            }
+        }
+    }
+    out
+}
+
+/// Whether a part's `Content-ID` is shown in the body: referenced from an
+/// `<img src="cid:…">`, in any spelling (see [`normalize_content_id`]).
+/// A part the body shows is a body part even when the sender declared it
+/// `Content-Disposition: attachment` (newsletters do this for logos).
+pub fn is_body_referenced(content_id: Option<&str>, html: Option<&str>) -> bool {
+    let (Some(cid), Some(html)) = (content_id, html) else {
+        return false;
+    };
+    let want = normalize_content_id(cid);
+    if want.is_empty() {
+        return false;
+    }
+    img_cid_references(html).contains(&want)
+}
 /// Replace every `<img src="cid:…">` in sanitized HTML with a `data:` URI
 /// from `images`. Returns the new HTML and how many references had no
 /// stored bytes (those become their alt text).
@@ -266,6 +322,19 @@ mod tests {
         assert_eq!(inline_cid_images(&html, &[svg]).1, 1);
         let big = png("x@example.com", &vec![0; MAX_INLINE_IMAGE_BYTES + 1]);
         assert_eq!(inline_cid_images(&html, &[big]).1, 1);
+    }
+
+    #[test]
+    fn body_references_cover_sender_spellings() {
+        let html = "<p><IMG SRC=cid:yellowLogo><img src='cid:bannerLogo'/></p>";
+        assert!(is_body_referenced(Some("yellowLogo"), Some(html)));
+        assert!(is_body_referenced(Some("<bannerLogo>"), Some(html)));
+        assert!(!is_body_referenced(Some("other"), Some(html)));
+        assert!(!is_body_referenced(None, Some(html)));
+        assert!(!is_body_referenced(Some("yellowLogo"), None));
+        // A linked file is not a body image: only <img src> counts.
+        let linked = "<p><a href=\"cid:report\">report</a></p>";
+        assert!(!is_body_referenced(Some("report"), Some(linked)));
     }
 
     #[test]

@@ -431,10 +431,15 @@ impl ImapSync {
         let parsed = mail_parser::MessageParser::default()
             .parse(&raw)
             .ok_or_else(|| StoreError::InvalidInput("parse failed".to_string()))?;
-        let files = extract_attachments(&parsed, true);
+        let files = extract_attachments(&parsed, true, real_html_body(&parsed).as_deref());
         let stored = files.len() as u64;
         store_attachments(db, message_id, files)?;
-        messages::set_has_attachments(db, message_id, stored > 0)?;
+        // Body images never raise the flag: a mail of only `cid:`-shown
+        // parts downloads bytes but lists no files.
+        let has_files = messages::list_attachments(db, message_id)
+            .map(|rows| rows.iter().any(|a| !a.is_inline))
+            .unwrap_or(stored > 0);
+        messages::set_has_attachments(db, message_id, has_files)?;
         log::info!("imap: downloaded {stored} attachment(s) for message {message_id}");
         Ok(stored)
     }

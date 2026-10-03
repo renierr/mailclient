@@ -4,7 +4,7 @@
 use mailcore::store::{accounts, folders, messages};
 use mailcore::sync::pool::checkout_session;
 
-use mailcore::paths::safe_attachment_name;
+use mailcore::paths::safe_attachment_name_for_mime;
 
 use super::files::file_url;
 
@@ -70,7 +70,11 @@ pub(crate) fn draft_attachment_path(
         "{}-{}-{}",
         attachment.message_id,
         attachment.id,
-        safe_attachment_name(attachment.filename.as_deref(), attachment.id)
+        safe_attachment_name_for_mime(
+            attachment.filename.as_deref(),
+            attachment.mime_type.as_deref(),
+            attachment.id
+        )
     );
     let dest = dir.join(name);
     let mut file = std::fs::OpenOptions::new()

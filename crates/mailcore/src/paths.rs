@@ -131,7 +131,50 @@ pub fn fallback_attachment_name(id: i64) -> String {
 /// Android can land on a shared or FAT/NTFS volume, and consistent names are
 /// easier to reason about than per-OS ones.
 pub fn safe_attachment_name(name: Option<&str>, id: i64) -> String {
-    let named = clean_attachment_name(name, id);
+    safe_attachment_name_for_mime(name, None, id)
+}
+
+/// Like [`safe_attachment_name`], but the written file always opens with
+/// the right application: a missing extension is taken from the MIME type
+/// (`inline` + `image/png` → `inline.png`), and an extension that names a
+/// different sniffed type is swapped (`photo.jpg` holding PNG bytes →
+/// `photo.png`). An extension nothing maps to is left alone — renaming
+/// `report.dat` to `report.pdf` would hide the sender's name for no
+/// certain gain.
+///
+/// Pass the stored MIME (already magic-corrected at parse time, see
+/// `mime::corrected_mime`); `None` keeps the historic behaviour.
+pub fn safe_attachment_name_for_mime(name: Option<&str>, mime: Option<&str>, id: i64) -> String {
+    let mut named = clean_attachment_name(name, id);
+    let Some(want_ext) = mime.and_then(crate::mime::extension_for_mime) else {
+        return cap_name(&named, MAX_ATTACHMENT_NAME_BYTES);
+    };
+    if named == fallback_attachment_name(id) {
+        return cap_name(
+            &format!("attachment-{id}.{want_ext}"),
+            MAX_ATTACHMENT_NAME_BYTES,
+        );
+    }
+    let want_mime = mime.map(|m| m.trim().to_ascii_lowercase()).map(|m| {
+        if m == "image/jpg" {
+            "image/jpeg".to_string()
+        } else {
+            m
+        }
+    });
+    match named.rfind('.') {
+        // A known extension naming another type is swapped; anything
+        // unmapped (`.dat`) is left alone rather than guessed at.
+        Some(i) if i > 0 && i < named.len() - 1 => {
+            let swaps = crate::mime::mime_for_extension(&named[i + 1..])
+                .is_some_and(|cur| Some(cur) != want_mime.as_deref());
+            if swaps {
+                named = format!("{}.{want_ext}", &named[..i]);
+            }
+        }
+        // No extension (`.bashrc` counts as none): append.
+        _ => named = format!("{named}.{want_ext}"),
+    }
     cap_name(&named, MAX_ATTACHMENT_NAME_BYTES)
 }
 
@@ -302,6 +345,46 @@ mod tests {
         assert_eq!(
             safe_attachment_name(Some("Ümläut ök.pdf"), 1),
             "Ümläut ök.pdf"
+        );
+    }
+
+    #[test]
+    fn mime_aware_names_open_with_the_right_app() {
+        // The Commerzbank case: extensionless `inline` holding a PNG.
+        assert_eq!(
+            safe_attachment_name_for_mime(Some("inline"), Some("image/png"), 7),
+            "inline.png"
+        );
+        // A known extension lying about the type is swapped.
+        assert_eq!(
+            safe_attachment_name_for_mime(Some("photo.jpg"), Some("image/png"), 7),
+            "photo.png"
+        );
+        // Matching names, unknown extensions and unknown MIME stay put.
+        assert_eq!(
+            safe_attachment_name_for_mime(Some("report.pdf"), Some("application/pdf"), 7),
+            "report.pdf"
+        );
+        assert_eq!(
+            safe_attachment_name_for_mime(Some("report.dat"), Some("application/pdf"), 7),
+            "report.dat"
+        );
+        assert_eq!(
+            safe_attachment_name_for_mime(Some("inline"), Some("application/octet-stream"), 7),
+            "inline"
+        );
+        assert_eq!(
+            safe_attachment_name_for_mime(None, Some("image/png"), 42),
+            "attachment-42.png"
+        );
+        assert_eq!(
+            safe_attachment_name_for_mime(None, None, 42),
+            "attachment-42.bin"
+        );
+        // Case-insensitive: `PHOTO.JPG` already names a JPEG.
+        assert_eq!(
+            safe_attachment_name_for_mime(Some("PHOTO.JPG"), Some("image/jpeg"), 7),
+            "PHOTO.JPG"
         );
     }
 

@@ -339,8 +339,7 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
     } else {
         plain.clone()
     };
-    let files: Vec<serde_json::Value> = messages::list_attachments(db, m.id)
-        .unwrap_or_default()
+    let files: Vec<serde_json::Value> = listed_attachments(db, m.id, m.body_html.as_deref())
         .iter()
         .map(attachment_row)
         .collect();
@@ -360,7 +359,7 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
         "date_key": date.key,
         "snippet": m.snippet.as_deref().unwrap_or(""),
         "unread": if is_trash { false } else { !m.is_read }, "starred": m.is_starred,
-        "has_attachments": m.has_attachments || !files.is_empty(),
+        "has_attachments": !files.is_empty(),
         "attachments": files, "body_text": plain, "body_html": body_html,
         "is_html": is_html, "has_remote_images": had_remote && is_html,
         "missing_inline_images": missing_inline,
@@ -376,18 +375,36 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
 /// save dialog; bytes leave Rust only via `save_attachment_to_path`.
 pub fn attachments_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
     let m = messages::get_by_uid(db, folder_id, uid)?;
-    let files: Vec<serde_json::Value> = messages::list_attachments(db, m.id)
-        .unwrap_or_default()
+    let files: Vec<serde_json::Value> = listed_attachments(db, m.id, m.body_html.as_deref())
         .iter()
         .map(attachment_row)
         .collect();
     Ok(serde_json::to_string(&files)?)
 }
 
+/// The attachments a reader lists, offers to open and counts: everything
+/// stored except inline body parts. Besides `is_inline` this excludes a
+/// part the body shows through `<img src="cid:…">`, even when the sender
+/// declared it `attachment` — its stored flag may predate that rule (see
+/// the v20 migration), so the feed re-checks against the body.
+fn listed_attachments(
+    db: &Db,
+    message_id: i64,
+    body_html: Option<&str>,
+) -> Vec<crate::models::Attachment> {
+    messages::list_attachments(db, message_id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|a| {
+            !a.is_inline && !crate::html::is_body_referenced(a.content_id.as_deref(), body_html)
+        })
+        .collect()
+}
+
 /// One attachment's metadata. `display_name` is what to show (the mail's
 /// name, or a fallback when it has none); `file_name` is the name a file
-/// written for it gets (see [`crate::paths::safe_attachment_name`]), which a
-/// save dialog should suggest. `size_text` is the preformatted byte count
+/// written for it gets (see `crate::paths::safe_attachment_name_for_mime`),
+/// which a save dialog should suggest. `size_text` is the preformatted byte count
 /// ([`crate::maintenance::format_bytes`]) so both readers show one text.
 fn attachment_row(a: &crate::models::Attachment) -> serde_json::Value {
     let display_name = a
@@ -396,14 +413,18 @@ fn attachment_row(a: &crate::models::Attachment) -> serde_json::Value {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map_or_else(
-            || crate::paths::fallback_attachment_name(a.id),
+            || crate::paths::safe_attachment_name_for_mime(None, a.mime_type.as_deref(), a.id),
             String::from,
         );
     json!({
         "id": a.id,
         "filename": a.filename,
         "display_name": display_name,
-        "file_name": crate::paths::safe_attachment_name(a.filename.as_deref(), a.id),
+        "file_name": crate::paths::safe_attachment_name_for_mime(
+            a.filename.as_deref(),
+            a.mime_type.as_deref(),
+            a.id
+        ),
         "mime_type": a.mime_type,
         "size": a.size,
         "size_text": crate::maintenance::format_bytes(a.size),
