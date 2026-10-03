@@ -50,6 +50,8 @@ Future<void> moreActions(
       }
     case 'headers':
       if (context.mounted) await showHeaders(context, message);
+    case 'export':
+      await state.exportMessage(state.folderId, message.uid);
   }
 }
 

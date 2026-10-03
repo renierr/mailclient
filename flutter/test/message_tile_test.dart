@@ -72,4 +72,13 @@ void main() {
     // Centred under the avatar, not before the text.
     expect(clipBox.center.dx, closeTo(avatarBox.center.dx, 1));
   });
+
+  testWidgets('message actions menu includes Save as .eml…', (tester) async {
+    await pumpTile(tester, row());
+    await tester.tap(find.byTooltip('Message actions'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Save as .eml…'), findsOneWidget);
+    expect(find.text('Find similar'), findsOneWidget);
+  });
 }

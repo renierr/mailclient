@@ -682,6 +682,13 @@ List<PopupMenuEntry<String>> messageActionItems({
     value: 'similar',
     child: MenuRow(icon: Icons.search, text: 'Find similar'),
   ),
+  const PopupMenuItem(
+    value: 'export',
+    child: MenuRow(
+      icon: Icons.file_download_outlined,
+      text: 'Save as .eml…',
+    ),
+  ),
 ];
 
 /// One row action on [uid]. `folderId` is the shown folder unless given;
@@ -698,6 +705,8 @@ Future<void> runMessageAction(
   switch (action) {
     case 'similar':
       await state.findSimilar(folderId ?? state.folderId, uid);
+    case 'export':
+      await state.exportMessage(folderId ?? state.folderId, uid);
     case 'read':
       await state.setRead(uid, unread, folderId: folderId);
     case 'star':

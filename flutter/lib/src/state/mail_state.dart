@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 
 import '../ffi/mail_core.dart';
@@ -780,6 +781,28 @@ class MailState extends ChangeNotifier {
     _searchHits = const [];
     _dropSelection();
     notifyListeners();
+  }
+
+  /// Export message [uid] in [folderId] as a standard RFC 5322 .eml file.
+  Future<void> exportMessage(int folderId, int uid) async {
+    try {
+      final fileName = _core.suggestedEmlName(folderId, uid);
+      final bytes = await _core.exportMessageEmlBytes(folderId, uid);
+      final dest = await FilePicker.saveFile(
+        dialogTitle: 'Export message as .eml',
+        fileName: fileName,
+        bytes: bytes,
+        type: FileType.custom,
+        allowedExtensions: const ['eml'],
+      );
+      if (dest == null) return;
+      showStatus('Exported $fileName');
+    } catch (e) {
+      showStatus(
+        'Could not export message: ${coreErrorText(e)}',
+        isError: true,
+      );
+    }
   }
 
   void _dropSelection() {

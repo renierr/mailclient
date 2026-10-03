@@ -156,6 +156,33 @@ Future<bool> toggleStar({
 LinkInfo linkInfo({required String url}) =>
     MailCoreApi.instance.api.crateApiMessagesLinkInfo(url: url);
 
+/// Export one message as standard RFC 5322 .eml bytes.
+Future<Uint8List> exportMessageEmlBytes({
+  required PlatformInt64 folderId,
+  required int uid,
+}) => MailCoreApi.instance.api.crateApiMessagesExportMessageEmlBytes(
+  folderId: folderId,
+  uid: uid,
+);
+
+/// Export one message as .eml to a file path.
+Future<String> exportMessageEml({
+  required PlatformInt64 folderId,
+  required int uid,
+  required String path,
+}) => MailCoreApi.instance.api.crateApiMessagesExportMessageEml(
+  folderId: folderId,
+  uid: uid,
+  path: path,
+);
+
+/// Suggested filename for exporting a message as .eml.
+String suggestedEmlName({required PlatformInt64 folderId, required int uid}) =>
+    MailCoreApi.instance.api.crateApiMessagesSuggestedEmlName(
+      folderId: folderId,
+      uid: uid,
+    );
+
 /// [`mailcore::html::LinkInfo`] as a generated struct; `""` = none.
 class LinkInfo {
   /// `http`, `https` or `mailto`: may be opened (user-gated).

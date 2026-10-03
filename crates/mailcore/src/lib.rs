@@ -8,6 +8,7 @@ pub mod bulk;
 pub mod compose;
 pub mod db;
 pub mod error;
+pub mod export;
 pub mod feed;
 pub mod html;
 pub mod maintenance;

@@ -1365,6 +1365,7 @@ ApplicationWindow {
             onBulkPurgeRequested: uids => root.confirmBulkPurge(uids)
             onLoadOlderRequested: root.loadOlder()
             onSortRequested: (field, descending) => root.changeSort(field, descending)
+            onStatusMessage: text => root.statusText = text
         }
 
         MessageView {

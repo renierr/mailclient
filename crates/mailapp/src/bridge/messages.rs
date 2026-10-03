@@ -359,6 +359,47 @@ impl qobject::Bridge {
         })
     }
 
+    pub fn suggested_eml_name(&self, folder_id: i64, uid: i32) -> QString {
+        let Ok(db) = shared_db() else {
+            return qstring(&format!("message-{uid}.eml"));
+        };
+        let folder_id = if folder_id <= 0 {
+            *self.current_folder_id()
+        } else {
+            folder_id
+        };
+        if folder_id < 0 || uid < 0 {
+            return qstring(&format!("message-{uid}.eml"));
+        }
+        qstring(&mailcore::export::suggested_eml_name(
+            db, folder_id, uid as u32,
+        ))
+    }
+
+    pub fn export_message(
+        self: Pin<&mut Self>,
+        folder_id: i64,
+        uid: i32,
+        path: &QString,
+    ) -> QString {
+        let current_f = *self.current_folder_id();
+        let folder_id = if folder_id <= 0 { current_f } else { folder_id };
+        let path = path.to_string();
+        spawn_job(self, "Export", move |db, _progress| async move {
+            if folder_id < 0 || uid < 0 {
+                return Err("no message selected".to_string());
+            }
+            let msg = messages::get_by_uid(db, folder_id, uid as u32)
+                .map_err(|_| "unknown message".to_string())?;
+            if msg.has_attachments {
+                let _ = ensure_attachment_data(db, msg.id, false).await;
+            }
+            let dest = mailcore::export::export_eml_to(db, folder_id, uid as u32, &path)
+                .map_err(|e| e.to_string())?;
+            Ok((format!("Exported to {}", dest.display()), None))
+        })
+    }
+
     pub fn mark_read_plan_json(&self, unread: bool) -> QString {
         let (auto, delay) = match shared_db() {
             Ok(db) => (

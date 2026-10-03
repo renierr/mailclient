@@ -1,6 +1,8 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
+import QtCore
 
 import Mailclient
 import "components"
@@ -97,6 +99,7 @@ Rectangle {
     signal bulkDeleteRequested(var uids)
     signal bulkPurgeRequested(var uids)
     signal sortRequested(string field, bool descending)
+    signal statusMessage(string text)
 
     readonly property bool hasQuickFilter: root.filterUnread || root.filterStarred || root.filterAttachments
     readonly property bool hasAnyFilter: root.filterText !== "" || root.hasQuickFilter
@@ -1190,6 +1193,11 @@ Rectangle {
             onTriggered: root.emitLater2(root.findSimilarRequested, root.menuFolderPath, root.menuUid)
         }
         AppMenuItem {
+            glyph: Icons.fileDownload
+            label: qsTr("Save as .eml…")
+            onTriggered: root.exportEml(root.menuFolderPath, root.menuUid)
+        }
+        AppMenuItem {
             glyph: Icons.deleteForever
             label: qsTr("Delete permanently…")
             onTriggered: root.emitLater(root.purgeRequested, root.menuTarget())
@@ -1398,5 +1406,41 @@ Rectangle {
             visible: !root.hasAnyFilter
             text: qsTr("Press ⟳ to sync")
         }
+    }
+
+    FileDialog {
+        id: exportEmlDialog
+        title: qsTr("Save as .eml")
+        fileMode: FileDialog.SaveFile
+        nameFilters: [qsTr("Mail files (*.eml)"), qsTr("All files (*)")]
+        property string exportFolderPath: ""
+        property int exportUid: -1
+        onAccepted: {
+            if (root.backend && root.backend.export_message) {
+                root.statusMessage(qsTr("Exporting…"));
+                var r = root.backend.export_message(-1, exportUid, selectedFile.toString());
+                if (r !== "")
+                    root.statusMessage(r);
+            }
+        }
+    }
+
+    function exportEml(folderPath, uid) {
+        if (!root.backend || uid < 0)
+            return;
+        exportEmlDialog.exportFolderPath = folderPath;
+        exportEmlDialog.exportUid = uid;
+        var name = root.backend.suggested_eml_name ? root.backend.suggested_eml_name(-1, uid) : ("message-" + uid
+                                                                                                 + ".eml");
+        var base = StandardPaths.writableLocation(StandardPaths.DownloadLocation);
+        var s = base.toString().replace(/\\/g, "/");
+        if (s.indexOf("file:") !== 0) {
+            if (s.length >= 2 && s[1] === ":")
+                s = "/" + s;
+            s = "file://" + s;
+        }
+        s = s.replace(/\/+$/, "") + "/" + encodeURIComponent(name);
+        exportEmlDialog.selectedFile = s;
+        exportEmlDialog.open();
     }
 }

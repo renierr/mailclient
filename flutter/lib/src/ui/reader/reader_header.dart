@@ -299,6 +299,13 @@ class ReaderHeader extends StatelessWidget {
                           text: 'Delete permanently…',
                         ),
                       ),
+                      const PopupMenuItem(
+                        value: 'export',
+                        child: MenuRow(
+                          icon: Icons.file_download_outlined,
+                          text: 'Save as .eml…',
+                        ),
+                      ),
                       const PopupMenuDivider(),
                       const PopupMenuItem(
                         value: 'headers',

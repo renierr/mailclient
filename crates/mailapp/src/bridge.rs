@@ -324,6 +324,20 @@ pub mod qobject {
         #[qinvokable]
         fn save_all_attachments(self: Pin<&mut Self>, uid: i32, dir: &QString) -> QString;
 
+        /// Export one message as a standard RFC 5322 .eml file at `path`.
+        /// Downloads attachments first when they are not cached yet.
+        #[qinvokable]
+        fn export_message(
+            self: Pin<&mut Self>,
+            folder_id: i64,
+            uid: i32,
+            path: &QString,
+        ) -> QString;
+
+        /// Suggested filename for exporting a message as .eml.
+        #[qinvokable]
+        fn suggested_eml_name(&self, folder_id: i64, uid: i32) -> QString;
+
         /// Local storage statistics for the Maintenance settings section, as
         /// JSON (`db_bytes`, `message_count`, cached/temp sizes, …). Local
         /// SQLite read, no network.

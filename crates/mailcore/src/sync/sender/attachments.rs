@@ -17,6 +17,7 @@ pub fn guess_mime(filename: &str) -> String {
         "txt" | "log" | "md" => "text/plain",
         "html" | "htm" => "text/html",
         "csv" => "text/csv",
+        "ics" => "text/calendar",
         "pdf" => "application/pdf",
         "json" => "application/json",
         "zip" => "application/zip",

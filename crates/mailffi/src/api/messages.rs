@@ -171,3 +171,26 @@ pub struct LinkInfo {
     pub host: String,
     pub path: String,
 }
+
+/// Export one message as standard RFC 5322 .eml bytes.
+pub fn export_message_eml_bytes(folder_id: i64, uid: u32) -> anyhow::Result<Vec<u8>> {
+    let db = shared_db()?;
+    let bytes = mailcore::export::assemble_eml(db, folder_id, uid)?;
+    Ok(bytes)
+}
+
+/// Export one message as .eml to a file path.
+pub fn export_message_eml(folder_id: i64, uid: u32, path: String) -> anyhow::Result<String> {
+    let db = shared_db()?;
+    let dest = mailcore::export::export_eml_to(db, folder_id, uid, &path)?;
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+/// Suggested filename for exporting a message as .eml.
+#[flutter_rust_bridge::frb(sync)]
+pub fn suggested_eml_name(folder_id: i64, uid: u32) -> String {
+    let Ok(db) = shared_db() else {
+        return format!("message-{uid}.eml");
+    };
+    mailcore::export::suggested_eml_name(db, folder_id, uid)
+}

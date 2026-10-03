@@ -248,6 +248,27 @@ class MailCore {
         ),
       );
 
+  Future<Uint8List> exportMessageEmlBytes(int folderId, int uid) async =>
+      Uint8List.fromList(
+        await rust_messages.exportMessageEmlBytes(
+          folderId: folderId,
+          uid: uid,
+        ),
+      );
+
+  Future<String> exportMessageEml(int folderId, int uid, String path) =>
+      rust_messages.exportMessageEml(
+        folderId: folderId,
+        uid: uid,
+        path: path,
+      );
+
+  String suggestedEmlName(int folderId, int uid) =>
+      rust_messages.suggestedEmlName(
+        folderId: folderId,
+        uid: uid,
+      );
+
   Future<void> markRead(int accountId, int folderId, int uid, bool read) =>
       rust_messages.markRead(
         accountId: accountId,
