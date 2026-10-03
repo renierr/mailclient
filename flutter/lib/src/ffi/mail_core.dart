@@ -26,6 +26,7 @@ import 'generated/api/init.dart' as rust_init;
 import 'generated/api/maintenance.dart' as rust_maintenance;
 import 'generated/api/messages.dart' as rust_messages;
 import 'generated/api/mutate.dart' as rust_mutate;
+import 'generated/api/outbox.dart' as rust_outbox;
 import 'generated/api/search.dart' as rust_search;
 import 'generated/api/settings.dart' as rust_settings;
 import 'generated/api/sync.dart' as rust_sync;
@@ -422,6 +423,27 @@ class MailCore {
       (jsonDecode(await rust_sync.backgroundRunHistory()) as List<dynamic>)
           .whereType<Map<String, dynamic>>()
           .toList(growable: false);
+
+  // --- outbox (`mailcore::outbox`) ---------------------------------------
+
+  /// The account's outbox counts. Cheap enough to re-read on every job.
+  Future<OutboxStatus> outboxStatus(int accountId) async =>
+      OutboxStatus.fromJson(
+        await _decodeMap(
+          await rust_outbox.outboxStatusJson(accountId: accountId),
+        ),
+      );
+
+  /// The account's unsent mail, oldest first. Local SQLite read, no network.
+  Future<List<OutboxEntry>> outbox(int accountId) async => _decodeList(
+    await rust_outbox.outboxJson(accountId: accountId),
+    OutboxEntry.fromJson,
+  );
+
+  /// Forget one queued send. Retrying needs no call of its own: the next
+  /// sync flushes every submittable row.
+  Future<void> dismissOutbox(int accountId, int id) =>
+      rust_outbox.dismissOutbox(accountId: accountId, id: id);
 
   // --- search --------------------------------------------------------------
 

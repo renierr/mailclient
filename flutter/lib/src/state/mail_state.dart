@@ -49,6 +49,10 @@ class MailState extends ChangeNotifier {
   /// close the reader nor cancel the wait.
   ({String kind, int accountId, int folderId, int uid})? _pendingClose;
 
+  /// The open account's outbox counts (`mailcore::outbox::status`), for the
+  /// status-bar pill. Null before the first read.
+  OutboxStatus? _outboxStatus;
+
   /// Callers waiting for the next finish of a job kind — a form that has to
   /// know whether *its* job worked, which the shared status line cannot say.
   final Map<String, List<Completer<JobEvent>>> _finishWaiters = {};
@@ -205,6 +209,9 @@ class MailState extends ChangeNotifier {
   /// The status bar line. Empty when there is nothing to say.
   String get status => _status;
   bool get statusIsError => _statusIsError;
+
+  /// The open account's outbox counts, null before the first read.
+  OutboxStatus? get outboxStatus => _outboxStatus;
 
   AppSettings get settings => _settings;
 
@@ -626,6 +633,38 @@ class MailState extends ChangeNotifier {
     return _queue('Sync', () => _core.syncAccount(_accountId));
   }
 
+  // --- outbox ------------------------------------------------------------
+
+  /// Re-read the open account's outbox counts. Cheap local read: safe to run
+  /// on every job event, like Qt's footer pill does.
+  Future<void> refreshOutbox() async {
+    if (_accountId < 0) {
+      _outboxStatus = null;
+    } else {
+      try {
+        _outboxStatus = await _core.outboxStatus(_accountId);
+      } catch (_) {
+        // The pill keeps its last counts rather than blinking out.
+      }
+    }
+    notifyListeners();
+  }
+
+  /// The open account's unsent mail, oldest first, for the outbox dialog.
+  Future<List<OutboxEntry>> outboxEntries() =>
+      _accountId < 0 ? Future.value(const []) : _core.outbox(_accountId);
+
+  /// Forget one queued send, then refresh the pill. Errors go to the status
+  /// line, like refused queues.
+  Future<void> dismissOutbox(int id) async {
+    try {
+      await _core.dismissOutbox(_accountId, id);
+    } catch (e) {
+      showStatus(coreErrorText(e), isError: true);
+    }
+    await refreshOutbox();
+  }
+
   /// The app is in the foreground again. Android freezes a backgrounded
   /// app, so the periodic sync did not run meanwhile, while the background
   /// check may well have pulled new mail into the cache. Show the cache at
@@ -1020,6 +1059,8 @@ class MailState extends ChangeNotifier {
     // only needs the generic reloads below, as in Qt — no second Sent sync.
     // `-1` for the account means the job changed nothing worth re-reading.
     if (e.accountId < 0 || e.accountId != _accountId) return;
+    // A send or sync moves outbox rows: keep the pill honest.
+    unawaited(refreshOutbox());
     unawaited(_reloadFolders());
     // A purge or sync can change what the index holds: re-query an active
     // search so hits never go stale (local only, like Qt's job refresh).
@@ -1189,6 +1230,7 @@ class MailState extends ChangeNotifier {
     await _reloadFolders();
     await _reloadMessages();
     await _reloadAutoSync();
+    await refreshOutbox();
     notifyListeners();
   }
 

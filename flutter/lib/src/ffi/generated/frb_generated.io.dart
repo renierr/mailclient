@@ -13,6 +13,7 @@ import 'api/init.dart';
 import 'api/maintenance.dart';
 import 'api/messages.dart';
 import 'api/mutate.dart';
+import 'api/outbox.dart';
 import 'api/reader.dart';
 import 'api/search.dart';
 import 'api/settings.dart';

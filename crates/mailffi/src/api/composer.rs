@@ -20,6 +20,7 @@ pub fn send_mail(account_id: i64, folder_id: i64, form: String) -> anyhow::Resul
     let db = shared_db()?;
     let prepared = compose::prepare_send(db, account_id, form).map_err(anyhow::Error::msg)?;
     let queue_id = prepared.queue_id;
+    let prepared_account = prepared.account_id;
     let started = spawn(
         "Send",
         format!("send:{queue_id}"),
@@ -38,8 +39,9 @@ pub fn send_mail(account_id: i64, folder_id: i64, form: String) -> anyhow::Resul
         },
     );
     if started.is_err() {
-        // Never leave a claimed row behind for crash recovery to deliver.
-        let _ = mailcore::store::queue::discard_mime(db, queue_id);
+        // Never leave a row behind for the outbox list: the composer is
+        // still open with the text intact.
+        let _ = mailcore::outbox::dismiss(db, prepared_account, queue_id);
     }
     started
 }

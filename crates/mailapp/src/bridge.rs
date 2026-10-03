@@ -515,6 +515,25 @@ pub mod qobject {
         #[qinvokable]
         fn delete_draft(self: Pin<&mut Self>, uid: i32) -> QString;
 
+        /// Unsent mail for the current account as JSON
+        /// (`mailcore::outbox::list_json`: `[{id, status, state, last_error,
+        /// retries, retryable, has_bytes, envelope_from, envelope_to,
+        /// subject, created_at, updated_at}]`). Local SQLite read, no
+        /// network. Returns `"[]"` when nothing is queued.
+        #[qinvokable]
+        fn outbox_json(&self) -> QString;
+
+        /// The current account's outbox counts as JSON
+        /// (`mailcore::outbox::status`: `{queued, sending, failed,
+        /// retryable, pending}`). Local read; `"{}"` without an account.
+        #[qinvokable]
+        fn outbox_status_json(&self) -> QString;
+
+        /// Forget one queued send (a failed send the user owns the retry
+        /// for, or a stale entry). Local-only; returns `""` or an error.
+        #[qinvokable]
+        fn dismiss_outbox(&self, id: i64) -> QString;
+
         /// Drop all pooled IMAP sessions (app quit). No LOGOUT round-trip,
         /// so quit never blocks on a dead connection — closing the sockets
         /// reaps the server-side sessions, like any network drop.
@@ -889,6 +908,7 @@ mod accounts;
 mod capabilities;
 mod composer;
 mod messages;
+mod outbox;
 mod settings;
 mod sync;
 mod worker;

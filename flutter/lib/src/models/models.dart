@@ -451,6 +451,91 @@ class Contact {
       alias.isNotEmpty ? alias : (name.isNotEmpty ? name : address);
 }
 
+/// One unsent mail (`mailcore::outbox::list_json`): everything the outbox
+/// dialog shows, never the MIME bytes.
+class OutboxEntry {
+  const OutboxEntry({
+    required this.id,
+    required this.status,
+    this.state = '',
+    required this.lastError,
+    required this.retries,
+    required this.retryable,
+    required this.hasBytes,
+    required this.envelopeFrom,
+    required this.envelopeTo,
+    required this.subject,
+    required this.createdAt,
+  });
+
+  final int id;
+  final String status;
+
+  /// The row's one-line state, phrased once by the core so both frontends
+  /// show the same words (like the undo toast labels).
+  final String state;
+  final String lastError;
+  final int retries;
+  final bool retryable;
+  final bool hasBytes;
+  final String envelopeFrom;
+  final List<String> envelopeTo;
+  final String subject;
+  final String createdAt;
+
+  factory OutboxEntry.fromJson(Map<String, dynamic> j) => OutboxEntry(
+    id: _int(j['id']),
+    status: _str(j['status']),
+    state: _str(j['state']),
+    lastError: _str(j['last_error']),
+    retries: _int(j['retries']),
+    retryable: _bool(j['retryable']),
+    hasBytes: _bool(j['has_bytes']),
+    envelopeFrom: _str(j['envelope_from']),
+    envelopeTo: switch (j['envelope_to']) {
+      List<dynamic> items => items.map((e) => e.toString()).toList(),
+      _ => const [],
+    },
+    subject: _str(j['subject']),
+    createdAt: _str(j['created_at']),
+  );
+}
+
+/// Outbox counts for one account (`mailcore::outbox::status`).
+class OutboxStatus {
+  const OutboxStatus({
+    required this.queued,
+    required this.sending,
+    required this.failed,
+    required this.retryable,
+    required this.pending,
+  });
+
+  static const empty = OutboxStatus(
+    queued: 0,
+    sending: 0,
+    failed: 0,
+    retryable: 0,
+    pending: 0,
+  );
+
+  final int queued;
+  final int sending;
+  final int failed;
+  final int retryable;
+  final int pending;
+
+  bool get any => pending > 0;
+
+  factory OutboxStatus.fromJson(Map<String, dynamic> j) => OutboxStatus(
+    queued: _int(j['queued']),
+    sending: _int(j['sending']),
+    failed: _int(j['failed']),
+    retryable: _int(j['retryable']),
+    pending: _int(j['pending']),
+  );
+}
+
 // --- decoding helpers ------------------------------------------------------
 //
 // A feed field that is missing, null or the wrong type must not take down the

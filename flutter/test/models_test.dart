@@ -252,4 +252,49 @@ void main() {
     final a = AttachmentInfo.fromJson({'id': 7, 'size': 2048, 'size_text': '2.0 KB'});
     expect(a.sizeText, '2.0 KB');
   });
+
+  group('Outbox', () {
+    test('rows decode with recipients, error and retry state', () {
+      final e = OutboxEntry.fromJson({
+        'id': 4,
+        'status': 'failed',
+        'state': 'Failed — will retry on the next sync',
+        'last_error': 'connection refused',
+        'retries': 1,
+        'retryable': true,
+        'has_bytes': true,
+        'envelope_from': 'me@example.com',
+        'envelope_to': ['you@example.com'],
+        'subject': 'hello',
+        'created_at': '2026-01-01T00:00:00Z',
+      });
+
+      expect(e.subject, 'hello');
+      expect(e.envelopeTo, ['you@example.com']);
+      expect(e.state, 'Failed — will retry on the next sync');
+    });
+
+    test('a row without a state still renders', () {
+      final e = OutboxEntry.fromJson({'id': 5, 'status': 'failed'});
+
+      expect(e.subject, '');
+      expect(e.retryable, isFalse);
+      expect(e.state, '');
+    });
+
+    test('counts decode and empty means no pill', () {
+      const empty = OutboxStatus.empty;
+      expect(empty.any, isFalse);
+
+      final s = OutboxStatus.fromJson({
+        'queued': 1,
+        'sending': 0,
+        'failed': 2,
+        'retryable': 1,
+        'pending': 3,
+      });
+      expect(s.any, isTrue);
+      expect(s.pending, 3);
+    });
+  });
 }

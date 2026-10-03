@@ -36,6 +36,7 @@ impl qobject::Bridge {
             Err(e) => return qstring(&e),
         };
         let queue_id = prepared.queue_id;
+        let prepared_account = prepared.account_id;
         let queued = spawn_job(self, "Send", move |db, progress| async move {
             // SMTP accepted it: release the composer now rather than holding
             // it open through the Sent copy, the draft removal and the resync.
@@ -48,9 +49,10 @@ impl qobject::Bridge {
         });
         if !queued.is_empty() {
             // Not started after all (unreachable while the busy check above
-            // holds, since both run on the GUI thread) — never leave an
-            // orphan row behind for crash recovery to deliver later.
-            let _ = mailcore::store::queue::discard_mime(db, queue_id);
+            // holds, since both run on the GUI thread) — drop the row
+            // entirely: the composer is still open with the text intact, and
+            // a kept row would sit in the outbox list forever with no bytes.
+            let _ = mailcore::outbox::dismiss(db, prepared_account, queue_id);
         }
         queued
     }

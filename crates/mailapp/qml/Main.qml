@@ -154,6 +154,9 @@ ApplicationWindow {
     // How the search field runs its text, decided by mailcore
     // (`search::plan`: mode, trimmed query, hit limit, debounce).
     property var searchPlan: ({})
+    // Unsent mail counts for the current account (`mailcore::outbox::status`:
+    // `{queued, sending, failed, retryable, pending}`); `{}` before first read.
+    property var outboxStatus: ({})
 
     // --- feed plumbing ----------------------------------------------------
 
@@ -202,7 +205,14 @@ ApplicationWindow {
         reloadAccounts();
         reloadFolders();
         reloadMessages();
+        reloadOutboxStatus();
         return r;
+    }
+
+    // Cheap local read for the footer pill; never touches the list feeds,
+    // so read-only jobs can refresh it without losing scroll position.
+    function reloadOutboxStatus() {
+        root.outboxStatus = FeedJson.parse(backend.outbox_status_json(), ({}));
     }
 
     function messageByUid(uid) {
@@ -788,6 +798,7 @@ ApplicationWindow {
                 reloadFolders();
                 reloadMessages();
             }
+            reloadOutboxStatus();
             // A sync can change what the index holds: re-run an active
             // search so results never go stale behind a fresh feed (local
             // re-query only — never re-arms the server debounce).
@@ -1424,6 +1435,30 @@ ApplicationWindow {
                 tooltip: qsTr("View full status message and copy")
                 onClicked: statusDetailsDialog.open()
             }
+            // Unsent mail: queued, still sending, or failed. Opens the
+            // outbox dialog; red while anything failed.
+            IconButton {
+                id: outboxButton
+                visible: (root.outboxStatus.pending || 0) > 0
+                implicitWidth: Theme.miniButton
+                implicitHeight: Theme.miniButton
+                fontSize: Theme.fontSmall
+                text: Icons.outbox
+                iconFont: true
+                tooltip: (root.outboxStatus.failed || 0) > 0 ? qsTr("Outbox: %1 unsent (%2 failed) — open outbox").arg(
+                                                                   root.outboxStatus.pending).arg(
+                                                                   root.outboxStatus.failed) : qsTr(
+                                                                   "Outbox: %1 unsent — open outbox").arg(
+                                                                   root.outboxStatus.pending)
+                Accessible.name: tooltip
+                onClicked: outboxDialog.open()
+            }
+            Label {
+                visible: outboxButton.visible
+                text: root.outboxStatus.pending || 0
+                color: (root.outboxStatus.failed || 0) > 0 ? Theme.danger : Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+            }
             Label {
                 text: backend.current_account_email
                 color: Theme.textMuted
@@ -1505,6 +1540,14 @@ ApplicationWindow {
         id: contactsDialog
         backend: backend
         onStatusMessage: text => root.statusText = text
+    }
+
+    Outbox {
+        id: outboxDialog
+        backend: backend
+        onStatusMessage: text => root.statusText = text
+        onSyncRequested: root.syncNow()
+        onClosed: root.reloadOutboxStatus()
     }
 
     Folders {

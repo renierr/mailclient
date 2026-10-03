@@ -13,6 +13,7 @@ pub mod html;
 pub mod maintenance;
 pub mod mime;
 pub mod models;
+pub mod outbox;
 pub mod paths;
 pub mod search;
 pub mod store;

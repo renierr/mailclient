@@ -138,17 +138,33 @@ pub fn claim(db: &Db, id: i64) -> Result<bool> {
 }
 
 /// Crash recovery: a `sending` row untouched for longer than any live submit
-/// takes never got a final status, so put it back in `queued` for the next
-/// submit of the same MIME bytes. Scoped per account so a flush never
-/// disturbs another account's rows; recent rows are left to their owner.
+/// takes never got a final status. If it still holds MIME bytes, put it back
+/// in `queued` for the next submit. If its bytes were dropped (aborted before
+/// submit), mark it `failed` so it is never presented as queued for sending.
+/// Also marks any legacy `queued` rows missing bytes as `failed`.
+/// Scoped per account so a flush never disturbs another account's rows; recent
+/// rows are left to their owner.
 pub fn requeue_interrupted(db: &Db, account_id: i64) -> Result<u64> {
     let cutoff = (chrono::Utc::now() - chrono::Duration::minutes(STALE_SENDING_MINUTES))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let n = db.conn().execute(
         "update send_queue set status = 'queued', updated_at = ?1
-         where status = 'sending' and account_id = ?2 and updated_at < ?3",
+         where status = 'sending' and account_id = ?2 and updated_at < ?3
+           and raw_mime is not null and length(raw_mime) > 0",
         params![now(), account_id, cutoff],
     )?;
+    let _ = db.conn().execute(
+        "update send_queue set status = 'failed', last_error = 'aborted or missing message bytes', updated_at = ?1
+         where status = 'sending' and account_id = ?2 and updated_at < ?3
+           and (raw_mime is null or length(raw_mime) = 0)",
+        params![now(), account_id, cutoff],
+    );
+    let _ = db.conn().execute(
+        "update send_queue set status = 'failed', last_error = 'aborted or missing message bytes', updated_at = ?1
+         where status = 'queued' and account_id = ?2
+           and (raw_mime is null or length(raw_mime) = 0)",
+        params![now(), account_id],
+    );
     Ok(n as u64)
 }
 
@@ -300,6 +316,17 @@ mod tests {
         assert_eq!(requeue_interrupted(&db, acc).unwrap(), 1);
         assert_eq!(get(&db, live).unwrap().status, QueueStatus::Sending);
         assert_eq!(get(&db, orphan).unwrap().status, QueueStatus::Queued);
+    }
+
+    #[test]
+    fn an_orphan_without_bytes_becomes_failed_not_queued() {
+        let (db, acc) = setup();
+        let orphan = enqueue(&db, acc);
+        discard_mime(&db, orphan).unwrap();
+        age(&db, orphan, STALE_SENDING_MINUTES + 1);
+        assert_eq!(requeue_interrupted(&db, acc).unwrap(), 0);
+        let row = get(&db, orphan).unwrap();
+        assert_eq!(row.status, QueueStatus::Failed);
     }
 
     #[test]

@@ -50,6 +50,7 @@ still to promote") points here instead of keeping its own list.
 | Mark-read on open | `mailcore::store::settings::mark_read_plan` (off / now / after-delay from the two settings plus the row state); both viewers follow it |
 | Job outcome | `SendOutcome::outcome` (`"sent"` / `"sent_partial"`) on the job event (`job_finished` outcome, `JobEvent.outcome`); Qt keys its close decision off it, and the Sent refresh stays `deliver`'s job on both |
 | Recipient autocomplete segment | `mailcore::compose::{recipient_segment, replace_recipient_segment}`, quote-aware; both recipient fields complete through them |
+| Outbox rows: counts, list, dismiss, one-line row state | `mailcore::outbox` (`status`, `list_json`, `dismiss`, `state_line`); retry is the next sync (`flush_outbox`), both dialogs only start one |
 
 ## Open
 

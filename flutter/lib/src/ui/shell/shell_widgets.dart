@@ -10,6 +10,7 @@ import '../contacts/contacts_dialog.dart';
 import '../dialogs/mail_dialog.dart';
 import '../folders/folder_manager_dialog.dart';
 import '../menu_row.dart';
+import '../outbox/outbox_dialog.dart';
 import '../settings/settings_dialog.dart';
 
 /// The draggable split between panes, like the Qt SplitView handle.
@@ -404,6 +405,12 @@ class StatusBar extends StatelessWidget {
       (s) => s.account?.email ?? '',
     );
     final syncing = context.select<MailState, bool>((s) => s.isSyncing);
+    final outboxPending = context.select<MailState, int>(
+      (s) => s.outboxStatus?.pending ?? 0,
+    );
+    final outboxFailed = context.select<MailState, int>(
+      (s) => s.outboxStatus?.failed ?? 0,
+    );
     final scheme = Theme.of(context).colorScheme;
     final error = status.isNotEmpty && isError;
     final small = Theme.of(context).textTheme.bodySmall;
@@ -470,6 +477,37 @@ class StatusBar extends StatelessWidget {
                 icon: const Icon(Icons.open_in_new),
                 onPressed: () => _showStatusDialog(context, status, error),
               ),
+            // Unsent mail: queued, still sending, or failed. Red while
+            // anything failed; tapping opens the outbox, like Qt's pill.
+            if (outboxPending > 0) ...[
+              IconButton(
+                tooltip: outboxFailed > 0
+                    ? 'Outbox: $outboxPending unsent ($outboxFailed failed)'
+                    : 'Outbox: $outboxPending unsent',
+                iconSize: 13,
+                padding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints.tightFor(
+                  width: 24,
+                  height: 24,
+                ),
+                color: outboxFailed > 0
+                    ? scheme.error
+                    : scheme.onSurfaceVariant,
+                icon: const Icon(Icons.outbox),
+                onPressed: () => OutboxDialog.show(context),
+              ),
+              Text(
+                '$outboxPending',
+                maxLines: 1,
+                style: small?.copyWith(
+                  fontSize: 12,
+                  color: outboxFailed > 0
+                      ? scheme.error
+                      : scheme.onSurfaceVariant,
+                ),
+              ),
+            ],
             const SizedBox(width: 8),
             // Right-aligned, and never more than its share, so a long
             // address cannot push the status line off a phone screen.
