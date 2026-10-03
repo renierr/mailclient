@@ -301,3 +301,11 @@ fn blank_location_is_absent() {
     let event = parse_ics(&ics).expect("should parse");
     assert_eq!(event.location, None);
 }
+
+#[test]
+fn outlook_style_invite_parses() {
+    let ics = "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nPRODID:Microsoft Exchange Server 2010\r\nVERSION:2.0\r\nBEGIN:VTIMEZONE\r\nTZID:W. Europe Standard Time\r\nBEGIN:STANDARD\r\nDTSTART:16010101T030000\r\nTZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\nRRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=10\r\nEND:STANDARD\r\nBEGIN:DAYLIGHT\r\nDTSTART:16010101T020000\r\nTZOFFSETFROM:+0100\r\nTZOFFSETTO:+0200\r\nRRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=3\r\nEND:DAYLIGHT\r\nEND:VTIMEZONE\r\nBEGIN:VEVENT\r\nORGANIZER;CN=Jane Doe:mailto:jane@example.com\r\nATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN=Joe:mailto:joe@example.com\r\nDESCRIPTION;LANGUAGE=de-DE:Hallo\\n\r\nSUMMARY;LANGUAGE=de-DE:Planung\r\nDTSTART;TZID=W. Europe Standard Time:20261006T100000\r\nDTEND;TZID=W. Europe Standard Time:20261006T110000\r\nUID:040000008200E00074C5B7101A82E00800000000\r\nCLASS:PUBLIC\r\nPRIORITY:5\r\nDTSTAMP:20261001T080000Z\r\nTRANSP:OPAQUE\r\nSTATUS:CONFIRMED\r\nSEQUENCE:0\r\nLOCATION;LANGUAGE=de-DE:Raum 1\r\nBEGIN:VALARM\r\nDESCRIPTION:REMINDER\r\nTRIGGER;RELATED=START:-PT15M\r\nACTION:DISPLAY\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let event = parse_ics(ics).expect("outlook invite should parse");
+    assert_eq!(event.summary, "Planung");
+    assert_eq!(event.location.as_deref(), Some("Raum 1"));
+}
