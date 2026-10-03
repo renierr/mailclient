@@ -222,14 +222,13 @@ pub fn darken_colors(html: &str) -> String {
             let new = format!(" style=\"{}\"", convert_style(style));
             attrs = splice(&attrs, range, &new);
         }
-        // `bgcolor` or `color`, whichever comes first.
-        let first = ["bgcolor", "color"]
-            .iter()
-            .filter_map(|name| find_attr(&attrs, name).map(|(r, v)| (*name, r, v.to_string())))
-            .min_by_key(|(_, r, _)| r.start);
-        if let Some((name, range, value)) = first {
-            if let Some(v) = convert_value(&value) {
-                attrs = splice(&attrs, range, &format!(" {name}=\"{v}\""));
+        // `bgcolor` and `color` each convert when present; an element may
+        // carry both (legacy mail), so neither is skipped for the other.
+        for name in ["bgcolor", "color"] {
+            if let Some((range, value)) = find_attr(&attrs, name).map(|(r, v)| (r, v.to_string())) {
+                if let Some(v) = convert_value(&value) {
+                    attrs = splice(&attrs, range, &format!(" {name}=\"{v}\""));
+                }
             }
         }
         Some(attrs)

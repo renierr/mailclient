@@ -254,9 +254,9 @@ Rectangle {
     // Sender parts and the Reply-To decision come parsed from the reader
     // payload (mailcore feed::message_json), shared with Flutter.
     readonly property var sender: ({
-            "name": root.message ? (root.message.from_name || root.message.from || "") : "",
-            "addr": root.message ? (root.message.from || "") : ""
-        })
+                                       "name": root.message ? (root.message.from_name || root.message.from || "") : "",
+                                       "addr": root.message ? (root.message.from || "") : ""
+                                   })
     readonly property string replyToAddr: root.message ? (root.message.reply_to || "") : ""
     readonly property bool replyToDiffers: !!root.message && root.message.reply_to_differs === true
     readonly property string toLine: root.joinAddrs(root.headersInfo.to)
@@ -310,7 +310,7 @@ Rectangle {
     // Behind the document, so nothing flashes a different colour first.
     readonly property color docBackground: {
         var p = root.backend ? FeedJson.parse(root.backend.reader_palette_json(root.paintMode, JSON.stringify(
-                                                                                    root.themeColors())), ({})) : ({});
+                                                                                   root.themeColors())), ({})) : ({});
         return p.paper || Theme.bg;
     }
 
@@ -417,14 +417,14 @@ Rectangle {
                 anchors.fill: parent
                 acceptedButtons: Qt.RightButton
                 onPressed: mouse => {
-                               if (mouse.button === Qt.RightButton && root.hoveredLinkUrl !== "") {
-                                   linkContextMenu.linkUrl = root.hoveredLinkUrl;
-                                   linkContextMenu.popup();
-                                   mouse.accepted = true;
-                               } else {
-                                   mouse.accepted = false;
-                               }
-                           }
+                    if (mouse.button === Qt.RightButton && root.hoveredLinkUrl !== "") {
+                        linkContextMenu.linkUrl = root.hoveredLinkUrl;
+                        linkContextMenu.popup();
+                        mouse.accepted = true;
+                    } else {
+                        mouse.accepted = false;
+                    }
+                }
             }
         }
 
@@ -843,12 +843,12 @@ Rectangle {
             // `hoveredUrl` is a QUrl: stringify explicitly, "" when the mouse
             // leaves a link (which hides the statusline again).
             onLoadingChanged: loadingInfo => {
-                                  if (loadingInfo.status === WebEngineLoadingInfo.LoadSucceededStatus)
-                                  root.syncSpacer();
-                              }
+                if (loadingInfo.status === WebEngineLoadingInfo.LoadSucceededStatus)
+                    root.syncSpacer();
+            }
             onLinkHovered: hoveredUrl => {
-                               root.hoveredLinkUrl = hoveredUrl ? hoveredUrl.toString() : "";
-                           }
+                root.hoveredLinkUrl = hoveredUrl ? hoveredUrl.toString() : "";
+            }
             // Clicking a link must not navigate the reader away from the
             // mail. The request is blocked FIRST, before any handling below:
             // even if that handling hit an error, the message stays put.
@@ -869,23 +869,23 @@ Rectangle {
             // browser / mail client or land in the examine dialog first
             // (default per `link_click_action`).
             onNavigationRequested: request => {
-                                       if (request.navigationType === WebEngineNavigationRequest.TypedNavigation) {
-                                           request.accept();
-                                           return;
-                                       }
-                                       request.reject();
-                                       if (request.navigationType !== WebEngineNavigationRequest.LinkClickedNavigation)
-                                       return;
-                                       root.handleLinkUrl(request.url.toString());
-                                   }
+                if (request.navigationType === WebEngineNavigationRequest.TypedNavigation) {
+                    request.accept();
+                    return;
+                }
+                request.reject();
+                if (request.navigationType !== WebEngineNavigationRequest.LinkClickedNavigation)
+                    return;
+                root.handleLinkUrl(request.url.toString());
+            }
 
             // Middle-click / Ctrl+click asks for a new window instead of a
             // navigation. Never open one (the mail stays put); treat it like
             // a normal click. Left unhandled the load would just fail, but
             // routing it keeps every click consistent.
             onNewWindowRequested: request => {
-                                      root.handleLinkUrl(request.requestedUrl.toString());
-                                  }
+                root.handleLinkUrl(request.requestedUrl.toString());
+            }
         }
     }
 

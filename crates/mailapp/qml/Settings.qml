@@ -643,8 +643,8 @@ AppDialog {
                         help: qsTr(
                                   "Scales type and controls across the whole app. The desktop zoom still applies on top of this.")
                         onChosen: index => {
-                                      root.localUiScale = root.choiceValue("ui_scale", index);
-                                  }
+                            root.localUiScale = root.choiceValue("ui_scale", index);
+                        }
                     }
                     ChoiceRow {
                         caption: qsTr("Mail text size")
@@ -652,8 +652,8 @@ AppDialog {
                         currentIndex: root.choiceIndex("reader_font_size", root.localReaderFont)
                         help: qsTr("Applies to plain-text mail; HTML mail brings its own sizes.")
                         onChosen: index => {
-                                      root.localReaderFont = root.choiceValue("reader_font_size", index);
-                                  }
+                            root.localReaderFont = root.choiceValue("reader_font_size", index);
+                        }
                     }
                 }
             }
@@ -679,16 +679,16 @@ AppDialog {
                         model: root.choiceLabels("message_sort_field")
                         currentIndex: root.choiceIndex("message_sort_field", root.localSortField)
                         onChosen: index => {
-                                      root.localSortField = root.choiceValue("message_sort_field", index);
-                                  }
+                            root.localSortField = root.choiceValue("message_sort_field", index);
+                        }
                     }
                     ChoiceRow {
                         caption: qsTr("Order")
                         model: [qsTr("Newest first"), qsTr("Oldest first")]
                         currentIndex: root.localSortDesc ? 0 : 1
                         onChosen: index => {
-                                      root.localSortDesc = index === 0;
-                                  }
+                            root.localSortDesc = index === 0;
+                        }
                     }
                     ChoiceRow {
                         caption: qsTr("Density")
@@ -696,8 +696,8 @@ AppDialog {
                         currentIndex: root.choiceIndex("list_density", root.localDensity)
                         help: qsTr("Compact hides the preview line and tightens the rows.")
                         onChosen: index => {
-                                      root.localDensity = root.choiceValue("list_density", index);
-                                  }
+                            root.localDensity = root.choiceValue("list_density", index);
+                        }
                     }
                     AppCheckBox {
                         Layout.fillWidth: true
@@ -743,8 +743,8 @@ AppDialog {
                         help: qsTr(
                                   "With a delay, only messages still open when the timer elapses count as read. Right-click any message to mark it read or unread manually.")
                         onChosen: index => {
-                                      root.localMarkDelay = root.choiceValue("mark_read_delay_secs", index);
-                                  }
+                            root.localMarkDelay = root.choiceValue("mark_read_delay_secs", index);
+                        }
                     }
                     AppCheckBox {
                         Layout.fillWidth: true
@@ -755,17 +755,17 @@ AppDialog {
                     }
                     HintLabel {
                         text: qsTr(
-                                   "Remote images can track opens. Blocked images still offer a one-click “Show once” banner per message.")
+                                  "Remote images can track opens. Blocked images still offer a one-click “Show once” banner per message.")
                     }
                     ChoiceRow {
                         caption: qsTr("Clicking a link in a message")
                         model: root.choiceLabels("link_click_action")
                         currentIndex: root.choiceIndex("link_click_action", root.localLinkClick)
                         help: qsTr(
-                                   "The safety dialog shows the link's real address before anything opens, so disguised links cannot surprise you.")
+                                  "The safety dialog shows the link's real address before anything opens, so disguised links cannot surprise you.")
                         onChosen: index => {
-                                      root.localLinkClick = root.choiceValue("link_click_action", index);
-                                  }
+                            root.localLinkClick = root.choiceValue("link_click_action", index);
+                        }
                     }
                 }
             }
@@ -791,8 +791,8 @@ AppDialog {
                         model: root.choiceLabels("compose_send_format")
                         currentIndex: root.choiceIndex("compose_send_format", root.localSendFormat)
                         onChosen: index => {
-                                      root.localSendFormat = root.choiceValue("compose_send_format", index);
-                                  }
+                            root.localSendFormat = root.choiceValue("compose_send_format", index);
+                        }
                     }
                     AppCheckBox {
                         Layout.fillWidth: true
@@ -809,8 +809,8 @@ AppDialog {
                         model: [qsTr("Above the quote"), qsTr("Below the quote")]
                         currentIndex: root.localReplyBelow ? 1 : 0
                         onChosen: index => {
-                                      root.localReplyBelow = index === 1;
-                                  }
+                            root.localReplyBelow = index === 1;
+                        }
                     }
                     AppCheckBox {
                         Layout.fillWidth: true
@@ -908,8 +908,8 @@ AppDialog {
                             currentIndex: root.choiceIndex("sync_interval_minutes", root.localSyncInterval)
                             help: qsTr("Automatic checks only run while the app is idle, never mid-action.")
                             onChosen: index => {
-                                          root.localSyncInterval = root.choiceValue("sync_interval_minutes", index);
-                                      }
+                                root.localSyncInterval = root.choiceValue("sync_interval_minutes", index);
+                            }
                         }
                         AppCheckBox {
                             Layout.fillWidth: true
@@ -950,7 +950,8 @@ AppDialog {
                                                                              root.values("sync_interval_minutes"))
                                 help: qsTr("Automatic checks only run while the app is idle, never mid-action.")
                                 onChosen: index => root.setAccountDraft("sync_interval_minutes",
-                                                                        AccountOverrides.intervalValue(index, root.values(
+                                                                        AccountOverrides.intervalValue(index,
+                                                                                                       root.values(
                                                                                                            "sync_interval_minutes")))
                             }
                             ChoiceRow {
@@ -976,14 +977,13 @@ AppDialog {
                                 help: qsTr(
                                           "Between these times the automatic check skips this account while the window is not active. Syncing by hand still checks.")
                                 onChosen: index => {
-                                              root.setAccountDraft("quiet_hours_enabled", AccountOverrides.flagValue(
-                                                                       index));
-                                              // Own times only go with an own window.
-                                              if (index !== 1) {
-                                                  root.setAccountDraft("quiet_hours_start", "");
-                                                  root.setAccountDraft("quiet_hours_end", "");
-                                              }
-                                          }
+                                    root.setAccountDraft("quiet_hours_enabled", AccountOverrides.flagValue(index));
+                                    // Own times only go with an own window.
+                                    if (index !== 1) {
+                                        root.setAccountDraft("quiet_hours_start", "");
+                                        root.setAccountDraft("quiet_hours_end", "");
+                                    }
+                                }
                             }
                             QuietTimes {
                                 visible: root.accountDraft("quiet_hours_enabled") === "1"
@@ -1073,24 +1073,31 @@ AppDialog {
                     }
 
                     HintLabel {
-                        text: qsTr("Frees local space only — nothing here touches the mail server. Trimmed messages return with the next sync; removed files download again when opened.")
+                        text: qsTr(
+                                  "Frees local space only — nothing here touches the mail server. Trimmed messages return with the next sync; removed files download again when opened.")
                     }
                     Flow {
                         Layout.fillWidth: true
                         spacing: Theme.sm
                         AppButton {
                             text: qsTr("Clean temporary files")
-                            onClicked: root.askMaint("cleanup_temp", qsTr("Clean temporary files?"), qsTr("Delete staged viewer copies? They are re-created the next time an attachment is opened. Mail on the server is untouched."), qsTr("Clean"))
+                            onClicked: root.askMaint("cleanup_temp", qsTr("Clean temporary files?"), qsTr(
+                                                         "Delete staged viewer copies? They are re-created the next time an attachment is opened. Mail on the server is untouched."),
+                                                     qsTr("Clean"))
                         }
                         AppButton {
                             text: qsTr("Remove downloaded files")
-                            onClicked: root.askMaint("evict_attachments", qsTr("Remove downloaded files?"), qsTr("Delete downloaded attachment files from this device? Names and sizes stay, and files download again when opened. Mail on the server is untouched."), qsTr("Remove"))
+                            onClicked: root.askMaint("evict_attachments", qsTr("Remove downloaded files?"), qsTr(
+                                                         "Delete downloaded attachment files from this device? Names and sizes stay, and files download again when opened. Mail on the server is untouched."),
+                                                     qsTr("Remove"))
                         }
                         AppButton {
                             text: qsTr("Trim old messages")
                             onClicked: {
                                 var keep = root.maintStats.keep_per_folder || 200;
-                                root.askMaint("trim_cache", qsTr("Trim old messages?"), qsTr("Delete cached messages past the newest %n per folder from this device? Drafts and unsent mail are kept, and trimmed mail returns with the next sync. Mail on the server is untouched.", "", keep), qsTr("Trim"));
+                                root.askMaint("trim_cache", qsTr("Trim old messages?"), qsTr(
+                                                  "Delete cached messages past the newest %n per folder from this device? Drafts and unsent mail are kept, and trimmed mail returns with the next sync. Mail on the server is untouched.",
+                                                  "", keep), qsTr("Trim"));
                             }
                         }
                     }
@@ -1155,11 +1162,11 @@ AppDialog {
                             model: root.capsAccountEmails()
                             currentIndex: root.capsAccountIndex()
                             onActivated: index => {
-                                             if (index >= 0 && index < root.capsAccounts.length) {
-                                                 root.capsAccountId = root.capsAccounts[index].id;
-                                                 root.refreshCaps();
-                                             }
-                                         }
+                                if (index >= 0 && index < root.capsAccounts.length) {
+                                    root.capsAccountId = root.capsAccounts[index].id;
+                                    root.refreshCaps();
+                                }
+                            }
                         }
                         AppButton {
                             text: qsTr("Refresh")

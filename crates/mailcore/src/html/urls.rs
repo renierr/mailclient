@@ -30,7 +30,7 @@ pub(super) fn is_public_remote(src: &str) -> bool {
     let host = low
         .split_once("://")
         .map(|(_, r)| {
-            r.split('/')
+            r.split(['/', '?', '#'])
                 .next()
                 .unwrap_or("")
                 .split('@')
@@ -116,7 +116,7 @@ pub fn link_info(url: &str) -> LinkInfo {
         let end = rest.find(['?', '#']).unwrap_or(rest.len());
         (&rest[..end], "")
     } else {
-        match rest.find('/') {
+        match rest.find(['/', '?', '#']) {
             Some(i) => (&rest[..i], &rest[i..]),
             None => (rest, ""),
         }

@@ -136,7 +136,9 @@ Dialog {
     readonly property var accountParts: root.senderParts(root.accountEmail)
     readonly property string accountDomain: root.accountParts.domain || ""
     readonly property string accountLocalPart: root.accountParts.local || ""
-    readonly property string effectiveFrom: root.backend ? root.backend.effective_from(fromLocal.text, root.accountEmail) : root.accountEmail
+    readonly property string effectiveFrom: root.backend ? root.backend.effective_from(fromLocal.text,
+                                                                                       root.accountEmail) :
+                                                           root.accountEmail
 
     function senderParts(address) {
         return root.backend ? FeedJson.parse(root.backend.sender_parts_json(address), ({})) : ({});

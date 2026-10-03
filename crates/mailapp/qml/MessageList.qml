@@ -643,13 +643,11 @@ Rectangle {
                     }
                     Label {
                         text: root.searching ? (root.searchFolder !== "" ? qsTr("%n result(s) in %1", "",
-                                                                                filtered.count).arg(
-                                                                               root.searchFolder) : qsTr(
-                                                                               "%n result(s) across this account",
-                                                                               "", filtered.count)) :
-                                               !root.hasAnyFilter ? qsTr("%1").arg(filtered.count) : qsTr(
-                                                                        "%1 of %2").arg(filtered.count).arg(
-                                                                        root.messages ? root.messages.length : 0)
+                                                                                filtered.count).arg(root.searchFolder) :
+                                                                           qsTr("%n result(s) across this account", "",
+                                                                                filtered.count)) : !root.hasAnyFilter
+                                               ? qsTr("%1").arg(filtered.count) : qsTr("%1 of %2").arg(filtered.count).arg(
+                                                     root.messages ? root.messages.length : 0)
                         color: Theme.textMuted
                         font.pixelSize: Theme.fontSmall
                     }
@@ -792,30 +790,30 @@ Rectangle {
                     hoverEnabled: true
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     onClicked: mouse => {
-                                   if (mouse.button === Qt.RightButton) {
-                                       root.menuUid = row.model.uid;
-                                       root.menuFolderPath = row.model.folder;
-                                       root.menuStarred = row.model.starred;
-                                       root.menuUnread = row.model.unread;
-                                       rowMenu.popup();
-                                   } else if (mouse.modifiers & Qt.ControlModifier) {
-                                       if (!root.selectionMode)
-                                       root.setSelectionMode(true);
-                                       root.toggleSelection(row.model.key);
-                                   } else if (mouse.modifiers & Qt.ShiftModifier) {
-                                       if (!root.selectionMode)
-                                       root.setSelectionMode(true);
-                                       root.selectRange(row.model.key);
-                                       if (!root.searching)
-                                       root.emitLater(root.messageSelected, row.model.uid);
-                                   } else if (root.searching) {
-                                       root.lastClickedKey = row.model.key;
-                                       root.emitLater2(root.searchJump, row.model.folder, row.model.uid);
-                                   } else {
-                                       root.lastClickedKey = row.model.key;
-                                       root.emitLater(root.messageSelected, row.model.uid);
-                                   }
-                               }
+                        if (mouse.button === Qt.RightButton) {
+                            root.menuUid = row.model.uid;
+                            root.menuFolderPath = row.model.folder;
+                            root.menuStarred = row.model.starred;
+                            root.menuUnread = row.model.unread;
+                            rowMenu.popup();
+                        } else if (mouse.modifiers & Qt.ControlModifier) {
+                            if (!root.selectionMode)
+                                root.setSelectionMode(true);
+                            root.toggleSelection(row.model.key);
+                        } else if (mouse.modifiers & Qt.ShiftModifier) {
+                            if (!root.selectionMode)
+                                root.setSelectionMode(true);
+                            root.selectRange(row.model.key);
+                            if (!root.searching)
+                                root.emitLater(root.messageSelected, row.model.uid);
+                        } else if (root.searching) {
+                            root.lastClickedKey = row.model.key;
+                            root.emitLater2(root.searchJump, row.model.folder, row.model.uid);
+                        } else {
+                            root.lastClickedKey = row.model.key;
+                            root.emitLater(root.messageSelected, row.model.uid);
+                        }
+                    }
                 }
 
                 // Tight at the pane edge so sender and subject keep every
@@ -1058,8 +1056,8 @@ Rectangle {
                     id: loadOlderButton
                     Layout.alignment: Qt.AlignVCenter
                     visible: root.canLoadOlder
-                    text: root.busy ? qsTr("Loading…") : (root.olderState === "unchecked" ? qsTr("Check server") :
-                                                                                             qsTr("Load older"))
+                    text: root.busy ? qsTr("Loading…") : (root.olderState === "unchecked" ? qsTr("Check server") : qsTr(
+                                                                                                "Load older"))
                     enabled: !root.busy
                     onClicked: root.loadOlderRequested()
                 }

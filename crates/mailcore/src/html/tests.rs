@@ -312,6 +312,20 @@ fn links_open_only_on_web_schemes() {
 }
 
 #[test]
+fn private_hosts_stay_blocked_with_query_or_fragment() {
+    for url in [
+        "http://192.168.1.2?x=1",
+        "http://192.168.1.2#x",
+        "http://localhost?x=1",
+        "http://localhost#x",
+        "http://127.0.0.1?x=1",
+    ] {
+        assert!(!super::urls::is_public_remote(url), "{url}");
+    }
+    assert!(super::urls::is_public_remote("https://example.com?x=1"));
+}
+
+#[test]
 fn links_split_for_the_examine_dialog() {
     let i = link_info("https://user@example.com:443/a/b?x=1");
     assert_eq!(
@@ -325,6 +339,22 @@ fn links_split_for_the_examine_dialog() {
     );
     assert_eq!(m.path, "");
     assert_eq!(link_info("https://example.com").path, "");
+    // No path slash: the query/fragment belong to the path, never the host.
+    let q = link_info("https://example.com?foo=bar");
+    assert_eq!(
+        (q.scheme.as_str(), q.host.as_str(), q.path.as_str()),
+        ("https", "example.com", "?foo=bar")
+    );
+    let f = link_info("https://example.com#target");
+    assert_eq!(
+        (f.scheme.as_str(), f.host.as_str(), f.path.as_str()),
+        ("https", "example.com", "#target")
+    );
+    let qp = link_info("https://example.com/path?x=1#f");
+    assert_eq!(
+        (qp.scheme.as_str(), qp.host.as_str(), qp.path.as_str()),
+        ("https", "example.com", "/path?x=1#f")
+    );
     let empty = link_info("");
     assert_eq!(
         (empty.scheme, empty.host, empty.path),

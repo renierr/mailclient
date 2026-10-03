@@ -21,20 +21,20 @@ DropArea {
 
     onEntered: drag => drag.accepted = drag.hasUrls
     onDropped: drop => {
-                   if (!drop.hasUrls)
-                   return;
-                   var images = [];
-                   var others = [];
-                   for (var i = 0; i < drop.urls.length; i++) {
-                       var u = drop.urls[i].toString();
-                       if (root.isInlineImage(u))
-                       images.push(u);
-                       else
-                       others.push(u);
-                   }
-                   drop.accept(Qt.CopyAction);
-                   root.filesDropped(images, others);
-               }
+        if (!drop.hasUrls)
+            return;
+        var images = [];
+        var others = [];
+        for (var i = 0; i < drop.urls.length; i++) {
+            var u = drop.urls[i].toString();
+            if (root.isInlineImage(u))
+                images.push(u);
+            else
+                others.push(u);
+        }
+        drop.accept(Qt.CopyAction);
+        root.filesDropped(images, others);
+    }
 
     Rectangle {
         anchors.fill: parent

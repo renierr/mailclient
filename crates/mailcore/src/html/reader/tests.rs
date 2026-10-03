@@ -131,6 +131,18 @@ fn darkening_converts_the_colour_inside_border_shorthands() {
 }
 
 #[test]
+fn darkening_converts_both_bgcolor_and_color_on_one_element() {
+    assert_eq!(
+        darken_colors(r##"<td bgcolor="#ffffff" color="#000000">x</td>"##),
+        format!(
+            r#"<td bgcolor="{}" color="{}">x</td>"#,
+            inverted("#ffffff"),
+            inverted("#000000")
+        )
+    );
+}
+
+#[test]
 fn darkening_leaves_the_rest_of_the_mail_alone() {
     let html = concat!(
         r#"<table width="600">"#,

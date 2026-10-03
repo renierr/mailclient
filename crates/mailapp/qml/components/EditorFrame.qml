@@ -129,26 +129,26 @@ Item {
         settings.javascriptCanAccessClipboard: true
 
         onLoadingChanged: loadRequest => {
-                              if (loadRequest.status === WebEngineView.LoadSucceededStatus) {
-                                  root.ready = true;
-                                  if (root.pendingHtml !== "") {
-                                      root.setHtml(root.pendingHtml);
-                                      root.pendingHtml = "";
-                                  }
-                                  root.pollState();
-                              }
-                          }
+            if (loadRequest.status === WebEngineView.LoadSucceededStatus) {
+                root.ready = true;
+                if (root.pendingHtml !== "") {
+                    root.setHtml(root.pendingHtml);
+                    root.pendingHtml = "";
+                }
+                root.pollState();
+            }
+        }
 
         // Clicking a link in the draft must not navigate the editor away.
         // Same Qt 6 API note as the reader (MessageView): the type lives on
         // `WebEngineNavigationRequest` and the verdict is accept()/reject().
         // Only TypedNavigation (our own loadHtml) is accepted.
         onNavigationRequested: request => {
-                                   if (request.navigationType === WebEngineNavigationRequest.TypedNavigation)
-                                   request.accept();
-                                   else
-                                   request.reject();
-                               }
+            if (request.navigationType === WebEngineNavigationRequest.TypedNavigation)
+                request.accept();
+            else
+                request.reject();
+        }
 
         Component.onCompleted: view.loadHtml(root.documentHtml, "")
     }
