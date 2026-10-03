@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1505696699;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -449892335;
 
 // Section: executor
 
@@ -3246,6 +3246,88 @@ fn wire__crate__api__init__shutdown_impl(
         },
     )
 }
+fn wire__crate__api__search__similar_json_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "similar_json",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_account_id = <i64>::sse_decode(&mut deserializer);
+            let api_folder_id = <i64>::sse_decode(&mut deserializer);
+            let api_uid = <i64>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let output_ok = crate::api::search::similar_json(
+                            api_account_id,
+                            api_folder_id,
+                            api_uid,
+                        )?;
+                        std::result::Result::Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__search__similar_subject_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "similar_subject",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_account_id = <i64>::sse_decode(&mut deserializer);
+            let api_folder_id = <i64>::sse_decode(&mut deserializer);
+            let api_uid = <i64>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let output_ok = crate::api::search::similar_subject(
+                            api_account_id,
+                            api_folder_id,
+                            api_uid,
+                        )?;
+                        std::result::Result::Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__maintenance__storage_stats_json_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -4125,21 +4207,23 @@ fn pde_ffi_dispatcher_primary_impl(
         86 => wire__crate__api__messages__set_star_many_impl(port, ptr, rust_vec_len, data_len),
         88 => wire__crate__api__settings__settings_json_impl(port, ptr, rust_vec_len, data_len),
         89 => wire__crate__api__init__shutdown_impl(port, ptr, rust_vec_len, data_len),
-        90 => wire__crate__api__maintenance__storage_stats_json_impl(
+        90 => wire__crate__api__search__similar_json_impl(port, ptr, rust_vec_len, data_len),
+        91 => wire__crate__api__search__similar_subject_impl(port, ptr, rust_vec_len, data_len),
+        92 => wire__crate__api__maintenance__storage_stats_json_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        91 => wire__crate__api__sync__sync_account_impl(port, ptr, rust_vec_len, data_len),
-        92 => wire__crate__api__sync__sync_folder_impl(port, ptr, rust_vec_len, data_len),
-        93 => wire__crate__api__messages__toggle_star_impl(port, ptr, rust_vec_len, data_len),
-        94 => {
+        93 => wire__crate__api__sync__sync_account_impl(port, ptr, rust_vec_len, data_len),
+        94 => wire__crate__api__sync__sync_folder_impl(port, ptr, rust_vec_len, data_len),
+        95 => wire__crate__api__messages__toggle_star_impl(port, ptr, rust_vec_len, data_len),
+        96 => {
             wire__crate__api__maintenance__trim_local_cache_impl(port, ptr, rust_vec_len, data_len)
         }
-        95 => wire__crate__api__maintenance__trim_status_impl(port, ptr, rust_vec_len, data_len),
-        97 => wire__crate__api__mutate__undo_move_impl(port, ptr, rust_vec_len, data_len),
-        98 => wire__crate__api__attachments__write_attachment_copy_impl(
+        97 => wire__crate__api__maintenance__trim_status_impl(port, ptr, rust_vec_len, data_len),
+        99 => wire__crate__api__mutate__undo_move_impl(port, ptr, rust_vec_len, data_len),
+        100 => wire__crate__api__attachments__write_attachment_copy_impl(
             port,
             ptr,
             rust_vec_len,
@@ -4182,7 +4266,7 @@ fn pde_ffi_dispatcher_sync_impl(
         74 => wire__crate__api__search__search_plan_impl(ptr, rust_vec_len, data_len),
         78 => wire__crate__api__composer__sender_parts_impl(ptr, rust_vec_len, data_len),
         87 => wire__crate__api__settings__setting_choices_json_impl(ptr, rust_vec_len, data_len),
-        96 => wire__crate__api__mutate__undo_grace_secs_impl(ptr, rust_vec_len, data_len),
+        98 => wire__crate__api__mutate__undo_grace_secs_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

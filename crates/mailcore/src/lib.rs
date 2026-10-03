@@ -16,6 +16,7 @@ pub mod models;
 pub mod outbox;
 pub mod paths;
 pub mod search;
+pub mod similar;
 pub mod store;
 pub mod sync;
 pub mod undo;

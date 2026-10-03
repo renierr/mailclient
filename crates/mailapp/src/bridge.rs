@@ -269,6 +269,14 @@ pub mod qobject {
         #[qinvokable]
         fn search_json(&self, query: &QString, folder: &QString) -> QString;
 
+        /// Similar messages across the account as JSON (same shape as search_json).
+        #[qinvokable]
+        fn find_similar_json(&self, folder_path: &QString, uid: i32) -> QString;
+
+        /// Target message's subject for the "Similar to: ..." chip.
+        #[qinvokable]
+        fn find_similar_subject(&self, folder_path: &QString, uid: i32) -> QString;
+
         /// How the search field runs `query` as JSON (`mailcore::search::plan`:
         /// `mode` off/filter/index, trimmed `query`, `hit_limit`, `debounce_ms`).
         #[qinvokable]

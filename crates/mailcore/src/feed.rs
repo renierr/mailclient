@@ -148,10 +148,10 @@ pub fn accounts_json(db: &Db) -> Result<String> {
 /// produce "Yesterday" in the user's language. It names the case instead and
 /// QML supplies the word (`text` carries untranslated English as the
 /// fallback, so a caller that ignores `key` still shows something sensible).
-struct ShortDate {
-    text: String,
+pub(crate) struct ShortDate {
+    pub(crate) text: String,
     /// `"yesterday"`, or `""` when `text` is already a plain time or date.
-    key: &'static str,
+    pub(crate) key: &'static str,
 }
 
 /// Compact human date in the **viewer's** timezone: `09:12` (today),
@@ -161,7 +161,7 @@ struct ShortDate {
 /// directly keeps whatever offset the sender wrote (usually `Z`), so a mail
 /// that arrived at 11:12 local showed 09:12, and "today"/"yesterday" flipped
 /// at UTC midnight rather than the user's.
-fn short_date(rfc3339: Option<&str>) -> ShortDate {
+pub(crate) fn short_date(rfc3339: Option<&str>) -> ShortDate {
     let plain = |text: String| ShortDate { text, key: "" };
     let raw = rfc3339.unwrap_or("");
     let Ok(dt) = chrono::DateTime::parse_from_rfc3339(raw) else {
@@ -259,7 +259,7 @@ pub(crate) fn with_inline_images(db: &Db, message_id: i64, body_html: &str) -> (
 /// List snippets are single-line by contract: the FTS `snippet()` context
 /// keeps the body's line breaks, which would paint past the fixed row
 /// height and overlap the next row. Collapse all whitespace runs.
-fn one_line(s: &str) -> String {
+pub(crate) fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 

@@ -33,7 +33,8 @@ void main() {
       expect(f.leafName, 'Client');
     });
 
-    test('an unknown role degrades to custom instead of throwing', () {      final f = Folder.fromJson(
+    test('an unknown role degrades to custom instead of throwing', () {
+      final f = Folder.fromJson(
         jsonDecode('{"id": 1, "name": "X", "role": "templates"}')
             as Map<String, dynamic>,
       );
@@ -249,7 +250,11 @@ void main() {
   });
 
   test('attachment sizes come preformatted from the core', () {
-    final a = AttachmentInfo.fromJson({'id': 7, 'size': 2048, 'size_text': '2.0 KB'});
+    final a = AttachmentInfo.fromJson({
+      'id': 7,
+      'size': 2048,
+      'size_text': '2.0 KB',
+    });
     expect(a.sizeText, '2.0 KB');
   });
 

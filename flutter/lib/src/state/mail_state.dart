@@ -75,6 +75,8 @@ class MailState extends ChangeNotifier {
   List<SearchHit> _searchHits = const [];
   Timer? _searchBackfillTimer;
   bool _serverSearchPending = false;
+  String? _similarSubject;
+  ({int folderId, int uid})? _similarTarget;
 
   // --- list quick filters ------------------------------------------------
   // Each checked entry narrows the visible rows (AND-combined), in the
@@ -223,7 +225,10 @@ class MailState extends ChangeNotifier {
   String get searchQuery => _searchQuery;
   bool get searchFolderOnly => _searchFolderOnly;
   List<SearchHit> get searchHits => _searchHits;
-  bool get searching => _searchPlan.mode == SearchMode.indexed;
+  bool get searching =>
+      _searchPlan.mode == SearchMode.indexed || _similarSubject != null;
+  bool get isSimilarSearch => _similarSubject != null;
+  String? get similarSubject => _similarSubject;
 
   // --- multi-select ------------------------------------------------------
 
@@ -373,14 +378,11 @@ class MailState extends ChangeNotifier {
         case 'now':
           await _applyRead(uid, true);
         case 'after':
-          _markReadTimer = Timer(
-            Duration(seconds: plan.delaySecs.toInt()),
-            () {
-              // Still looking at it: Thunderbird-style, closing it early means
-              // it stays unread.
-              if (_openUid == uid) unawaited(_applyRead(uid, true));
-            },
-          );
+          _markReadTimer = Timer(Duration(seconds: plan.delaySecs.toInt()), () {
+            // Still looking at it: Thunderbird-style, closing it early means
+            // it stays unread.
+            if (_openUid == uid) unawaited(_applyRead(uid, true));
+          });
         case 'off':
           break;
       }
@@ -709,6 +711,8 @@ class MailState extends ChangeNotifier {
   /// debounced server backfill; the `"Search"` job re-runs this when done.
   Future<void> runSearch(String query, {bool? folderOnly}) async {
     final wasSearching = searching;
+    _similarSubject = null;
+    _similarTarget = null;
     _searchQuery = query;
     _searchPlan = query.isEmpty ? _noSearch : _core.searchPlan(query);
     // A checkbox set belongs to the list it was made in.
@@ -738,13 +742,43 @@ class MailState extends ChangeNotifier {
   }
 
   void exitSearch() {
-    if (_searchQuery.isEmpty && _searchHits.isEmpty) return;
+    if (_searchQuery.isEmpty &&
+        _searchHits.isEmpty &&
+        _similarSubject == null) {
+      return;
+    }
     _searchBackfillTimer?.cancel();
     if (searching) _dropSelection();
     _searchQuery = '';
     _searchPlan = _noSearch;
+    _similarSubject = null;
+    _similarTarget = null;
     _searchHits = const [];
     _serverSearchPending = false;
+    notifyListeners();
+  }
+
+  /// Messages similar to the message at [uid] in [folderId] across the account.
+  Future<void> findSimilar(int folderId, int uid) async {
+    final wasSearching = searching;
+    _searchBackfillTimer?.cancel();
+    _serverSearchPending = false;
+    _searchQuery = '';
+    _searchPlan = _noSearch;
+    final subject = await _core.similarSubject(_accountId, folderId, uid);
+    _similarSubject = subject;
+    _similarTarget = (folderId: folderId, uid: uid);
+    if (!wasSearching) _dropSelection();
+    _searchHits = await _core.similar(_accountId, folderId, uid);
+    notifyListeners();
+  }
+
+  void clearSimilar() {
+    if (_similarSubject == null) return;
+    _similarSubject = null;
+    _similarTarget = null;
+    _searchHits = const [];
+    _dropSelection();
     notifyListeners();
   }
 
@@ -1087,12 +1121,21 @@ class MailState extends ChangeNotifier {
   }
 
   Future<void> _rerunSearch() async {
-    final scope = _searchFolderOnly ? (folder?.path ?? '') : '';
-    _searchHits = await _core.search(
-      _accountId,
-      _searchPlan.query,
-      folder: scope,
-    );
+    final target = _similarTarget;
+    if (target != null) {
+      _searchHits = await _core.similar(
+        _accountId,
+        target.folderId,
+        target.uid,
+      );
+    } else {
+      final scope = _searchFolderOnly ? (folder?.path ?? '') : '';
+      _searchHits = await _core.search(
+        _accountId,
+        _searchPlan.query,
+        folder: scope,
+      );
+    }
     // Hits that left the results (moved, deleted) leave the selection too.
     if (_selectedHits.isNotEmpty) {
       _selectedHits.retainAll(_shownHits.map((h) => h.key));

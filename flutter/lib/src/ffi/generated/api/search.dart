@@ -23,6 +23,29 @@ Future<String> searchJson({
   folder: folder,
 );
 
+/// Query similar messages across the account as JSON (same shape as
+/// `search_json`).
+Future<String> similarJson({
+  required PlatformInt64 accountId,
+  required PlatformInt64 folderId,
+  required PlatformInt64 uid,
+}) => MailCoreApi.instance.api.crateApiSearchSimilarJson(
+  accountId: accountId,
+  folderId: folderId,
+  uid: uid,
+);
+
+/// Target message's subject for the "Similar to: ..." chip.
+Future<String> similarSubject({
+  required PlatformInt64 accountId,
+  required PlatformInt64 folderId,
+  required PlatformInt64 uid,
+}) => MailCoreApi.instance.api.crateApiSearchSimilarSubject(
+  accountId: accountId,
+  folderId: folderId,
+  uid: uid,
+);
+
 /// How the search field runs `query` (`mailcore::search::plan`).
 SearchPlan searchPlan({required String query}) =>
     MailCoreApi.instance.api.crateApiSearchSearchPlan(query: query);

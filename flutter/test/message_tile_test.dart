@@ -70,9 +70,6 @@ void main() {
     expect(clipBox.top, greaterThan(avatarBox.bottom));
     expect(clipBox.top - avatarBox.bottom, greaterThanOrEqualTo(6));
     // Centred under the avatar, not before the text.
-    expect(
-      clipBox.center.dx,
-      closeTo(avatarBox.center.dx, 1),
-    );
+    expect(clipBox.center.dx, closeTo(avatarBox.center.dx, 1));
   });
 }

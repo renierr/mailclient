@@ -154,6 +154,9 @@ ApplicationWindow {
     // How the search field runs its text, decided by mailcore
     // (`search::plan`: mode, trimmed query, hit limit, debounce).
     property var searchPlan: ({})
+    // Similar messages search mode: dismissable chip subject; empty when inactive.
+    property string similarSubject: ""
+    property var similarTarget: ({})
     // Unsent mail counts for the current account (`mailcore::outbox::status`:
     // `{queued, sending, failed, retryable, pending}`); `{}` before first read.
     property var outboxStatus: ({})
@@ -245,6 +248,42 @@ ApplicationWindow {
         height: 0
     }
 
+    function findSimilar(folderPath, uid) {
+        var folder = folderPath !== "" ? folderPath : root.currentFolder;
+        var subj = backend.find_similar_subject(folder, uid);
+        var hits = FeedJson.parse(backend.find_similar_json(folder, uid), []);
+        root.similarSubject = subj;
+        root.similarTarget = ({
+                                  folder: folder,
+                                  uid: uid
+                              });
+        root.searching = true;
+        root.searchRows = hits;
+        root.searchPlan = ({
+                               mode: "similar",
+                               query: "",
+                               hit_limit: hits.length,
+                               debounce_ms: 0
+                           });
+        if (searchField.text !== "")
+            searchField.text = "";
+        if (!root.wideLayout) {
+            if (root.currentUid >= 0)
+                root.closeReader();
+            root.narrowPane = "list";
+        }
+    }
+
+    function clearSimilar() {
+        if (root.similarSubject === "")
+            return;
+        root.similarSubject = "";
+        root.similarTarget = ({});
+        root.searching = false;
+        root.searchRows = [];
+        root.lastServerQuery = "";
+    }
+
     // Toolbar search: short input filters the loaded folder feed (see
     // MessageList.matches); 3+ letters run the FTS index — account-wide,
     // or limited to the selected folder while the toolbar checkbox is on
@@ -253,6 +292,15 @@ ApplicationWindow {
     // server-search debounce — a job-finish refresh must not, or the
     // finished job would retrigger itself forever.
     function updateSearch(fromTyping) {
+        if (root.similarSubject !== "") {
+            if (fromTyping) {
+                root.clearSimilar();
+            } else {
+                root.searchRows = FeedJson.parse(backend.find_similar_json(root.similarTarget.folder || "",
+                                                                           root.similarTarget.uid), []);
+                return;
+            }
+        }
         root.searchPlan = FeedJson.parse(backend.search_plan_json(searchField.text), ({}));
         if (root.searchPlan.mode === "index") {
             // Starting a search shows the hits: where the list shares its
@@ -1110,14 +1158,20 @@ ApplicationWindow {
                     anchors.verticalCenter: parent.verticalCenter
                     width: Theme.miniButton
                     height: Theme.miniButton
-                    visible: searchField.text !== ""
+                    visible: searchField.text !== "" || root.similarSubject !== ""
                     text: Icons.close
                     iconFont: true
                     fontSize: Theme.fontSmall
                     tooltip: qsTr("Clear search")
-                    onClicked: searchField.text = ""
+                    onClicked: {
+                        searchField.text = "";
+                        root.clearSimilar();
+                    }
                 }
-                Keys.onEscapePressed: searchField.text = ""
+                Keys.onEscapePressed: {
+                    searchField.text = "";
+                    root.clearSimilar();
+                }
                 // The search syntax, as mailcore::search reads it.
                 ToolTip.text: qsTr(
                                   "All words must match, by word start (inv finds invoice)\n\"exact phrase\"   -exclude\nfrom:name   to:address   subject:word")
@@ -1283,10 +1337,13 @@ ApplicationWindow {
             searching: root.searching
             searchRows: root.searchRows
             searchFolder: root.searching ? root.searchScope() : ""
+            similarSubject: root.similarSubject
             serverSearching: root.serverSearching
             onMessageSelected: uid => root.openMessage(uid)
             onSearchJump: (path, uid) => root.jumpToSearchResult(path, uid)
             onSearchFolderNeeded: path => root.useSearchFolder(path)
+            onFindSimilarRequested: (folderPath, uid) => root.findSimilar(folderPath, uid)
+            onClearSimilarRequested: root.clearSimilar()
             onStarToggled: uid => root.toggleStar(uid)
             onArchiveRequested: uid => root.archiveMessage(uid)
             onMoveRequested: uid => root.openMove(uid)
@@ -1327,6 +1384,7 @@ ApplicationWindow {
             onReplyRequested: composer.openForAnswer(root.currentUid, "reply")
             onReplyAllRequested: composer.openForAnswer(root.currentUid, "reply_all")
             onForwardRequested: composer.openForAnswer(root.currentUid, "forward")
+            onFindSimilarRequested: root.findSimilar("", root.currentUid)
             onStarRequested: root.toggleStar(root.currentUid)
             onArchiveRequested: root.archiveMessage(root.currentUid)
             onMoveRequested: root.openMove(root.currentUid)

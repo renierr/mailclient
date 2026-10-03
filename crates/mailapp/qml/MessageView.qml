@@ -48,6 +48,7 @@ Rectangle {
     signal moveRequested
     signal deleteRequested
     signal purgeRequested
+    signal findSimilarRequested
     signal statusMessage(string text)
 
     color: Theme.bg
@@ -904,6 +905,11 @@ Rectangle {
             glyph: Icons.deleteForever
             label: qsTr("Delete permanently…")
             onTriggered: root.purgeRequested()
+        }
+        AppMenuItem {
+            glyph: Icons.search
+            label: qsTr("Find similar")
+            onTriggered: root.findSimilarRequested()
         }
         MenuSeparator {}
         AppMenuItem {

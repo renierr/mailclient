@@ -45,6 +45,8 @@ Rectangle {
     // every bridge mutation is scoped to the selected folder.
     property bool searching: false
     property var searchRows: []
+    // Similar messages mode: if non-empty, displays the dismissable chip
+    property string similarSubject: ""
     // The folder a scoped search is limited to ("" = the whole account): its
     // hits all share one folder, so they get no section headers.
     property string searchFolder: ""
@@ -79,6 +81,8 @@ Rectangle {
     signal searchJump(string folderPath, int uid)
     // A search hit's row action needs its folder selected first (Main).
     signal searchFolderNeeded(string folderPath)
+    signal findSimilarRequested(string folderPath, int uid)
+    signal clearSimilarRequested
     signal starToggled(int uid)
     signal archiveRequested(int uid)
     signal moveRequested(int uid)
@@ -634,20 +638,34 @@ Rectangle {
 
                     Label {
                         Layout.fillWidth: true
-                        text: root.searching ? qsTr("Search results") : root.folderName === "" ? qsTr("Messages") :
-                                                                                                 root.folderName
+                        text: root.similarSubject !== "" ? qsTr("Similar messages") : root.searching ? qsTr(
+                                                                                                           "Search results") :
+                                                                                                       root.folderName
+                                                                                                       === "" ? qsTr(
+                                                                                                                    "Messages") :
+                                                                                                                root.folderName
                         color: Theme.text
                         font.pixelSize: Theme.fontBase
                         font.bold: true
                         elide: Text.ElideRight
                     }
                     Label {
-                        text: root.searching ? (root.searchFolder !== "" ? qsTr("%n result(s) in %1", "",
-                                                                                filtered.count).arg(root.searchFolder) :
-                                                                           qsTr("%n result(s) across this account", "",
-                                                                                filtered.count)) : !root.hasAnyFilter
-                                               ? qsTr("%1").arg(filtered.count) : qsTr("%1 of %2").arg(filtered.count).arg(
-                                                     root.messages ? root.messages.length : 0)
+                        text: root.similarSubject !== "" ? qsTr("%n result(s)", "", filtered.count) : root.searching ? (
+                                                                                                                           root.searchFolder
+                                                                                                                           !== "" ? qsTr(
+                                                                                                                                        "%n result(s) in %1",
+                                                                                                                                        "", filtered.count).arg(
+                                                                                                                                        root.searchFolder) :
+                                                                                                                                    qsTr("%n result(s) across this account",
+                                                                                                                                         "", filtered.count)) :
+                                                                                                                       !root.hasAnyFilter
+                                                                                                                       ? qsTr("%1").arg(
+                                                                                                                             filtered.count) :
+                                                                                                                         qsTr("%1 of %2").arg(
+                                                                                                                             filtered.count).arg(
+                                                                                                                             root.messages
+                                                                                                                             ? root.messages.length :
+                                                                                                                               0)
                         color: Theme.textMuted
                         font.pixelSize: Theme.fontSmall
                     }
@@ -685,6 +703,65 @@ Rectangle {
                         fontSize: Theme.fontSmall
                         tooltip: qsTr("Select messages")
                         onClicked: selectMenu.popup()
+                    }
+                }
+
+                // Dismissable chip for "Find similar" search
+                Rectangle {
+                    visible: root.similarSubject !== ""
+                    width: parent.width
+                    height: visible ? Math.round(28 * Theme.uiScale) : 0
+                    color: "transparent"
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: Theme.sm
+                        anchors.rightMargin: Theme.sm
+                        spacing: Theme.xs
+
+                        Rectangle {
+                            Layout.fillWidth: false
+                            Layout.maximumWidth: parent.width
+                            height: Math.round(24 * Theme.uiScale)
+                            radius: Math.round(12 * Theme.uiScale)
+                            color: Theme.selected
+                            border.color: Theme.accent
+                            border.width: 1
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: Theme.sm
+                                anchors.rightMargin: Theme.xs
+                                spacing: Theme.xs
+
+                                Label {
+                                    text: Icons.search
+                                    font.family: Icons.fontFamily
+                                    font.pixelSize: Theme.fontTiny
+                                    color: Theme.accent
+                                }
+                                Label {
+                                    Layout.maximumWidth: Math.round(260 * Theme.uiScale)
+                                    text: qsTr("Similar to: %1").arg(root.similarSubject)
+                                    color: Theme.text
+                                    font.pixelSize: Theme.fontSmall
+                                    elide: Text.ElideRight
+                                }
+                                IconButton {
+                                    width: Math.round(18 * Theme.uiScale)
+                                    height: Math.round(18 * Theme.uiScale)
+                                    fontSize: Theme.fontTiny
+                                    text: Icons.close
+                                    iconFont: true
+                                    contentColor: Theme.textMuted
+                                    tooltip: qsTr("Clear similar search")
+                                    onClicked: root.clearSimilarRequested()
+                                }
+                            }
+                        }
+                        Item {
+                            Layout.fillWidth: true
+                        }
                     }
                 }
 
@@ -792,7 +869,7 @@ Rectangle {
                     onClicked: mouse => {
                         if (mouse.button === Qt.RightButton) {
                             root.menuUid = row.model.uid;
-                            root.menuFolderPath = row.model.folder;
+                            root.menuFolderPath = row.model.folder !== undefined ? row.model.folder : root.folderName;
                             root.menuStarred = row.model.starred;
                             root.menuUnread = row.model.unread;
                             rowMenu.popup();
@@ -988,7 +1065,8 @@ Rectangle {
                                 tooltip: qsTr("Message actions")
                                 onClicked: {
                                     root.menuUid = row.model.uid;
-                                    root.menuFolderPath = row.model.folder;
+                                    root.menuFolderPath = row.model.folder !== undefined ? row.model.folder :
+                                                                                           root.folderName;
                                     root.menuStarred = row.model.starred;
                                     root.menuUnread = row.model.unread;
                                     rowMenu.popup();
@@ -1106,6 +1184,11 @@ Rectangle {
             onTriggered: root.emitLater(root.deleteRequested, root.menuTarget())
         }
         MenuSeparator {}
+        AppMenuItem {
+            glyph: Icons.search
+            label: qsTr("Find similar")
+            onTriggered: root.emitLater2(root.findSimilarRequested, root.menuFolderPath, root.menuUid)
+        }
         AppMenuItem {
             glyph: Icons.deleteForever
             label: qsTr("Delete permanently…")

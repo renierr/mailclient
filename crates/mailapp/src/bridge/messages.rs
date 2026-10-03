@@ -185,6 +185,58 @@ impl qobject::Bridge {
         .map_or_else(|_| qstring("[]"), |j| qstring(&j))
     }
 
+    pub fn find_similar_json(&self, folder_path: &QString, uid: i32) -> QString {
+        let Ok(db) = shared_db() else {
+            return qstring("[]");
+        };
+        let acc_id = *self.current_account_id();
+        if acc_id < 0 || uid < 0 {
+            return qstring("[]");
+        }
+        let folder_id = if folder_path.is_empty() {
+            *self.current_folder_id()
+        } else {
+            match mailcore::store::folders::get_by_path(db, acc_id, &folder_path.to_string()) {
+                Ok(f) => f.id,
+                Err(_) => *self.current_folder_id(),
+            }
+        };
+        if folder_id < 0 {
+            return qstring("[]");
+        }
+        mailcore::similar::similar_json(
+            db,
+            acc_id,
+            folder_id,
+            uid as i64,
+            mailcore::search::HIT_LIMIT,
+        )
+        .map_or_else(|_| qstring("[]"), |j| qstring(&j))
+    }
+
+    pub fn find_similar_subject(&self, folder_path: &QString, uid: i32) -> QString {
+        let Ok(db) = shared_db() else {
+            return qstring("");
+        };
+        let acc_id = *self.current_account_id();
+        if acc_id < 0 || uid < 0 {
+            return qstring("");
+        }
+        let folder_id = if folder_path.is_empty() {
+            *self.current_folder_id()
+        } else {
+            match mailcore::store::folders::get_by_path(db, acc_id, &folder_path.to_string()) {
+                Ok(f) => f.id,
+                Err(_) => *self.current_folder_id(),
+            }
+        };
+        if folder_id < 0 {
+            return qstring("");
+        }
+        mailcore::similar::target_subject(db, acc_id, folder_id, uid as i64)
+            .map_or_else(|_| qstring(""), |s| qstring(&s))
+    }
+
     pub fn reader_paint(&self, colored: bool, dark: bool, keep_original: bool) -> QString {
         qstring(reader::paint_for(colored, dark, keep_original).as_str())
     }

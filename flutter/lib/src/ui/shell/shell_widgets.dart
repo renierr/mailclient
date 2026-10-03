@@ -274,6 +274,7 @@ class ShellSearchField extends StatelessWidget {
     final folderOnly = context.select<MailState, bool>(
       (s) => s.searchFolderOnly,
     );
+    final isSimilar = context.select<MailState, bool>((s) => s.isSimilarSearch);
     if (controller.text != query && query.isEmpty) {
       controller.clear();
     }
@@ -306,7 +307,7 @@ class ShellSearchField extends StatelessWidget {
           decoration: InputDecoration(
             hintText: hint,
             // The empty field's clear slot holds the syntax help (tap).
-            suffixIcon: query.isEmpty
+            suffixIcon: (query.isEmpty && !isSimilar)
                 ? const Tooltip(
                     message: searchSyntaxHint,
                     triggerMode: TooltipTriggerMode.tap,

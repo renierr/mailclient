@@ -27,6 +27,9 @@ Future<void> moreActions(
       }
     case 'archive':
       await state.archiveMessages([message.uid]);
+    case 'similar':
+      state.closeMessage();
+      await state.findSimilar(state.folderId, message.uid);
     case 'move':
       if (context.mounted) {
         await MoveToDialog.show(

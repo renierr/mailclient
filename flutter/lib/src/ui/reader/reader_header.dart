@@ -279,6 +279,13 @@ class ReaderHeader extends StatelessWidget {
                         ),
                       ),
                       const PopupMenuItem(
+                        value: 'similar',
+                        child: MenuRow(
+                          icon: Icons.search,
+                          text: 'Find similar',
+                        ),
+                      ),
+                      const PopupMenuItem(
                         value: 'move',
                         child: MenuRow(
                           icon: Icons.drive_file_move_outlined,

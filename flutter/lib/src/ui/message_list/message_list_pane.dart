@@ -235,6 +235,10 @@ class MessageListPaneState extends State<MessageListPane> {
     );
     final hasFilter = filterUnread || filterStarred || filterAttachments;
     final state = context.read<MailState>();
+    final isSimilar = context.select<MailState, bool>((s) => s.isSimilarSearch);
+    final similarSubject = context.select<MailState, String?>(
+      (s) => s.similarSubject,
+    );
     final shownHits = hasFilter
         ? hits.where(state.isHitShown).toList(growable: false)
         : hits;
@@ -245,6 +249,23 @@ class MessageListPaneState extends State<MessageListPane> {
     return Column(
       children: [
         const MessageListHeader(),
+        if (isSimilar)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: InputChip(
+                avatar: const Icon(Icons.search, size: 18),
+                label: Text(
+                  'Similar to: ${similarSubject ?? "(no subject)"}',
+                  overflow: TextOverflow.ellipsis,
+                ),
+                onDeleted: () => context.read<MailState>().clearSimilar(),
+                deleteButtonTooltipMessage: 'Clear similar search',
+              ),
+            ),
+          ),
         if (hasFilter)
           Container(
             width: double.infinity,

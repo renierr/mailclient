@@ -21,6 +21,28 @@ pub fn search_json(account_id: i64, query: String, folder: String) -> anyhow::Re
     )?)
 }
 
+/// Query similar messages across the account as JSON (same shape as
+/// `search_json`).
+pub fn similar_json(account_id: i64, folder_id: i64, uid: i64) -> anyhow::Result<String> {
+    Ok(mailcore::similar::similar_json(
+        shared_db()?,
+        account_id,
+        folder_id,
+        uid,
+        search::HIT_LIMIT,
+    )?)
+}
+
+/// Target message's subject for the "Similar to: ..." chip.
+pub fn similar_subject(account_id: i64, folder_id: i64, uid: i64) -> anyhow::Result<String> {
+    Ok(mailcore::similar::target_subject(
+        shared_db()?,
+        account_id,
+        folder_id,
+        uid,
+    )?)
+}
+
 /// How the search field runs `query` (`mailcore::search::plan`).
 #[flutter_rust_bridge::frb(sync)]
 pub fn search_plan(query: String) -> SearchPlan {

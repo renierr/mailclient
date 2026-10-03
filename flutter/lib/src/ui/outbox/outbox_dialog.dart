@@ -93,9 +93,8 @@ class _OutboxDialogState extends State<OutboxDialog> {
       title: Text(
         e.subject.isNotEmpty ? e.subject : '(no subject)',
         overflow: TextOverflow.ellipsis,
-        style: Theme.of(
-          context,
-        ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+        style: Theme.of(context).textTheme.titleSmall
+            ?.copyWith(fontWeight: FontWeight.bold),
       ),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -147,8 +146,7 @@ class _OutboxDialogState extends State<OutboxDialog> {
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       itemCount: _entries.length,
       separatorBuilder: (_, _) => const Divider(height: 1),
-      itemBuilder: (context, i) =>
-          _row(context, state, _entries[i]),
+      itemBuilder: (context, i) => _row(context, state, _entries[i]),
     );
   }
 
@@ -157,8 +155,9 @@ class _OutboxDialogState extends State<OutboxDialog> {
   /// Sync-now + Close actions, shared by dialog and page. Wrap, not Row:
   /// the buttons stack instead of overflowing on a very narrow dialog.
   Widget _actions(MailState state) {
-    final retryable =
-        context.select<MailState, int>((s) => s.outboxStatus?.retryable ?? 0);
+    final retryable = context.select<MailState, int>(
+      (s) => s.outboxStatus?.retryable ?? 0,
+    );
     return Wrap(
       alignment: WrapAlignment.end,
       spacing: 8,
@@ -172,9 +171,7 @@ class _OutboxDialogState extends State<OutboxDialog> {
                 )
               : const Icon(Icons.sync, size: 16),
           label: const Text('Sync now'),
-          onPressed: _syncing || retryable == 0
-              ? null
-              : () => _syncNow(state),
+          onPressed: _syncing || retryable == 0 ? null : () => _syncNow(state),
         ),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
@@ -201,10 +198,7 @@ class _OutboxDialogState extends State<OutboxDialog> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(
-                'Outbox',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
+              Text('Outbox', style: Theme.of(context).textTheme.titleLarge),
               const SizedBox(height: 12),
               _hint(),
               const SizedBox(height: 8),
@@ -260,11 +254,10 @@ class _OutboxDialogState extends State<OutboxDialog> {
               SliverList.separated(
                 itemCount: _entries.length,
                 separatorBuilder: (_, _) => const Divider(height: 1),
-                itemBuilder: (context, i) =>
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: _row(context, state, _entries[i]),
-                    ),
+                itemBuilder: (context, i) => Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: _row(context, state, _entries[i]),
+                ),
               ),
           ],
         ),

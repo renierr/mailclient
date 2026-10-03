@@ -17,6 +17,7 @@ class MessageListHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final searching = context.select<MailState, bool>((s) => s.searching);
+    final isSimilar = context.select<MailState, bool>((s) => s.isSimilarSearch);
     final folderOnly = context.select<MailState, bool>(
       (s) => s.searchFolderOnly,
     );
@@ -67,7 +68,9 @@ class MessageListHeader extends StatelessWidget {
           ),
           Expanded(
             child: Text(
-              searching
+              isSimilar
+                  ? '$count similar message(s)'
+                  : searching
                   ? '$count result(s) in ${folderOnly ? title : 'this account'}'
                   : '$title · $count',
               overflow: TextOverflow.ellipsis,
@@ -675,6 +678,10 @@ List<PopupMenuEntry<String>> messageActionItems({
       text: 'Delete permanently…',
     ),
   ),
+  const PopupMenuItem(
+    value: 'similar',
+    child: MenuRow(icon: Icons.search, text: 'Find similar'),
+  ),
 ];
 
 /// One row action on [uid]. `folderId` is the shown folder unless given;
@@ -689,6 +696,8 @@ Future<void> runMessageAction(
 }) async {
   final state = context.read<MailState>();
   switch (action) {
+    case 'similar':
+      await state.findSimilar(folderId ?? state.folderId, uid);
     case 'read':
       await state.setRead(uid, unread, folderId: folderId);
     case 'star':

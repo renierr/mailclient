@@ -462,6 +462,25 @@ class MailCore {
     SearchHit.fromJson,
   );
 
+  /// Messages similar to the given message, across the entire account.
+  Future<List<SearchHit>> similar(int accountId, int folderId, int uid) async =>
+      _decodeList(
+        await rust_search.similarJson(
+          accountId: accountId,
+          folderId: folderId,
+          uid: uid,
+        ),
+        SearchHit.fromJson,
+      );
+
+  /// Target message's subject for the "Similar to: ..." chip.
+  Future<String> similarSubject(int accountId, int folderId, int uid) =>
+      rust_search.similarSubject(
+        accountId: accountId,
+        folderId: folderId,
+        uid: uid,
+      );
+
   // --- reader document (`mailcore::html::reader`) -------------------------
 
   /// The paint for one HTML mail.
