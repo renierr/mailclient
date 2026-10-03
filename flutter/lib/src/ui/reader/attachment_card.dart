@@ -90,7 +90,7 @@ class AttachmentCard extends StatelessWidget {
               const SizedBox(width: 8),
               flow(
                 Text(
-                  formatBytes(a.size),
+                  a.sizeText,
                   style: small?.copyWith(color: scheme.onSurfaceVariant),
                 ),
               ),
@@ -286,10 +286,4 @@ Future<void> saveAll(BuildContext context, MessageBody message) async {
   } catch (e) {
     state.showStatus('Could not save attachments: $e', isError: true);
   }
-}
-
-String formatBytes(int bytes) {
-  if (bytes < 1024) return '$bytes B';
-  if (bytes < 1024 * 1024) return '${(bytes / 1024).round()} KB';
-  return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
 }

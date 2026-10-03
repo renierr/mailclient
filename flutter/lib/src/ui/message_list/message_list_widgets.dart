@@ -585,7 +585,7 @@ class MessageTile extends StatelessWidget {
                           // its room.
                           const SizedBox(width: 4),
                           Text(
-                            message.date,
+                            message.displayDate,
                             style: theme.textTheme.bodySmall?.copyWith(
                               color: theme.colorScheme.outline,
                             ),

@@ -321,6 +321,34 @@ pub fn set_delay_secs(db: &Db, key: &str, value: i64) -> Result<()> {
     set(db, key, &normalize_delay_secs(value).to_string())
 }
 
+/// What opening a message does to its read flag: one decision both viewers
+/// follow, so an already-read row never issues a no-op flag write on one
+/// client while the other skips it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkReadPlan {
+    /// Stay unread: auto-mark is off, or the row is already read.
+    Off,
+    /// Mark read now.
+    Now,
+    /// Mark read once the message is still open after `0` seconds
+    /// (Thunderbird-style: moving on early keeps it unread).
+    AfterDelay(u64),
+}
+
+/// Whether and when opening a message marks it read, from the two settings
+/// (`auto_mark_read`, `mark_read_delay_secs`) and whether the opened row is
+/// still unread.
+#[must_use]
+pub fn mark_read_plan(auto_mark_read: bool, delay_secs: i64, unread: bool) -> MarkReadPlan {
+    if !auto_mark_read || !unread {
+        MarkReadPlan::Off
+    } else if delay_secs <= 0 {
+        MarkReadPlan::Now
+    } else {
+        MarkReadPlan::AfterDelay(delay_secs as u64)
+    }
+}
+
 /// Validated message-list sort field: `date` | `from` | `subject`.
 /// Unknown/empty values fall back to `date` (Roundcube offers the same three
 /// primary orderings).
@@ -601,6 +629,16 @@ mod tests {
         assert_eq!(get_last_active_account_id(&db), None);
         set(&db, LAST_ACTIVE_ACCOUNT_ID, "-1").unwrap();
         assert_eq!(get_last_active_account_id(&db), None);
+    }
+
+    #[test]
+    fn mark_read_plan_needs_auto_unread_and_delay() {
+        use MarkReadPlan::{AfterDelay, Now, Off};
+        assert_eq!(mark_read_plan(false, 0, true), Off);
+        assert_eq!(mark_read_plan(true, 0, false), Off);
+        assert_eq!(mark_read_plan(true, 0, true), Now);
+        assert_eq!(mark_read_plan(true, -3, true), Now);
+        assert_eq!(mark_read_plan(true, 5, true), AfterDelay(5));
     }
 
     #[test]

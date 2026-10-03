@@ -332,8 +332,9 @@ class MailState extends ChangeNotifier {
   ///
   /// The read flag is a local write plus a background push, so this returns as
   /// soon as SQLite has it — reading a message can never wait on the network.
-  /// When the mark-read delay is set, the message only counts as read if it is
-  /// still open when the timer fires.
+  /// Whether and when viewing counts as read is the core's call
+  /// (`store::settings::mark_read_plan`): already-read rows stay untouched
+  /// instead of issuing a no-op flag write, as in Qt.
   Future<void> openMessage(int uid) async {
     _openUid = uid;
     _openMessage = null;
@@ -355,16 +356,26 @@ class MailState extends ChangeNotifier {
     _openMessage = body;
 
     final row = _messages.where((m) => m.uid == uid).firstOrNull;
-    if (row != null && row.unread && _settings.autoMarkRead && _folderId >= 0) {
-      final delay = _settings.markReadDelaySecs;
-      if (delay <= 0) {
-        await _applyRead(uid, true);
-      } else {
-        _markReadTimer = Timer(Duration(seconds: delay), () {
-          // Still looking at it: Thunderbird-style, closing it early means
-          // it stays unread.
-          if (_openUid == uid) unawaited(_applyRead(uid, true));
-        });
+    if (_folderId >= 0) {
+      final plan = _core.markReadPlan(
+        _settings.autoMarkRead,
+        _settings.markReadDelaySecs,
+        row?.unread ?? false,
+      );
+      switch (plan.plan) {
+        case 'now':
+          await _applyRead(uid, true);
+        case 'after':
+          _markReadTimer = Timer(
+            Duration(seconds: plan.delaySecs.toInt()),
+            () {
+              // Still looking at it: Thunderbird-style, closing it early means
+              // it stays unread.
+              if (_openUid == uid) unawaited(_applyRead(uid, true));
+            },
+          );
+        case 'off':
+          break;
       }
     }
     notifyListeners();
@@ -1004,19 +1015,9 @@ class MailState extends ChangeNotifier {
       if (searching) unawaited(_rerunSearch());
       return;
     }
-    if (e.kind == 'Send' && e.ok) {
-      // SMTP accepted it and the Sent copy is filed server-side, but the
-      // local cache only learns about it from a sync. The generic reload
-      // below is not enough — pull the Sent folder so it appears.
-      final sent = _folders.where((f) => f.role == FolderRole.sent).firstOrNull;
-      // A refusal just means a sync is already running; its own event will
-      // refresh the list when it lands.
-      if (sent != null) {
-        unawaited(
-          _core.syncFolder(_accountId, sent.id).catchError(_ignoreBusy),
-        );
-      }
-    }
+    // A sent message's Sent copy and folder refreshes already ran inside
+    // `deliver` (`compose::send::refresh_after_send`); the finished event
+    // only needs the generic reloads below, as in Qt — no second Sent sync.
     // `-1` for the account means the job changed nothing worth re-reading.
     if (e.accountId < 0 || e.accountId != _accountId) return;
     unawaited(_reloadFolders());

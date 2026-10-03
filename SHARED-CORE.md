@@ -44,30 +44,20 @@ still to promote") points here instead of keeping its own list.
 | Reader HTML document: paint decision, palette, dark rewrite, width fitting, CSP and base CSS | `mailcore::html::reader`; Qt dropped its CSS `filter`, Flutter desktop its `ColorFiltered` — all three renderers show the same rewritten colours |
 | Folder rules: permanent delete, "Show older" state | `mailcore::undo::delete_is_permanent`, `mailcore::feed::older_state`; folder feed fields `delete_is_permanent`, `server_total`, `older`, `can_load_older` |
 | Bulk actions across folders (search hits) | `mailcore::bulk` (one flag write, one Undo batch, one purge job); search hits arrive grouped by folder from `feed::search_json` |
+| File size text | `mailcore::maintenance::format_bytes` (one decimal at every scale) via the attachment feed field `size_text`; both readers dropped their twins |
+| "Yesterday" | feed `date_key` threaded through the Dart models (`displayDate`); the word stays the UI's, as in Qt |
+| Folder depth and short name | folder feed fields `depth` and `leaf` (`feed::folder_depth`/`folder_leaf`); `MoveTo.qml` and Dart `Folder` read them |
+| Mark-read on open | `mailcore::store::settings::mark_read_plan` (off / now / after-delay from the two settings plus the row state); both viewers follow it |
+| Job outcome | `SendOutcome::outcome` (`"sent"` / `"sent_partial"`) on the job event (`job_finished` outcome, `JobEvent.outcome`); Qt keys its close decision off it, and the Sent refresh stays `deliver`'s job on both |
+| Recipient autocomplete segment | `mailcore::compose::{recipient_segment, replace_recipient_segment}`, quote-aware; both recipient fields complete through them |
 
 ## Open
 
 Ordered by priority; numbers stay as first assigned, so a done item leaves
 a gap. "Drift" says whether the two versions already behave differently.
 
-### 11. Small items
-
-Pick these up when the area is touched anyway.
-
-- **File size text:** Qt shows KB with one decimal, Flutter rounds. Feed
-  field `size_text`.
-- **"Yesterday":** Flutter ignores `date_key`, so the word stays English.
-  Use `date_key` like Qt does.
-- **Folder depth and short name:** `MoveTo.qml` and Dart `models.dart`.
-  Feed fields `depth` and `leaf`.
-- **Mark-read on open:** Flutter only marks unread rows, Qt always asks.
-  One `mark_read_plan(settings)` deciding whether and when.
-- **Job outcome:** Qt detects partial success by matching the status text
-  ("sent, but …"), Flutter reads a flag, and Flutter also starts the Sent
-  sync itself. An `outcome` field on job events.
-- **Recipient autocomplete segment:** `components/RecipientField.qml` and Dart
-  `composer_widgets.dart` match, but both break on a quoted name containing
-  a comma. `compose::recipient_segment` / `replace_segment`.
+No open items. Add a new numbered section when the next duplicated logic is
+found.
 
 ## Deliberate frontend-only logic
 

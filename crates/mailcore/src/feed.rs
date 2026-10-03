@@ -56,8 +56,11 @@ pub fn older_state(cached: u64, server: Option<u64>) -> OlderState {
     }
 }
 
-/// `[{id, name, role, unread, subscribed, count, delimiter, server_total,
-/// older, can_load_older, delete_is_permanent}]` ordered by path.
+/// `[{id, name, role, unread, subscribed, count, delimiter, depth, leaf,
+/// server_total, older, can_load_older, delete_is_permanent}]` ordered by
+/// path. `depth`/`leaf` derive from the path and delimiter here so the move
+/// picker and the sidebar indent and label subfolders identically instead of
+/// each splitting the path itself.
 pub fn folders_json(db: &Db, account_id: i64) -> Result<String> {
     let counts = messages::counts_by_account(db, account_id)?;
     let list = folders::list_by_account(db, account_id)?;
@@ -75,11 +78,13 @@ pub fn folders_json(db: &Db, account_id: i64) -> Result<String> {
             "role": f.role.as_str(),
             "unread": unread,
             // Sidebar visibility toggle + cached total (see Folders dialog),
-            // plus the hierarchy delimiter so the move picker can indent
-            // subfolders (depth = segments - 1).
+            // plus the hierarchy fields so the move picker can indent
+            // subfolders (depth = segments - 1) and show the short name.
             "subscribed": f.subscribed,
             "count": c.total,
             "delimiter": f.delimiter,
+            "depth": folder_depth(&f.path, &f.delimiter),
+            "leaf": folder_leaf(&f.path, &f.delimiter),
             // `-1`: the server never reported a count.
             "server_total": f.server_total.map_or(-1, |s| s as i64),
             "older": older_state(c.total, f.server_total).as_str(),
@@ -88,6 +93,26 @@ pub fn folders_json(db: &Db, account_id: i64) -> Result<String> {
         }));
     }
     Ok(serde_json::to_string(&arr)?)
+}
+
+/// Hierarchy depth of an IMAP path: segments minus one (`INBOX` → 0,
+/// `Work/Client` → 1). An empty delimiter means no hierarchy.
+pub fn folder_depth(path: &str, delimiter: &str) -> u64 {
+    if delimiter.is_empty() {
+        0
+    } else {
+        path.split(delimiter).count().saturating_sub(1) as u64
+    }
+}
+
+/// The short name of an IMAP path: the last segment (`Work/Client` →
+/// `Client`). An empty delimiter leaves the path whole.
+pub fn folder_leaf(path: &str, delimiter: &str) -> String {
+    if delimiter.is_empty() {
+        path.to_string()
+    } else {
+        path.rsplit(delimiter).next().unwrap_or(path).to_string()
+    }
 }
 
 /// `[{id, name, email, from_name, imap_host, smtp_host, …}]` for the account
@@ -347,7 +372,7 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
 }
 
 /// Attachment metadata for one message (`[{id, filename, display_name,
-/// file_name, mime_type, size, content_id, is_inline}]`, no bytes). Used by the reader pane and the
+/// file_name, mime_type, size, size_text, content_id, is_inline}]`, no bytes). Used by the reader pane and the
 /// save dialog; bytes leave Rust only via `save_attachment_to_path`.
 pub fn attachments_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
     let m = messages::get_by_uid(db, folder_id, uid)?;
@@ -362,7 +387,8 @@ pub fn attachments_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
 /// One attachment's metadata. `display_name` is what to show (the mail's
 /// name, or a fallback when it has none); `file_name` is the name a file
 /// written for it gets (see [`crate::paths::safe_attachment_name`]), which a
-/// save dialog should suggest.
+/// save dialog should suggest. `size_text` is the preformatted byte count
+/// ([`crate::maintenance::format_bytes`]) so both readers show one text.
 fn attachment_row(a: &crate::models::Attachment) -> serde_json::Value {
     let display_name = a
         .filename
@@ -380,6 +406,7 @@ fn attachment_row(a: &crate::models::Attachment) -> serde_json::Value {
         "file_name": crate::paths::safe_attachment_name(a.filename.as_deref(), a.id),
         "mime_type": a.mime_type,
         "size": a.size,
+        "size_text": crate::maintenance::format_bytes(a.size),
         "content_id": a.content_id,
         "is_inline": a.is_inline,
     })

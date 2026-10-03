@@ -307,6 +307,24 @@ impl qobject::Bridge {
         })
     }
 
+    pub fn mark_read_plan_json(&self, unread: bool) -> QString {
+        let (auto, delay) = match shared_db() {
+            Ok(db) => (
+                settings::get_bool(db, settings::AUTO_MARK_READ).unwrap_or(true),
+                settings::get_delay_secs(db, settings::MARK_READ_DELAY_SECS),
+            ),
+            Err(_) => (false, 0),
+        };
+        let (plan, delay_secs) = match settings::mark_read_plan(auto, delay, unread) {
+            settings::MarkReadPlan::Off => ("off", 0),
+            settings::MarkReadPlan::Now => ("now", 0),
+            settings::MarkReadPlan::AfterDelay(s) => ("after", s),
+        };
+        qstring(&format!(
+            "{{\"plan\":\"{plan}\",\"delay_secs\":{delay_secs}}}"
+        ))
+    }
+
     pub fn open_message(mut self: Pin<&mut Self>, uid: i32) -> QString {
         let db = match shared_db() {
             Ok(d) => d,

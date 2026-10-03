@@ -48,6 +48,24 @@ impl JobRefresh {
     }
 }
 
+/// What a finished job reports: status prose plus a machine-readable
+/// `outcome` Dart keys decisions off instead of matching the status text.
+pub(crate) struct JobDone {
+    pub status: String,
+    pub refresh: Option<JobRefresh>,
+    pub outcome: String,
+}
+
+impl From<(String, Option<JobRefresh>)> for JobDone {
+    fn from((status, refresh): (String, Option<JobRefresh>)) -> Self {
+        Self {
+            status,
+            refresh,
+            outcome: String::new(),
+        }
+    }
+}
+
 /// Lets a running job report a milestone before it is finished.
 ///
 /// A send is the case that matters: once SMTP has accepted the message it
@@ -66,6 +84,7 @@ impl JobProgress {
             account_id: -1,
             folder_id: -1,
             ok: true,
+            outcome: String::new(),
         });
     }
 }
@@ -114,10 +133,11 @@ fn net_tx() -> &'static mpsc::Sender<JobFn> {
 /// `key` dedupes: a second job with a key already in flight is refused rather
 /// than stacked, so holding down ⟳ cannot open five IMAP sessions. Completion
 /// arrives on the Dart event stream as a [`JobPhase::Finished`] event.
-pub(crate) fn spawn<F, Fut>(kind: &str, key: String, op: F) -> anyhow::Result<()>
+pub(crate) fn spawn<F, Fut, D>(kind: &str, key: String, op: F) -> anyhow::Result<()>
 where
     F: FnOnce(&'static mailcore::Db, JobProgress) -> Fut + Send + 'static,
-    Fut: std::future::Future<Output = Result<(String, Option<JobRefresh>), String>> + 'static,
+    Fut: std::future::Future<Output = Result<D, String>> + 'static,
+    D: Into<JobDone>,
 {
     {
         let mut set = inflight().lock().unwrap_or_else(|e| e.into_inner());
@@ -134,16 +154,16 @@ where
         let outcome = guard(&kind, || {
             rt.block_on(async {
                 let db = shared_db().map_err(|e| e.to_string())?;
-                op(db, progress).await
+                op(db, progress).await.map(|d| -> JobDone { d.into() })
             })
         });
         inflight()
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&key);
-        let (status, refresh, ok) = match outcome {
-            Ok((status, refresh)) => (status, refresh, true),
-            Err(e) => (e, None, false),
+        let (status, refresh, job_outcome, ok) = match outcome {
+            Ok(done) => (done.status, done.refresh, done.outcome, true),
+            Err(e) => (e, None, String::new(), false),
         };
         let refresh = refresh.unwrap_or(JobRefresh {
             account_id: -1,
@@ -156,6 +176,7 @@ where
             account_id: refresh.account_id,
             folder_id: refresh.folder_id,
             ok,
+            outcome: job_outcome,
         });
     }));
     if sent.is_err() {

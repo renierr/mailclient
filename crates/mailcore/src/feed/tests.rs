@@ -156,6 +156,8 @@ fn feed_carries_attachment_metadata_without_bytes() {
     assert_eq!(only[0]["file_name"], "doc.pdf");
     assert_eq!(only[1]["display_name"], "../con");
     assert_eq!(only[1]["file_name"], "_con");
+    // Preformatted sizes ride along, so both readers show one text.
+    assert_eq!(only[0]["size_text"], "4 B");
 }
 
 #[test]
@@ -288,6 +290,34 @@ fn message_html_resanitizes_for_show_once() {
     // …but Show-once gets it back from the stored raw body.
     let allowed = message_html(&db, f, 11, true).unwrap();
     assert!(allowed.contains("example.com"));
+}
+
+#[test]
+fn folders_carry_depth_and_leaf_for_indent_and_label() {
+    let (db, acc, _inbox) = setup();
+    folders::upsert(&db, acc, "Work/Client", "/", FolderRole::Custom).unwrap();
+    let folders: serde_json::Value =
+        serde_json::from_str(&folders_json(&db, acc).unwrap()).unwrap();
+    let inbox = folders
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "INBOX")
+        .unwrap();
+    assert_eq!(inbox["depth"], 0);
+    assert_eq!(inbox["leaf"], "INBOX");
+    let sub = folders
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "Work/Client")
+        .unwrap();
+    assert_eq!(sub["depth"], 1);
+    assert_eq!(sub["leaf"], "Client");
+    assert_eq!(folder_depth("a.b.c", "."), 2);
+    assert_eq!(folder_leaf("a.b.c", "."), "c");
+    assert_eq!(folder_depth("INBOX", ""), 0);
+    assert_eq!(folder_leaf("INBOX", ""), "INBOX");
 }
 
 #[test]

@@ -28,3 +28,17 @@ pub fn set_contact_alias(address: String, alias: String) -> anyhow::Result<()> {
 pub fn delete_contact(address: String) -> anyhow::Result<()> {
     Ok(contacts::delete(shared_db()?, address.trim())?)
 }
+
+/// The recipient address currently being typed: the last `,`/`;` segment
+/// outside double quotes (`compose::recipient_segment`), trimmed.
+#[flutter_rust_bridge::frb(sync)]
+pub fn recipient_segment(text: String) -> String {
+    mailcore::compose::recipient_segment(&text).to_string()
+}
+
+/// The field after completing its current segment with `replacement`
+/// (`compose::replace_recipient_segment`).
+#[flutter_rust_bridge::frb(sync)]
+pub fn replace_recipient_segment(text: String, replacement: String) -> String {
+    mailcore::compose::replace_recipient_segment(&text, &replacement)
+}

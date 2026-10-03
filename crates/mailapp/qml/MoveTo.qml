@@ -48,13 +48,19 @@ AppDialog {
         }
     }
 
-    // Hierarchy depth from the stored path + delimiter (subfolders indent).
+    // Hierarchy depth and the short name ride the folder feed
+    // (`feed::folder_depth` / `folder_leaf`); the split here is only the
+    // fallback for rows that predate those fields.
     function depthOf(model) {
+        if (model.depth !== undefined)
+            return model.depth;
         var delim = model.delimiter !== undefined && model.delimiter !== "" ? model.delimiter : "/";
         return model.name.split(delim).length - 1;
     }
 
     function shortName(model) {
+        if (model.leaf !== undefined)
+            return model.leaf;
         var delim = model.delimiter !== undefined && model.delimiter !== "" ? model.delimiter : "/";
         var parts = model.name.split(delim);
         return parts[parts.length - 1];
@@ -157,7 +163,9 @@ AppDialog {
                 rows.push({
                               name: f.name,
                               role: f.role,
-                              delimiter: f.delimiter !== undefined ? f.delimiter : "/"
+                              delimiter: f.delimiter !== undefined ? f.delimiter : "/",
+                              depth: f.depth,
+                              leaf: f.leaf
                           });
             }
         }

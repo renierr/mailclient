@@ -32,6 +32,7 @@ class _DownloadCore implements MailCore {
           phase: JobPhase.finished,
           status: 'connection refused',
           ok: false,
+          outcome: '',
           accountId: -1,
           folderId: -1,
         ),

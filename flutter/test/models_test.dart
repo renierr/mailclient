@@ -20,8 +20,20 @@ void main() {
       expect(f.leafName, '2024');
     });
 
-    test('an unknown role degrades to custom instead of throwing', () {
+    test('prefers the feed depth and leaf over deriving them', () {
       final f = Folder.fromJson(
+        jsonDecode('''
+        {"id": 4, "name": "Work/Client", "role": "custom", "unread": 0,
+         "count": 3, "subscribed": true, "delimiter": "/",
+         "depth": 1, "leaf": "Client"}
+      ''') as Map<String, dynamic>,
+      );
+
+      expect(f.depth, 1);
+      expect(f.leafName, 'Client');
+    });
+
+    test('an unknown role degrades to custom instead of throwing', () {      final f = Folder.fromJson(
         jsonDecode('{"id": 1, "name": "X", "role": "templates"}')
             as Map<String, dynamic>,
       );
@@ -94,6 +106,19 @@ void main() {
       );
       expect(unnamed.fromName, '');
       expect(unnamed.senderName, 'plain@example.com');
+    });
+
+    test('a named date key shows the word, not the fallback text', () {
+      final m = MessageSummary.fromJson(
+        jsonDecode('{"uid": 7, "date": "Yesterday", "date_key": "yesterday"}')
+            as Map<String, dynamic>,
+      );
+      expect(m.displayDate, 'Yesterday');
+
+      final plain = MessageSummary.fromJson(
+        jsonDecode('{"uid": 8, "date": "12:30"}') as Map<String, dynamic>,
+      );
+      expect(plain.displayDate, '12:30');
     });
   });
 
@@ -220,5 +245,11 @@ void main() {
     final old = AttachmentInfo.fromJson({'id': 3});
     expect(old.filename, 'attachment-3.bin');
     expect(old.fileName, 'attachment-3.bin');
+    expect(old.sizeText, '');
+  });
+
+  test('attachment sizes come preformatted from the core', () {
+    final a = AttachmentInfo.fromJson({'id': 7, 'size': 2048, 'size_text': '2.0 KB'});
+    expect(a.sizeText, '2.0 KB');
   });
 }

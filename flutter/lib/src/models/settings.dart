@@ -246,6 +246,7 @@ class SearchHit {
     required this.subject,
     required this.from,
     required this.date,
+    this.dateKey = '',
     required this.snippet,
     required this.unread,
     required this.starred,
@@ -264,6 +265,10 @@ class SearchHit {
   final String fromName;
   final SenderBadge badge;
   final String date;
+
+  /// Names the date cases that are a word rather than a number
+  /// (`mailcore::feed`), carried into [summary] so hits draw like the list.
+  final String dateKey;
   final String snippet;
   final bool unread;
   final bool starred;
@@ -278,6 +283,7 @@ class SearchHit {
     from: from,
     fromName: fromName,
     date: date,
+    dateKey: dateKey,
     snippet: snippet,
     unread: unread,
     starred: starred,
@@ -294,6 +300,7 @@ class SearchHit {
     fromName: _str(j['from_name']),
     badge: SenderBadge.fromJson(j),
     date: _str(j['date']),
+    dateKey: _str(j['date_key']),
     snippet: _str(j['snippet']),
     unread: _truthy(j['unread']),
     starred: _truthy(j['starred']),

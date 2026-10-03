@@ -41,9 +41,12 @@ pub mod qobject {
         type Bridge = super::BridgeRust;
 
         /// Fired when a background network job finishes. Feeds are already
-        /// refreshed. `kind` is `"Sync"` / `"Send"` / `"Delete"` / …
+        /// refreshed. `kind` is `"Sync"` / `"Send"` / `"Delete"` / …,
+        /// `outcome` is the machine-readable result (`SendOutcome::outcome`:
+        /// `"sent"` / `"sent_partial"`, `""` for jobs without one) — key
+        /// decisions off it, never off matching the status prose.
         #[qsignal]
-        fn job_finished(self: Pin<&mut Self>, kind: &QString, status: &QString);
+        fn job_finished(self: Pin<&mut Self>, kind: &QString, status: &QString, outcome: &QString);
 
         /// Fired when a job reaches a milestone the UI should act on before
         /// the job itself is done — SMTP accepting a message, say, so the
@@ -135,6 +138,16 @@ pub mod qobject {
         /// an address or name; an empty prefix lists all contacts.
         #[qinvokable]
         fn contacts_json(&self, prefix: &QString) -> QString;
+
+        /// The recipient address currently being typed: the last `,`/`;`
+        /// segment outside double quotes (`compose::recipient_segment`).
+        #[qinvokable]
+        fn recipient_segment(&self, text: &QString) -> QString;
+
+        /// The field after completing its current segment with `replacement`
+        /// (`compose::replace_recipient_segment`).
+        #[qinvokable]
+        fn replace_recipient_segment(&self, text: &QString, replacement: &QString) -> QString;
 
         /// Set or update a contact's custom alias. Returns `""` or an error.
         #[qinvokable]
@@ -349,6 +362,12 @@ pub mod qobject {
         /// e.g. from the list context menu). Queued like `open_message`.
         #[qinvokable]
         fn mark_read(self: Pin<&mut Self>, uid: i32, read: bool) -> QString;
+
+        /// Whether and when opening an `unread` row marks it read
+        /// (`store::settings::mark_read_plan` over the two settings):
+        /// `{"plan":"off"|"now"|"after","delay_secs":N}`.
+        #[qinvokable]
+        fn mark_read_plan_json(&self, unread: bool) -> QString;
 
         /// Flip the starred flag locally; pushed by the next sync.
         #[qinvokable]
@@ -761,6 +780,17 @@ impl qobject::Bridge {
             log::warn!("contacts: cannot load suggestions: {e}");
             "[]".to_string()
         }))
+    }
+
+    pub fn recipient_segment(&self, text: &QString) -> QString {
+        qstring(mailcore::compose::recipient_segment(&text.to_string()))
+    }
+
+    pub fn replace_recipient_segment(&self, text: &QString, replacement: &QString) -> QString {
+        qstring(&mailcore::compose::replace_recipient_segment(
+            &text.to_string(),
+            &replacement.to_string(),
+        ))
     }
 
     pub fn update_contact_alias(&self, address: &QString, alias: &QString) -> QString {

@@ -91,7 +91,7 @@ class ReaderHeader extends StatelessWidget {
           final from = pick(h?.from, message.from);
           final to = pick(h?.to, message.to);
           final cc = pick(h?.cc, message.cc);
-          final date = pick(h?.date, message.date);
+          final date = pick(h?.date, message.displayDate);
           final replyTo = message.replyTo;
           final replyToDiffers = message.replyToDiffers;
           return Column(
@@ -142,7 +142,7 @@ class ReaderHeader extends StatelessWidget {
                                 ),
                               ),
                               const SizedBox(width: 8),
-                              Text(message.date, style: muted),
+                              Text(message.displayDate, style: muted),
                             ],
                           ),
                           if (message.fromName.isNotEmpty)

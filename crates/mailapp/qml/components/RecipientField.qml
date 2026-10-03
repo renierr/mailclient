@@ -16,6 +16,10 @@ Item {
     signal edited
 
     function query() {
+        // The segment being typed, split quote-aware by the core so a comma
+        // inside `"Last, First"` does not start a new segment.
+        if (root.backend)
+            return root.backend.recipient_segment(field.text).trim();
         var pieces = field.text.split(/[;,]/);
         return pieces[pieces.length - 1].trim();
     }
@@ -38,8 +42,12 @@ Item {
     }
 
     function choose(address) {
-        var end = field.text.search(/[;,][^;,]*$/);
-        field.text = end < 0 ? address : field.text.substring(0, end + 1) + " " + address;
+        if (root.backend)
+            field.text = root.backend.replace_recipient_segment(field.text, address);
+        else {
+            var end = field.text.search(/[;,][^;,]*$/);
+            field.text = end < 0 ? address : field.text.substring(0, end + 1) + " " + address;
+        }
         field.cursorPosition = field.text.length;
         popup.close();
         field.forceActiveFocus();

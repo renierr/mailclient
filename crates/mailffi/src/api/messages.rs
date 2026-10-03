@@ -65,6 +65,30 @@ pub fn mark_read(account_id: i64, folder_id: i64, uid: u32, read: bool) -> anyho
     mark_read_many(account_id, folder_id, vec![uid], read).map(|_| ())
 }
 
+/// Whether and when opening an `unread` row marks it read, from the two
+/// settings and the row state (`store::settings::mark_read_plan`).
+#[flutter_rust_bridge::frb(sync)]
+pub fn mark_read_plan(auto_mark_read: bool, delay_secs: i64, unread: bool) -> MarkReadPlan {
+    let (plan, delay_secs) =
+        match mailcore::store::settings::mark_read_plan(auto_mark_read, delay_secs, unread) {
+            mailcore::store::settings::MarkReadPlan::Off => ("off", 0),
+            mailcore::store::settings::MarkReadPlan::Now => ("now", 0),
+            mailcore::store::settings::MarkReadPlan::AfterDelay(s) => ("after", s),
+        };
+    MarkReadPlan {
+        plan: plan.to_string(),
+        delay_secs,
+    }
+}
+
+/// [`mark_read_plan`] as a generated struct.
+pub struct MarkReadPlan {
+    /// `"off"`, `"now"` or `"after"`.
+    pub plan: String,
+    /// Seconds to wait when `plan` is `"after"`, else `0`.
+    pub delay_secs: u64,
+}
+
 /// Set the read flag on a selection.
 pub fn mark_read_many(
     account_id: i64,

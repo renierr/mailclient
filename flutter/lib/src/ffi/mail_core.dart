@@ -255,6 +255,18 @@ class MailCore {
         read: read,
       );
 
+  /// Whether and when opening an `unread` row marks it read
+  /// (`store::settings::mark_read_plan`).
+  rust_messages.MarkReadPlan markReadPlan(
+    bool autoMarkRead,
+    int delaySecs,
+    bool unread,
+  ) => rust_messages.markReadPlan(
+    autoMarkRead: autoMarkRead,
+    delaySecs: delaySecs,
+    unread: unread,
+  );
+
   /// Returns how many rows actually changed. Rust counts these as `u64`,
   /// which crosses as a `BigInt`; a folder never holds enough messages for
   /// that to matter, so the UI gets a plain int.
@@ -620,6 +632,19 @@ class MailCore {
 
   Future<void> deleteContact(String address) =>
       rust_contacts.deleteContact(address: address);
+
+  /// The recipient address currently being typed, split quote-aware by the
+  /// core (`compose::recipient_segment`).
+  String recipientSegment(String text) =>
+      rust_contacts.recipientSegment(text: text);
+
+  /// The field after completing its current segment with `replacement`
+  /// (`compose::replace_recipient_segment`).
+  String replaceRecipientSegment(String text, String replacement) =>
+      rust_contacts.replaceRecipientSegment(
+        text: text,
+        replacement: replacement,
+      );
 
   // --- settings ------------------------------------------------------------
 

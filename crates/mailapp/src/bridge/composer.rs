@@ -6,7 +6,7 @@ use mailcore::compose::{self, ComposeForm};
 use crate::bridge::messages::{draft_attachment_path, ensure_attachment_data};
 use crate::bridge::qobject;
 use crate::bridge::qstring;
-use crate::bridge::worker::{spawn_job, JobRefresh, BUSY_MESSAGE};
+use crate::bridge::worker::{spawn_job, JobDone, JobRefresh, BUSY_MESSAGE};
 
 // Thin adapter over `mailcore::compose`: parse the QML form, start the job,
 // phrase the result. The send/draft rules themselves live in the core.
@@ -40,10 +40,11 @@ impl qobject::Bridge {
             // SMTP accepted it: release the composer now rather than holding
             // it open through the Sent copy, the draft removal and the resync.
             let outcome = compose::deliver(db, prepared, folder_id, || progress.report("")).await?;
-            Ok((
-                outcome.notes.join(" "),
-                Some(JobRefresh::feeds(outcome.account_id, folder_id)),
-            ))
+            Ok(JobDone {
+                status: outcome.notes.join(" "),
+                refresh: Some(JobRefresh::feeds(outcome.account_id, folder_id)),
+                outcome: outcome.outcome().to_string(),
+            })
         });
         if !queued.is_empty() {
             // Not started after all (unreachable while the busy check above

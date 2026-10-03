@@ -80,6 +80,18 @@ Future<void> markRead({
   read: read,
 );
 
+/// Whether and when opening an `unread` row marks it read, from the two
+/// settings and the row state (`store::settings::mark_read_plan`).
+MarkReadPlan markReadPlan({
+  required bool autoMarkRead,
+  required PlatformInt64 delaySecs,
+  required bool unread,
+}) => MailCoreApi.instance.api.crateApiMessagesMarkReadPlan(
+  autoMarkRead: autoMarkRead,
+  delaySecs: delaySecs,
+  unread: unread,
+);
+
 /// Set the read flag on a selection.
 Future<BigInt> markReadMany({
   required PlatformInt64 accountId,
@@ -172,4 +184,26 @@ class LinkInfo {
           scheme == other.scheme &&
           host == other.host &&
           path == other.path;
+}
+
+/// [`mark_read_plan`] as a generated struct.
+class MarkReadPlan {
+  /// `"off"`, `"now"` or `"after"`.
+  final String plan;
+
+  /// Seconds to wait when `plan` is `"after"`, else `0`.
+  final BigInt delaySecs;
+
+  const MarkReadPlan({required this.plan, required this.delaySecs});
+
+  @override
+  int get hashCode => plan.hashCode ^ delaySecs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MarkReadPlan &&
+          runtimeType == other.runtimeType &&
+          plan == other.plan &&
+          delaySecs == other.delaySecs;
 }

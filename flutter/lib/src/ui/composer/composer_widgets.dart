@@ -236,14 +236,9 @@ class RecipientField extends StatelessWidget {
           );
   }
 
-  static String currentSegment(String text) {
-    final parts = text.split(RegExp(r'[,;]'));
-    return parts.isEmpty ? '' : parts.last.trim();
-  }
+  static String currentSegment(String text) =>
+      MailCore.instance.recipientSegment(text);
 
-  static String replaceSegment(String text, String address) {
-    final idx = text.lastIndexOf(RegExp(r'[,;]'));
-    final head = idx < 0 ? '' : '${text.substring(0, idx + 1)} ';
-    return '$head$address';
-  }
+  static String replaceSegment(String text, String address) =>
+      MailCore.instance.replaceRecipientSegment(text, address);
 }

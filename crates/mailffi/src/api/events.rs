@@ -35,6 +35,10 @@ pub struct JobEvent {
     pub status: String,
     /// Whether the job succeeded. Always `true` for [`JobPhase::Progress`].
     pub ok: bool,
+    /// Machine-readable result for decisions that must not match the status
+    /// prose (`SendOutcome::outcome`: `"sent"` / `"sent_partial"`).
+    /// `""` for jobs without one.
+    pub outcome: String,
     /// Account whose cached data changed, or `-1` for "nothing changed".
     pub account_id: i64,
     /// Folder whose messages changed; `-1` with a real `account_id` means

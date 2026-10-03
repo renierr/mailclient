@@ -143,18 +143,9 @@ Rectangle {
         return out;
     }
 
-    function formatSize(n) {
-        if (n === undefined || n === null)
-            return "";
-        if (n < 1024)
-            return qsTr("%1 B").arg(n);
-        if (n < 1024 * 1024)
-            return qsTr("%1 KB").arg((n / 1024).toFixed(1));
-        return qsTr("%1 MB").arg((n / (1024 * 1024)).toFixed(1));
-    }
-
     // Names come from the core: `display_name` to show, `file_name` for
-    // anything written (mailcore::paths::safe_attachment_name).
+    // anything written (mailcore::paths::safe_attachment_name), and
+    // `size_text` for the byte count (mailcore::maintenance::format_bytes).
     function displayName(a) {
         return a.display_name || a.filename || "";
     }
@@ -759,7 +750,7 @@ Rectangle {
                                     elide: Text.ElideRight
                                 }
                                 Label {
-                                    text: root.formatSize(fileRow.modelData.size)
+                                    text: fileRow.modelData.size_text || ""
                                     color: Theme.textMuted
                                     font.pixelSize: Theme.fontTiny
                                 }

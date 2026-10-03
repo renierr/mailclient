@@ -85,6 +85,26 @@ impl JobProgress {
 /// What a refused [`spawn_job`] returns while another job holds the latch.
 pub(crate) const BUSY_MESSAGE: &str = "busy — wait for the current action";
 
+/// What a finished job reports: status prose for the status bar, what feeds
+/// to rebuild, and a machine-readable `outcome` QML keys decisions off
+/// (`SendOutcome::outcome`; `""` for jobs without one) instead of matching
+/// the status text.
+pub(crate) struct JobDone {
+    pub status: String,
+    pub refresh: Option<JobRefresh>,
+    pub outcome: String,
+}
+
+impl From<(String, Option<JobRefresh>)> for JobDone {
+    fn from((status, refresh): (String, Option<JobRefresh>)) -> Self {
+        Self {
+            status,
+            refresh,
+            outcome: String::new(),
+        }
+    }
+}
+
 type JobFn = Box<dyn FnOnce(&tokio::runtime::Runtime) + Send>;
 
 /// Fire-and-forget push of local changes — read/star toggles and undoable
@@ -155,10 +175,15 @@ fn net_tx() -> &'static mpsc::Sender<JobFn> {
 /// a busy message. Completion is [`qobject::Bridge::job_finished`]; `op`
 /// returns `None` for the refresh when it changed nothing the feeds show, so
 /// reading a draft or saving an attachment does not rebuild the message list.
-pub(crate) fn spawn_job<F, Fut>(mut bridge: Pin<&mut qobject::Bridge>, kind: &str, op: F) -> QString
+pub(crate) fn spawn_job<F, Fut, D>(
+    mut bridge: Pin<&mut qobject::Bridge>,
+    kind: &str,
+    op: F,
+) -> QString
 where
     F: FnOnce(&'static mailcore::Db, JobProgress) -> Fut + Send + 'static,
-    Fut: std::future::Future<Output = Result<(String, Option<JobRefresh>), String>> + 'static,
+    Fut: std::future::Future<Output = Result<D, String>> + 'static,
+    D: Into<JobDone>,
 {
     if *bridge.busy() {
         return qstring(BUSY_MESSAGE);
@@ -178,12 +203,12 @@ where
         let outcome = guard(&kind_owned, || {
             rt.block_on(async {
                 let db = shared_db()?;
-                op(db, progress).await
+                op(db, progress).await.map(|d| -> JobDone { d.into() })
             })
         });
-        let (status, refresh) = match outcome {
-            Ok((status, refresh)) => (status, refresh),
-            Err(e) => (e, None),
+        let (status, refresh, job_outcome) = match outcome {
+            Ok(done) => (done.status, done.refresh, done.outcome),
+            Err(e) => (e, None, String::new()),
         };
         let queued = qt.queue(move |mut bridge| {
             if let Some(refresh) = refresh {
@@ -202,7 +227,8 @@ where
             bridge.as_mut().set_busy(false);
             let kind = qstring(&kind_owned);
             let status = qstring(&status);
-            bridge.job_finished(&kind, &status);
+            let outcome = qstring(&job_outcome);
+            bridge.job_finished(&kind, &status, &outcome);
         });
         if let Err(e) = queued {
             // Only reachable once the QObject is gone, i.e. during shutdown —

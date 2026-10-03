@@ -55,6 +55,20 @@ pub struct SendOutcome {
     pub notes: Vec<String>,
 }
 
+impl SendOutcome {
+    /// Machine-readable result for job events: `"sent"`, or `"sent_partial"`
+    /// when follow-ups failed. Frontends key their close/refresh decisions
+    /// off this, never off matching the status prose.
+    #[must_use]
+    pub fn outcome(&self) -> &'static str {
+        if self.notes.is_empty() {
+            "sent"
+        } else {
+            "sent_partial"
+        }
+    }
+}
+
 /// Validate the form, build the MIME with the user's send settings and put
 /// it in the outbox. No network, no secrets.
 pub fn prepare_send(db: &Db, account_id: i64, form: ComposeForm) -> Result<PreparedSend, String> {
@@ -266,6 +280,20 @@ mod tests {
         sent.discard(&db);
         let row = queue::get(&db, sent.queue_id).unwrap();
         assert!(row.raw_mime.as_deref().is_none_or(|b| b.is_empty()));
+    }
+
+    #[test]
+    fn outcome_names_partial_sends_for_job_events() {
+        let full = SendOutcome {
+            account_id: 1,
+            notes: Vec::new(),
+        };
+        assert_eq!(full.outcome(), "sent");
+        let partial = SendOutcome {
+            account_id: 1,
+            notes: vec!["sent, but the Sent copy failed: gone".to_string()],
+        };
+        assert_eq!(partial.outcome(), "sent_partial");
     }
 
     #[test]

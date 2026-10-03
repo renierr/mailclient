@@ -4,7 +4,7 @@
 use mailcore::compose::{self, ComposeForm};
 
 use crate::db::shared_db;
-use crate::net::{spawn, JobRefresh};
+use crate::net::{spawn, JobDone, JobRefresh};
 
 /// Send a message from the composer's JSON form
 /// (`{to, cc?, bcc?, from?, from_name?, reply_to?, subject, body, body_html?,
@@ -30,10 +30,11 @@ pub fn send_mail(account_id: i64, folder_id: i64, form: String) -> anyhow::Resul
             } else {
                 outcome.notes.join("; ")
             };
-            Ok((
+            Ok(JobDone {
                 status,
-                Some(JobRefresh::folder(outcome.account_id, folder_id)),
-            ))
+                refresh: Some(JobRefresh::folder(outcome.account_id, folder_id)),
+                outcome: outcome.outcome().to_string(),
+            })
         },
     );
     if started.is_err() {

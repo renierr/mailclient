@@ -25,3 +25,18 @@ Future<void> setContactAlias({
 /// Forget one auto-collected recipient.
 Future<void> deleteContact({required String address}) =>
     MailCoreApi.instance.api.crateApiContactsDeleteContact(address: address);
+
+/// The recipient address currently being typed: the last `,`/`;` segment
+/// outside double quotes (`compose::recipient_segment`), trimmed.
+String recipientSegment({required String text}) =>
+    MailCoreApi.instance.api.crateApiContactsRecipientSegment(text: text);
+
+/// The field after completing its current segment with `replacement`
+/// (`compose::replace_recipient_segment`).
+String replaceRecipientSegment({
+  required String text,
+  required String replacement,
+}) => MailCoreApi.instance.api.crateApiContactsReplaceRecipientSegment(
+  text: text,
+  replacement: replacement,
+);

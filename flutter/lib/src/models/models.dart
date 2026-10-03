@@ -105,12 +105,13 @@ class Folder {
     required this.subscribed,
     required this.delimiter,
     this.deleteIsPermanent = true,
+    required this.depth,
+    required this.leafName,
   });
 
   final int id;
 
-  /// The full IMAP path, e.g. `Work/Client`. Hierarchy lives in the path, so
-  /// [depth] and [leafName] derive from it rather than from a parent link.
+  /// The full IMAP path, e.g. `Work/Client`.
   final String path;
   final FolderRole role;
   final int unread;
@@ -127,20 +128,33 @@ class Folder {
   /// `undo::delete_is_permanent`).
   final bool deleteIsPermanent;
 
-  factory Folder.fromJson(Map<String, dynamic> j) => Folder(
-    id: _int(j['id']),
-    path: _str(j['name']),
-    role: FolderRole.parse(_str(j['role'])),
-    unread: _int(j['unread']),
-    total: _int(j['count']),
-    subscribed: _bool(j['subscribed'], orElse: true),
-    delimiter: _str(j['delimiter'], orElse: '/'),
-    deleteIsPermanent: _bool(j['delete_is_permanent'], orElse: true),
-  );
+  /// Subfolder nesting from the feed (`mailcore::feed::folder_depth`).
+  final int depth;
 
-  int get depth => delimiter.isEmpty ? 0 : path.split(delimiter).length - 1;
+  /// Short name from the feed (`mailcore::feed::folder_leaf`).
+  final String leafName;
 
-  String get leafName => delimiter.isEmpty ? path : path.split(delimiter).last;
+  factory Folder.fromJson(Map<String, dynamic> j) {
+    final path = _str(j['name']);
+    final delimiter = _str(j['delimiter'], orElse: '/');
+    return Folder(
+      id: _int(j['id']),
+      path: path,
+      role: FolderRole.parse(_str(j['role'])),
+      unread: _int(j['unread']),
+      total: _int(j['count']),
+      subscribed: _bool(j['subscribed'], orElse: true),
+      delimiter: delimiter,
+      deleteIsPermanent: _bool(j['delete_is_permanent'], orElse: true),
+      // A payload without the fields still indents like the core would.
+      depth:
+          _optInt(j['depth']) ??
+          (delimiter.isEmpty ? 0 : path.split(delimiter).length - 1),
+      leafName:
+          _optStr(j['leaf']) ??
+          (delimiter.isEmpty ? path : path.split(delimiter).last),
+    );
+  }
 }
 
 /// One row of the message list. Deliberately without a body: opening a folder
@@ -152,6 +166,7 @@ class MessageSummary {
     required this.from,
     required this.fromName,
     required this.date,
+    this.dateKey = '',
     required this.snippet,
     required this.unread,
     required this.starred,
@@ -174,6 +189,16 @@ class MessageSummary {
   /// Preformatted by the core, which knows the user's locale rules for
   /// "today" and "yesterday" better than a list item does.
   final String date;
+
+  /// Names the date cases that are a word rather than a number
+  /// (`mailcore::feed`: `"yesterday"`, else `""`) — the word itself is the
+  /// UI's to supply, as in Qt.
+  final String dateKey;
+
+  /// What the row shows: the localized word for a named [dateKey], else
+  /// the core's text.
+  String get displayDate => displayMailDate(date, dateKey);
+
   final String snippet;
   final bool unread;
   final bool starred;
@@ -185,6 +210,7 @@ class MessageSummary {
     from: _str(j['from'], orElse: '?'),
     fromName: _str(j['from_name']),
     date: _str(j['date']),
+    dateKey: _str(j['date_key']),
     snippet: _str(j['snippet']),
     unread: _bool(j['unread']),
     starred: _bool(j['starred']),
@@ -198,6 +224,7 @@ class MessageSummary {
     from: from,
     fromName: fromName,
     date: date,
+    dateKey: dateKey,
     snippet: snippet,
     unread: unread ?? this.unread,
     starred: starred ?? this.starred,
@@ -216,6 +243,7 @@ class MessageBody {
     required this.cc,
     required this.replyTo,
     required this.date,
+    this.dateKey = '',
     required this.bodyText,
     required this.bodyHtml,
     required this.isHtml,
@@ -251,6 +279,15 @@ class MessageBody {
   final String replyTarget;
   final bool replyToDiffers;
   final String date;
+
+  /// Names the date cases that are a word rather than a number
+  /// (`mailcore::feed`: `"yesterday"`, else `""`).
+  final String dateKey;
+
+  /// What the reader shows: the localized word for a named [dateKey], else
+  /// the core's text.
+  String get displayDate => displayMailDate(date, dateKey);
+
   final String bodyText;
 
   /// Already sanitized by `mailcore`, with remote images stripped unless the
@@ -279,6 +316,7 @@ class MessageBody {
     cc: _str(j['cc']),
     replyTo: _str(j['reply_to']),
     date: _str(j['date']),
+    dateKey: _str(j['date_key']),
     bodyText: _str(j['body_text']),
     bodyHtml: _str(j['body_html']),
     isHtml: _bool(j['is_html']),
@@ -348,6 +386,7 @@ class AttachmentInfo {
     required this.size,
     required this.isInline,
     this.fileName = '',
+    this.sizeText = '',
   });
 
   final int id;
@@ -360,6 +399,10 @@ class AttachmentInfo {
   final String fileName;
   final String mimeType;
   final int size;
+
+  /// Preformatted byte count from the feed (`size_text`,
+  /// `mailcore::maintenance::format_bytes`): what the bar shows.
+  final String sizeText;
 
   /// Inline parts are the images the body already references by `cid:`; the
   /// attachment bar leaves them out.
@@ -374,6 +417,7 @@ class AttachmentInfo {
     fileName: _str(j['file_name'], orElse: 'attachment-${_int(j['id'])}.bin'),
     mimeType: _str(j['mime_type'], orElse: 'application/octet-stream'),
     size: _int(j['size']),
+    sizeText: _str(j['size_text']),
     isInline: _bool(j['is_inline']),
   );
 }
@@ -412,11 +456,32 @@ class Contact {
 // A feed field that is missing, null or the wrong type must not take down the
 // whole list, so each of these falls back rather than throwing.
 
+/// What a row shows for the core's date: the localized word for a named key
+/// (`"yesterday"`), else the core's text — the same decision Qt's list and
+/// reader make from `date_key`.
+String displayMailDate(String date, String dateKey) =>
+    dateKey == 'yesterday' ? 'Yesterday' : date;
+
 int _int(Object? v) => switch (v) {
   int n => n,
   num n => n.toInt(),
   String s => int.tryParse(s) ?? 0,
   _ => 0,
+};
+
+/// Null when the field is missing rather than a number, so callers can tell
+/// "absent" apart from a real zero.
+int? _optInt(Object? v) => switch (v) {
+  int n => n,
+  num n => n.toInt(),
+  String s => int.tryParse(s),
+  _ => null,
+};
+
+/// Null when the field is missing or empty, so callers can fall back.
+String? _optStr(Object? v) => switch (v) {
+  String s when s.isNotEmpty => s,
+  _ => null,
 };
 
 String _str(Object? v, {String orElse = ''}) => switch (v) {

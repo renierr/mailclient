@@ -23,8 +23,10 @@ use crate::paths::{file_url_to_path, free_path, prune_stale_draft_dirs, DRAFT_TE
 /// what sync keeps anyway.
 pub use crate::sync::imap::FULL_SYNC_WINDOW as TRIM_KEEP_PER_FOLDER;
 
-/// `1023` → `"1023 B"`, `2048` → `"2 KB"`, `3 MiB` → `"3.0 MB"`. One
-/// definition so both frontends report the same sizes.
+/// `1023` → `"1023 B"`, `2048` → `"2.0 KB"`, `3 MiB` → `"3.0 MB"`.
+/// One definition so both frontends report the same sizes (the attachment
+/// feed's `size_text`, and the `*_display` storage fields, all come from
+/// here — no frontend formats bytes itself).
 pub fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = 1024 * KB;
@@ -32,7 +34,7 @@ pub fn format_bytes(bytes: u64) -> String {
     if bytes < KB {
         format!("{bytes} B")
     } else if bytes < MB {
-        format!("{} KB", bytes / KB)
+        format!("{:.1} KB", bytes as f64 / KB as f64)
     } else if bytes < GB {
         format!("{:.1} MB", bytes as f64 / MB as f64)
     } else {
@@ -428,7 +430,7 @@ mod tests {
     fn format_bytes_uses_one_scale() {
         assert_eq!(format_bytes(0), "0 B");
         assert_eq!(format_bytes(1023), "1023 B");
-        assert_eq!(format_bytes(2048), "2 KB");
+        assert_eq!(format_bytes(2048), "2.0 KB");
         assert_eq!(format_bytes(3 * 1024 * 1024), "3.0 MB");
     }
 

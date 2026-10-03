@@ -27,6 +27,11 @@ class JobEvent {
   /// Whether the job succeeded. Always `true` for [`JobPhase::Progress`].
   final bool ok;
 
+  /// Machine-readable result for decisions that must not match the status
+  /// prose (`SendOutcome::outcome`: `"sent"` / `"sent_partial"`).
+  /// `""` for jobs without one.
+  final String outcome;
+
   /// Account whose cached data changed, or `-1` for "nothing changed".
   final PlatformInt64 accountId;
 
@@ -39,6 +44,7 @@ class JobEvent {
     required this.phase,
     required this.status,
     required this.ok,
+    required this.outcome,
     required this.accountId,
     required this.folderId,
   });
@@ -49,6 +55,7 @@ class JobEvent {
       phase.hashCode ^
       status.hashCode ^
       ok.hashCode ^
+      outcome.hashCode ^
       accountId.hashCode ^
       folderId.hashCode;
 
@@ -61,6 +68,7 @@ class JobEvent {
           phase == other.phase &&
           status == other.status &&
           ok == other.ok &&
+          outcome == other.outcome &&
           accountId == other.accountId &&
           folderId == other.folderId;
 }

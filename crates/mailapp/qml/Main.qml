@@ -337,17 +337,21 @@ ApplicationWindow {
         if (root.currentMessage !== undefined)
             root.narrowPane = "reader";
         markReadTimer.stop();
-        if (!appSettings.auto_mark_read) {
-            // stay unread until the user says otherwise
-            return;
-        }
-        if (appSettings.mark_read_delay_secs <= 0) {
+        // Whether and when viewing marks the row read is the core's call
+        // (`store::settings::mark_read_plan`): already-read rows stay
+        // untouched instead of issuing a no-op flag write.
+        var plan = FeedJson.parse(backend.mark_read_plan_json(root.currentMessage !== undefined
+                                                              && root.currentMessage.unread === true), {
+                                      plan: "off",
+                                      delay_secs: 0
+                                  });
+        if (plan.plan === "now") {
             markAsRead(uid);
-        } else {
+        } else if (plan.plan === "after") {
             // Thunderbird-style: counts as read only if still viewing it
             // when the delay elapses; moving on keeps it unread.
             markReadTimer.uid = uid;
-            markReadTimer.interval = appSettings.mark_read_delay_secs * 1000;
+            markReadTimer.interval = plan.delay_secs * 1000;
             markReadTimer.start();
         }
     }
@@ -778,7 +782,7 @@ ApplicationWindow {
             undoToast.show(batch, label);
         }
 
-        function onJob_finished(kind, status) {
+        function onJob_finished(kind, status, outcome) {
             if (jobConnections.readOnlyKinds.indexOf(kind) < 0) {
                 reloadAccounts();
                 reloadFolders();
@@ -801,11 +805,11 @@ ApplicationWindow {
                 // never arrived, so the composer still holds this message
                 // (new compositions are refused meanwhile). Cleared means it
                 // was released at SMTP acceptance and may hold a newer mail
-                // by now: never touch it then. "sent, but …" means the
+                // by now: never touch it then. "sent_partial" means the
                 // bookkeeping failed, never the delivery.
                 if (composer.sendPending) {
                     composer.sendPending = false;
-                    if (status === "" || status.indexOf("sent, but") === 0) {
+                    if (outcome === "sent" || outcome === "sent_partial") {
                         composer.markClean();
                         composer.close();
                     } else {
