@@ -1,51 +1,11 @@
-//! Getting attachment bytes: the on-demand download, and materializing one
-//! file for the composer.
+//! Materializing one cached attachment file for the composer. The
+//! on-demand download itself is `mailcore::sync::attachments`.
 
-use mailcore::store::{accounts, folders, messages};
-use mailcore::sync::pool::checkout_session;
+use mailcore::store::messages;
 
 use mailcore::paths::safe_attachment_name_for_mime;
 
 use super::files::file_url;
-
-/// Make sure a message's file bytes are cached, downloading them now on
-/// explicit user request. Background sync stores names/sizes only, so this
-/// is the single place attachment bytes cross the network. Returns the
-/// number of files downloaded (0 = already cached). Draft opening includes
-/// inline parts because Composer must preserve them on replacement.
-pub(crate) async fn ensure_attachment_data(
-    db: &mailcore::Db,
-    message_id: i64,
-    include_inline: bool,
-) -> Result<u64, String> {
-    let files = messages::list_attachments(db, message_id).map_err(|e| e.to_string())?;
-    let mut missing = false;
-    for a in files.iter().filter(|a| include_inline || !a.is_inline) {
-        let has = messages::attachment_has_data(db, a.id).map_err(|e| e.to_string())?;
-        if !has {
-            missing = true;
-            break;
-        }
-    }
-    if !missing {
-        return Ok(0);
-    }
-    let msg = messages::get(db, message_id).map_err(|e| e.to_string())?;
-    let folder = folders::get(db, msg.folder_id).map_err(|e| e.to_string())?;
-    let acc = accounts::get(db, folder.account_id).map_err(|e| e.to_string())?;
-    let started = std::time::Instant::now();
-    let mut imap = checkout_session(&acc).await?;
-    let n = imap
-        .fetch_attachments(db, message_id)
-        .await
-        .map_err(|e| e.to_string())?;
-    imap.checkin();
-    log::info!(
-        "attachments: downloaded {n} file(s) for message {message_id} in {:?}",
-        started.elapsed()
-    );
-    Ok(n)
-}
 
 /// Materialize one cached attachment for Composer. The file name keeps the
 /// original extension for MIME guessing. Each invocation owns a 0700 temp

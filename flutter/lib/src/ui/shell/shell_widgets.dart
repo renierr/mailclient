@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../../ffi/mail_core.dart';
 import '../../state/mail_state.dart';
 import '../accounts/account_setup_dialog.dart';
 import '../accounts/accounts_dialog.dart';
@@ -245,12 +246,6 @@ void openShellMenu(BuildContext context, String value) {
   }
 }
 
-/// The search syntax, as `mailcore::search` reads it (Qt shows the same).
-const searchSyntaxHint =
-    'All words must match, by word start (inv finds invoice)\n'
-    '"exact phrase"   -exclude\n'
-    'from:name   to:address   subject:word';
-
 /// Account-wide FTS from 3+ letters, or this folder only when the scope
 /// toggle is on. Short input keeps the instant folder list — searching the
 /// server on every keystroke would be a very expensive autocomplete.
@@ -289,12 +284,15 @@ class ShellSearchField extends StatelessWidget {
       context.read<MailState>().exitSearch();
     }
 
+    // The search syntax as mailcore reads it (Qt shows the same text).
+    final syntaxHelp = MailCore.instance.searchSyntaxHelp();
+
     return CallbackShortcuts(
       bindings: {const SingleActivator(LogicalKeyboardKey.escape): clear},
       // Hover shows the syntax on desktop; `manual` keeps a long-press on
       // the field for text selection. Touch gets the help icon instead.
       child: Tooltip(
-        message: searchSyntaxHint,
+        message: syntaxHelp,
         triggerMode: TooltipTriggerMode.manual,
         waitDuration: const Duration(milliseconds: 800),
         child: TextField(
@@ -308,8 +306,8 @@ class ShellSearchField extends StatelessWidget {
             hintText: hint,
             // The empty field's clear slot holds the syntax help (tap).
             suffixIcon: (query.isEmpty && !isSimilar)
-                ? const Tooltip(
-                    message: searchSyntaxHint,
+                ? Tooltip(
+                    message: syntaxHelp,
                     triggerMode: TooltipTriggerMode.tap,
                     showDuration: Duration(seconds: 6),
                     child: Icon(Icons.help_outline, size: 18),
@@ -409,8 +407,11 @@ class StatusBar extends StatelessWidget {
     final outboxPending = context.select<MailState, int>(
       (s) => s.outboxStatus?.pending ?? 0,
     );
-    final outboxFailed = context.select<MailState, int>(
-      (s) => s.outboxStatus?.failed ?? 0,
+    final outboxLabel = context.select<MailState, String>(
+      (s) => s.outboxStatus?.label ?? '',
+    );
+    final outboxFailing = context.select<MailState, bool>(
+      (s) => s.outboxStatus?.hasFailures ?? false,
     );
     final scheme = Theme.of(context).colorScheme;
     final error = status.isNotEmpty && isError;
@@ -482,9 +483,7 @@ class StatusBar extends StatelessWidget {
             // anything failed; tapping opens the outbox, like Qt's pill.
             if (outboxPending > 0) ...[
               IconButton(
-                tooltip: outboxFailed > 0
-                    ? 'Outbox: $outboxPending unsent ($outboxFailed failed)'
-                    : 'Outbox: $outboxPending unsent',
+                tooltip: 'Outbox: $outboxLabel',
                 iconSize: 13,
                 padding: EdgeInsets.zero,
                 visualDensity: VisualDensity.compact,
@@ -492,9 +491,7 @@ class StatusBar extends StatelessWidget {
                   width: 24,
                   height: 24,
                 ),
-                color: outboxFailed > 0
-                    ? scheme.error
-                    : scheme.onSurfaceVariant,
+                color: outboxFailing ? scheme.error : scheme.onSurfaceVariant,
                 icon: const Icon(Icons.outbox),
                 onPressed: () => OutboxDialog.show(context),
               ),
@@ -503,9 +500,7 @@ class StatusBar extends StatelessWidget {
                 maxLines: 1,
                 style: small?.copyWith(
                   fontSize: 12,
-                  color: outboxFailed > 0
-                      ? scheme.error
-                      : scheme.onSurfaceVariant,
+                  color: outboxFailing ? scheme.error : scheme.onSurfaceVariant,
                 ),
               ),
             ],

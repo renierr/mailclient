@@ -4,6 +4,7 @@ use cxx_qt_lib::QString;
 use mailcore::feed;
 use mailcore::html::reader;
 use mailcore::store::{messages, settings};
+use mailcore::sync::attachments::ensure_cached;
 use mailcore::undo::MoveTarget;
 
 use crate::bridge::qobject;
@@ -15,7 +16,7 @@ mod bulk;
 mod files;
 mod maintenance;
 
-pub(crate) use attachments::{draft_attachment_path, ensure_attachment_data};
+pub(crate) use attachments::draft_attachment_path;
 pub(crate) use files::file_url;
 
 /// Parse a bulk UID argument (JSON array of numbers from QML) into a
@@ -185,28 +186,32 @@ impl qobject::Bridge {
         .map_or_else(|_| qstring("[]"), |j| qstring(&j))
     }
 
+    /// The folder a QML call names: its path, or the open folder when the
+    /// path is empty (the reader). `None` when the path does not resolve —
+    /// never a silent fallback to another folder, whose uid would name a
+    /// different message.
+    fn folder_for_path(&self, db: &mailcore::Db, folder_path: &QString) -> Option<i64> {
+        let acc_id = *self.current_account_id();
+        let folder_id = if folder_path.is_empty() {
+            *self.current_folder_id()
+        } else {
+            mailcore::store::folders::get_by_path(db, acc_id, &folder_path.to_string())
+                .ok()?
+                .id
+        };
+        (acc_id >= 0 && folder_id >= 0).then_some(folder_id)
+    }
+
     pub fn find_similar_json(&self, folder_path: &QString, uid: i32) -> QString {
         let Ok(db) = shared_db() else {
             return qstring("[]");
         };
-        let acc_id = *self.current_account_id();
-        if acc_id < 0 || uid < 0 {
+        let Some(folder_id) = self.folder_for_path(db, folder_path).filter(|_| uid >= 0) else {
             return qstring("[]");
-        }
-        let folder_id = if folder_path.is_empty() {
-            *self.current_folder_id()
-        } else {
-            match mailcore::store::folders::get_by_path(db, acc_id, &folder_path.to_string()) {
-                Ok(f) => f.id,
-                Err(_) => *self.current_folder_id(),
-            }
         };
-        if folder_id < 0 {
-            return qstring("[]");
-        }
         mailcore::similar::similar_json(
             db,
-            acc_id,
+            *self.current_account_id(),
             folder_id,
             uid as i64,
             mailcore::search::HIT_LIMIT,
@@ -218,22 +223,10 @@ impl qobject::Bridge {
         let Ok(db) = shared_db() else {
             return qstring("");
         };
-        let acc_id = *self.current_account_id();
-        if acc_id < 0 || uid < 0 {
+        let Some(folder_id) = self.folder_for_path(db, folder_path).filter(|_| uid >= 0) else {
             return qstring("");
-        }
-        let folder_id = if folder_path.is_empty() {
-            *self.current_folder_id()
-        } else {
-            match mailcore::store::folders::get_by_path(db, acc_id, &folder_path.to_string()) {
-                Ok(f) => f.id,
-                Err(_) => *self.current_folder_id(),
-            }
         };
-        if folder_id < 0 {
-            return qstring("");
-        }
-        mailcore::similar::target_subject(db, acc_id, folder_id, uid as i64)
+        mailcore::similar::target_subject(db, *self.current_account_id(), folder_id, uid as i64)
             .map_or_else(|_| qstring(""), |s| qstring(&s))
     }
 
@@ -289,6 +282,10 @@ impl qobject::Bridge {
         qstring(&serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string()))
     }
 
+    pub fn search_syntax_help(&self) -> QString {
+        qstring(mailcore::search::SYNTAX_HELP)
+    }
+
     pub fn search_plan_json(&self, query: &QString) -> QString {
         let plan = mailcore::search::plan(&query.to_string());
         qstring(&serde_json::to_string(&plan).unwrap_or_else(|_| "{}".to_string()))
@@ -318,7 +315,7 @@ impl qobject::Bridge {
         spawn_job(self, "Open", move |db, _progress| async move {
             let parent =
                 messages::get_attachment(db, attachment_id as i64).map_err(|e| e.to_string())?;
-            ensure_attachment_data(db, parent.message_id, false).await?;
+            ensure_cached(db, parent.message_id, false).await?;
             let dir = std::env::temp_dir().join("mailclient-attachments");
             let dest = messages::write_attachment_copy(db, attachment_id as i64, &dir)
                 .map_err(|e| e.to_string())?;
@@ -336,7 +333,7 @@ impl qobject::Bridge {
         spawn_job(self, "Save", move |db, _progress| async move {
             let parent =
                 messages::get_attachment(db, attachment_id as i64).map_err(|e| e.to_string())?;
-            ensure_attachment_data(db, parent.message_id, false).await?;
+            ensure_cached(db, parent.message_id, false).await?;
             let dest = messages::save_attachment_to(db, attachment_id as i64, &path)
                 .map_err(|e| e.to_string())?;
             Ok((format!("Saved to {}", dest.display()), None))
@@ -352,48 +349,40 @@ impl qobject::Bridge {
             }
             let msg = messages::get_by_uid(db, folder_id, uid as u32)
                 .map_err(|_| "unknown message".to_string())?;
-            ensure_attachment_data(db, msg.id, false).await?;
+            ensure_cached(db, msg.id, false).await?;
             let saved =
                 messages::save_all_attachments_to(db, msg.id, &dir).map_err(|e| e.to_string())?;
             Ok((format!("Saved {saved} attachment(s)"), None))
         })
     }
 
-    pub fn suggested_eml_name(&self, folder_id: i64, uid: i32) -> QString {
+    pub fn suggested_eml_name(&self, folder_path: &QString, uid: i32) -> QString {
+        let fallback = || qstring(&format!("message-{uid}.eml"));
         let Ok(db) = shared_db() else {
-            return qstring(&format!("message-{uid}.eml"));
+            return fallback();
         };
-        let folder_id = if folder_id <= 0 {
-            *self.current_folder_id()
-        } else {
-            folder_id
-        };
-        if folder_id < 0 || uid < 0 {
-            return qstring(&format!("message-{uid}.eml"));
+        match self.folder_for_path(db, folder_path).filter(|_| uid >= 0) {
+            Some(folder_id) => qstring(&mailcore::export::suggested_eml_name(
+                db, folder_id, uid as u32,
+            )),
+            None => fallback(),
         }
-        qstring(&mailcore::export::suggested_eml_name(
-            db, folder_id, uid as u32,
-        ))
     }
 
     pub fn export_message(
         self: Pin<&mut Self>,
-        folder_id: i64,
+        folder_path: &QString,
         uid: i32,
         path: &QString,
     ) -> QString {
-        let current_f = *self.current_folder_id();
-        let folder_id = if folder_id <= 0 { current_f } else { folder_id };
+        let folder_id = shared_db()
+            .ok()
+            .and_then(|db| self.folder_for_path(db, folder_path))
+            .filter(|_| uid >= 0);
         let path = path.to_string();
         spawn_job(self, "Export", move |db, _progress| async move {
-            if folder_id < 0 || uid < 0 {
-                return Err("no message selected".to_string());
-            }
-            let msg = messages::get_by_uid(db, folder_id, uid as u32)
-                .map_err(|_| "unknown message".to_string())?;
-            if msg.has_attachments {
-                let _ = ensure_attachment_data(db, msg.id, false).await;
-            }
+            let folder_id = folder_id.ok_or_else(|| "unknown message".to_string())?;
+            mailcore::export::prepare(db, folder_id, uid as u32).await?;
             let dest = mailcore::export::export_eml_to(db, folder_id, uid as u32, &path)
                 .map_err(|e| e.to_string())?;
             Ok((format!("Exported to {}", dest.display()), None))

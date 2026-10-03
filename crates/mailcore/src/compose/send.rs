@@ -26,8 +26,8 @@ use super::ComposeForm;
 ///
 /// The row is born claimed (`sending`), so nothing else will submit it. If
 /// the adapter cannot start the delivery job after all, it must call
-/// [`PreparedSend::discard`] — otherwise crash recovery would later deliver a
-/// message the user was told did not go out.
+/// [`abandon_send`] — otherwise crash recovery would later deliver a message
+/// the user was told did not go out.
 #[derive(Debug)]
 pub struct PreparedSend {
     pub queue_id: i64,
@@ -40,9 +40,21 @@ pub struct PreparedSend {
 }
 
 impl PreparedSend {
-    /// Drop the built MIME so this row can never be submitted.
-    pub fn discard(&self, db: &Db) {
-        let _ = queue::discard_mime(db, self.queue_id);
+    /// The user is told this send failed: the row becomes `failed` without
+    /// bytes, so it can never be submitted, and the outbox shows why.
+    fn fail(&self, db: &Db, error: &str) {
+        if let Err(e) = queue::fail_and_discard(db, self.queue_id, error) {
+            log::warn!("outbox: could not mark send {} failed: {e}", self.queue_id);
+        }
+    }
+}
+
+/// The delivery job for `queue_id` never started (the composer is still open
+/// with its text): remove the row entirely, so it neither gets delivered
+/// later nor lingers in the outbox list.
+pub fn abandon_send(db: &Db, queue_id: i64) {
+    if let Err(e) = queue::delete(db, queue_id) {
+        log::warn!("outbox: could not drop unsent row {queue_id}: {e}");
     }
 }
 
@@ -130,14 +142,16 @@ pub async fn deliver(
     let (acc, secrets) = match prepared {
         Ok(v) => v,
         Err(e) => {
-            sent.discard(db);
-            return Err(format!("send failed: {e}"));
+            let e = format!("send failed: {e}");
+            sent.fail(db, &e);
+            return Err(e);
         }
     };
     if let Err(e) = SmtpSender::new(&acc).submit_claimed(db, sent.queue_id, &secrets.smtp_password)
     {
-        sent.discard(db);
-        return Err(format!("send failed: {e}"));
+        let e = format!("send failed: {e}");
+        sent.fail(db, &e);
+        return Err(e);
     }
     if account_settings::get_bool(db, acc.id, settings::COLLECT_SENT_CONTACTS) {
         collect_recipients(db, &sent.to, &sent.cc, &sent.bcc);
@@ -264,11 +278,13 @@ mod tests {
     fn prepare_queues_a_claimed_row_with_the_account_sender_name() {
         let db = Db::open_in_memory().unwrap();
         let id = account(&db, "Account Name");
-        let form = ComposeForm::parse(
-            r#"{"to":"you@example.com","subject":"queued","body":"hello","draft_uid":5}"#,
-        )
-        .unwrap();
-        let sent = prepare_send(&db, id, form).unwrap();
+        let form = || {
+            ComposeForm::parse(
+                r#"{"to":"you@example.com","subject":"queued","body":"hello","draft_uid":5}"#,
+            )
+            .unwrap()
+        };
+        let sent = prepare_send(&db, id, form()).unwrap();
         assert_eq!(sent.account_id, id);
         assert_eq!(sent.draft_uid, 5);
         let text = String::from_utf8(sent.raw.clone()).unwrap();
@@ -277,9 +293,19 @@ mod tests {
         let row = queue::get(&db, sent.queue_id).unwrap();
         assert!(row.raw_mime.as_deref().is_some_and(|b| !b.is_empty()));
 
-        sent.discard(&db);
+        sent.fail(&db, "send failed: no password in keyring");
         let row = queue::get(&db, sent.queue_id).unwrap();
         assert!(row.raw_mime.as_deref().is_none_or(|b| b.is_empty()));
+        // Never left looking like it is still going out.
+        assert_eq!(row.status, crate::models::QueueStatus::Failed);
+        assert_eq!(
+            row.last_error.as_deref(),
+            Some("send failed: no password in keyring")
+        );
+
+        let again = prepare_send(&db, id, form()).unwrap();
+        abandon_send(&db, again.queue_id);
+        assert!(queue::get(&db, again.queue_id).is_err());
     }
 
     #[test]

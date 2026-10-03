@@ -46,6 +46,10 @@ Future<String> similarSubject({
   uid: uid,
 );
 
+/// The search syntax for the search field's tooltip.
+String searchSyntaxHelp() =>
+    MailCoreApi.instance.api.crateApiSearchSearchSyntaxHelp();
+
 /// How the search field runs `query` (`mailcore::search::plan`).
 SearchPlan searchPlan({required String query}) =>
     MailCoreApi.instance.api.crateApiSearchSearchPlan(query: query);

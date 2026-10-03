@@ -22,9 +22,5 @@ pub fn outbox_status_json(account_id: i64) -> anyhow::Result<String> {
 /// Forget one queued send (a failed send the user owns the retry for, or a
 /// stale entry). Local-only.
 pub fn dismiss_outbox(account_id: i64, id: i64) -> anyhow::Result<()> {
-    let db = shared_db()?;
-    if outbox::dismiss(db, account_id, id)? == 0 {
-        anyhow::bail!("message is no longer available");
-    }
-    Ok(())
+    Ok(outbox::dismiss(shared_db()?, account_id, id)?)
 }

@@ -630,6 +630,31 @@ fn search_with_filter_tokens() {
     assert_eq!(hit_uids(&db, acc, "invoice is:unread"), [101]);
     assert_eq!(hit_uids(&db, acc, "invoice is:read"), [102]);
     assert_eq!(hit_uids(&db, acc, "is:unread after:2026-09-01"), [103]);
+    // Lenient date spellings are normalised before the text comparison.
+    assert_eq!(hit_uids(&db, acc, "after:2026-9-1"), [102, 103]);
+}
+
+#[test]
+fn filter_only_search_honours_exclusions() {
+    let (db, acc, f) = setup();
+    for (uid, subject, from, read) in [
+        (111, "Newsletter weekly", "news@example.com", false),
+        (112, "Invoice", "bob@example.com", false),
+        (113, "Newsletter monthly", "news@example.com", true),
+        (114, "Meeting", "anna@example.com", false),
+    ] {
+        let mut m = msg_store::sample_new(acc, f, uid);
+        m.subject = Some(subject.to_string());
+        m.from_addr = Some(from.to_string());
+        m.is_read = read;
+        msg_store::upsert(&db, &m).unwrap();
+    }
+    assert_eq!(hit_uids(&db, acc, "is:unread"), [111, 112, 114]);
+    assert_eq!(hit_uids(&db, acc, "-newsletter is:unread"), [112, 114]);
+    assert_eq!(hit_uids(&db, acc, "is:unread -newsletter -from:bob"), [114]);
+    assert_eq!(hit_uids(&db, acc, "-subject:meeting is:read"), [113]);
+    // Exclusions alone still search nothing.
+    assert_eq!(hit_uids(&db, acc, "-newsletter"), Vec::<u32>::new());
 }
 
 #[test]
@@ -777,5 +802,7 @@ END:VCALENDAR\r\n";
     assert_eq!(reader["event"]["location"], "Room 1");
     assert_eq!(reader["event"]["organizer"], "Host <host@example.org>");
     assert_eq!(reader["event"]["attachment_id"], att_id);
+    assert_eq!(reader["event"]["save_name"], "invite.ics");
+    assert!(reader["event"].get("start_iso").is_none());
     assert_eq!(reader["event"]["is_cancelled"], false);
 }

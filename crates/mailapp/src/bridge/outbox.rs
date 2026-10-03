@@ -40,10 +40,6 @@ impl qobject::Bridge {
         let result = shared_db().map_err(|e| e.to_string()).and_then(|db| {
             mailcore::outbox::dismiss(db, account_id, id).map_err(|e| e.to_string())
         });
-        match result {
-            Ok(1) => qstring(""),
-            Ok(_) => qstring("message is no longer available"),
-            Err(e) => qstring(&e),
-        }
+        qstring(&result.err().unwrap_or_default())
     }
 }

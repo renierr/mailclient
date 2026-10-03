@@ -10,7 +10,7 @@
 use serde_json::json;
 
 use crate::db::Db;
-use crate::error::Result;
+use crate::error::{Result, StoreError};
 use crate::models::QueueStatus;
 use crate::store::queue;
 
@@ -32,6 +32,17 @@ impl OutboxStatus {
     #[must_use]
     pub fn any(self) -> bool {
         self.pending > 0
+    }
+
+    /// The pill's words, phrased once for both frontends: `2 unsent` or
+    /// `2 unsent (1 failed)`.
+    #[must_use]
+    pub fn label(self) -> String {
+        if self.failed > 0 {
+            format!("{} unsent ({} failed)", self.pending, self.failed)
+        } else {
+            format!("{} unsent", self.pending)
+        }
     }
 }
 
@@ -66,7 +77,17 @@ pub fn status(db: &Db, account_id: i64) -> Result<OutboxStatus> {
             }
         }
     }
-    let retryable = queue::list_submittable(db, account_id)?.len() as u64;
+    // Same conditions as `queue::list_submittable`, without loading the
+    // MIME bytes of every queued message.
+    let retryable = db.conn().query_row(
+        "select count(*) from send_queue
+          where account_id = ?1
+            and status in ('queued', 'failed')
+            and raw_mime is not null and length(raw_mime) > 0
+            and retries < ?2",
+        rusqlite::params![account_id, queue::MAX_SEND_RETRIES as i64],
+        |r| r.get::<_, i64>(0),
+    )? as u64;
     Ok(OutboxStatus {
         queued,
         sending,
@@ -76,9 +97,14 @@ pub fn status(db: &Db, account_id: i64) -> Result<OutboxStatus> {
     })
 }
 
-/// `status` as JSON for the bridges (same transport as [`crate::feed`]).
+/// `status` as JSON for the bridges (same transport as [`crate::feed`]),
+/// plus what the pill shows: `label` and `has_failures` (danger styling).
 pub fn status_json(db: &Db, account_id: i64) -> Result<String> {
-    Ok(serde_json::to_string(&status(db, account_id)?)?)
+    let s = status(db, account_id)?;
+    let mut v = serde_json::to_value(s)?;
+    v["label"] = json!(s.label());
+    v["has_failures"] = json!(s.failed > 0);
+    Ok(serde_json::to_string(&v)?)
 }
 
 /// One outbox row for the dialog: everything the UI shows, never the MIME
@@ -111,9 +137,9 @@ pub fn list_json(db: &Db, account_id: i64) -> Result<String> {
         let (id, status_raw, last_error, retries, raw, from, to_raw, created, updated) = row?;
         let status = QueueStatus::parse_status(&status_raw);
         let has_bytes = raw.as_deref().is_some_and(|b| !b.is_empty());
-        let retryable = matches!(status, QueueStatus::Queued | QueueStatus::Failed)
-            && has_bytes
-            && (retries as u64) < queue::MAX_SEND_RETRIES;
+        // `dismiss`'s rule: never a row being sent.
+        let dismissable = matches!(status, QueueStatus::Queued | QueueStatus::Failed);
+        let retryable = dismissable && has_bytes && (retries as u64) < queue::MAX_SEND_RETRIES;
         let to: Vec<String> = serde_json::from_str(&to_raw).unwrap_or_default();
         arr.push(json!({
             "id": id,
@@ -122,10 +148,14 @@ pub fn list_json(db: &Db, account_id: i64) -> Result<String> {
             "last_error": last_error.unwrap_or_default(),
             "retries": retries,
             "retryable": retryable,
+            "dismissable": dismissable,
             "has_bytes": has_bytes,
             "envelope_from": from.unwrap_or_default(),
             "envelope_to": to,
-            "subject": raw.as_deref().and_then(subject_from_mime).unwrap_or_default(),
+            "subject": raw
+                .as_deref()
+                .and_then(subject_from_mime)
+                .unwrap_or_else(|| "(no subject)".to_string()),
             "created_at": created,
             "updated_at": updated,
         }));
@@ -134,15 +164,22 @@ pub fn list_json(db: &Db, account_id: i64) -> Result<String> {
 }
 
 /// Forget one outbox row of this account (a failed send the user owns the
-/// retry for, or a stale entry). Returns rows removed: 0 means the id is
-/// gone or belongs to another account. Never touches a `sent` row's history
-/// beyond the same delete — pruning those stays [`queue::prune_sent`]'s job.
-pub fn dismiss(db: &Db, account_id: i64, id: i64) -> Result<u64> {
-    Ok(db.conn().execute(
+/// retry for, or a stale entry). Fails with `NotFound` when the id is gone,
+/// belongs to another account, or is `sending` right now — deleting that
+/// would not stop the mail, only hide that it went out. `sent` rows are
+/// [`queue::prune_sent`]'s job.
+pub fn dismiss(db: &Db, account_id: i64, id: i64) -> Result<()> {
+    let n = db.conn().execute(
         "delete from send_queue
-          where id = ?1 and account_id = ?2 and status in ('queued', 'sending', 'failed')",
+          where id = ?1 and account_id = ?2 and status in ('queued', 'failed')",
         rusqlite::params![id, account_id],
-    )? as u64)
+    )?;
+    if n == 0 {
+        return Err(StoreError::NotFound(
+            "outbox entry (already sent, being sent, or gone)".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// A row's one-line state from its status, whether a sync could still
@@ -319,10 +356,23 @@ mod tests {
         )
         .unwrap();
         let id = enqueue(&db, other, "theirs");
-        assert_eq!(dismiss(&db, acc, id).unwrap(), 0);
-        assert_eq!(dismiss(&db, other, id).unwrap(), 1);
-        assert_eq!(dismiss(&db, other, id).unwrap(), 0);
-        assert_eq!(dismiss(&db, acc, 9999).unwrap(), 0);
+        queue::mark_failed(&db, id, "connection refused").unwrap();
+        assert!(dismiss(&db, acc, id).is_err());
+        dismiss(&db, other, id).unwrap();
+        assert!(dismiss(&db, other, id).is_err());
+        assert!(dismiss(&db, acc, 9999).is_err());
+    }
+
+    #[test]
+    fn a_row_being_sent_cannot_be_dismissed() {
+        let db = Db::open_in_memory().unwrap();
+        let acc = account(&db);
+        // Born claimed: a sync is submitting it right now.
+        let id = enqueue(&db, acc, "in flight");
+        assert!(dismiss(&db, acc, id).is_err());
+        assert!(queue::get(&db, id).is_ok());
+        let rows: serde_json::Value = serde_json::from_str(&list_json(&db, acc).unwrap()).unwrap();
+        assert_eq!(rows[0]["dismissable"], false);
     }
 
     #[test]
@@ -395,5 +445,25 @@ mod tests {
             subject_from_mime(b"From: a@b.c\r\n\r\nSubject: not a header"),
             None
         );
+    }
+
+    #[test]
+    fn status_json_carries_the_pill_label() {
+        let db = Db::open_in_memory().unwrap();
+        let acc = account(&db);
+        let a = enqueue(&db, acc, "one");
+        enqueue(&db, acc, "two");
+        queue::mark_failed(&db, a, "refused").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&status_json(&db, acc).unwrap()).unwrap();
+        assert_eq!(v["label"], "2 unsent (1 failed)");
+        assert_eq!(v["has_failures"], true);
+        let one = OutboxStatus {
+            queued: 1,
+            sending: 0,
+            failed: 0,
+            retryable: 1,
+            pending: 1,
+        };
+        assert_eq!(one.label(), "1 unsent");
     }
 }

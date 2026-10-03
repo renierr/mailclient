@@ -37,12 +37,16 @@ class EventCard extends StatelessWidget {
 
     AttachmentInfo? findAttachment() {
       if (event.attachmentId == null) return null;
+      // An inline invitation part is not in the attachment list; use the
+      // core's safe name, which always comes with attachmentId.
+      final name = event.saveName ?? '';
       return message.attachments
               .where((a) => a.id == event.attachmentId)
               .firstOrNull ??
           AttachmentInfo(
             id: event.attachmentId!,
-            filename: '${event.summary}.ics',
+            filename: name,
+            fileName: name,
             mimeType: 'text/calendar',
             size: 0,
             sizeText: '',

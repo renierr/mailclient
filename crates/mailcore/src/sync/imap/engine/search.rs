@@ -71,18 +71,25 @@ impl ImapSync {
     }
 }
 
-/// The SEARCH keys for `terms` and filter tokens (the server ANDs them): words and phrases
-/// are `TEXT`, `from:` is `FROM`, `to:` is any of `TO`/`CC`/`BCC`,
-/// `subject:` is `SUBJECT`, exclusions wrap their key in `NOT`,
-/// `is:unread` maps to `UNSEEN`, `is:starred` maps to `FLAGGED`, etc.
+/// The SEARCH keys for `terms` and filter tokens (the server ANDs them):
+/// words and phrases are `TEXT`, `from:` is `FROM`, `to:` is any of
+/// `TO`/`CC`/`BCC`, `subject:` is `SUBJECT`, exclusions wrap their key in
+/// `NOT`. Filters only narrow: `is:unread`/`is:read` are `UNSEEN`/`SEEN`,
+/// `is:starred`/`is:unstarred` are `FLAGGED`/`UNFLAGGED`, and
+/// `after:`/`before:` are `SENTSINCE`/`SENTBEFORE` (the Date: header, like
+/// the local `m.date`). `has:` stays local-only (no SEARCH key for it).
 /// Non-ASCII terms stay local-only (servers disagree on SEARCH charsets).
-/// `None` when no positive term is left to send.
+/// `None` when no positive text term is left to send: a filter-only query
+/// would fetch arbitrary mail from the whole account.
 fn imap_criteria(parsed: &ParsedQuery) -> Option<Vec1<SearchKey<'static>>> {
     let mut keys: Vec<(bool, SearchKey<'static>)> = parsed
         .terms
         .iter()
         .filter_map(|t| Some((t.negated, imap_key(t)?)))
         .collect();
+    if keys.iter().all(|(negated, _)| *negated) {
+        return None;
+    }
 
     if let Some(unread) = parsed.filters.unread {
         let key = if unread {
@@ -105,7 +112,7 @@ fn imap_criteria(parsed: &ParsedQuery) -> Option<Vec1<SearchKey<'static>>> {
     if let Some(ref after) = parsed.filters.after {
         if let Ok(d) = chrono::NaiveDate::parse_from_str(after, "%Y-%m-%d") {
             if let Ok(imap_d) = imap_types::datetime::NaiveDate::try_from(d) {
-                keys.push((false, SearchKey::Since(imap_d)));
+                keys.push((false, SearchKey::SentSince(imap_d)));
             }
         }
     }
@@ -113,14 +120,11 @@ fn imap_criteria(parsed: &ParsedQuery) -> Option<Vec1<SearchKey<'static>>> {
     if let Some(ref before) = parsed.filters.before {
         if let Ok(d) = chrono::NaiveDate::parse_from_str(before, "%Y-%m-%d") {
             if let Ok(imap_d) = imap_types::datetime::NaiveDate::try_from(d) {
-                keys.push((false, SearchKey::Before(imap_d)));
+                keys.push((false, SearchKey::SentBefore(imap_d)));
             }
         }
     }
 
-    if keys.is_empty() || keys.iter().all(|(negated, _)| *negated) {
-        return None;
-    }
     Vec1::try_from(keys.into_iter().map(|(_, k)| k).collect::<Vec<_>>()).ok()
 }
 
@@ -183,17 +187,36 @@ mod tests {
             )]
         );
         assert_eq!(
-            criteria("is:unread is:starred after:2026-06-01").unwrap(),
+            criteria("invoice is:unread is:starred after:2026-06-01 before:2026-07-01").unwrap(),
             vec![
+                SearchKey::Text(astr("invoice")),
                 SearchKey::Unseen,
                 SearchKey::Flagged,
-                SearchKey::Since(
-                    imap_types::datetime::NaiveDate::try_from(
-                        chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap(),
-                    )
-                    .unwrap(),
-                ),
+                SearchKey::SentSince(day(2026, 6, 1)),
+                SearchKey::SentBefore(day(2026, 7, 1)),
             ]
+        );
+        assert_eq!(
+            criteria("-is:unread foo").unwrap(),
+            vec![SearchKey::Text(astr("foo")), SearchKey::Seen]
+        );
+    }
+
+    fn day(y: i32, m: u32, d: u32) -> imap_types::datetime::NaiveDate {
+        imap_types::datetime::NaiveDate::try_from(chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap())
+            .unwrap()
+    }
+
+    #[test]
+    fn filters_alone_never_reach_the_server() {
+        assert_eq!(criteria("has:attachment"), None);
+        assert_eq!(criteria("is:read"), None);
+        assert_eq!(criteria("before:2020-01-01 is:starred"), None);
+        assert_eq!(criteria("-newsletter is:unread"), None);
+        // `has:` narrows locally only; the text still goes out.
+        assert_eq!(
+            criteria("invoice has:attachment").unwrap(),
+            vec![SearchKey::Text(astr("invoice"))]
         );
     }
 

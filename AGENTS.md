@@ -195,6 +195,20 @@ it needs the same ask.
 - Flutter: `flutter run -d windows` / `-d linux` from `flutter/` (the Rust core builds as part of it). Regenerate FFI glue with `flutter_rust_bridge_codegen generate` from the repo root.
 - Versions: the product version lives once in the workspace root `Cargo.toml` (`[workspace.package]`); all crates use `version.workspace = true`. Qt About and Flutter About both read `CARGO_PKG_VERSION` from their adapter crate, so they follow automatically. The Flutter `pubspec.yaml` versionName mirrors the workspace version; the `+N` suffix is Android-only (`versionCode`) and increments on every shipped APK/AAB, independently of the versionName. Bump order: workspace version → pubspec versionName → +N. Never bump per-crate.
 - Android launcher icons are generated, never hand-drawn: SVG masters plus rendered PNGs live in `flutter/assets/icon-src/` (brand blue `#3B82F6`); the `flutter_launcher_icons` section of `flutter/pubspec.yaml` selects adaptive background/foreground/monochrome and the output goes to `android/app/src/main/res/`. Regenerate with `dart run flutter_launcher_icons` from `flutter/` after touching the sources. Never list `icon-src` under `flutter: assets:` — build-time sources must not ship inside the app bundle.
+- New feature for both frontends: build it **core-first**, in this order.
+  1. Write the `mailcore` API: logic, decisions, error/edge cases, and its tests.
+  2. Expose it through the thin adapters (`mailapp` bridge, `mailffi` API +
+     codegen). An adapter only translates types. It takes explicit ids
+     (account, `folder_id`, uid) from the caller and never fills in its own
+     "current" state, so the same call does the same thing from either
+     frontend.
+  3. Write the two UIs last.
+
+  Multi-step operations ("make sure the bytes are cached, then build and
+  write the file", "is this row safe to delete") are one `mailcore` call, not
+  a sequence each adapter assembles itself. If you notice you are writing the
+  same `if`/loop/format in QML and Dart, or in `mailapp` and `mailffi`, stop
+  and move it down.
 - Tests: `cargo test --workspace`, plus `flutter test` in `flutter/`. QML smoke: `qml6 qml/Main.qml` or `qmllint qml/*.qml` if no display.
 - Debugging crashes on Omarchy: load the `diagnose-crash` skill path (systemd-coredump) — do not guess.
 - Desktop integration files live in `resources/` (`.desktop`, icons). Install script links them; do not hardcode `$HOME` in code — use `directories`.
@@ -234,3 +248,8 @@ target (`--qt` / `--flutter` / `--apk`).
 2. `scripts/qml-check.sh` green on touched QML (lint gate + headless QML tests + format check; or noted as skipped headless with reason — the format check skips itself without the pinned qmlformat). Qt/WebEngine enum and API names verified against the installed headers or Qt docs — QML misspellings of them fail silently.
 3. The affected `./build.sh` target produces a runnable bundle in `dist/` (`--qt` → `dist/mailclient/bin/mailapp`, `--flutter` → `dist/mailclient-flutter/`, `--apk` → `dist/mailclient-apk/`).
 4. `PROJECT.md` status table updated; no secrets/binaries/`dist/` staged.
+5. Cross-frontend features get a duplication check: read both adapters' new
+   functions and both UIs' new code side by side. Do they show any logic
+   beyond toolkit code (widgets, gestures, layout, theme lookups)? Then that
+   logic moves into `mailcore` (§1, §5 core-first). Any deliberate exception
+   is added to `SHARED-CORE.md`.

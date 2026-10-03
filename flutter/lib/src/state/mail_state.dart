@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 
 import '../ffi/mail_core.dart';
@@ -62,6 +61,10 @@ class MailState extends ChangeNotifier {
   int _autoSyncMinutes = 0;
 
   // --- search ------------------------------------------------------------
+
+  /// Bumped by every search, similar search and exit: a result whose await
+  /// outlived a newer request is dropped instead of overwriting it.
+  int _searchGen = 0;
   String _searchQuery = '';
 
   /// How [_searchQuery] runs, decided by the core (`search::plan`).
@@ -711,6 +714,7 @@ class MailState extends ChangeNotifier {
   /// Run the local FTS index. At 3+ letters a thin result also schedules a
   /// debounced server backfill; the `"Search"` job re-runs this when done.
   Future<void> runSearch(String query, {bool? folderOnly}) async {
+    final gen = ++_searchGen;
     final wasSearching = searching;
     _similarSubject = null;
     _similarTarget = null;
@@ -728,7 +732,9 @@ class MailState extends ChangeNotifier {
     }
     final scope = _searchFolderOnly ? (folder?.path ?? '') : '';
     final plan = _searchPlan;
-    _searchHits = await _core.search(_accountId, plan.query, folder: scope);
+    final hits = await _core.search(_accountId, plan.query, folder: scope);
+    if (gen != _searchGen) return;
+    _searchHits = hits;
     notifyListeners();
     if (_searchHits.length < plan.hitLimit && !_serverSearchPending) {
       _searchBackfillTimer = Timer(Duration(milliseconds: plan.debounceMs), () {
@@ -748,6 +754,7 @@ class MailState extends ChangeNotifier {
         _similarSubject == null) {
       return;
     }
+    _searchGen++;
     _searchBackfillTimer?.cancel();
     if (searching) _dropSelection();
     _searchQuery = '';
@@ -761,48 +768,42 @@ class MailState extends ChangeNotifier {
 
   /// Messages similar to the message at [uid] in [folderId] across the account.
   Future<void> findSimilar(int folderId, int uid) async {
+    final gen = ++_searchGen;
     final wasSearching = searching;
     _searchBackfillTimer?.cancel();
     _serverSearchPending = false;
+    final String subject;
+    final List<SearchHit> hits;
+    try {
+      subject = await _core.similarSubject(_accountId, folderId, uid);
+      hits = await _core.similar(_accountId, folderId, uid);
+    } catch (e) {
+      if (gen == _searchGen) {
+        showStatus(
+          'Could not find similar messages: ${coreErrorText(e)}',
+          isError: true,
+        );
+      }
+      return;
+    }
+    if (gen != _searchGen) return;
     _searchQuery = '';
     _searchPlan = _noSearch;
-    final subject = await _core.similarSubject(_accountId, folderId, uid);
     _similarSubject = subject;
     _similarTarget = (folderId: folderId, uid: uid);
     if (!wasSearching) _dropSelection();
-    _searchHits = await _core.similar(_accountId, folderId, uid);
+    _searchHits = hits;
     notifyListeners();
   }
 
   void clearSimilar() {
     if (_similarSubject == null) return;
+    _searchGen++;
     _similarSubject = null;
     _similarTarget = null;
     _searchHits = const [];
     _dropSelection();
     notifyListeners();
-  }
-
-  /// Export message [uid] in [folderId] as a standard RFC 5322 .eml file.
-  Future<void> exportMessage(int folderId, int uid) async {
-    try {
-      final fileName = _core.suggestedEmlName(folderId, uid);
-      final bytes = await _core.exportMessageEmlBytes(folderId, uid);
-      final dest = await FilePicker.saveFile(
-        dialogTitle: 'Export message as .eml',
-        fileName: fileName,
-        bytes: bytes,
-        type: FileType.custom,
-        allowedExtensions: const ['eml'],
-      );
-      if (dest == null) return;
-      showStatus('Exported $fileName');
-    } catch (e) {
-      showStatus(
-        'Could not export message: ${coreErrorText(e)}',
-        isError: true,
-      );
-    }
   }
 
   void _dropSelection() {
@@ -1144,21 +1145,17 @@ class MailState extends ChangeNotifier {
   }
 
   Future<void> _rerunSearch() async {
+    final gen = _searchGen;
     final target = _similarTarget;
+    final List<SearchHit> hits;
     if (target != null) {
-      _searchHits = await _core.similar(
-        _accountId,
-        target.folderId,
-        target.uid,
-      );
+      hits = await _core.similar(_accountId, target.folderId, target.uid);
     } else {
       final scope = _searchFolderOnly ? (folder?.path ?? '') : '';
-      _searchHits = await _core.search(
-        _accountId,
-        _searchPlan.query,
-        folder: scope,
-      );
+      hits = await _core.search(_accountId, _searchPlan.query, folder: scope);
     }
+    if (gen != _searchGen) return;
+    _searchHits = hits;
     // Hits that left the results (moved, deleted) leave the selection too.
     if (_selectedHits.isNotEmpty) {
       _selectedHits.retainAll(_shownHits.map((h) => h.key));

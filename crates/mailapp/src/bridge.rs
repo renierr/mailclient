@@ -277,6 +277,11 @@ pub mod qobject {
         #[qinvokable]
         fn find_similar_subject(&self, folder_path: &QString, uid: i32) -> QString;
 
+        /// The search syntax for the search field's tooltip
+        /// (`mailcore::search::SYNTAX_HELP`).
+        #[qinvokable]
+        fn search_syntax_help(&self) -> QString;
+
         /// How the search field runs `query` as JSON (`mailcore::search::plan`:
         /// `mode` off/filter/index, trimmed `query`, `hit_limit`, `debounce_ms`).
         #[qinvokable]
@@ -327,16 +332,18 @@ pub mod qobject {
         /// Export one message as a standard RFC 5322 .eml file at `path`.
         /// Downloads attachments first when they are not cached yet.
         #[qinvokable]
+        /// `folder_path` names the message's folder (empty = the open one).
         fn export_message(
             self: Pin<&mut Self>,
-            folder_id: i64,
+            folder_path: &QString,
             uid: i32,
             path: &QString,
         ) -> QString;
 
-        /// Suggested filename for exporting a message as .eml.
+        /// Suggested filename for exporting a message as .eml
+        /// (`folder_path` as for `export_message`).
         #[qinvokable]
-        fn suggested_eml_name(&self, folder_id: i64, uid: i32) -> QString;
+        fn suggested_eml_name(&self, folder_path: &QString, uid: i32) -> QString;
 
         /// Local storage statistics for the Maintenance settings section, as
         /// JSON (`db_bytes`, `message_count`, cached/temp sizes, …). Local
@@ -539,7 +546,7 @@ pub mod qobject {
 
         /// Unsent mail for the current account as JSON
         /// (`mailcore::outbox::list_json`: `[{id, status, state, last_error,
-        /// retries, retryable, has_bytes, envelope_from, envelope_to,
+        /// retries, retryable, dismissable, has_bytes, envelope_from, envelope_to,
         /// subject, created_at, updated_at}]`). Local SQLite read, no
         /// network. Returns `"[]"` when nothing is queued.
         #[qinvokable]
@@ -547,7 +554,8 @@ pub mod qobject {
 
         /// The current account's outbox counts as JSON
         /// (`mailcore::outbox::status`: `{queued, sending, failed,
-        /// retryable, pending}`). Local read; `"{}"` without an account.
+        /// retryable, pending, label, has_failures}`). Local read; `"{}"`
+        /// without an account.
         #[qinvokable]
         fn outbox_status_json(&self) -> QString;
 

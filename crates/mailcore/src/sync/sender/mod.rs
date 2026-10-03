@@ -30,5 +30,6 @@ pub use attachments::{
 };
 pub use client::{endpoint_for, SmtpEndpoint, SmtpSender};
 pub use inline::{extract_data_images, image_data_url, is_inline_image_file, InlinePart};
+pub(crate) use message::mime_body;
 pub use message::{format_draft, resolve_bodies, SendRequest};
 pub use policy::{effective_format, SendFormat, SendPolicy};

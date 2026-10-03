@@ -153,18 +153,12 @@ pub fn requeue_interrupted(db: &Db, account_id: i64) -> Result<u64> {
            and raw_mime is not null and length(raw_mime) > 0",
         params![now(), account_id, cutoff],
     )?;
-    let _ = db.conn().execute(
+    db.conn().execute(
         "update send_queue set status = 'failed', last_error = 'aborted or missing message bytes', updated_at = ?1
-         where status = 'sending' and account_id = ?2 and updated_at < ?3
-           and (raw_mime is null or length(raw_mime) = 0)",
+         where account_id = ?2 and (raw_mime is null or length(raw_mime) = 0)
+           and (status = 'queued' or (status = 'sending' and updated_at < ?3))",
         params![now(), account_id, cutoff],
-    );
-    let _ = db.conn().execute(
-        "update send_queue set status = 'failed', last_error = 'aborted or missing message bytes', updated_at = ?1
-         where status = 'queued' and account_id = ?2
-           and (raw_mime is null or length(raw_mime) = 0)",
-        params![now(), account_id],
-    );
+    )?;
     Ok(n as u64)
 }
 
@@ -191,6 +185,28 @@ pub fn discard_mime(db: &Db, id: i64) -> Result<()> {
         "update send_queue set raw_mime = null, updated_at = ?1 where id = ?2",
         params![now(), id],
     )?;
+    Ok(())
+}
+
+/// A send the user was told failed: mark the row `failed` (keeping an error
+/// already recorded, else `error`) and drop its bytes so no sync can deliver
+/// it behind the user's back. Retries are not bumped — nothing was retried.
+pub fn fail_and_discard(db: &Db, id: i64, error: &str) -> Result<()> {
+    db.conn().execute(
+        "update send_queue
+            set last_error = case when status = 'failed' and last_error is not null
+                                  then last_error else ?1 end,
+                status = 'failed', raw_mime = null, updated_at = ?2
+          where id = ?3",
+        params![error, now(), id],
+    )?;
+    Ok(())
+}
+
+/// Remove one row whatever its status (a send whose job never started).
+pub fn delete(db: &Db, id: i64) -> Result<()> {
+    db.conn()
+        .execute("delete from send_queue where id = ?1", [id])?;
     Ok(())
 }
 

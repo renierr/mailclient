@@ -6,6 +6,22 @@
 //! (To/Cc/Bcc) and `subject:` limit a term to one field. Everything else is
 //! literal text: typed FTS operators, `*` and unknown prefixes cannot change
 //! what a query means or make it fail.
+//!
+//! Filter tokens narrow the result instead of adding text: `is:unread`,
+//! `is:read`, `is:starred`/`is:flagged`, `is:unstarred`/`is:unflagged`,
+//! `has:attachment(s)` (each negatable with `-`), and `after:`/`since:`
+//! (inclusive) and `before:` (exclusive) with a `YYYY-MM-DD` date. Dates
+//! are whole UTC days, compared against the stored UTC message date. A
+//! filter token is written without a space after the colon (`is: read` is
+//! two words of text); only the date keys also accept `after: 2026-01-01`,
+//! since a full date can never be a word the user meant as text.
+
+/// The search syntax as both frontends show it (search field tooltip).
+pub const SYNTAX_HELP: &str = "All words must match, by word start (inv finds invoice)\n\
+\"exact phrase\"   -exclude\n\
+from:name   to:address   subject:word\n\
+is:unread   is:read   is:starred   has:attachment   (-is:read excludes)\n\
+after:2026-01-31   before:2026-02-28";
 
 /// The fields a term must match in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,9 +57,9 @@ pub struct SearchFilters {
     pub starred: Option<bool>,
     /// `Some(true)` for messages with attachments, `Some(false)` for messages without.
     pub has_attachments: Option<bool>,
-    /// `after:` / `since:` date in `YYYY-MM-DD` format (inclusive).
+    /// `after:` / `since:` UTC day, normalised to `YYYY-MM-DD` (inclusive).
     pub after: Option<String>,
-    /// `before:` date in `YYYY-MM-DD` format (exclusive).
+    /// `before:` UTC day, normalised to `YYYY-MM-DD` (exclusive).
     pub before: Option<String>,
 }
 
@@ -71,8 +87,23 @@ const FIELDS: [(&str, SearchField); 3] = [
     ("subject:", SearchField::Subject),
 ];
 
-fn is_valid_date(s: &str) -> bool {
-    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok()
+/// `s` as a normalised `YYYY-MM-DD` day, or `None` when it is not a date
+/// with a four-digit year. chrono alone is lenient (`2026-9-1`, `+2026-09-01`
+/// and `26-09-01` all parse), and the result is compared as text, so it is
+/// re-printed in the one canonical form.
+fn normalise_date(s: &str) -> Option<String> {
+    let year = s.split('-').next()?;
+    if year.len() != 4 || !year.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let d = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()?;
+    Some(d.format("%Y-%m-%d").to_string())
+}
+
+fn is_date_key(key: &str) -> bool {
+    ["after", "since", "before"]
+        .iter()
+        .any(|k| key.eq_ignore_ascii_case(k))
 }
 
 fn try_parse_filter_pair(key: &str, val: &str, negated: bool, filters: &mut SearchFilters) -> bool {
@@ -95,14 +126,16 @@ fn try_parse_filter_pair(key: &str, val: &str, negated: bool, filters: &mut Sear
             filters.has_attachments = Some(!negated);
             return true;
         }
-    } else if (key.eq_ignore_ascii_case("after") || key.eq_ignore_ascii_case("since"))
-        && is_valid_date(val)
-    {
-        filters.after = Some(val.to_string());
-        return true;
-    } else if key.eq_ignore_ascii_case("before") && is_valid_date(val) {
-        filters.before = Some(val.to_string());
-        return true;
+    } else if key.eq_ignore_ascii_case("after") || key.eq_ignore_ascii_case("since") {
+        if let Some(d) = normalise_date(val) {
+            filters.after = Some(d);
+            return true;
+        }
+    } else if key.eq_ignore_ascii_case("before") {
+        if let Some(d) = normalise_date(val) {
+            filters.before = Some(d);
+            return true;
+        }
     }
     false
 }
@@ -124,7 +157,9 @@ pub fn parse_query_full(raw: &str) -> ParsedQuery {
                 .unwrap_or(candidate.len());
             let word = &candidate[..end];
             if let Some((k, v)) = word.split_once(':') {
-                if v.is_empty() {
+                if v.is_empty() && is_date_key(k) {
+                    // `after: 2026-01-01`: only a valid date is taken, so
+                    // the next word is never swallowed as a filter value.
                     let after_colon = candidate[end..].trim_start();
                     let val_end = after_colon
                         .find(char::is_whitespace)
@@ -223,6 +258,20 @@ pub fn fts_query(raw: &str) -> Option<String> {
     Some(query)
 }
 
+/// The excluded (`-`) terms of `raw` as one FTS5 MATCH expression that hits
+/// any of them, quoted like [`fts_query`]. Used when no positive term is
+/// left to carry the `NOT`s: filter-only searches drop these rows instead.
+#[must_use]
+pub fn fts_exclusions(raw: &str) -> Option<String> {
+    let query = parse_query(raw)
+        .iter()
+        .filter(|t| t.negated)
+        .map(fts_term)
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    (!query.is_empty()).then_some(query)
+}
+
 fn fts_term(t: &SearchTerm) -> String {
     let columns = match t.field {
         SearchField::Any => "",
@@ -257,8 +306,9 @@ pub enum SearchMode {
     /// One or two letters: an instant filter over the shown folder
     /// ([`filter_matches`]); too short to be worth the index.
     Filter,
-    /// Three letters and more: the FTS index, topped up from the server
-    /// when the index runs thin (fewer than [`HIT_LIMIT`] hits).
+    /// Three letters and more, or any filter token (`is:`, `has:`,
+    /// `after:`, `before:`) at any length: the FTS index, topped up from
+    /// the server when the index runs thin (fewer than [`HIT_LIMIT`] hits).
     Index,
 }
 
@@ -280,10 +330,10 @@ pub fn plan(raw: &str) -> SearchPlan {
     } else if !parsed.filters.is_empty() {
         SearchMode::Index
     } else {
-        match query.chars().count() {
-            0 => SearchMode::Off,
-            n if n < INDEX_MIN_CHARS => SearchMode::Filter,
-            _ => SearchMode::Index,
+        if query.chars().count() < INDEX_MIN_CHARS {
+            SearchMode::Filter
+        } else {
+            SearchMode::Index
         }
     };
     SearchPlan {
@@ -434,11 +484,43 @@ mod tests {
         assert_eq!(q4.terms[2].field, SearchField::From);
         assert_eq!(q4.filters.unread, Some(true));
 
-        // Spaced variants
-        let q5 = parse_query_full("is: unread has: attachments");
-        assert!(q5.terms.is_empty());
-        assert_eq!(q5.filters.unread, Some(true));
-        assert_eq!(q5.filters.has_attachments, Some(true));
+        // Only date keys take a spaced value; `is: read` is text.
+        let q5 = parse_query_full("this is: read after: 2026-01-01");
+        assert_eq!(
+            q5.filters,
+            SearchFilters {
+                after: Some("2026-01-01".to_string()),
+                ..SearchFilters::default()
+            }
+        );
+        let texts: Vec<_> = q5.terms.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(texts, ["this", "is:", "read"]);
+        let q6 = parse_query_full("has: attachment before: soon");
+        assert!(q6.filters.is_empty());
+        let texts: Vec<_> = q6.terms.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(texts, ["has:", "attachment", "before:", "soon"]);
+    }
+
+    #[test]
+    fn dates_are_normalised_with_four_digit_years() {
+        let q = parse_query_full("after:2026-9-1 before:2026-10-01");
+        assert_eq!(q.filters.after.as_deref(), Some("2026-09-01"));
+        assert_eq!(q.filters.before.as_deref(), Some("2026-10-01"));
+        // Not a four-digit-year date: stays text, like an invalid date.
+        for raw in ["after:+2026-09-01", "after:26-09-01", "before:2026-02-30"] {
+            let q = parse_query_full(raw);
+            assert!(q.filters.is_empty(), "{raw}");
+            assert_eq!(q.terms.len(), 1, "{raw}");
+        }
+    }
+
+    #[test]
+    fn exclusions_become_one_or_expression() {
+        assert_eq!(fts_exclusions("invoice is:unread"), None);
+        assert_eq!(
+            fts_exclusions("-newsletter is:unread -from:bob"),
+            Some(r#""newsletter"* OR {from_addr from_name} : "bob"*"#.to_string())
+        );
     }
 
     #[test]

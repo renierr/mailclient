@@ -50,10 +50,11 @@ still to promote") points here instead of keeping its own list.
 | Mark-read on open | `mailcore::store::settings::mark_read_plan` (off / now / after-delay from the two settings plus the row state); both viewers follow it |
 | Job outcome | `SendOutcome::outcome` (`"sent"` / `"sent_partial"`) on the job event (`job_finished` outcome, `JobEvent.outcome`); Qt keys its close decision off it, and the Sent refresh stays `deliver`'s job on both |
 | Recipient autocomplete segment | `mailcore::compose::{recipient_segment, replace_recipient_segment}`, quote-aware; both recipient fields complete through them |
-| Outbox rows: counts, list, dismiss, one-line row state | `mailcore::outbox` (`status`, `list_json`, `dismiss`, `state_line`); retry is the next sync (`flush_outbox`), both dialogs only start one |
+| Outbox rows: counts, list, dismiss, one-line row state; a send that never started | `mailcore::outbox` (`status`, `list_json`, `dismiss` — never a row being sent, `state_line`); `compose::abandon_send` for an unstarted send job; retry is the next sync (`flush_outbox`), both dialogs only start one |
 | Similar messages: 3-tier match, subject normalize, keywords | `mailcore::similar` (`similar_json`, `target_subject`, `normalize_subject`, `extract_keywords`); frontends are UI only |
-| Message EML export: RFC 5322 MIME assembly, headers, safe filename | `mailcore::export` (`assemble_eml`, `export_eml_to`, `suggested_eml_name`); frontends are UI only |
-| Calendar invite parsing: RFC 5545 VEVENT extraction, line unfolding, unescaping, date formatting | `mailcore::calendar` (`parse_ics`, `parse_ics_bytes`, `CalendarEvent`); `feed::message_json` supplies `"event"` directly; frontends are UI only |
+| Message EML export: attachment download, MIME assembly, headers, safe filename | `mailcore::export` (`prepare`, `assemble_eml`, `export_eml_to`, `suggested_eml_name`); the body tree is the composer's `sync::sender::mime_body` (lettre encodes every header); frontends only pick the destination |
+| On-demand attachment download ("make sure the bytes are cached") | `mailcore::sync::attachments::{ensure_cached, download}`; was a private helper in `mailapp` and an inline copy in `mailffi` |
+| Calendar invite parsing: RFC 5545 VEVENT extraction, line unfolding, unescaping, date formatting, .ics save name | `mailcore::calendar` (`parse_ics`, `parse_ics_bytes`, `CalendarEvent` incl. `save_name`); `feed::message_json` supplies `"event"` directly; frontends are UI only |
 
 ## Open
 

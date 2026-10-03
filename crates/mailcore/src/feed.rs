@@ -391,7 +391,7 @@ pub fn find_calendar_event(
                 if let Ok(full) = messages::get_attachment(db, att.id) {
                     if let Some(bytes) = full.data.as_deref() {
                         if let Some(mut event) = crate::calendar::parse_ics_bytes(bytes) {
-                            event.attachment_id = Some(att.id);
+                            event.set_attachment(&att);
                             return Some(event);
                         }
                     }
@@ -554,126 +554,123 @@ pub fn search_json(
     let parsed = crate::search::parse_query_full(query);
     let match_query = crate::search::fts_query(query);
 
+    // Exclusions alone search nothing (see `is_searchable`).
     if match_query.is_none() && parsed.filters.is_empty() {
         return Ok("[]".to_string());
     }
 
-    let is_read_param: Option<i64> = match parsed.filters.unread {
-        Some(true) => Some(0),  // unread
-        Some(false) => Some(1), // read
-        None => None,
+    // The text part, bound as ?9. With a positive term the FTS match carries
+    // the `NOT`s and supplies the snippet; a filter-only query reads
+    // `messages` directly and drops rows matching any excluded term.
+    let (source, snippet, text_clause, text_param) = match match_query {
+        Some(q) => (
+            "messages_fts join messages m on m.id = messages_fts.rowid",
+            "snippet(messages_fts, 6, '', '', '…', 12)",
+            "messages_fts match ?9",
+            Some(q),
+        ),
+        None => (
+            "messages m",
+            "coalesce(m.snippet, '')",
+            "(?9 is null or m.id not in
+                (select rowid from messages_fts where messages_fts match ?9))",
+            crate::search::fts_exclusions(query),
+        ),
     };
-    let is_starred_param: Option<i64> = match parsed.filters.starred {
-        Some(true) => Some(1),
-        Some(false) => Some(0),
-        None => None,
-    };
-    let has_attachments_param: Option<i64> = match parsed.filters.has_attachments {
-        Some(true) => Some(1),
-        Some(false) => Some(0),
-        None => None,
-    };
-    let after_param = parsed.filters.after.as_deref().unwrap_or("");
-    let before_param = parsed.filters.before.as_deref().unwrap_or("");
+    let flag = |v: Option<bool>| v.map(i64::from);
+    let filters = &parsed.filters;
+    let sql = format!(
+        "select m.uid, m.folder_id, f.path, m.subject, m.from_addr, m.date,
+                {snippet},
+                m.is_read, m.is_starred, m.has_attachments, m.from_name
+         from {source}
+         join folders f on f.id = m.folder_id
+         where {text_clause} and m.account_id = ?1
+           and (?3 = '' or f.path = ?3)
+           and m.id not in (select message_id from pending_moves)
+           and (?4 is null or m.is_read = ?4)
+           and (?5 is null or m.is_starred = ?5)
+           and (?6 is null or m.has_attachments = ?6)
+           and (?7 is null or m.date >= ?7)
+           and (?8 is null or m.date < ?8)
+         order by m.date desc, m.id desc limit ?2"
+    );
+    let mut stmt = db.conn().prepare(&sql)?;
+    let rows = stmt.query_map(
+        rusqlite::params![
+            account_id,
+            limit as i64,
+            folder,
+            flag(filters.unread.map(|unread| !unread)),
+            flag(filters.starred),
+            flag(filters.has_attachments),
+            filters.after,
+            filters.before,
+            text_param,
+        ],
+        |row| {
+            Ok(hit_json(HitRow {
+                uid: row.get(0)?,
+                folder_id: row.get(1)?,
+                folder: row.get(2)?,
+                subject: row.get(3)?,
+                from_addr: row.get(4)?,
+                date: row.get(5)?,
+                snippet: row.get(6)?,
+                is_read: row.get::<_, i64>(7)? != 0,
+                is_starred: row.get::<_, i64>(8)? != 0,
+                has_attachments: row.get::<_, i64>(9)? != 0,
+                from_name: row.get(10)?,
+            }))
+        },
+    )?;
+    hits_json(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
 
-    let map_row = |row: &rusqlite::Row| -> rusqlite::Result<serde_json::Value> {
-        let date = short_date(row.get::<_, Option<String>>(5)?.as_deref());
-        let from = row
-            .get::<_, Option<String>>(4)?
-            .unwrap_or_else(|| "?".to_string());
-        // Named like the list row, so a hit keeps the row's badge.
-        let from_name = row.get::<_, Option<String>>(10)?.unwrap_or_default();
-        let badge = sender_badge(&from_name, &from);
-        let mut hit = json!({
-            "uid": row.get::<_, u32>(0)?,
-            "folder_id": row.get::<_, i64>(1)?,
-            "folder": row.get::<_, String>(2)?,
-            "subject": row.get::<_, Option<String>>(3)?.unwrap_or_else(|| "(no subject)".to_string()),
-            "from": from,
-            "from_name": from_name,
-            "date": date.text,
-            "date_key": date.key,
-            "snippet": one_line(&row.get::<_, String>(6)?),
-            "unread": row.get::<_, i64>(7)? == 0,
-            "starred": row.get::<_, i64>(8)? != 0,
-            "has_attachments": row.get::<_, i64>(9)? != 0,
-        });
-        badge.extend(&mut hit);
-        Ok(hit)
-    };
+/// One search-style hit as read from SQL, before it becomes JSON.
+pub(crate) struct HitRow {
+    pub uid: u32,
+    pub folder_id: i64,
+    pub folder: String,
+    pub subject: Option<String>,
+    pub from_addr: Option<String>,
+    pub from_name: Option<String>,
+    pub date: Option<String>,
+    pub snippet: Option<String>,
+    pub is_read: bool,
+    pub is_starred: bool,
+    pub has_attachments: bool,
+}
 
-    let mut arr = Vec::new();
-    if let Some(fts_match) = match_query {
-        let mut stmt = db.conn().prepare(
-            "select m.uid, m.folder_id, f.path, m.subject, m.from_addr, m.date,
-                    snippet(messages_fts, 6, '', '', '…', 12),
-                    m.is_read, m.is_starred, m.has_attachments, m.from_name
-             from messages_fts
-             join messages m on m.id = messages_fts.rowid
-             join folders f on f.id = m.folder_id
-             where messages_fts match ?1 and m.account_id = ?2
-               and (?4 = '' or f.path = ?4)
-               and m.id not in (select message_id from pending_moves)
-               and (?5 is null or m.is_read = ?5)
-               and (?6 is null or m.is_starred = ?6)
-               and (?7 is null or m.has_attachments = ?7)
-               and (?8 = '' or m.date >= ?8)
-               and (?9 = '' or m.date < ?9)
-             order by m.date desc, m.id desc limit ?3",
-        )?;
-        let rows = stmt.query_map(
-            rusqlite::params![
-                fts_match,
-                account_id,
-                limit as i64,
-                folder,
-                is_read_param,
-                is_starred_param,
-                has_attachments_param,
-                after_param,
-                before_param,
-            ],
-            map_row,
-        )?;
-        for row in rows {
-            arr.push(row?);
-        }
-    } else {
-        let mut stmt = db.conn().prepare(
-            "select m.uid, m.folder_id, f.path, m.subject, m.from_addr, m.date,
-                    coalesce(m.snippet, ''),
-                    m.is_read, m.is_starred, m.has_attachments, m.from_name
-             from messages m
-             join folders f on f.id = m.folder_id
-             where m.account_id = ?1
-               and (?3 = '' or f.path = ?3)
-               and m.id not in (select message_id from pending_moves)
-               and (?4 is null or m.is_read = ?4)
-               and (?5 is null or m.is_starred = ?5)
-               and (?6 is null or m.has_attachments = ?6)
-               and (?7 = '' or m.date >= ?7)
-               and (?8 = '' or m.date < ?8)
-             order by m.date desc, m.id desc limit ?2",
-        )?;
-        let rows = stmt.query_map(
-            rusqlite::params![
-                account_id,
-                limit as i64,
-                folder,
-                is_read_param,
-                is_starred_param,
-                has_attachments_param,
-                after_param,
-                before_param,
-            ],
-            map_row,
-        )?;
-        for row in rows {
-            arr.push(row?);
-        }
-    }
+/// A hit row as the frontends read it: the search shape, shared by
+/// [`search_json`] and [`crate::similar::similar_json`].
+pub(crate) fn hit_json(row: HitRow) -> serde_json::Value {
+    let date = short_date(row.date.as_deref());
+    let from = row.from_addr.unwrap_or_else(|| "?".to_string());
+    // Named like the list row, so a hit keeps the row's badge.
+    let from_name = row.from_name.unwrap_or_default();
+    let badge = sender_badge(&from_name, &from);
+    let mut hit = json!({
+        "uid": row.uid,
+        "folder_id": row.folder_id,
+        "folder": row.folder,
+        "subject": row.subject.unwrap_or_else(|| "(no subject)".to_string()),
+        "from": from,
+        "from_name": from_name,
+        "date": date.text,
+        "date_key": date.key,
+        "snippet": one_line(row.snippet.as_deref().unwrap_or_default()),
+        "unread": !row.is_read,
+        "starred": row.is_starred,
+        "has_attachments": row.has_attachments,
+    });
+    badge.extend(&mut hit);
+    hit
+}
 
-    // Stable: newest first inside each folder.
+/// Hits grouped by folder, folders in the order of their first hit, the
+/// hits' own order kept inside each folder.
+pub(crate) fn hits_json(mut arr: Vec<serde_json::Value>) -> Result<String> {
     let mut order: Vec<String> = Vec::new();
     for hit in &arr {
         let f = hit["folder"].as_str().unwrap_or_default();

@@ -250,24 +250,16 @@ class MailCore {
 
   Future<Uint8List> exportMessageEmlBytes(int folderId, int uid) async =>
       Uint8List.fromList(
-        await rust_messages.exportMessageEmlBytes(
-          folderId: folderId,
-          uid: uid,
-        ),
+        await rust_messages.exportMessageEmlBytes(folderId: folderId, uid: uid),
       );
 
-  Future<String> exportMessageEml(int folderId, int uid, String path) =>
-      rust_messages.exportMessageEml(
-        folderId: folderId,
-        uid: uid,
-        path: path,
-      );
+  /// Queues the attachment download an export needs; finishes as an
+  /// `Export` job event.
+  Future<void> prepareEmlExport(int folderId, int uid) =>
+      rust_messages.prepareEmlExport(folderId: folderId, uid: uid);
 
   String suggestedEmlName(int folderId, int uid) =>
-      rust_messages.suggestedEmlName(
-        folderId: folderId,
-        uid: uid,
-      );
+      rust_messages.suggestedEmlName(folderId: folderId, uid: uid);
 
   Future<void> markRead(int accountId, int folderId, int uid, bool read) =>
       rust_messages.markRead(
@@ -531,6 +523,10 @@ class MailCore {
   /// A link split for the examine dialog, and whether it may be opened at
   /// all (`mailcore::html::link_info`).
   LinkInfo linkInfo(String url) => rust_messages.linkInfo(url: url);
+
+  /// The search syntax for the search field's tooltip
+  /// (`mailcore::search::SYNTAX_HELP`).
+  String searchSyntaxHelp() => rust_search.searchSyntaxHelp();
 
   /// How the search field runs `query` (`mailcore::search::plan`).
   SearchPlan searchPlan(String query) => rust_search.searchPlan(query: query);

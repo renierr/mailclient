@@ -6,6 +6,7 @@ import '../../models/models.dart';
 import '../../models/settings.dart';
 import '../../state/mail_state.dart';
 import '../composer/composer_dialog.dart';
+import '../dialogs/eml_export.dart';
 import '../dialogs/mail_dialog.dart';
 import '../message_list/message_list_pane.dart' show confirmDelete;
 import '../move_to/move_to_dialog.dart';
@@ -51,7 +52,7 @@ Future<void> moreActions(
     case 'headers':
       if (context.mounted) await showHeaders(context, message);
     case 'export':
-      await state.exportMessage(state.folderId, message.uid);
+      await exportMessageAsEml(state, state.folderId, message.uid);
   }
 }
 

@@ -5,6 +5,7 @@ import '../../ffi/mail_core.dart';
 import '../../models/models.dart';
 import '../../models/settings.dart';
 import '../../state/mail_state.dart';
+import '../dialogs/eml_export.dart';
 import '../dialogs/mail_dialog.dart';
 import '../dialogs/sender_avatar.dart';
 import '../menu_row.dart';
@@ -684,10 +685,7 @@ List<PopupMenuEntry<String>> messageActionItems({
   ),
   const PopupMenuItem(
     value: 'export',
-    child: MenuRow(
-      icon: Icons.file_download_outlined,
-      text: 'Save as .eml…',
-    ),
+    child: MenuRow(icon: Icons.file_download_outlined, text: 'Save as .eml…'),
   ),
 ];
 
@@ -706,7 +704,7 @@ Future<void> runMessageAction(
     case 'similar':
       await state.findSimilar(folderId ?? state.folderId, uid);
     case 'export':
-      await state.exportMessage(folderId ?? state.folderId, uid);
+      await exportMessageAsEml(state, folderId ?? state.folderId, uid);
     case 'read':
       await state.setRead(uid, unread, folderId: folderId);
     case 'star':

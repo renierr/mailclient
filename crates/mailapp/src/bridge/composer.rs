@@ -3,10 +3,11 @@ use std::pin::Pin;
 use cxx_qt_lib::QString;
 use mailcore::compose::{self, ComposeForm};
 
-use crate::bridge::messages::{draft_attachment_path, ensure_attachment_data};
+use crate::bridge::messages::draft_attachment_path;
 use crate::bridge::qobject;
 use crate::bridge::qstring;
 use crate::bridge::worker::{spawn_job, JobDone, JobRefresh, BUSY_MESSAGE};
+use mailcore::sync::attachments::ensure_cached;
 
 // Thin adapter over `mailcore::compose`: parse the QML form, start the job,
 // phrase the result. The send/draft rules themselves live in the core.
@@ -36,7 +37,6 @@ impl qobject::Bridge {
             Err(e) => return qstring(&e),
         };
         let queue_id = prepared.queue_id;
-        let prepared_account = prepared.account_id;
         let queued = spawn_job(self, "Send", move |db, progress| async move {
             // SMTP accepted it: release the composer now rather than holding
             // it open through the Sent copy, the draft removal and the resync.
@@ -52,7 +52,7 @@ impl qobject::Bridge {
             // holds, since both run on the GUI thread) — drop the row
             // entirely: the composer is still open with the text intact, and
             // a kept row would sit in the outbox list forever with no bytes.
-            let _ = mailcore::outbox::dismiss(db, prepared_account, queue_id);
+            mailcore::compose::abandon_send(db, queue_id);
         }
         queued
     }
@@ -105,7 +105,7 @@ impl qobject::Bridge {
         let folder_id = *self.current_folder_id();
         spawn_job(self, "Open draft", move |db, _progress| async move {
             let message = compose::open_draft(db, folder_id, uid as u32)?;
-            ensure_attachment_data(db, message.id, true).await?;
+            ensure_cached(db, message.id, true).await?;
             // QML's FileDialog deals in paths, so the draft's files are
             // materialized as temp copies the composer can re-attach.
             // Inline images come back inside the body (see `draft_html`),

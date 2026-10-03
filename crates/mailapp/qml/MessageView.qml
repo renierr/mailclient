@@ -223,17 +223,6 @@ Rectangle {
         saveAllDialog.open();
     }
 
-    function exportEml() {
-        if (!root.backend || root.messageUid < 0)
-            return;
-        var name = root.backend.suggested_eml_name ? root.backend.suggested_eml_name(-1, root.messageUid) : ("message-"
-                                                                                                             + root.messageUid
-                                                                                                             + ".eml");
-        var base = StandardPaths.writableLocation(StandardPaths.DownloadLocation);
-        exportEmlDialog.selectedFile = root.joinFileUrl(base, name);
-        exportEmlDialog.open();
-    }
-
     // Open in the system viewer — downloads first when not cached yet.
     function openOne(a) {
         if (!root.backend || !root.backend.open_attachment)
@@ -712,7 +701,7 @@ Rectangle {
                                 && root.message.event.attachment_id !== null) {
                             root.openOne({
                                              "id": root.message.event.attachment_id,
-                                             "file_name": (root.message.event.summary || "invite") + ".ics"
+                                             "file_name": root.message.event.save_name || ""
                                          });
                         }
                     }
@@ -721,7 +710,7 @@ Rectangle {
                                 && root.message.event.attachment_id !== null) {
                             root.saveOne({
                                              "id": root.message.event.attachment_id,
-                                             "file_name": (root.message.event.summary || "invite") + ".ics"
+                                             "file_name": root.message.event.save_name || ""
                                          });
                         }
                     }
@@ -951,7 +940,7 @@ Rectangle {
         AppMenuItem {
             glyph: Icons.fileDownload
             label: qsTr("Save as .eml…")
-            onTriggered: root.exportEml()
+            onTriggered: exportEmlDialog.openFor("", root.messageUid)
         }
         MenuSeparator {}
         AppMenuItem {
@@ -1164,19 +1153,10 @@ Rectangle {
         }
     }
 
-    FileDialog {
+    EmlExportDialog {
         id: exportEmlDialog
-        title: qsTr("Save as .eml")
-        fileMode: FileDialog.SaveFile
-        nameFilters: [qsTr("Mail files (*.eml)"), qsTr("All files (*)")]
-        onAccepted: {
-            if (root.backend && root.backend.export_message) {
-                root.statusMessage(qsTr("Exporting…"));
-                var r = root.backend.export_message(-1, root.messageUid, selectedFile.toString());
-                if (r !== "")
-                    root.statusMessage(r);
-            }
-        }
+        backend: root.backend
+        onStatusMessage: text => root.statusMessage(text)
     }
 
     // --- headers dialog ---------------------------------------------------

@@ -1173,8 +1173,7 @@ ApplicationWindow {
                     root.clearSimilar();
                 }
                 // The search syntax, as mailcore::search reads it.
-                ToolTip.text: qsTr(
-                                  "All words must match, by word start (inv finds invoice)\n\"exact phrase\"   -exclude\nfrom:name   to:address   subject:word")
+                ToolTip.text: backend.search_syntax_help()
                 ToolTip.visible: hovered
                 ToolTip.delay: 800
             }
@@ -1336,7 +1335,8 @@ ApplicationWindow {
             density: appSettings.list_density
             searching: root.searching
             searchRows: root.searchRows
-            searchFolder: root.searching ? root.searchScope() : ""
+            // Similar results span the account whatever the scope checkbox says.
+            searchFolder: root.searching && root.similarSubject === "" ? root.searchScope() : ""
             similarSubject: root.similarSubject
             serverSearching: root.serverSearching
             onMessageSelected: uid => root.openMessage(uid)
@@ -1504,18 +1504,14 @@ ApplicationWindow {
                 fontSize: Theme.fontSmall
                 text: Icons.outbox
                 iconFont: true
-                tooltip: (root.outboxStatus.failed || 0) > 0 ? qsTr("Outbox: %1 unsent (%2 failed) — open outbox").arg(
-                                                                   root.outboxStatus.pending).arg(
-                                                                   root.outboxStatus.failed) : qsTr(
-                                                                   "Outbox: %1 unsent — open outbox").arg(
-                                                                   root.outboxStatus.pending)
+                tooltip: qsTr("Outbox: %1 — open outbox").arg(root.outboxStatus.label || "")
                 Accessible.name: tooltip
                 onClicked: outboxDialog.open()
             }
             Label {
                 visible: outboxButton.visible
                 text: root.outboxStatus.pending || 0
-                color: (root.outboxStatus.failed || 0) > 0 ? Theme.danger : Theme.textMuted
+                color: root.outboxStatus.has_failures ? Theme.danger : Theme.textMuted
                 font.pixelSize: Theme.fontSmall
             }
             Label {

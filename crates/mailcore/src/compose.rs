@@ -24,7 +24,7 @@ pub use form::ComposeForm;
 pub use from::{effective_from, sender_parts, SenderParts};
 pub use reply::{reply_address, ReplyAddress};
 pub use segments::{recipient_segment, replace_recipient_segment};
-pub use send::{deliver, prepare_send, PreparedSend, SendOutcome};
+pub use send::{abandon_send, deliver, prepare_send, PreparedSend, SendOutcome};
 
 /// Inline images: an editor shows an inserted image as a `data:` URL, which
 /// the sender turns into a `cid:` part (see `sync::sender::inline`).

@@ -281,6 +281,25 @@ pub(crate) fn assemble_message(
                 .map_err(|e| StoreError::InvalidInput(format!("cannot address draft: {e}")))?,
         );
     }
+    Ok(match mime_body(format, plain, html, inlines, files) {
+        Body::Plain(t) => builder.header(ContentType::TEXT_PLAIN).body(t),
+        Body::Html(h) => builder.header(ContentType::TEXT_HTML).body(h),
+        Body::Multi(m) => builder.multipart(m),
+    }?)
+}
+
+/// The MIME body tree for resolved parts: plain, HTML or
+/// `multipart/alternative` (HTML as `multipart/related` with its inline
+/// images), wrapped in `multipart/mixed` when there are files. Shared by
+/// sending and by `.eml` export ([`crate::export`]), so both shape mail the
+/// same way and lettre does every header encoding.
+pub(crate) fn mime_body(
+    format: SendFormat,
+    plain: String,
+    html: Option<String>,
+    inlines: &[InlinePart],
+    files: &[(String, String, Vec<u8>)],
+) -> Body {
     // A plain-text body has nowhere to show an image, so inline images go
     // along as ordinary attachments rather than being dropped.
     let plain_only = format == SendFormat::Plain || html.is_none();
@@ -304,36 +323,43 @@ pub(crate) fn assemble_message(
             })
         }
     };
-    Ok(if files.is_empty() {
-        match body {
-            Body::Plain(t) => builder.header(ContentType::TEXT_PLAIN).body(t),
-            Body::Html(h) => builder.header(ContentType::TEXT_HTML).body(h),
-            Body::Multi(m) => builder.multipart(m),
-        }
-    } else {
-        // Body first (single part, alternative or related), then one
-        // `SinglePart` per file inside a `multipart/mixed` envelope.
-        let mixed = lettre::message::MultiPart::mixed();
-        let mut mixed = match body {
-            Body::Plain(t) => mixed.singlepart(lettre::message::SinglePart::plain(t)),
-            Body::Html(h) => mixed.singlepart(lettre::message::SinglePart::html(h)),
-            Body::Multi(m) => mixed.multipart(m),
-        };
-        for (filename, mime, bytes) in &files {
-            mixed = mixed.singlepart(
-                lettre::message::Attachment::new(filename.clone())
-                    .body(bytes.clone(), content_type(mime)),
-            );
-        }
-        builder.multipart(mixed)
-    }?)
+    if files.is_empty() {
+        return body;
+    }
+    // Body first (single part, alternative or related), then one
+    // `SinglePart` per file inside a `multipart/mixed` envelope.
+    let mixed = lettre::message::MultiPart::mixed();
+    let mut mixed = match body {
+        Body::Plain(t) => mixed.singlepart(lettre::message::SinglePart::plain(t)),
+        Body::Html(h) => mixed.singlepart(lettre::message::SinglePart::html(h)),
+        Body::Multi(m) => mixed.multipart(m),
+    };
+    for (filename, mime, bytes) in &files {
+        mixed = mixed.singlepart(
+            lettre::message::Attachment::new(filename.clone())
+                .body(bytes.clone(), content_type(mime)),
+        );
+    }
+    Body::Multi(mixed)
 }
 
-/// The text body before attachments are wrapped around it.
-enum Body {
+/// A MIME body: one text part or a multipart tree.
+pub(crate) enum Body {
     Plain(String),
     Html(String),
     Multi(lettre::message::MultiPart),
+}
+
+impl Body {
+    /// The body's own MIME headers and content, ready to follow a message's
+    /// top-level headers.
+    pub(crate) fn formatted(self) -> Vec<u8> {
+        match self {
+            Body::Plain(t) => lettre::message::SinglePart::plain(t).formatted(),
+            Body::Html(h) => lettre::message::SinglePart::html(h).formatted(),
+            Body::Multi(m) => m.formatted(),
+        }
+    }
 }
 
 /// The HTML part, as `multipart/related` with its images when it has any.

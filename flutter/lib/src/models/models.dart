@@ -340,50 +340,41 @@ class MessageBody {
   );
 }
 
-/// Parsed calendar event metadata for reader preview card.
+/// Parsed calendar event for the reader preview card
+/// (`mailcore::calendar::CalendarEvent`).
 class CalendarEventInfo {
   const CalendarEventInfo({
     required this.summary,
-    this.description,
     this.location,
     this.organizer,
-    this.startIso,
-    this.endIso,
     required this.formattedTime,
-    this.isAllDay = false,
-    this.status,
     this.isCancelled = false,
-    this.method,
     this.attachmentId,
+    this.saveName,
   });
 
   final String summary;
-  final String? description;
   final String? location;
   final String? organizer;
-  final String? startIso;
-  final String? endIso;
   final String formattedTime;
-  final bool isAllDay;
-  final String? status;
   final bool isCancelled;
-  final String? method;
   final int? attachmentId;
+
+  /// Filesystem-safe name for the `.ics` attachment (`mailcore::paths`);
+  /// never build one from [summary].
+  final String? saveName;
 
   factory CalendarEventInfo.fromJson(Map<String, dynamic> j) =>
       CalendarEventInfo(
         summary: _str(j['summary'], orElse: '(Event)'),
-        description: j['description'] as String?,
         location: j['location'] as String?,
         organizer: j['organizer'] as String?,
-        startIso: j['start_iso'] as String?,
-        endIso: j['end_iso'] as String?,
         formattedTime: _str(j['formatted_time']),
-        isAllDay: _bool(j['is_all_day']),
-        status: j['status'] as String?,
         isCancelled: _bool(j['is_cancelled']),
-        method: j['method'] as String?,
-        attachmentId: j['attachment_id'] == null ? null : _int(j['attachment_id']),
+        attachmentId: j['attachment_id'] == null
+            ? null
+            : _int(j['attachment_id']),
+        saveName: j['save_name'] as String?,
       );
 }
 
@@ -515,6 +506,7 @@ class OutboxEntry {
     required this.lastError,
     required this.retries,
     required this.retryable,
+    required this.dismissable,
     required this.hasBytes,
     required this.envelopeFrom,
     required this.envelopeTo,
@@ -531,6 +523,9 @@ class OutboxEntry {
   final String lastError;
   final int retries;
   final bool retryable;
+
+  /// Whether ✕ may forget the row (never one being sent right now).
+  final bool dismissable;
   final bool hasBytes;
   final String envelopeFrom;
   final List<String> envelopeTo;
@@ -544,6 +539,7 @@ class OutboxEntry {
     lastError: _str(j['last_error']),
     retries: _int(j['retries']),
     retryable: _bool(j['retryable']),
+    dismissable: _bool(j['dismissable']),
     hasBytes: _bool(j['has_bytes']),
     envelopeFrom: _str(j['envelope_from']),
     envelopeTo: switch (j['envelope_to']) {
@@ -563,6 +559,8 @@ class OutboxStatus {
     required this.failed,
     required this.retryable,
     required this.pending,
+    this.label = '',
+    this.hasFailures = false,
   });
 
   static const empty = OutboxStatus(
@@ -579,6 +577,12 @@ class OutboxStatus {
   final int retryable;
   final int pending;
 
+  /// The pill's words (`2 unsent (1 failed)`), phrased by mailcore.
+  final String label;
+
+  /// Danger styling for the pill.
+  final bool hasFailures;
+
   bool get any => pending > 0;
 
   factory OutboxStatus.fromJson(Map<String, dynamic> j) => OutboxStatus(
@@ -587,6 +591,8 @@ class OutboxStatus {
     failed: _int(j['failed']),
     retryable: _int(j['retryable']),
     pending: _int(j['pending']),
+    label: _str(j['label']),
+    hasFailures: _bool(j['has_failures']),
   );
 }
 

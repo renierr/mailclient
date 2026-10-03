@@ -9,21 +9,13 @@ import '../dialogs/mail_dialog.dart';
 ///
 /// A sync retries everything still deliverable; a failed send the user
 /// already saw keeps no bytes and must be resent by hand — dismissing it
-/// here only forgets the dead row.
+/// here only forgets the dead row. No text field, so a plain dialog on every
+/// width (§3: only flows with a `TextField` become pages).
 class OutboxDialog extends StatefulWidget {
-  const OutboxDialog({super.key, this.fullscreen = false});
+  const OutboxDialog({super.key});
 
-  /// Fullscreen page instead of a floating dialog — used on phones, where a
-  /// dialog plus the on-screen keyboard leaves no usable room.
-  final bool fullscreen;
-
-  static Future<void> show(BuildContext context) async {
-    await MailDialog.showForm(
-      context,
-      dialog: (_) => const OutboxDialog(),
-      page: (_) => const OutboxDialog(fullscreen: true),
-    );
-  }
+  static Future<void> show(BuildContext context) =>
+      MailDialog.show<void>(context, builder: (_) => const OutboxDialog());
 
   @override
   State<OutboxDialog> createState() => _OutboxDialogState();
@@ -38,14 +30,38 @@ class _OutboxDialogState extends State<OutboxDialog> {
   /// behind this dialog (and a whole page away on phones).
   String? _error;
 
+  late final MailState _state;
+
+  /// The pill's counts when the rows were last read: a send or sync moving
+  /// rows changes them, and the open dialog re-reads (Qt reloads on the same
+  /// job finishes).
+  String? _seen;
+
   @override
   void initState() {
     super.initState();
+    _state = context.read<MailState>()..addListener(_onState);
     _load();
   }
 
+  @override
+  void dispose() {
+    _state.removeListener(_onState);
+    super.dispose();
+  }
+
+  String _countsKey() {
+    final s = _state.outboxStatus;
+    return '${s?.queued}/${s?.sending}/${s?.failed}/${s?.retryable}';
+  }
+
+  void _onState() {
+    if (_loaded && _countsKey() != _seen) _load();
+  }
+
   Future<void> _load() async {
-    final entries = await context.read<MailState>().outboxEntries();
+    _seen = _countsKey();
+    final entries = await _state.outboxEntries();
     if (!mounted) return;
     setState(() {
       _entries = entries;
@@ -85,13 +101,12 @@ class _OutboxDialogState extends State<OutboxDialog> {
 
   Widget _row(BuildContext context, MailState state, OutboxEntry e) {
     final scheme = Theme.of(context).colorScheme;
-    final failed = e.status == 'failed';
     final to = e.envelopeTo.join(', ');
     return ListTile(
       contentPadding: EdgeInsets.zero,
       dense: true,
       title: Text(
-        e.subject.isNotEmpty ? e.subject : '(no subject)',
+        e.subject,
         overflow: TextOverflow.ellipsis,
         style: Theme.of(context).textTheme.titleSmall
             ?.copyWith(fontWeight: FontWeight.bold),
@@ -110,9 +125,7 @@ class _OutboxDialogState extends State<OutboxDialog> {
       trailing: IconButton(
         tooltip: 'Forget this entry',
         icon: const Icon(Icons.close, size: 20),
-        onPressed: failed || e.status == 'queued'
-            ? () => _dismiss(state, e.id)
-            : null,
+        onPressed: e.dismissable ? () => _dismiss(state, e.id) : null,
       ),
     );
   }
@@ -143,7 +156,6 @@ class _OutboxDialogState extends State<OutboxDialog> {
     }
     if (_entries.isEmpty) return _emptyHint();
     return ListView.separated(
-      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       itemCount: _entries.length,
       separatorBuilder: (_, _) => const Divider(height: 1),
       itemBuilder: (context, i) => _row(context, state, _entries[i]),
@@ -183,7 +195,6 @@ class _OutboxDialogState extends State<OutboxDialog> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.fullscreen) return _page();
     final state = context.read<MailState>();
     final narrow = MailDialog.isNarrow(context);
     return Dialog(
@@ -207,59 +218,6 @@ class _OutboxDialogState extends State<OutboxDialog> {
               _actions(state),
             ],
           ),
-        ),
-      ),
-    );
-  }
-
-  /// Fullscreen outbox for phones (see [OutboxDialog.fullscreen]).
-  /// Header and rows scroll as one lazy sliver list: a fixed header over an
-  /// Expanded list overflows a landscape phone once the keyboard is up.
-  Widget _page() {
-    final state = context.read<MailState>();
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Outbox'),
-        actions: [
-          OutlinedButton.icon(
-            icon: _syncing
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.sync, size: 16),
-            label: const Text('Sync'),
-            onPressed: _syncing ? null : () => _syncNow(state),
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
-      body: SafeArea(
-        child: CustomScrollView(
-          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-          slivers: [
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-              sliver: SliverToBoxAdapter(child: _hint()),
-            ),
-            if (!_loaded)
-              const SliverFillRemaining(
-                hasScrollBody: false,
-                child: Center(child: CircularProgressIndicator()),
-              )
-            else if (_entries.isEmpty)
-              SliverFillRemaining(hasScrollBody: false, child: _emptyHint())
-            else
-              SliverList.separated(
-                itemCount: _entries.length,
-                separatorBuilder: (_, _) => const Divider(height: 1),
-                itemBuilder: (context, i) => Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: _row(context, state, _entries[i]),
-                ),
-              ),
-          ],
         ),
       ),
     );

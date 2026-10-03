@@ -1,315 +1,75 @@
 //! Parsing iCalendar (`.ics`, RFC 5545) events for reader event preview cards.
 //!
-//! Provides pure-Rust extraction of `VEVENT` components without external
-//! calendar dependencies. Handles line unfolding, parameter parsing, text
-//! unescaping, and date-range formatting for UI display.
+//! Provides pure-Rust extraction of the first `VEVENT` without external
+//! calendar dependencies. Handles line unfolding, quoted parameters, nested
+//! components, text unescaping, and date-range formatting for UI display.
+//! There is no time-zone database: a `TZID` time is converted only when the
+//! file's `VTIMEZONE` has a single fixed offset; otherwise the wall time is
+//! shown with the zone name instead of pretending it is local.
 
-use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Utc};
+mod format;
+mod line;
+mod time;
+
+use std::collections::HashMap;
+
+use chrono::{FixedOffset, TimeDelta};
 use serde::{Deserialize, Serialize};
 
-/// Parsed calendar event metadata for UI presentation.
+use format::format_date_range;
+use line::{parse_content_line, unescape_text, unfold, ContentLine};
+use time::{parse_duration_seconds, parse_utc_offset, read_time, ParsedTime, RawTime, ZoneBuilder};
+
+/// Parsed calendar event: exactly what the reader's event card shows.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CalendarEvent {
     pub summary: String,
-    pub description: Option<String>,
     pub location: Option<String>,
     pub organizer: Option<String>,
-    pub start_iso: Option<String>,
-    pub end_iso: Option<String>,
     pub formatted_time: String,
-    pub is_all_day: bool,
-    pub status: Option<String>,
     pub is_cancelled: bool,
-    pub method: Option<String>,
+    /// The `.ics` attachment the event came from, if any (none for an event
+    /// found in the body text).
     pub attachment_id: Option<i64>,
+    /// Filesystem-safe name to open or save that attachment under
+    /// (`crate::paths::safe_attachment_name_for_mime`); never derived from
+    /// the summary, which may contain path separators.
+    pub save_name: Option<String>,
 }
 
-/// Unfold RFC 5545 lines: CRLF or LF followed by a space or tab is deleted.
-pub fn unfold(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\r' {
-            if let Some(&'\n') = chars.peek() {
-                chars.next();
-                if let Some(&next_c) = chars.peek() {
-                    if next_c == ' ' || next_c == '\t' {
-                        chars.next();
-                        continue;
-                    }
-                }
-                out.push('\r');
-                out.push('\n');
-            } else {
-                out.push('\r');
-            }
-        } else if c == '\n' {
-            if let Some(&next_c) = chars.peek() {
-                if next_c == ' ' || next_c == '\t' {
-                    chars.next();
-                    continue;
-                }
-            }
-            out.push('\n');
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-/// Unescape RFC 5545 text value: `\,` -> `,`, `\;` -> `;`, `\n`/`\N` -> newline, `\\` -> `\`.
-pub fn unescape_text(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('n') | Some('N') => out.push('\n'),
-                Some(';') => out.push(';'),
-                Some(',') => out.push(','),
-                Some('\\') => out.push('\\'),
-                Some(other) => out.push(other),
-                None => out.push('\\'),
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ParsedTime {
-    Date(NaiveDate),
-    DateTimeUtc(DateTime<Utc>),
-    DateTimeLocal(NaiveDateTime),
-}
-
-impl ParsedTime {
-    fn parse(val: &str) -> Option<Self> {
-        let val = val.trim();
-        if val.ends_with('Z') || val.ends_with('z') {
-            let s = &val[..val.len() - 1];
-            if let Ok(ndt) = NaiveDateTime::parse_from_str(s, "%Y%m%dT%H%M%S") {
-                return Some(Self::DateTimeUtc(DateTime::from_naive_utc_and_offset(
-                    ndt, Utc,
-                )));
-            }
-        }
-        if val.contains('T') {
-            if let Ok(ndt) = NaiveDateTime::parse_from_str(val, "%Y%m%dT%H%M%S") {
-                return Some(Self::DateTimeLocal(ndt));
-            }
-        }
-        if val.len() == 8 {
-            if let Ok(nd) = NaiveDate::parse_from_str(val, "%Y%m%d") {
-                return Some(Self::Date(nd));
-            }
-        }
-        None
-    }
-
-    fn to_iso(&self) -> String {
-        match self {
-            Self::Date(d) => d.format("%Y-%m-%d").to_string(),
-            Self::DateTimeUtc(dt) => dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            Self::DateTimeLocal(ndt) => ndt.format("%Y-%m-%dT%H:%M:%S").to_string(),
-        }
-    }
-
-    fn date(&self) -> NaiveDate {
-        match self {
-            Self::Date(d) => *d,
-            Self::DateTimeUtc(dt) => dt.with_timezone(&chrono::Local).date_naive(),
-            Self::DateTimeLocal(ndt) => ndt.date(),
-        }
-    }
-
-    fn time_string(&self) -> Option<String> {
-        match self {
-            Self::Date(_) => None,
-            Self::DateTimeUtc(dt) => {
-                let local = dt.with_timezone(&chrono::Local);
-                Some(local.format("%H:%M").to_string())
-            }
-            Self::DateTimeLocal(ndt) => Some(ndt.format("%H:%M").to_string()),
-        }
+impl CalendarEvent {
+    /// Link the event to the attachment it was parsed from.
+    pub fn set_attachment(&mut self, att: &crate::models::Attachment) {
+        self.attachment_id = Some(att.id);
+        self.save_name = Some(crate::paths::safe_attachment_name_for_mime(
+            att.filename.as_deref(),
+            att.mime_type.as_deref(),
+            att.id,
+        ));
     }
 }
 
-/// Parse simple ISO 8601 duration: `PT1H`, `PT30M`, `PT1H30M`, `P1D`.
-fn parse_duration_seconds(d: &str) -> Option<i64> {
-    let d = d.trim();
-    if !d.starts_with('P') {
-        return None;
-    }
-    let mut total_secs: i64 = 0;
-    let mut in_time = false;
-    let mut num_buf = String::new();
-
-    for c in d[1..].chars() {
-        if c == 'T' {
-            in_time = true;
-            continue;
-        }
-        if c.is_ascii_digit() {
-            num_buf.push(c);
-        } else {
-            let val = num_buf.parse::<i64>().ok()?;
-            num_buf.clear();
-            match c {
-                'D' => total_secs += val * 86400,
-                'W' => total_secs += val * 86400 * 7,
-                'H' if in_time => total_secs += val * 3600,
-                'M' if in_time => total_secs += val * 60,
-                'S' if in_time => total_secs += val,
-                _ => {}
-            }
-        }
-    }
-    Some(total_secs)
+/// An event with the times it was formatted from, kept for tests.
+struct Parsed {
+    event: CalendarEvent,
+    #[cfg_attr(not(test), allow(dead_code))]
+    start: ParsedTime,
+    #[cfg_attr(not(test), allow(dead_code))]
+    end: Option<ParsedTime>,
 }
 
-fn format_date_range(start: &ParsedTime, end: Option<&ParsedTime>, is_all_day: bool) -> String {
-    let start_date = start.date();
-    let month_name = match start_date.month() {
-        1 => "Jan",
-        2 => "Feb",
-        3 => "Mar",
-        4 => "Apr",
-        5 => "May",
-        6 => "Jun",
-        7 => "Jul",
-        8 => "Aug",
-        9 => "Sep",
-        10 => "Oct",
-        11 => "Nov",
-        12 => "Dec",
-        _ => "",
-    };
-    let weekday = match start_date.weekday() {
-        chrono::Weekday::Mon => "Mon",
-        chrono::Weekday::Tue => "Tue",
-        chrono::Weekday::Wed => "Wed",
-        chrono::Weekday::Thu => "Thu",
-        chrono::Weekday::Fri => "Fri",
-        chrono::Weekday::Sat => "Sat",
-        chrono::Weekday::Sun => "Sun",
-    };
-
-    if is_all_day {
-        let single_day = match end {
-            None => true,
-            Some(e) => {
-                let e_date = e.date();
-                e_date == start_date || e_date == start_date.succ_opt().unwrap_or(start_date)
-            }
-        };
-        if single_day {
-            return format!(
-                "{weekday}, {month_name} {}, {} · All day",
-                start_date.day(),
-                start_date.year()
-            );
-        }
-        if let Some(e) = end {
-            let e_date = e.date();
-            let end_month = match e_date.month() {
-                1 => "Jan",
-                2 => "Feb",
-                3 => "Mar",
-                4 => "Apr",
-                5 => "May",
-                6 => "Jun",
-                7 => "Jul",
-                8 => "Aug",
-                9 => "Sep",
-                10 => "Oct",
-                11 => "Nov",
-                12 => "Dec",
-                _ => "",
-            };
-            return format!(
-                "{month_name} {}, {} – {end_month} {}, {}",
-                start_date.day(),
-                start_date.year(),
-                e_date.day(),
-                e_date.year()
-            );
-        }
-        return format!(
-            "{weekday}, {month_name} {}, {} · All day",
-            start_date.day(),
-            start_date.year()
-        );
+fn parse_organizer(line: &ContentLine<'_>) -> Option<String> {
+    let val = line.value.trim();
+    let email = match val.get(..7) {
+        Some(p) if p.eq_ignore_ascii_case("mailto:") => &val[7..],
+        _ => val,
     }
-
-    let start_time = start.time_string().unwrap_or_default();
-    match end {
-        Some(e) => {
-            let e_date = e.date();
-            let end_time = e.time_string().unwrap_or_default();
-            if e_date == start_date {
-                format!(
-                    "{weekday}, {month_name} {}, {} · {start_time} – {end_time}",
-                    start_date.day(),
-                    start_date.year()
-                )
-            } else {
-                let end_month = match e_date.month() {
-                    1 => "Jan",
-                    2 => "Feb",
-                    3 => "Mar",
-                    4 => "Apr",
-                    5 => "May",
-                    6 => "Jun",
-                    7 => "Jul",
-                    8 => "Aug",
-                    9 => "Sep",
-                    10 => "Oct",
-                    11 => "Nov",
-                    12 => "Dec",
-                    _ => "",
-                };
-                format!(
-                    "{month_name} {}, {}, {start_time} – {end_month} {}, {}, {end_time}",
-                    start_date.day(),
-                    start_date.year(),
-                    e_date.day(),
-                    e_date.year()
-                )
-            }
-        }
-        None => format!(
-            "{weekday}, {month_name} {}, {} · {start_time}",
-            start_date.day(),
-            start_date.year()
-        ),
-    }
-}
-
-fn parse_organizer(params_and_val: &str) -> Option<String> {
-    let (params_part, val) = match params_and_val.split_once(':') {
-        Some((p, v)) => (p, v),
-        None => ("", params_and_val),
-    };
-    let email = val
-        .trim()
-        .strip_prefix("mailto:")
-        .or_else(|| val.trim().strip_prefix("MAILTO:"))
-        .unwrap_or(val.trim());
-
-    let mut cn = None;
-    for param in params_part.split(';') {
-        let param = param.trim();
-        if let Some(rest) = param.strip_prefix("CN=") {
-            let clean = rest.trim().trim_matches('"');
-            if !clean.is_empty() {
-                cn = Some(clean.to_string());
-            }
-        }
-    }
+    .trim();
+    let cn = line
+        .param("CN")
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .map(str::to_string);
 
     match (cn, email) {
         (Some(name), addr) if !addr.is_empty() && name != addr => Some(format!("{name} <{addr}>")),
@@ -322,262 +82,166 @@ fn parse_organizer(params_and_val: &str) -> Option<String> {
 /// Parse an iCalendar string into a `CalendarEvent`. Returns `None` if no
 /// valid `VEVENT` is found or parsing fails.
 pub fn parse_ics(ics_data: &str) -> Option<CalendarEvent> {
+    parse(ics_data).map(|p| p.event)
+}
+
+fn parse(ics_data: &str) -> Option<Parsed> {
     let unfolded = unfold(ics_data);
-    let mut in_calendar = false;
-    let mut in_event = false;
+    // Open components, innermost last. Properties are only read where the
+    // innermost component is the one they belong to, so a VALARM's
+    // SUMMARY never overwrites the event's.
+    let mut stack: Vec<String> = Vec::new();
+    let mut event_seen = false;
+    // The first event is complete; keep scanning only for VTIMEZONEs.
+    let mut event_done = false;
+    let mut zone: Option<ZoneBuilder> = None;
+    let mut zones: HashMap<String, FixedOffset> = HashMap::new();
 
     let mut calendar_method: Option<String> = None;
     let mut event_method: Option<String> = None;
     let mut summary: Option<String> = None;
-    let mut description: Option<String> = None;
     let mut location: Option<String> = None;
     let mut organizer: Option<String> = None;
     let mut status: Option<String> = None;
-    let mut dtstart: Option<ParsedTime> = None;
-    let mut dtend: Option<ParsedTime> = None;
+    let mut dtstart: Option<RawTime> = None;
+    let mut dtend: Option<RawTime> = None;
     let mut duration_secs: Option<i64> = None;
-    let mut is_all_day = false;
 
     for line in unfolded.lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-
-        if line.eq_ignore_ascii_case("BEGIN:VCALENDAR") {
-            in_calendar = true;
+        let Some(cl) = parse_content_line(line) else {
             continue;
-        }
-        if line.eq_ignore_ascii_case("END:VCALENDAR") {
-            break;
-        }
+        };
+        let value_upper = || cl.value.trim().to_ascii_uppercase();
 
-        if !in_calendar && !in_event {
-            // Also tolerate ICS files missing BEGIN:VCALENDAR wrapper
-            if line.eq_ignore_ascii_case("BEGIN:VEVENT") {
-                in_event = true;
+        match cl.name.as_str() {
+            "BEGIN" => {
+                let comp = value_upper();
+                if comp == "VTIMEZONE" {
+                    zone = Some(ZoneBuilder::default());
+                }
+                stack.push(comp);
                 continue;
             }
-        }
-
-        if line.eq_ignore_ascii_case("BEGIN:VEVENT") {
-            in_event = true;
-            continue;
-        }
-        if line.eq_ignore_ascii_case("END:VEVENT") {
-            if in_event {
-                break;
-            }
-            continue;
-        }
-
-        let (prop_with_params, val) = match line.split_once(':') {
-            Some((p, v)) => (p, v),
-            None => continue,
-        };
-
-        let prop_upper = prop_with_params.to_ascii_uppercase();
-        let prop_name = prop_upper.split(';').next().unwrap_or("").trim();
-
-        if !in_event {
-            if prop_name == "METHOD" {
-                calendar_method = Some(val.trim().to_string());
-            }
-            continue;
-        }
-
-        match prop_name {
-            "SUMMARY" => summary = Some(unescape_text(val)),
-            "DESCRIPTION" => description = Some(unescape_text(val)),
-            "LOCATION" => location = Some(unescape_text(val)),
-            "STATUS" => status = Some(val.trim().to_string()),
-            "METHOD" => event_method = Some(val.trim().to_string()),
-            "ORGANIZER" => organizer = parse_organizer(line),
-            "DTSTART" => {
-                if prop_upper.contains("VALUE=DATE") {
-                    is_all_day = true;
+            "END" => {
+                let comp = value_upper();
+                if let Some(pos) = stack.iter().rposition(|c| *c == comp) {
+                    stack.truncate(pos);
                 }
-                if let Some(pt) = ParsedTime::parse(val) {
-                    if matches!(pt, ParsedTime::Date(_)) {
-                        is_all_day = true;
+                match comp.as_str() {
+                    "VTIMEZONE" => {
+                        if let Some(z) = zone.take() {
+                            if let (Some(id), Some(off)) = (&z.tzid, z.fixed_offset()) {
+                                zones.insert(id.clone(), off);
+                            }
+                        }
                     }
-                    dtstart = Some(pt);
+                    "VEVENT" if event_seen => event_done = true,
+                    "VCALENDAR" => break,
+                    _ => {}
+                }
+                continue;
+            }
+            _ => {}
+        }
+
+        let top = stack.last().map(String::as_str);
+        let parent = stack
+            .len()
+            .checked_sub(2)
+            .and_then(|i| stack.get(i))
+            .map(String::as_str);
+        match (top, cl.name.as_str()) {
+            (Some("VCALENDAR"), "METHOD") => calendar_method = Some(cl.value.trim().to_string()),
+            (Some("VTIMEZONE"), "TZID") => {
+                if let Some(z) = zone.as_mut() {
+                    z.tzid = Some(cl.value.trim().to_string());
                 }
             }
-            "DTEND" => {
-                if let Some(pt) = ParsedTime::parse(val) {
-                    dtend = Some(pt);
+            (Some("STANDARD" | "DAYLIGHT"), "TZOFFSETTO") if parent == Some("VTIMEZONE") => {
+                if let Some(z) = zone.as_mut() {
+                    z.offsets.push(parse_utc_offset(cl.value));
                 }
             }
-            "DURATION" => {
-                duration_secs = parse_duration_seconds(val);
+            (Some("VEVENT"), name) if !event_done => {
+                event_seen = true;
+                match name {
+                    "SUMMARY" => summary = Some(unescape_text(cl.value)),
+                    // Blank means absent, so frontends only test presence.
+                    "LOCATION" => {
+                        location = Some(unescape_text(cl.value).trim().to_string())
+                            .filter(|l| !l.is_empty());
+                    }
+                    "STATUS" => status = Some(cl.value.trim().to_string()),
+                    "METHOD" => event_method = Some(cl.value.trim().to_string()),
+                    "ORGANIZER" => organizer = parse_organizer(&cl),
+                    "DTSTART" => dtstart = read_time(&cl),
+                    "DTEND" => dtend = read_time(&cl),
+                    "DURATION" => duration_secs = parse_duration_seconds(cl.value),
+                    _ => {}
+                }
             }
             _ => {}
         }
     }
 
-    let start = dtstart?;
+    let resolve = |raw: RawTime| raw.time.with_tzid(raw.tzid.as_deref(), &zones);
+    let start = resolve(dtstart?);
+    let is_all_day = matches!(start, ParsedTime::Date(_));
 
-    // If DTEND was not present but DURATION was, calculate DTEND
+    // Without DTEND, derive the end from DURATION; an overflowing one gives
+    // no end rather than a panic.
     let end = match (dtend, duration_secs) {
-        (Some(e), _) => Some(e),
-        (None, Some(secs)) => match &start {
-            ParsedTime::DateTimeUtc(dt) => Some(ParsedTime::DateTimeUtc(
-                *dt + chrono::Duration::seconds(secs),
-            )),
-            ParsedTime::DateTimeLocal(ndt) => Some(ParsedTime::DateTimeLocal(
-                *ndt + chrono::Duration::seconds(secs),
-            )),
-            ParsedTime::Date(d) => {
-                let days = (secs / 86400).max(1);
-                Some(ParsedTime::Date(*d + chrono::Duration::days(days)))
-            }
-        },
+        (Some(e), _) => Some(resolve(e)),
+        (None, Some(secs)) => {
+            let delta = if is_all_day {
+                TimeDelta::try_days((secs / 86_400).max(1))
+            } else {
+                TimeDelta::try_seconds(secs)
+            };
+            delta.and_then(|d| start.checked_add(d))
+        }
         (None, None) => None,
     };
 
     let formatted_time = format_date_range(&start, end.as_ref(), is_all_day);
-    let start_iso = Some(start.to_iso());
-    let end_iso = end.as_ref().map(|e| e.to_iso());
 
     let method = event_method.or(calendar_method);
     let is_cancelled = status
         .as_deref()
-        .map(|s| s.eq_ignore_ascii_case("CANCELLED"))
-        .unwrap_or(false)
+        .is_some_and(|s| s.eq_ignore_ascii_case("CANCELLED"))
         || method
             .as_deref()
-            .map(|m| m.eq_ignore_ascii_case("CANCEL"))
-            .unwrap_or(false);
+            .is_some_and(|m| m.eq_ignore_ascii_case("CANCEL"));
 
     let summary = summary
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "(Event)".to_string());
 
-    Some(CalendarEvent {
-        summary,
-        description,
-        location,
-        organizer,
-        start_iso,
-        end_iso,
-        formatted_time,
-        is_all_day,
-        status,
-        is_cancelled,
-        method,
-        attachment_id: None,
+    Some(Parsed {
+        event: CalendarEvent {
+            summary,
+            location,
+            organizer,
+            formatted_time,
+            is_cancelled,
+            attachment_id: None,
+            save_name: None,
+        },
+        start,
+        end,
     })
 }
 
-/// Parse an iCalendar byte slice into a `CalendarEvent`.
+/// Parse an iCalendar byte slice into a `CalendarEvent`. Invalid UTF-8 is
+/// replaced rather than rejecting the whole invitation.
 pub fn parse_ics_bytes(bytes: &[u8]) -> Option<CalendarEvent> {
-    let s = std::str::from_utf8(bytes).ok()?;
-    parse_ics(s)
+    parse_ics(&String::from_utf8_lossy(bytes))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_unfold_and_unescape() {
-        let folded = "SUMMARY:This is a long line that has been folded into \r\n multiple lines \r\n with spaces.\r\n";
-        assert_eq!(
-            unfold(folded),
-            "SUMMARY:This is a long line that has been folded into multiple lines with spaces.\r\n"
-        );
-
-        let unescaped = unescape_text(r"Line 1\nLine 2\, with commas\; and semicolons\\done");
-        assert_eq!(
-            unescaped,
-            "Line 1\nLine 2, with commas; and semicolons\\done"
-        );
-    }
-
-    #[test]
-    fn test_parse_timed_event() {
-        let ics = "BEGIN:VCALENDAR\r\n\
-VERSION:2.0\r\n\
-PRODID:-//Example Corp.//EN\r\n\
-METHOD:REQUEST\r\n\
-BEGIN:VEVENT\r\n\
-UID:meet-123@example.org\r\n\
-DTSTART:20261006T140000Z\r\n\
-DTEND:20261006T150000Z\r\n\
-SUMMARY:Sprint Planning\r\n\
-DESCRIPTION:Review backlog and sprint goals.\r\n\
-LOCATION:Meeting Room 3B\r\n\
-ORGANIZER;CN=\"Alice Smith\":mailto:alice@example.org\r\n\
-STATUS:CONFIRMED\r\n\
-END:VEVENT\r\n\
-END:VCALENDAR\r\n";
-
-        let event = parse_ics(ics).expect("should parse event");
-        assert_eq!(event.summary, "Sprint Planning");
-        assert_eq!(
-            event.description.as_deref(),
-            Some("Review backlog and sprint goals.")
-        );
-        assert_eq!(event.location.as_deref(), Some("Meeting Room 3B"));
-        assert_eq!(
-            event.organizer.as_deref(),
-            Some("Alice Smith <alice@example.org>")
-        );
-        assert_eq!(event.status.as_deref(), Some("CONFIRMED"));
-        assert_eq!(event.method.as_deref(), Some("REQUEST"));
-        assert!(!event.is_cancelled);
-        assert!(!event.is_all_day);
-        assert_eq!(event.start_iso.as_deref(), Some("2026-10-06T14:00:00Z"));
-        assert_eq!(event.end_iso.as_deref(), Some("2026-10-06T15:00:00Z"));
-        assert!(event.formatted_time.contains("Oct 6, 2026"));
-    }
-
-    #[test]
-    fn test_parse_all_day_event() {
-        let ics = "BEGIN:VCALENDAR\r\n\
-BEGIN:VEVENT\r\n\
-DTSTART;VALUE=DATE:20261006\r\n\
-DTEND;VALUE=DATE:20261007\r\n\
-SUMMARY:Team Offsite\r\n\
-END:VEVENT\r\n\
-END:VCALENDAR\r\n";
-
-        let event = parse_ics(ics).expect("should parse all-day event");
-        assert_eq!(event.summary, "Team Offsite");
-        assert!(event.is_all_day);
-        assert_eq!(event.formatted_time, "Tue, Oct 6, 2026 · All day");
-    }
-
-    #[test]
-    fn test_cancelled_event() {
-        let ics = "BEGIN:VCALENDAR\r\n\
-METHOD:CANCEL\r\n\
-BEGIN:VEVENT\r\n\
-DTSTART:20261006T100000Z\r\n\
-SUMMARY:Cancelled Sync\r\n\
-STATUS:CANCELLED\r\n\
-END:VEVENT\r\n\
-END:VCALENDAR\r\n";
-
-        let event = parse_ics(ics).expect("should parse cancelled event");
-        assert_eq!(event.summary, "Cancelled Sync");
-        assert!(event.is_cancelled);
-    }
-
-    #[test]
-    fn test_duration_fallback() {
-        let ics = "BEGIN:VCALENDAR\r\n\
-BEGIN:VEVENT\r\n\
-DTSTART:20261006T090000Z\r\n\
-DURATION:PT1H30M\r\n\
-SUMMARY:90-min Workshop\r\n\
-END:VEVENT\r\n\
-END:VCALENDAR\r\n";
-
-        let event = parse_ics(ics).expect("should parse duration");
-        assert_eq!(event.summary, "90-min Workshop");
-        assert_eq!(event.end_iso.as_deref(), Some("2026-10-06T10:30:00Z"));
-    }
-}
+mod tests;

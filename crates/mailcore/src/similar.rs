@@ -3,20 +3,20 @@
 //! Matches in three tiers:
 //! 1. Same conversation thread (`thread_id`).
 //! 2. Same sender and normalized subject (strip Re:/Fwd:, case-insensitive).
-//! 3. Subject content keywords via the existing FTS5 index (`messages_fts`).
+//! 3. Subject keywords via the existing FTS5 index (`messages_fts`), best
+//!    match first.
 //!
 //! Results exclude the target message itself and reuse the exact same JSON
-//! structure as [`crate::feed::search_json`] (grouped by folder, newest first).
+//! structure as [`crate::feed::search_json`]: grouped by folder, in tier order
+//! inside each folder.
 
 use std::collections::HashSet;
 
-use rusqlite::params;
-use serde_json::json;
+use rusqlite::{params, OptionalExtension};
 
-use crate::badge::sender_badge;
 use crate::db::Db;
 use crate::error::Result;
-use crate::feed::{one_line, short_date};
+use crate::feed::{hit_json, hits_json, HitRow};
 
 /// English, German, French common stop words that carry little topic signal.
 const STOP_WORDS: &[&str] = &[
@@ -31,6 +31,14 @@ const PREFIXES: &[&str] = &[
     "re:", "fwd:", "fw:", "aw:", "wg:", "sv:", "vs:", "antw:", "tr:",
 ];
 
+/// `s` without a leading ASCII-case-insensitive `prefix`. Never slices inside
+/// a multi-byte character.
+fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = s.get(..prefix.len())?;
+    head.eq_ignore_ascii_case(prefix)
+        .then(|| &s[prefix.len()..])
+}
+
 /// Strip reply/forward prefixes, brackets and whitespace, returning a lowercase
 /// canonical subject for grouping discussions.
 #[must_use]
@@ -39,35 +47,31 @@ pub fn normalize_subject(subject: &str) -> String {
     loop {
         let prev = s;
         // Strip bracketed tag prefixes like [Re], [Fwd] or [Fwd: ...]
-        if s.starts_with('[') {
-            if let Some(end) = s.find(']') {
-                let inside = s[1..end].trim();
+        if let Some(rest) = s.strip_prefix('[') {
+            if let Some(end) = rest.find(']') {
+                let inside = rest[..end].trim();
                 if PREFIXES
                     .iter()
                     .any(|p| inside.eq_ignore_ascii_case(p.trim_end_matches(':')))
                 {
-                    s = s[end + 1..].trim_start();
+                    s = rest[end + 1..].trim_start();
                     continue;
                 }
-                if let Some(matching) = PREFIXES
+                if let Some(remainder) = PREFIXES
                     .iter()
-                    .find(|p| inside.len() >= p.len() && inside[..p.len()].eq_ignore_ascii_case(p))
+                    .find_map(|p| strip_prefix_ci(rest.trim_start(), p))
                 {
-                    let remainder = s[1 + matching.len()..].trim_start();
-                    if let Some(r) = remainder.strip_suffix(']') {
-                        s = r.trim();
-                    } else {
-                        s = remainder;
-                    }
+                    let remainder = remainder.trim_start();
+                    s = match remainder.strip_suffix(']') {
+                        Some(r) => r.trim(),
+                        None => remainder,
+                    };
                     continue;
                 }
             }
         }
-        for prefix in PREFIXES {
-            if s.len() >= prefix.len() && s[..prefix.len()].eq_ignore_ascii_case(prefix) {
-                s = s[prefix.len()..].trim_start();
-                break;
-            }
+        if let Some(rest) = PREFIXES.iter().find_map(|p| strip_prefix_ci(s, p)) {
+            s = rest.trim_start();
         }
         if s == prev {
             break;
@@ -82,7 +86,10 @@ pub fn extract_keywords(normalized: &str) -> Vec<String> {
     let mut keywords = Vec::new();
     for word in normalized.split_whitespace() {
         let clean: String = word.chars().filter(|c| c.is_alphanumeric()).collect();
-        if clean.len() >= 3 && !STOP_WORDS.contains(&clean.as_str()) {
+        if clean.chars().count() >= 3
+            && !STOP_WORDS.contains(&clean.as_str())
+            && !keywords.contains(&clean)
+        {
             keywords.push(clean);
             if keywords.len() >= 5 {
                 break;
@@ -92,32 +99,91 @@ pub fn extract_keywords(normalized: &str) -> Vec<String> {
     keywords
 }
 
+/// FTS5 query matching any keyword in the subject column.
+fn keyword_query(keywords: &[String]) -> Option<String> {
+    if keywords.is_empty() {
+        return None;
+    }
+    let terms = keywords
+        .iter()
+        .map(|k| format!("\"{}\"", k.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    Some(format!("{{subject}} : ({terms})"))
+}
+
 /// Retrieve the subject of a target message (for displaying the search chip).
 pub fn target_subject(db: &Db, account_id: i64, folder_id: i64, uid: i64) -> Result<String> {
-    let mut stmt = db.conn().prepare(
-        "select subject from messages
-          where account_id = ?1 and folder_id = ?2 and uid = ?3",
-    )?;
-    let subject: Option<String> = stmt
-        .query_row(params![account_id, folder_id, uid], |r| r.get(0))
-        .unwrap_or(None);
+    let subject: Option<String> = db
+        .conn()
+        .query_row(
+            "select subject from messages
+              where account_id = ?1 and folder_id = ?2 and uid = ?3",
+            params![account_id, folder_id, uid],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
     Ok(subject
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "(no subject)".to_string()))
 }
 
+/// Columns every tier selects, in the order [`match_row`] reads them. The
+/// snippet column differs (FTS tiers use `snippet()`), so it is spliced in.
+fn select_columns(snippet: &str) -> String {
+    format!(
+        "m.id, m.uid, m.folder_id, f.path, m.subject, m.from_addr, m.date,
+         {snippet}, m.is_read, m.is_starred, m.has_attachments, m.from_name"
+    )
+}
+
 struct MatchRow {
-    uid: u32,
-    folder_id: i64,
-    folder_path: String,
-    subject: Option<String>,
-    from_addr: Option<String>,
-    from_name: Option<String>,
-    date: Option<String>,
-    snippet: String,
-    is_read: bool,
-    is_starred: bool,
-    has_attachments: bool,
+    id: i64,
+    hit: HitRow,
+}
+
+fn match_row(r: &rusqlite::Row) -> rusqlite::Result<MatchRow> {
+    Ok(MatchRow {
+        id: r.get(0)?,
+        hit: HitRow {
+            uid: r.get(1)?,
+            folder_id: r.get(2)?,
+            folder: r.get(3)?,
+            subject: r.get(4)?,
+            from_addr: r.get(5)?,
+            date: r.get(6)?,
+            snippet: r.get(7)?,
+            is_read: r.get::<_, i64>(8)? != 0,
+            is_starred: r.get::<_, i64>(9)? != 0,
+            has_attachments: r.get::<_, i64>(10)? != 0,
+            from_name: r.get(11)?,
+        },
+    })
+}
+
+/// Accumulates matches across tiers: skips the target and repeats, stops at
+/// the limit.
+struct Collector {
+    seen: HashSet<i64>,
+    rows: Vec<MatchRow>,
+    limit: usize,
+}
+
+impl Collector {
+    fn full(&self) -> bool {
+        self.rows.len() >= self.limit
+    }
+
+    fn remaining(&self) -> i64 {
+        self.limit.saturating_sub(self.rows.len()) as i64
+    }
+
+    fn push(&mut self, row: MatchRow) {
+        if !self.full() && self.seen.insert(row.id) {
+            self.rows.push(row);
+        }
+    }
 }
 
 /// Query similar messages across the account, formatted as JSON matching
@@ -129,229 +195,122 @@ pub fn similar_json(
     uid: i64,
     limit: u64,
 ) -> Result<String> {
-    // 1. Locate target message
-    let target = {
-        let mut stmt = db.conn().prepare(
+    let conn = db.conn();
+    let target = conn
+        .query_row(
             "select id, thread_id, subject, from_addr
-              from messages
+               from messages
               where account_id = ?1 and folder_id = ?2 and uid = ?3",
-        )?;
-        let mut rows = stmt.query(params![account_id, folder_id, uid])?;
-        if let Some(row) = rows.next()? {
-            let id: i64 = row.get(0)?;
-            let thread_id: Option<String> = row.get(1)?;
-            let subject: Option<String> = row.get(2)?;
-            let from_addr: Option<String> = row.get(3)?;
-            Some((
-                id,
-                thread_id.unwrap_or_default(),
-                subject.unwrap_or_default(),
-                from_addr.unwrap_or_default(),
-            ))
-        } else {
-            None
-        }
-    };
-
+            params![account_id, folder_id, uid],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                ))
+            },
+        )
+        .optional()?;
     let Some((target_id, target_thread_id, target_subject, target_from)) = target else {
         return Ok("[]".to_string());
     };
 
     let target_norm = normalize_subject(&target_subject);
-    let keywords = extract_keywords(&target_norm);
+    let mut found = Collector {
+        seen: HashSet::from([target_id]),
+        rows: Vec::new(),
+        limit: limit.max(1) as usize,
+    };
+    let plain = select_columns("m.snippet");
 
-    let mut seen_ids: HashSet<i64> = HashSet::new();
-    seen_ids.insert(target_id);
-
-    let mut collected: Vec<MatchRow> = Vec::new();
-    let max_limit = limit.max(1) as usize;
-
-    // --- Tier 1: Same thread_id ---------------------------------------------
+    // Tier 1: same thread.
     if !target_thread_id.is_empty() {
-        let mut stmt = db.conn().prepare(
-            "select m.id, m.uid, m.folder_id, f.path, m.subject, m.from_addr, m.date,
-                    m.snippet, m.is_read, m.is_starred, m.has_attachments, m.from_name
+        let mut stmt = conn.prepare(&format!(
+            "select {plain}
                from messages m
                join folders f on f.id = m.folder_id
               where m.account_id = ?1
-                and m.id != ?2
-                and m.thread_id is not null
-                and m.thread_id = ?3
+                and m.thread_id = ?2
                 and m.id not in (select message_id from pending_moves)
               order by m.date desc, m.id desc
-              limit ?4",
-        )?;
+              limit ?3"
+        ))?;
+        // +1: the target sits in its own thread and is skipped.
         let rows = stmt.query_map(
-            params![account_id, target_id, target_thread_id, limit as i64],
-            |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    MatchRow {
-                        uid: r.get::<_, u32>(1)?,
-                        folder_id: r.get::<_, i64>(2)?,
-                        folder_path: r.get::<_, String>(3)?,
-                        subject: r.get::<_, Option<String>>(4)?,
-                        from_addr: r.get::<_, Option<String>>(5)?,
-                        date: r.get::<_, Option<String>>(6)?,
-                        snippet: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
-                        is_read: r.get::<_, i64>(8)? != 0,
-                        is_starred: r.get::<_, i64>(9)? != 0,
-                        has_attachments: r.get::<_, i64>(10)? != 0,
-                        from_name: r.get::<_, Option<String>>(11)?,
-                    },
-                ))
-            },
+            params![account_id, target_thread_id, found.remaining() + 1],
+            match_row,
         )?;
         for row in rows {
-            let (id, match_row) = row?;
-            if seen_ids.insert(id) {
-                collected.push(match_row);
-            }
+            found.push(row?);
         }
     }
 
-    // --- Tier 2: Same sender + normalized subject ---------------------------
-    if collected.len() < max_limit && !target_from.is_empty() && !target_norm.is_empty() {
-        let remaining = (max_limit - collected.len()) as i64;
-        let mut stmt = db.conn().prepare(
-            "select m.id, m.uid, m.folder_id, f.path, m.subject, m.from_addr, m.date,
-                    m.snippet, m.is_read, m.is_starred, m.has_attachments, m.from_name
-               from messages m
-               join folders f on f.id = m.folder_id
-              where m.account_id = ?1
-                and m.id != ?2
-                and m.from_addr is not null
-                and m.from_addr = ?3
-                and m.id not in (select message_id from pending_moves)
-              order by m.date desc, m.id desc
-              limit ?4",
-        )?;
-        let rows = stmt.query_map(
-            params![account_id, target_id, target_from, remaining * 2],
-            |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    MatchRow {
-                        uid: r.get::<_, u32>(1)?,
-                        folder_id: r.get::<_, i64>(2)?,
-                        folder_path: r.get::<_, String>(3)?,
-                        subject: r.get::<_, Option<String>>(4)?,
-                        from_addr: r.get::<_, Option<String>>(5)?,
-                        date: r.get::<_, Option<String>>(6)?,
-                        snippet: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
-                        is_read: r.get::<_, i64>(8)? != 0,
-                        is_starred: r.get::<_, i64>(9)? != 0,
-                        has_attachments: r.get::<_, i64>(10)? != 0,
-                        from_name: r.get::<_, Option<String>>(11)?,
-                    },
-                ))
-            },
-        )?;
-        for row in rows {
-            let (id, match_row) = row?;
-            if !seen_ids.contains(&id) {
-                let subj = match_row.subject.as_deref().unwrap_or("");
-                if normalize_subject(subj) == target_norm && seen_ids.insert(id) {
-                    collected.push(match_row);
-                    if collected.len() >= max_limit {
+    // Tier 2: same sender, same normalized subject. Normalizing happens in
+    // Rust, so scan the sender's subjects (cheap columns only) and fetch full
+    // rows for the matches.
+    if !found.full() && !target_from.is_empty() && !target_norm.is_empty() {
+        let ids: Vec<i64> = {
+            let mut stmt = conn.prepare(
+                "select m.id, m.subject
+                   from messages m
+                  where m.account_id = ?1
+                    and m.from_addr = ?2
+                    and m.id not in (select message_id from pending_moves)
+                  order by m.date desc, m.id desc",
+            )?;
+            let mut ids = Vec::new();
+            let mut rows = stmt.query(params![account_id, target_from])?;
+            while let Some(r) = rows.next()? {
+                let id: i64 = r.get(0)?;
+                let subject: Option<String> = r.get(1)?;
+                if !found.seen.contains(&id)
+                    && normalize_subject(subject.as_deref().unwrap_or("")) == target_norm
+                {
+                    ids.push(id);
+                    if ids.len() as i64 >= found.remaining() {
                         break;
                     }
                 }
             }
+            ids
+        };
+        let mut stmt = conn.prepare(&format!(
+            "select {plain}
+               from messages m
+               join folders f on f.id = m.folder_id
+              where m.id = ?1"
+        ))?;
+        for id in ids {
+            found.push(stmt.query_row(params![id], match_row)?);
         }
     }
 
-    // --- Tier 3: Subject keywords in FTS5 ------------------------------------
-    if collected.len() < max_limit && !keywords.is_empty() {
-        let fts_input = keywords.join(" ");
-        if let Some(match_query) = crate::search::fts_query(&fts_input) {
-            let remaining = (max_limit - collected.len()) as i64;
-            let mut stmt = db.conn().prepare(
-                "select m.id, m.uid, m.folder_id, f.path, m.subject, m.from_addr, m.date,
-                        snippet(messages_fts, 6, '', '', '…', 12),
-                        m.is_read, m.is_starred, m.has_attachments, m.from_name
+    // Tier 3: subject keywords, best FTS rank first.
+    if !found.full() {
+        if let Some(match_query) = keyword_query(&extract_keywords(&target_norm)) {
+            let mut stmt = conn.prepare(&format!(
+                "select {}
                    from messages_fts
                    join messages m on m.id = messages_fts.rowid
                    join folders f on f.id = m.folder_id
                   where messages_fts match ?1
                     and m.account_id = ?2
-                    and m.id != ?3
                     and m.id not in (select message_id from pending_moves)
-                  order by m.date desc, m.id desc
-                  limit ?4",
-            )?;
-            let rows = stmt.query_map(
-                params![match_query, account_id, target_id, remaining],
-                |r| {
-                    Ok((
-                        r.get::<_, i64>(0)?,
-                        MatchRow {
-                            uid: r.get::<_, u32>(1)?,
-                            folder_id: r.get::<_, i64>(2)?,
-                            folder_path: r.get::<_, String>(3)?,
-                            subject: r.get::<_, Option<String>>(4)?,
-                            from_addr: r.get::<_, Option<String>>(5)?,
-                            date: r.get::<_, Option<String>>(6)?,
-                            snippet: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
-                            is_read: r.get::<_, i64>(8)? != 0,
-                            is_starred: r.get::<_, i64>(9)? != 0,
-                            has_attachments: r.get::<_, i64>(10)? != 0,
-                            from_name: r.get::<_, Option<String>>(11)?,
-                        },
-                    ))
-                },
-            )?;
+                  order by messages_fts.rank, m.date desc, m.id desc
+                  limit ?3",
+                select_columns("snippet(messages_fts, 6, '', '', '…', 12)")
+            ))?;
+            // +seen: rows already taken by earlier tiers come back too.
+            let limit = found.remaining() + found.seen.len() as i64;
+            let rows = stmt.query_map(params![match_query, account_id, limit], match_row)?;
             for row in rows {
-                let (id, match_row) = row?;
-                if seen_ids.insert(id) {
-                    collected.push(match_row);
-                    if collected.len() >= max_limit {
-                        break;
-                    }
-                }
+                found.push(row?);
             }
         }
     }
 
-    // Build JSON rows formatted identically to search_json
-    let mut arr = Vec::with_capacity(collected.len());
-    for row in collected {
-        let date = short_date(row.date.as_deref());
-        let from = row.from_addr.unwrap_or_else(|| "?".to_string());
-        let from_name = row.from_name.unwrap_or_default();
-        let badge = sender_badge(&from_name, &from);
-        let mut hit = json!({
-            "uid": row.uid,
-            "folder_id": row.folder_id,
-            "folder": row.folder_path,
-            "subject": row.subject.unwrap_or_else(|| "(no subject)".to_string()),
-            "from": from,
-            "from_name": from_name,
-            "date": date.text,
-            "date_key": date.key,
-            "snippet": one_line(&row.snippet),
-            "unread": !row.is_read,
-            "starred": row.is_starred,
-            "has_attachments": row.has_attachments,
-        });
-        badge.extend(&mut hit);
-        arr.push(hit);
-    }
-
-    // Stable grouping: folders grouped in order of their first/highest hit
-    let mut order: Vec<String> = Vec::new();
-    for hit in &arr {
-        let f = hit["folder"].as_str().unwrap_or_default();
-        if !order.iter().any(|o| o == f) {
-            order.push(f.to_string());
-        }
-    }
-    arr.sort_by_key(|hit| {
-        let f = hit["folder"].as_str().unwrap_or_default();
-        order.iter().position(|o| o == f)
-    });
-
-    Ok(serde_json::to_string(&arr)?)
+    hits_json(found.rows.into_iter().map(|r| hit_json(r.hit)).collect())
 }
 
 #[cfg(test)]
@@ -374,6 +333,17 @@ mod tests {
             normalize_subject("[Re] Meeting tomorrow"),
             "meeting tomorrow"
         );
+    }
+
+    #[test]
+    fn normalize_subject_survives_multibyte_subjects() {
+        // Fixed-width prefix slicing used to panic inside these characters.
+        assert_eq!(normalize_subject("Привет"), "привет");
+        assert_eq!(normalize_subject("日本語"), "日本語");
+        assert_eq!(normalize_subject("Re: Öäü…"), "öäü…");
+        assert_eq!(normalize_subject("[日本] 語"), "[日本] 語");
+        assert_eq!(normalize_subject("[Ré: x]"), "[ré: x]");
+        assert_eq!(normalize_subject("AW: Grüße"), "grüße");
     }
 
     #[test]
@@ -454,5 +424,83 @@ mod tests {
         let uids: Vec<u64> = hits.iter().map(|h| h["uid"].as_u64().unwrap()).collect();
         assert!(uids.contains(&102));
         assert!(uids.contains(&103));
+    }
+
+    fn add(db: &Db, acc: i64, folder: i64, uid: u32, subject: &str, from: &str) {
+        let mut m = messages::sample_new(acc, folder, uid);
+        m.thread_id = None;
+        m.subject = Some(subject.into());
+        m.from_addr = Some(from.into());
+        messages::upsert(db, &m).unwrap();
+    }
+
+    fn uids(json: &str) -> Vec<u64> {
+        let hits: Vec<serde_json::Value> = serde_json::from_str(json).unwrap();
+        hits.iter().map(|h| h["uid"].as_u64().unwrap()).collect()
+    }
+
+    #[test]
+    fn similar_handles_non_ascii_subjects_from_the_same_sender() {
+        let (db, acc, folder) = setup_test_db();
+        add(&db, acc, folder, 1, "Привет мир", "a@example.com");
+        add(&db, acc, folder, 2, "日本語", "a@example.com");
+        add(&db, acc, folder, 3, "Re: Привет мир", "a@example.com");
+        assert_eq!(
+            uids(&similar_json(&db, acc, folder, 1, 50).unwrap()),
+            vec![3]
+        );
+    }
+
+    #[test]
+    fn keyword_tier_matches_subjects_only_and_ranks_best_first() {
+        let (db, acc, folder) = setup_test_db();
+        add(
+            &db,
+            acc,
+            folder,
+            1,
+            "Quarterly budget review",
+            "a@example.com",
+        );
+        add(&db, acc, folder, 2, "Budget", "b@example.com");
+        add(
+            &db,
+            acc,
+            folder,
+            3,
+            "Quarterly budget review notes",
+            "c@example.com",
+        );
+        // Body mentions the keywords, subject does not: no match.
+        let mut body_only = messages::sample_new(acc, folder, 4);
+        body_only.thread_id = None;
+        body_only.subject = Some("Lunch".into());
+        body_only.body_text = Some("quarterly budget review".into());
+        messages::upsert(&db, &body_only).unwrap();
+
+        let hits = uids(&similar_json(&db, acc, folder, 1, 50).unwrap());
+        assert_eq!(hits, vec![3, 2]);
+    }
+
+    #[test]
+    fn similar_stops_at_the_limit() {
+        let (db, acc, folder) = setup_test_db();
+        add(&db, acc, folder, 1, "Weekly report", "a@example.com");
+        for uid in 2..10 {
+            add(&db, acc, folder, uid, "Re: Weekly report", "a@example.com");
+        }
+        assert_eq!(
+            uids(&similar_json(&db, acc, folder, 1, 3).unwrap()).len(),
+            3
+        );
+    }
+
+    #[test]
+    fn target_subject_falls_back_for_missing_messages() {
+        let (db, acc, folder) = setup_test_db();
+        assert_eq!(
+            target_subject(&db, acc, folder, 999).unwrap(),
+            "(no subject)"
+        );
     }
 }

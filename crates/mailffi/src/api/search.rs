@@ -43,6 +43,12 @@ pub fn similar_subject(account_id: i64, folder_id: i64, uid: i64) -> anyhow::Res
     )?)
 }
 
+/// The search syntax for the search field's tooltip.
+#[flutter_rust_bridge::frb(sync)]
+pub fn search_syntax_help() -> String {
+    search::SYNTAX_HELP.to_string()
+}
+
 /// How the search field runs `query` (`mailcore::search::plan`).
 #[flutter_rust_bridge::frb(sync)]
 pub fn search_plan(query: String) -> SearchPlan {

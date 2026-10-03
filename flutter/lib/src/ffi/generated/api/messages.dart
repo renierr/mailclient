@@ -156,24 +156,27 @@ Future<bool> toggleStar({
 LinkInfo linkInfo({required String url}) =>
     MailCoreApi.instance.api.crateApiMessagesLinkInfo(url: url);
 
-/// Export one message as standard RFC 5322 .eml bytes.
+/// Get a message ready for [`export_message_eml_bytes`]: downloads any
+/// attachment bytes it is still missing. Queued on the network thread;
+/// finishing is reported as an `"Export"` event (instant when everything is
+/// cached).
+Future<void> prepareEmlExport({
+  required PlatformInt64 folderId,
+  required int uid,
+}) => MailCoreApi.instance.api.crateApiMessagesPrepareEmlExport(
+  folderId: folderId,
+  uid: uid,
+);
+
+/// One message as standard RFC 5322 .eml bytes, for the platform save
+/// dialog. Fails while attachment bytes are missing: run
+/// [`prepare_eml_export`] first.
 Future<Uint8List> exportMessageEmlBytes({
   required PlatformInt64 folderId,
   required int uid,
 }) => MailCoreApi.instance.api.crateApiMessagesExportMessageEmlBytes(
   folderId: folderId,
   uid: uid,
-);
-
-/// Export one message as .eml to a file path.
-Future<String> exportMessageEml({
-  required PlatformInt64 folderId,
-  required int uid,
-  required String path,
-}) => MailCoreApi.instance.api.crateApiMessagesExportMessageEml(
-  folderId: folderId,
-  uid: uid,
-  path: path,
 );
 
 /// Suggested filename for exporting a message as .eml.

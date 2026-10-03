@@ -9,7 +9,7 @@
 use mailcore::store::messages;
 
 use crate::db::shared_db;
-use crate::net::spawn_flag_push;
+use crate::net::{spawn, spawn_flag_push};
 
 /// One page of the message list as JSON: `[{uid, subject, from, date,
 /// date_key, snippet, unread, starred, has_attachments}]`, in the order the
@@ -172,18 +172,30 @@ pub struct LinkInfo {
     pub path: String,
 }
 
-/// Export one message as standard RFC 5322 .eml bytes.
-pub fn export_message_eml_bytes(folder_id: i64, uid: u32) -> anyhow::Result<Vec<u8>> {
-    let db = shared_db()?;
-    let bytes = mailcore::export::assemble_eml(db, folder_id, uid)?;
-    Ok(bytes)
+/// Get a message ready for [`export_message_eml_bytes`]: downloads any
+/// attachment bytes it is still missing. Queued on the network thread;
+/// finishing is reported as an `"Export"` event (instant when everything is
+/// cached).
+pub fn prepare_eml_export(folder_id: i64, uid: u32) -> anyhow::Result<()> {
+    spawn(
+        "Export",
+        format!("export:{folder_id}:{uid}"),
+        move |db, _progress| async move {
+            mailcore::export::prepare(db, folder_id, uid).await?;
+            Ok((String::new(), None))
+        },
+    )
 }
 
-/// Export one message as .eml to a file path.
-pub fn export_message_eml(folder_id: i64, uid: u32, path: String) -> anyhow::Result<String> {
-    let db = shared_db()?;
-    let dest = mailcore::export::export_eml_to(db, folder_id, uid, &path)?;
-    Ok(dest.to_string_lossy().into_owned())
+/// One message as standard RFC 5322 .eml bytes, for the platform save
+/// dialog. Fails while attachment bytes are missing: run
+/// [`prepare_eml_export`] first.
+pub fn export_message_eml_bytes(folder_id: i64, uid: u32) -> anyhow::Result<Vec<u8>> {
+    Ok(mailcore::export::assemble_eml(
+        shared_db()?,
+        folder_id,
+        uid,
+    )?)
 }
 
 /// Suggested filename for exporting a message as .eml.

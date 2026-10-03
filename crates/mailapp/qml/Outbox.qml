@@ -135,7 +135,7 @@ AppDialog {
                             font.bold: true
                             font.pixelSize: Theme.fontMedium
                             color: Theme.text
-                            text: modelData.subject !== "" ? modelData.subject : qsTr("(no subject)")
+                            text: modelData.subject
                         }
 
                         Label {
@@ -175,7 +175,7 @@ AppDialog {
                         iconFont: true
                         tooltip: qsTr("Forget this entry")
                         Accessible.name: qsTr("Forget unsent mail to %1").arg((modelData.envelope_to || []).join(", "))
-                        enabled: modelData.status !== "sending"
+                        enabled: modelData.dismissable === true
                         onClicked: root.dismissRow(modelData.id)
                     }
                 }

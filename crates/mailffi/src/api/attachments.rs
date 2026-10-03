@@ -15,7 +15,7 @@ use mailcore::store::messages;
 
 use crate::db::shared_db;
 use crate::net::spawn;
-use mailcore::sync::pool::{checkout_session, resolve_account};
+use mailcore::sync::pool::resolve_account;
 
 /// One attachment's bytes, if they are already cached.
 ///
@@ -44,13 +44,10 @@ pub fn download_attachments(account_id: i64, folder_id: i64, uid: u32) -> anyhow
         if m.account_id != acc.id {
             return Err("message does not belong to this account".to_string());
         }
-        let mut imap = checkout_session(&acc).await?;
-        let result = imap.fetch_attachments(db, m.id).await;
-        imap.checkin();
-        let bytes = result.map_err(|e| e.to_string())?;
+        let files = mailcore::sync::attachments::download(db, m.id).await?;
         // Nothing the message list shows changed, so no refresh — the reader
         // re-reads the one message it is showing.
-        Ok((format!("Downloaded {bytes} bytes"), None))
+        Ok((format!("Downloaded {files} file(s)"), None))
     })
 }
 
