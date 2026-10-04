@@ -71,14 +71,37 @@ AppDialog {
         root.selectedAddresses = next;
     }
 
+    function toggleSelectAll() {
+        if (root.selectedAddresses.length === root.candidates.length)
+            root.selectedAddresses = [];
+        else
+            root.selectedAddresses = root.candidates.map(function (c) {
+                return c.contact.address;
+            });
+    }
+
     function removeSelected() {
-        var r = root.backend.delete_contacts(JSON.stringify(root.selectedAddresses));
+        root.askRemove(root.selectedAddresses.slice());
+    }
+
+    function askRemove(addresses) {
+        if (!addresses || addresses.length === 0)
+            return;
+        removeConfirm.addresses = addresses;
+        removeConfirm.open();
+    }
+
+    function doRemove() {
+        var r = root.backend.delete_contacts(JSON.stringify(removeConfirm.addresses));
+        removeConfirm.close();
         if (r !== "") {
             root.statusMessage(r);
             return;
         }
-        root.selectedAddresses = [];
-        root.reloadCandidates();
+        if (root.reviewing) {
+            root.selectedAddresses = [];
+            root.reloadCandidates();
+        }
         root.reload();
     }
 
@@ -103,6 +126,7 @@ AppDialog {
     footer: RowLayout {
         spacing: Theme.sm
         AppButton {
+            Layout.leftMargin: Theme.lg
             Layout.bottomMargin: Theme.md
             visible: !root.reviewing
             text: qsTr("Review suggestions…")
@@ -110,6 +134,7 @@ AppDialog {
             onClicked: root.enterReview()
         }
         AppButton {
+            Layout.leftMargin: Theme.lg
             Layout.bottomMargin: Theme.md
             visible: root.reviewing
             text: qsTr("Back")
@@ -123,6 +148,7 @@ AppDialog {
             Layout.bottomMargin: Theme.md
             visible: root.reviewing
             enabled: root.selectedAddresses.length > 0
+            intent: "danger"
             text: qsTr("Remove selected (%1)").arg(root.selectedAddresses.length)
             Accessible.name: qsTr("Remove selected contacts")
             onClicked: root.removeSelected()
@@ -133,6 +159,59 @@ AppDialog {
             text: qsTr("Close")
             Accessible.name: qsTr("Close contacts manager")
             onClicked: root.close()
+        }
+    }
+
+    // Forgetting a contact is confirmed first, like in the Flutter dialog:
+    // removing is one click, and the address returns with the next mail.
+    Dialog {
+        id: removeConfirm
+        title: removeConfirm.addresses.length > 1 ? qsTr("Remove contacts?") : qsTr("Remove contact?")
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(420, root.width - 2 * Theme.lg)
+        padding: Theme.lg
+
+        property var addresses: []
+
+        background: Rectangle {
+            color: Theme.bg
+            radius: Theme.radiusLg
+            border.width: 1
+            border.color: Theme.border
+        }
+
+        contentItem: Label {
+            wrapMode: Text.Wrap
+            text: {
+                var n = removeConfirm.addresses.length;
+                if (n > 1)
+                    return qsTr("%n contact(s) will be forgotten. They reappear the next time mail arrives from them.",
+                                "", n);
+                return qsTr("Forget %1? It reappears the next time mail arrives from it.").arg(
+                            removeConfirm.addresses[0] || "");
+            }
+        }
+
+        footer: RowLayout {
+            spacing: Theme.sm
+            Item {
+                Layout.fillWidth: true
+            }
+            AppButton {
+                text: qsTr("Cancel")
+                Accessible.name: qsTr("Cancel removal")
+                onClicked: removeConfirm.close()
+            }
+            AppButton {
+                Layout.rightMargin: Theme.lg
+                Layout.bottomMargin: Theme.md
+                Layout.topMargin: Theme.sm
+                text: qsTr("Remove")
+                intent: "danger"
+                Accessible.name: qsTr("Confirm removal")
+                onClicked: root.doRemove()
+            }
         }
     }
 
@@ -188,6 +267,25 @@ AppDialog {
             }
         }
 
+        RowLayout {
+            visible: root.reviewing && root.candidates.length > 0
+            Layout.fillWidth: true
+            spacing: Theme.sm
+
+            Label {
+                Layout.fillWidth: true
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+                text: qsTr("%n suggestion(s)", "", root.candidates.length)
+            }
+
+            AppButton {
+                text: root.selectedAddresses.length === root.candidates.length ? qsTr("Clear") : qsTr("Select all")
+                Accessible.name: qsTr("Select all or no suggestions")
+                onClicked: root.toggleSelectAll()
+            }
+        }
+
         Label {
             visible: root.reviewing ? root.candidates.length === 0 : root.rows.length === 0
             Layout.fillWidth: true
@@ -220,11 +318,7 @@ AppDialog {
             }
             Keys.onDeletePressed: {
                 if (!root.reviewing && currentIndex >= 0 && currentIndex < count && root.editingAddress === "") {
-                    var addr = model[currentIndex].address;
-                    var r = root.backend.delete_contact(addr);
-                    if (r !== "")
-                        root.statusMessage(r);
-                    root.reload();
+                    root.askRemove([model[currentIndex].address]);
                 }
             }
             Keys.onSpacePressed: {
@@ -355,6 +449,26 @@ AppDialog {
                         }
                     }
 
+                    Rectangle {
+                        Layout.alignment: Qt.AlignVCenter
+                        visible: (entry.sent_count || 0) > 0
+                        color: Theme.bgRaised
+                        radius: Theme.radius
+                        implicitWidth: sentLabel.implicitWidth + Theme.sm * 2
+                        implicitHeight: Theme.pillHeight
+                        border.width: 1
+                        border.color: Theme.accent
+                        Accessible.name: qsTr("You wrote to this address %1 times").arg(entry.sent_count)
+
+                        Label {
+                            id: sentLabel
+                            anchors.centerIn: parent
+                            text: qsTr("sent: %1").arg(entry.sent_count)
+                            color: Theme.accent
+                            font.pixelSize: Theme.fontTiny
+                        }
+                    }
+
                     IconButton {
                         Layout.alignment: Qt.AlignVCenter
                         visible: !root.reviewing
@@ -375,10 +489,7 @@ AppDialog {
                         tooltip: qsTr("Remove contact")
                         Accessible.name: qsTr("Remove contact %1").arg(entry.alias || entryAddress)
                         onClicked: {
-                            var r = root.backend.delete_contact(entryAddress);
-                            if (r !== "")
-                                root.statusMessage(r);
-                            root.reload();
+                            root.askRemove([entryAddress]);
                         }
                     }
                 }

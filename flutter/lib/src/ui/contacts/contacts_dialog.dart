@@ -400,7 +400,11 @@ class _ContactsDialogState extends State<ContactsDialog> {
             : null,
       ),
       subtitle: Text(
-        '${contact.address} · ${_reasonText(c)}',
+        [
+          contact.address,
+          _reasonText(c),
+          if (contact.sentCount > 0) 'sent ${contact.sentCount}',
+        ].join(' · '),
         overflow: TextOverflow.ellipsis,
         maxLines: 2,
       ),
@@ -431,6 +435,7 @@ class _ContactsDialogState extends State<ContactsDialog> {
           Text(
             [
               'seen ${c.timesSeen}',
+              if (c.sentCount > 0) 'sent ${c.sentCount}',
               if (c.alias.isNotEmpty && c.name.isNotEmpty) 'Was: ${c.name}',
             ].join(' · '),
             style: Theme.of(context).textTheme.bodySmall,
