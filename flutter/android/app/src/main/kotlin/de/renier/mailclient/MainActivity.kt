@@ -16,6 +16,7 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
     private var channel: MethodChannel? = null
+    private var readerChannel: MethodChannel? = null
 
     // A notification tap that started or re-used the activity and that Dart
     // has not picked up yet.
@@ -54,16 +55,55 @@ class MainActivity : FlutterActivity() {
         MailNotifier.onMailChanged = {
             runOnUiThread { this.channel?.invokeMethod("mailChanged", null) }
         }
+        // Experiment (branch experiment/native-reader): open one message in
+        // the native ReaderActivity. Settings travel with the ids (never the
+        // bodies — inline images exceed the Binder transaction limit); the
+        // activity re-reads everything else over JNI. Composer, find-similar
+        // and refresh requests come back over the same channel.
+        val reader = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, READER_CHANNEL)
+        readerChannel = reader
+        reader.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "open" -> {
+                    @Suppress("UNCHECKED_CAST")
+                    val args = call.arguments as? Map<String, Any?>
+                    if (args == null) {
+                        result.error("BAD_ARGS", "open needs an argument map", null)
+                    } else {
+                        try {
+                            startActivity(ReaderActivity.openIntent(this, args))
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("OPEN_FAILED", e.message, null)
+                        }
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+        pendingReaderPayload?.let {
+            reader.invokeMethod("onReaderAction", it)
+            pendingReaderPayload = null
+        }
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         MailNotifier.onMailChanged = null
         channel = null
+        readerChannel = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        intent.getStringExtra(EXTRA_READER_PAYLOAD)?.let { payload ->
+            val reader = readerChannel
+            if (reader == null) {
+                pendingReaderPayload = payload
+            } else {
+                reader.invokeMethod("onReaderAction", payload)
+            }
+        }
         val payload = payloadOf(intent) ?: return
         val channel = channel
         if (channel == null) {
@@ -76,6 +116,12 @@ class MainActivity : FlutterActivity() {
     override fun onResume() {
         super.onResume()
         MailNotifier.foreground = true
+        // Experiment (branch experiment/native-reader): the native reader
+        // mutated mail while covering us — reload the lists behind it.
+        if (readerDirty) {
+            readerDirty = false
+            readerChannel?.invokeMethod("onReaderChanged", null)
+        }
     }
 
     override fun onPause() {
@@ -126,8 +172,20 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private companion object {
+    companion object {
         const val POWER_CHANNEL = "mailclient/background_power"
+        const val READER_CHANNEL = "mailclient/reader"
+
+        // Experiment (branch experiment/native-reader): the native reader
+        // asks Flutter for a shell flow (composer, find-similar) by
+        // re-entering this activity with one of these set.
+        const val ACTION_READER = "de.renier.mailclient.READER_ACTION"
+        const val EXTRA_READER_PAYLOAD = "reader_payload"
+
+        // Set by ReaderActivity when it changed mail; MainActivity reports
+        // it to Dart on resume so the lists reload. Same process, no IPC.
+        @Volatile var readerDirty = false
+        var pendingReaderPayload: String? = null
     }
 
     // Whether the exact-alarm scheduler may fire at the exact minute.

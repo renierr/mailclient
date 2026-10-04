@@ -59,6 +59,31 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Experiment (branch experiment/native-reader): a native reader
+             activity for the scroll comparison. Opened from Dart over the
+             mailclient/reader channel with ids plus a settings snapshot;
+             composer and find-similar delegate back to Flutter. Same task
+             affinity so delegating returns to the live MainActivity instead
+             of starting a second engine. DayNight so the header follows the
+             system theme like the rest of the app. -->
+        <activity
+            android:name=".ReaderActivity"
+            android:exported="false"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.DeviceDefault.DayNight"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true" />
+        <!-- Experiment: viewer copies of attachments for ACTION_VIEW.
+             Cache-private; the URI grant hands one file to the viewer. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.readerfiles"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/reader_paths" />
+        </provider>
         <!-- The mail reader's WebView must not phone home: Safe Browsing
              sends URL lookups and list updates to Google, and metrics upload
              usage. Mail content is already kept offline by the reader's CSP. -->

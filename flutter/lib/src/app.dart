@@ -8,6 +8,7 @@ import 'ffi/mail_core.dart';
 import 'state/mail_state.dart';
 import 'sync/background_sync.dart';
 import 'theme/app_theme.dart';
+import 'ui/reader/native_reader.dart';
 import 'ui/shell/mail_shell.dart';
 import 'ui/shell/undo_snack_bar_host.dart';
 
@@ -58,6 +59,9 @@ class _MailAppState extends State<MailApp> with WidgetsBindingObserver {
       },
       onMailChanged: _state.reloadFromCache,
     );
+    // Experiment (branch experiment/native-reader): shell flows the native
+    // reader delegates back, and refreshes after its own mutations.
+    NativeReader.listenForActions(_state);
   }
 
   @override
@@ -113,6 +117,9 @@ class _MailAppState extends State<MailApp> with WidgetsBindingObserver {
       value: _state,
       child: MaterialApp(
         title: 'Mail',
+        // Experiment (branch experiment/native-reader): dialog context for
+        // composer flows the native reader delegates back.
+        navigatorKey: NativeReader.navigatorKey,
         theme: AppTheme.light(),
         darkTheme: AppTheme.dark(),
         debugShowCheckedModeBanner: false,

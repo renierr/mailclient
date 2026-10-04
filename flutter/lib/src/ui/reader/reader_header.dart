@@ -8,6 +8,7 @@ import '../composer/composer_dialog.dart';
 import '../dialogs/sender_avatar.dart';
 import '../menu_row.dart';
 import '../message_list/message_list_pane.dart' show confirmDelete;
+import 'native_reader.dart';
 import 'reader_widgets.dart';
 
 /// Subject, sender and actions, laid out like the Qt reader: the subject
@@ -257,6 +258,18 @@ class ReaderHeader extends StatelessWidget {
                     onPressed: () =>
                         context.read<MailState>().toggleReaderFullscreen(),
                   ),
+                  // Experiment (branch experiment/native-reader): same
+                  // message in the native activity, for the scroll
+                  // comparison. Android only; remove with the experiment.
+                  if (NativeReader.available)
+                    IconButton(
+                      tooltip: 'Open native (experiment)',
+                      icon: const Icon(Icons.android_outlined),
+                      onPressed: () => NativeReader.openMessage(
+                        context.read<MailState>(),
+                        message.uid,
+                      ),
+                    ),
                   PopupMenuButton<String>(
                     tooltip: 'More actions',
                     icon: const Icon(Icons.more_vert),

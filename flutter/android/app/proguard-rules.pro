@@ -10,3 +10,6 @@
 -keepclasseswithmembernames class de.renier.mailclient.MailNative {
     native <methods>;
 }
+# Experiment (branch experiment/native-reader): referenced from the manifest
+# and started from Dart, so keep it whole.
+-keep class de.renier.mailclient.ReaderActivity { *; }

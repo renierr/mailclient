@@ -14,7 +14,7 @@
 use std::sync::{Arc, Mutex};
 
 use jni::errors::ThrowRuntimeExAndDefault;
-use jni::objects::{JClass, JObject, JString};
+use jni::objects::{JByteArray, JClass, JObject, JString};
 use jni::refs::Global;
 use jni::vm::JavaVM;
 use jni::{jni_sig, jni_str, Env, EnvUnowned, JValue};
@@ -345,4 +345,476 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_pushStop<'caller>(
     _class: JClass<'caller>,
 ) {
     monitor().lock().unwrap_or_else(|e| e.into_inner()).take();
+}
+
+/// Drive `f` on a throwaway current-thread Tokio runtime, like
+/// `headless::push_flags_blocking`: JNI worker threads have no runtime.
+fn blocking<T>(f: impl std::future::Future<Output = anyhow::Result<T>>) -> Result<T> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| BridgeError(format!("runtime: {e}")))?;
+    rt.block_on(f).map_err(|e| BridgeError(format!("{e:#}")))
+}
+
+/// Experiment: native reader (`ReaderActivity.kt`, branch
+/// `experiment/native-reader`). The activity passes ids only (never HTML —
+/// bodies with inline images exceed the Binder limit) and re-reads from the
+/// same database Dart uses.
+///
+/// `MailNative.readerMessage(folderId, uid)`: full reader payload, same JSON
+/// as `api::messages::message_json` (sanitized bodies included).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_readerMessage<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+    uid: i32,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let json = mailcore::feed::message_json(
+                crate::db::shared_db()?,
+                folder_id,
+                uid.max(0) as u32,
+            )?;
+            Ok(env.new_string(json)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.readerHeaders(folderId, uid)`: `{from, to, cc, date, subject,
+/// message_id, reply_to}`, same JSON as `api::messages::headers_json`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_readerHeaders<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+    uid: i32,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let json = mailcore::feed::headers_json(
+                crate::db::shared_db()?,
+                folder_id,
+                uid.max(0) as u32,
+            )?;
+            Ok(env.new_string(json)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.readerDocument(body, paint, paper, ink, link, quote, rule,
+/// allowRemote, scale, fit)`: full document for a `WebView`, same builder as
+/// `api::reader::reader_document` but with `top_space: 0` — the native
+/// activity lays the header out as views above the `WebView` in one scroll,
+/// so there is no overlay spacer.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_readerDocument<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    body: JString<'caller>,
+    paint: JString<'caller>,
+    paper: i32,
+    ink: i32,
+    link: i32,
+    quote: i32,
+    rule: i32,
+    allow_remote: bool,
+    scale: f32,
+    fit: bool,
+) -> JString<'caller> {
+    use mailcore::html::reader::{self, Palette, Rgb};
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let rgb = |v: i32| Rgb(v as u32 & 0xFF_FFFF);
+            let doc = reader::document(
+                &string(env, &body)?,
+                &reader::DocumentOptions {
+                    paint: reader::Paint::parse(&string(env, &paint)?),
+                    theme: Palette {
+                        paper: rgb(paper),
+                        ink: rgb(ink),
+                        link: rgb(link),
+                        quote: rgb(quote),
+                        rule: rgb(rule),
+                    },
+                    allow_remote,
+                    top_space: 0,
+                    scale,
+                    fit,
+                    extra_css: "",
+                },
+            );
+            Ok(env.new_string(doc)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// Experiment: full reader actions over JNI (branch
+/// `experiment/native-reader`). Same rule as everywhere else: translation
+/// only — every one of these mirrors a `mailffi::api` function over the same
+/// database and net thread Dart uses, so both readers queue the same jobs.
+
+/// `MailNative.readerMessageHtml(folderId, uid, allowRemote)`: the "show
+/// remote images once" path — `feed::message_html` re-sanitized with remote
+/// references kept.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_readerMessageHtml<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+    uid: i32,
+    allow_remote: bool,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let html = mailcore::feed::message_html(
+                crate::db::shared_db()?,
+                folder_id,
+                uid.max(0) as u32,
+                allow_remote,
+            )?;
+            Ok(env.new_string(html)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.markReadPlan(autoMarkRead, delaySecs, unread)`: whether and
+/// when opening an unread row marks it read — `{"plan","delay_secs"}`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_markReadPlan<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    auto_mark_read: bool,
+    delay_secs: i64,
+    unread: bool,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let (plan, delay) =
+                match mailcore::store::settings::mark_read_plan(auto_mark_read, delay_secs, unread)
+                {
+                    mailcore::store::settings::MarkReadPlan::Off => ("off", 0),
+                    mailcore::store::settings::MarkReadPlan::Now => ("now", 0),
+                    mailcore::store::settings::MarkReadPlan::AfterDelay(s) => ("after", s),
+                };
+            let json = serde_json::json!({"plan": plan, "delay_secs": delay});
+            Ok(env.new_string(serde_json::to_string(&json)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.setReadFlag(accountId, folderId, uid, read)`: local flag write
+/// with background push, like `api::messages::mark_read`. (Named apart from
+/// the notification `markRead`, which marks a `ReadTarget`.)
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_setReadFlag<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+    uid: i32,
+    read: bool,
+) {
+    unowned
+        .with_env(|_env| -> Result<()> {
+            crate::api::messages::mark_read(account_id, folder_id, uid.max(0) as u32, read)?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.toggleStar(accountId, folderId, uid)`: flip one message's
+/// starred flag, like `api::messages::toggle_star`. The reader re-reads the
+/// message for the new state.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_toggleStar<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+    uid: i32,
+) {
+    unowned
+        .with_env(|_env| -> Result<()> {
+            crate::api::messages::toggle_star(account_id, folder_id, uid.max(0) as u32)?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+fn move_result_json<'a>(
+    env: &mut Env<'a>,
+    r: crate::api::mutate::MoveResult,
+) -> Result<JString<'a>> {
+    let json = serde_json::json!({
+        "batch": r.batch,
+        "label": r.label,
+        "purging": r.purging,
+    });
+    Ok(env.new_string(serde_json::to_string(&json)?)?)
+}
+
+/// `MailNative.deleteMessage(accountId, folderId, uid)`: Trash (undoable)
+/// or a purge job where Trash does not apply — `{"batch","label","purging"}`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_deleteMessage<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+    uid: i32,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let r = crate::api::mutate::delete_messages(
+                account_id,
+                folder_id,
+                vec![uid.max(0) as u32],
+            )?;
+            move_result_json(env, r)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.archiveMessage(accountId, folderId, uid)`: one-click archive.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_archiveMessage<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+    uid: i32,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let r = crate::api::mutate::archive_messages(
+                account_id,
+                folder_id,
+                vec![uid.max(0) as u32],
+            )?;
+            move_result_json(env, r)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.moveMessage(accountId, folderId, uid, destPath)`: move to any
+/// folder of the same account, addressed by path.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_moveMessage<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+    uid: i32,
+    dest_path: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let r = crate::api::mutate::move_messages(
+                account_id,
+                folder_id,
+                vec![uid.max(0) as u32],
+                string(env, &dest_path)?,
+            )?;
+            move_result_json(env, r)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.purgeMessage(accountId, folderId, uid)`: destroy server-side.
+/// No undo — the UI confirms first.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_purgeMessage<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+    uid: i32,
+) {
+    unowned
+        .with_env(|_env| -> Result<()> {
+            crate::api::mutate::purge_messages(account_id, folder_id, vec![uid.max(0) as u32])?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.undoMove(batch)`: take back a queued action; the status line
+/// text, also when it was too late.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_undoMove<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    batch: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let text = crate::api::mutate::undo_move(string(env, &batch)?)?;
+            Ok(env.new_string(text)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.undoGraceSecs()`: seconds an action stays undoable.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_undoGraceSecs<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::mutate::undo_grace_secs().to_string())?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.foldersJson(accountId)`: the move picker's folder tree.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_foldersJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::folders::folders_json(account_id)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.linkInfo(url)`: a clicked link split for the examine dialog,
+/// and whether it may be opened at all — `{"safe","scheme","host","path"}`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_linkInfo<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    url: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let i = mailcore::html::link_info(&string(env, &url)?);
+            let json = serde_json::json!({
+                "safe": i.safe,
+                "scheme": i.scheme,
+                "host": i.host,
+                "path": i.path,
+            });
+            Ok(env.new_string(serde_json::to_string(&json)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.cachedAttachmentBytes(attachmentId)`: cached bytes, or an
+/// error when they are not downloaded yet — then `downloadMessageFiles`
+/// first. Bytes cross as a `byte[]`, like the FRB `Vec<u8>`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_cachedAttachmentBytes<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    attachment_id: i64,
+) -> JByteArray<'caller> {
+    unowned
+        .with_env(|env| -> Result<JByteArray<'caller>> {
+            match crate::api::attachments::cached_attachment_bytes(attachment_id)? {
+                Some(bytes) => Ok(env.byte_array_from_slice(&bytes)?),
+                None => Err(BridgeError("not downloaded yet".to_string())),
+            }
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.downloadMessageFiles(accountId, folderId, uid)`: fetch every
+/// attachment of one message into the local cache, blocking the calling
+/// worker thread (whole-message: IMAP fetches by body part within one
+/// FETCH). Returns how many files landed.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_downloadMessageFiles<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+    uid: i32,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let db = crate::db::shared_db()?;
+            let m = mailcore::store::messages::get_by_uid(db, folder_id, uid.max(0) as u32)?;
+            if m.account_id != account_id {
+                return Err(BridgeError(
+                    "message does not belong to this account".to_string(),
+                ));
+            }
+            let files: u64 = blocking(async {
+                mailcore::sync::attachments::download(db, m.id)
+                    .await
+                    .map_err(anyhow::Error::msg)
+            })?;
+            Ok(env.new_string(files.to_string())?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.writeAttachmentCopy(attachmentId, dir)`: the copy a system
+/// viewer opens, under a name that cannot clash or escape `dir`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_writeAttachmentCopy<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    attachment_id: i64,
+    dir: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let path =
+                crate::api::attachments::write_attachment_copy(attachment_id, string(env, &dir)?)?;
+            Ok(env.new_string(path)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.suggestedEmlName(folderId, uid)`: filesystem-safe `.eml` name.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_suggestedEmlName<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+    uid: i32,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let name = mailcore::export::suggested_eml_name(
+                crate::db::shared_db()?,
+                folder_id,
+                uid.max(0) as u32,
+            );
+            Ok(env.new_string(name)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.exportEmlBytes(folderId, uid)`: download-then-assemble as one
+/// blocking call (the Dart side waits for an `Export` job event instead).
+/// Fails while attachment bytes are missing and undownloadable.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_exportEmlBytes<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+    uid: i32,
+) -> JByteArray<'caller> {
+    unowned
+        .with_env(|env| -> Result<JByteArray<'caller>> {
+            let uid = uid.max(0) as u32;
+            blocking(async {
+                mailcore::export::prepare(crate::db::shared_db()?, folder_id, uid)
+                    .await
+                    .map_err(anyhow::Error::msg)
+            })?;
+            let eml = mailcore::export::assemble_eml(crate::db::shared_db()?, folder_id, uid)?;
+            Ok(env.byte_array_from_slice(&eml)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
 }
