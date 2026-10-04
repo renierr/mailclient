@@ -261,7 +261,12 @@ impl ImapSync {
                     parsed.is_read = true;
                 }
                 let id = messages::upsert(db, &parsed)?;
-                collect_contacts_from_headers(db, parsed.account_id, parsed.raw_headers.as_deref());
+                collect_contacts_from_headers(
+                    db,
+                    parsed.account_id,
+                    folder.role,
+                    parsed.raw_headers.as_deref(),
+                );
                 store_attachment_meta(db, id, files);
                 fetched += 1;
             }
@@ -377,7 +382,12 @@ impl ImapSync {
                 let (parsed, files) =
                     parse_to_new(account.id, folder_id, uid, &flags, &raw, false)?;
                 let id = messages::upsert(db, &parsed)?;
-                collect_contacts_from_headers(db, parsed.account_id, parsed.raw_headers.as_deref());
+                collect_contacts_from_headers(
+                    db,
+                    parsed.account_id,
+                    folder.role,
+                    parsed.raw_headers.as_deref(),
+                );
                 store_attachment_meta(db, id, files);
                 fetched += 1;
             }

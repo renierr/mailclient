@@ -6,7 +6,7 @@ use imap_types::flag::Flag;
 use crate::db::Db;
 use crate::error::{Result, StoreError};
 use crate::html::{is_inline_image_mime, MAX_INLINE_BYTES_PER_MESSAGE, MAX_INLINE_IMAGE_BYTES};
-use crate::models::{NewAttachment, NewMessage};
+use crate::models::{FolderRole, NewAttachment, NewMessage};
 use crate::store::{account_settings, contacts, messages, settings};
 
 use super::types::{MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_BYTES};
@@ -289,8 +289,22 @@ fn addr_list(a: Option<&mail_parser::Address>) -> Vec<String> {
     out
 }
 
-pub(crate) fn collect_contacts_from_headers(db: &Db, account_id: i64, raw_headers: Option<&str>) {
+/// Harvest From/To/Cc addresses into `contacts`, unless the folder's mail
+/// is noise by definition: Junk, Trash and Drafts never feed autocomplete.
+/// (The [`settings::COLLECT_SENT_CONTACTS`] kill-switch is checked first.)
+pub(crate) fn collect_contacts_from_headers(
+    db: &Db,
+    account_id: i64,
+    folder_role: FolderRole,
+    raw_headers: Option<&str>,
+) {
     if !account_settings::get_bool(db, account_id, settings::COLLECT_SENT_CONTACTS) {
+        return;
+    }
+    if matches!(
+        folder_role,
+        FolderRole::Junk | FolderRole::Trash | FolderRole::Drafts
+    ) {
         return;
     }
     let Some(headers) = raw_headers else {

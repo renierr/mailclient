@@ -1,19 +1,72 @@
 //! `contacts` for address autocomplete with alias support and fuzzy search.
 
 use rusqlite::params;
+use serde::{Deserialize, Serialize};
 
 use crate::db::Db;
 use crate::error::Result;
 use crate::models::Contact;
 use crate::store::now;
 
+/// Contacts only ever seen once are suggested for removal once they are this
+/// old (compared against `last_seen_at`).
+const STALE_AFTER_DAYS: i64 = 90;
+
+/// Local parts that never belong to a human correspondent: no-reply senders,
+/// bounce processors and mail-system accounts. Matching is deliberately
+/// conservative (exact local part, or a `bounce*` prefix for VERP-style
+/// bounce addresses) so real mailing lists are left alone.
+const AUTOMATED_LOCAL_PARTS: &[&str] = &[
+    "noreply",
+    "no-reply",
+    "no_reply",
+    "donotreply",
+    "do-not-reply",
+    "do_not_reply",
+    "dontreply",
+    "do-not-respond",
+    "postmaster",
+    "mailer-daemon",
+    "mailerdaemon",
+    "mail-daemon",
+    "maildaemon",
+    "auto-reply",
+    "autoreply",
+];
+
+/// True for automated senders (`noreply@…`, `mailer-daemon@…`, `bounce-*@…`)
+/// that make noise in autocomplete and should never become contacts.
+#[must_use]
+pub fn is_automated_address(address: &str) -> bool {
+    let local = address
+        .trim()
+        .split('@')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if local.is_empty() {
+        return false;
+    }
+    AUTOMATED_LOCAL_PARTS.contains(&local.as_str()) || local.starts_with("bounce")
+}
+
+/// One contact the cleanup review suggests removing, with machine-readable
+/// reasons (`"automated"`, `"stale"`) the frontends map to localized text.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CleanupCandidate {
+    pub contact: Contact,
+    pub reasons: Vec<String>,
+}
+
 /// Record having seen an address (insert or bump counter).
 ///
 /// Seeds `alias` from `name` (the transferred real name) if `alias` is not
-/// already populated.
+/// already populated. Automated senders (see [`is_automated_address`]) are
+/// silently skipped so they never pollute autocomplete.
 pub fn seen(db: &Db, address: &str, name: Option<&str>) -> Result<()> {
     let addr_clean = address.trim();
-    if addr_clean.is_empty() {
+    if addr_clean.is_empty() || is_automated_address(addr_clean) {
         return Ok(());
     }
     let name_clean = name.map(str::trim).filter(|s| !s.is_empty());
@@ -87,7 +140,10 @@ pub fn seed_contacts_from_connection(conn: &rusqlite::Connection) -> Result<usiz
                             for a in addrs.iter() {
                                 if let Some(email) = a.address.as_deref() {
                                     let email_clean = email.trim();
-                                    if !email_clean.is_empty() && email_clean.contains('@') {
+                                    if !email_clean.is_empty()
+                                        && email_clean.contains('@')
+                                        && !is_automated_address(email_clean)
+                                    {
                                         let name_clean = a
                                             .name
                                             .as_deref()
@@ -114,7 +170,7 @@ pub fn seed_contacts_from_connection(conn: &rusqlite::Connection) -> Result<usiz
         if !parsed_any {
             if let Some(from) = from_addr {
                 let clean = from.trim();
-                if !clean.is_empty() && clean.contains('@') {
+                if !clean.is_empty() && clean.contains('@') && !is_automated_address(clean) {
                     found.push((clean.to_string(), None, ts.clone()));
                 }
             }
@@ -122,7 +178,8 @@ pub fn seed_contacts_from_connection(conn: &rusqlite::Connection) -> Result<usiz
                 if let Ok(addrs) = serde_json::from_str::<Vec<String>>(&to_json) {
                     for addr in addrs {
                         let clean = addr.trim();
-                        if !clean.is_empty() && clean.contains('@') {
+                        if !clean.is_empty() && clean.contains('@') && !is_automated_address(clean)
+                        {
                             found.push((clean.to_string(), None, ts.clone()));
                         }
                     }
@@ -311,6 +368,70 @@ pub fn delete(db: &Db, address: &str) -> Result<()> {
     Ok(())
 }
 
+/// Remove several contacts at once (the cleanup review's multi-select).
+/// Returns how many rows were removed.
+pub fn delete_many(db: &Db, addresses: &[&str]) -> Result<u64> {
+    if addresses.is_empty() {
+        return Ok(0);
+    }
+    let tx_guard = db.conn();
+    let mut removed = 0u64;
+    for addr in addresses {
+        let clean = addr.trim();
+        if clean.is_empty() {
+            continue;
+        }
+        removed += tx_guard.execute("delete from contacts where address = ?1", [clean])? as u64;
+    }
+    Ok(removed)
+}
+
+/// Contacts worth reviewing for removal: automated senders collected before
+/// the [`seen`] filter existed, and one-off addresses not seen for a long
+/// time. Each candidate carries machine-readable `reasons` (`"automated"`
+/// and/or `"stale"`); the frontends decide the wording. Most recently seen
+/// first, up to `limit`.
+pub fn cleanup_candidates(db: &Db, limit: u64) -> Result<Vec<CleanupCandidate>> {
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(STALE_AFTER_DAYS);
+    let mut stmt = db.conn().prepare(
+        "select address, name, alias, times_seen, last_seen_at from contacts
+          order by last_seen_at desc",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(Contact {
+                address: row.get(0)?,
+                name: row.get(1)?,
+                alias: row.get(2)?,
+                times_seen: row.get::<_, i64>(3)? as u64,
+                last_seen_at: row.get(4)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut out = Vec::new();
+    for contact in rows {
+        if out.len() >= limit as usize {
+            break;
+        }
+        let mut reasons = Vec::new();
+        if is_automated_address(&contact.address) {
+            reasons.push("automated".to_string());
+        }
+        let stale = contact.times_seen <= 1
+            && chrono::DateTime::parse_from_rfc3339(&contact.last_seen_at)
+                .map(|seen| seen < cutoff)
+                .unwrap_or(false);
+        if stale {
+            reasons.push("stale".to_string());
+        }
+        if !reasons.is_empty() {
+            out.push(CleanupCandidate { contact, reasons });
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,6 +485,84 @@ mod tests {
         let res4 = suggest(&db, "amz", 5).unwrap();
         assert_eq!(res4.len(), 1);
         assert_eq!(res4[0].address, "amazon@renier.de");
+    }
+
+    #[test]
+    fn automated_senders_are_never_stored() {
+        let db = Db::open_in_memory().unwrap();
+        for addr in [
+            "noreply@example.com",
+            "no-reply@example.com",
+            "NO_REPLY@example.com",
+            "donotreply@example.com",
+            "do-not-reply@example.com",
+            "postmaster@example.com",
+            "mailer-daemon@example.com",
+            "bounce-123@bounces.example.com",
+            "  Noreply@example.com  ",
+        ] {
+            seen(&db, addr, Some("Some Name")).unwrap();
+        }
+        // Real people and real lists still pass.
+        seen(&db, "alice@example.com", Some("Alice")).unwrap();
+        seen(&db, "team-news@example.com", Some("Team News")).unwrap();
+        seen(&db, "owner-announce@example.com", None).unwrap();
+        let all = list(&db, 20).unwrap();
+        assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn cleanup_candidates_flags_automated_and_stale() {
+        let db = Db::open_in_memory().unwrap();
+        // Automated row as collected before the filter existed.
+        db.conn()
+            .execute(
+                "insert into contacts (address, name, alias, times_seen, last_seen_at)
+                 values ('noreply@example.com', null, null, 5, '2026-10-04T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        // One-off address last seen long ago.
+        db.conn()
+            .execute(
+                "insert into contacts (address, name, alias, times_seen, last_seen_at)
+                 values ('once@example.com', null, null, 1, '2020-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        // Healthy rows: seen often, or seen once but recently.
+        seen(&db, "friend@example.com", Some("Friend")).unwrap();
+        seen(&db, "friend@example.com", Some("Friend")).unwrap();
+        seen(&db, "new@example.com", None).unwrap();
+
+        let cands = cleanup_candidates(&db, 50).unwrap();
+        assert_eq!(cands.len(), 2);
+        let noreply = cands
+            .iter()
+            .find(|c| c.contact.address == "noreply@example.com")
+            .unwrap();
+        assert_eq!(noreply.reasons, vec!["automated".to_string()]);
+        let once = cands
+            .iter()
+            .find(|c| c.contact.address == "once@example.com")
+            .unwrap();
+        assert_eq!(once.reasons, vec!["stale".to_string()]);
+    }
+
+    #[test]
+    fn delete_many_removes_selection() {
+        let db = Db::open_in_memory().unwrap();
+        seen(&db, "a@example.com", None).unwrap();
+        seen(&db, "b@example.com", None).unwrap();
+        seen(&db, "c@example.com", None).unwrap();
+        assert_eq!(
+            delete_many(&db, &["a@example.com", "b@example.com"]).unwrap(),
+            2
+        );
+        assert_eq!(delete_many(&db, &[]).unwrap(), 0);
+        let rest = list(&db, 10).unwrap();
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0].address, "c@example.com");
     }
 
     #[test]

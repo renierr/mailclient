@@ -175,6 +175,31 @@ void main() {
     });
   });
 
+  group('CleanupCandidate', () {
+    test('parses the contact plus machine-readable reasons', () {
+      final c = CleanupCandidate.fromJson(
+        jsonDecode(
+          '{"contact": {"address": "noreply@x.de", "times_seen": 5}, "reasons": ["automated"]}',
+        ) as Map<String, dynamic>,
+      );
+
+      expect(c.contact.address, 'noreply@x.de');
+      expect(c.reasons, ['automated']);
+      expect(c.reasonText, contains('automated sender'));
+    });
+
+    test('unknown reasons pass through instead of being dropped', () {
+      final c = CleanupCandidate.fromJson(
+        jsonDecode(
+          '{"contact": {"address": "a@x.de"}, "reasons": ["stale", "other"]}',
+        ) as Map<String, dynamic>,
+      );
+
+      expect(c.reasonText, contains('long ago'));
+      expect(c.reasonText, contains('other'));
+    });
+  });
+
   group('SenderBadge', () {
     test('rows carry the core badge', () {
       final m = MessageSummary.fromJson({

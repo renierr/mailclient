@@ -94,6 +94,9 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   LinkInfo dco_decode_link_info(dynamic raw);
 
   @protected
+  List<String> dco_decode_list_String(dynamic raw);
+
+  @protected
   List<Hit> dco_decode_list_hit(dynamic raw);
 
   @protected
@@ -226,6 +229,9 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
 
   @protected
   LinkInfo sse_decode_link_info(SseDeserializer deserializer);
+
+  @protected
+  List<String> sse_decode_list_String(SseDeserializer deserializer);
 
   @protected
   List<Hit> sse_decode_list_hit(SseDeserializer deserializer);
@@ -378,6 +384,9 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
 
   @protected
   void sse_encode_link_info(LinkInfo self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_String(List<String> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_hit(List<Hit> self, SseSerializer serializer);

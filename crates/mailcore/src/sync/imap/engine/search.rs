@@ -60,6 +60,7 @@ impl ImapSync {
                     collect_contacts_from_headers(
                         db,
                         parsed.account_id,
+                        folder.role,
                         parsed.raw_headers.as_deref(),
                     );
                     store_attachment_meta(db, id, files);

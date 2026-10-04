@@ -29,6 +29,20 @@ pub fn delete_contact(address: String) -> anyhow::Result<()> {
     Ok(contacts::delete(shared_db()?, address.trim())?)
 }
 
+/// Forget several auto-collected recipients at once (the cleanup review's
+/// multi-select). Returns how many were removed.
+pub fn delete_contacts(addresses: Vec<String>) -> anyhow::Result<u64> {
+    let refs: Vec<&str> = addresses.iter().map(String::as_str).collect();
+    Ok(contacts::delete_many(shared_db()?, &refs)?)
+}
+
+/// Contacts the cleanup review suggests removing (automated senders,
+/// long-unseen one-offs) as JSON, each with machine-readable `reasons`.
+pub fn cleanup_candidates_json() -> anyhow::Result<String> {
+    let cands = contacts::cleanup_candidates(shared_db()?, 200)?;
+    Ok(serde_json::to_string(&cands)?)
+}
+
 /// The recipient address currently being typed: the last `,`/`;` segment
 /// outside double quotes (`compose::recipient_segment`), trimmed.
 #[flutter_rust_bridge::frb(sync)]

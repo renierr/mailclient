@@ -34,6 +34,12 @@ class _ContactsDialogState extends State<ContactsDialog> {
   String? _editing;
   bool _loading = true;
 
+  /// Cleanup review state: suggested removals with a multi-select.
+  bool _reviewing = false;
+  List<CleanupCandidate> _candidates = const [];
+  final Set<String> _selected = {};
+  bool _reviewLoading = false;
+
   /// Last failed load/alias/remove, shown in the dialog itself: the status
   /// bar is hidden behind it (a whole page away on phones).
   String? _error;
@@ -78,6 +84,46 @@ class _ContactsDialogState extends State<ContactsDialog> {
     }
   }
 
+  void _enterReview() {
+    setState(() {
+      _reviewing = true;
+      _editing = null;
+      _selected.clear();
+    });
+    _reloadCandidates();
+  }
+
+  void _exitReview() {
+    setState(() {
+      _reviewing = false;
+      _selected.clear();
+    });
+    _reload();
+  }
+
+  Future<void> _reloadCandidates() async {
+    setState(() => _reviewLoading = true);
+    try {
+      final list = await MailCore.instance.cleanupCandidates();
+      if (!mounted) return;
+      setState(() {
+        _candidates = list;
+        // Drop selections for rows that are no longer suggested.
+        _selected.retainAll(list.map((c) => c.contact.address));
+        _reviewLoading = false;
+        _error = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _reviewLoading = false;
+        _error = '$e';
+      });
+    }
+  }
+
+  String _reasonText(CleanupCandidate c) => c.reasonText;
+
   @override
   Widget build(BuildContext context) {
     if (widget.fullscreen) return _page();
@@ -97,16 +143,26 @@ class _ContactsDialogState extends State<ContactsDialog> {
               Text('Contacts', style: Theme.of(context).textTheme.titleLarge),
               const SizedBox(height: 4),
               _explainer(),
-              const SizedBox(height: 12),
-              _searchField(),
+              if (!_reviewing) ...[
+                const SizedBox(height: 12),
+                _searchField(),
+              ],
+              _reviewTools(),
               _errorLine(),
               const SizedBox(height: 8),
               Expanded(child: _listBody()),
               Align(
                 alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Close'),
+                child: Wrap(
+                  spacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    ..._reviewActionButtons(),
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('Close'),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -161,6 +217,7 @@ class _ContactsDialogState extends State<ContactsDialog> {
 
   /// List for the dialog, whose header is short enough to stay fixed.
   Widget _listBody() {
+    if (_reviewing) return _reviewListBody();
     if (_placeholder() case final Widget placeholder) return placeholder;
     return ListView.separated(
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
@@ -170,10 +227,80 @@ class _ContactsDialogState extends State<ContactsDialog> {
     );
   }
 
+  /// The cleanup review list: suggested removals with a multi-select.
+  Widget _reviewListBody() {
+    if (_reviewLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_candidates.isEmpty) {
+      return Center(
+        child: Text(
+          'No cleanup suggestions — your list looks tidy',
+          style: _emptyStyle,
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
+    return ListView.separated(
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      itemCount: _candidates.length,
+      separatorBuilder: (_, _) => const Divider(height: 1),
+      itemBuilder: (context, i) => _reviewRow(_candidates[i]),
+    );
+  }
+
+  /// "N suggestions" plus select-all/clear, shown above the review list.
+  Widget _reviewTools() {
+    if (!_reviewing || _reviewLoading || _candidates.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final all = _selected.length == _candidates.length;
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            '${_candidates.length} suggestions',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+        TextButton(
+          onPressed: () => setState(() {
+            if (all) {
+              _selected.clear();
+            } else {
+              _selected.addAll(_candidates.map((c) => c.contact.address));
+            }
+          }),
+          child: Text(all ? 'Clear' : 'Select all'),
+        ),
+      ],
+    );
+  }
+
+  /// Review toggle + bulk remove, shared by the dialog footer and the page
+  /// header. The dialog appends its own Close button.
+  List<Widget> _reviewActionButtons() => [
+    if (!_reviewing)
+      TextButton(
+        onPressed: _enterReview,
+        child: const Text('Review suggestions'),
+      ),
+    if (_reviewing)
+      TextButton(onPressed: _exitReview, child: const Text('Back')),
+    if (_reviewing)
+      FilledButton(
+        style: MailDialog.dangerStyle(context),
+        onPressed: _selected.isEmpty ? null : _removeSelected,
+        child: Text('Remove selected (${_selected.length})'),
+      ),
+  ];
+
   /// Explanation line, shared by the dialog and the page.
   Widget _explainer() {
     return Text(
-      'Auto-collected from transferred mail. Set an alias to rename someone just for you.',
+      _reviewing
+          ? 'These look like automated senders or addresses seen only once, long ago. Tick the ones to forget.'
+          : 'Auto-collected from transferred mail. Set an alias to rename someone just for you.',
       style: Theme.of(context).textTheme.bodySmall,
     );
   }
@@ -182,7 +309,10 @@ class _ContactsDialogState extends State<ContactsDialog> {
   /// Header and rows scroll as one lazy sliver list: a fixed header over an
   /// Expanded list overflows a landscape phone once the keyboard is up.
   Widget _page() {
-    final placeholder = _placeholder();
+    final placeholder = _reviewing ? null : _placeholder();
+    final reviewingBusy = _reviewing && _reviewLoading;
+    final reviewingEmpty =
+        _reviewing && !_reviewLoading && _candidates.isEmpty;
     return Scaffold(
       appBar: AppBar(title: const Text('Contacts')),
       body: SafeArea(
@@ -196,15 +326,43 @@ class _ContactsDialogState extends State<ContactsDialog> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _explainer(),
-                    const SizedBox(height: 12),
-                    _searchField(),
+                    if (!_reviewing) ...[
+                      const SizedBox(height: 12),
+                      _searchField(),
+                    ],
+                    _reviewTools(),
                     _errorLine(),
+                    const SizedBox(height: 4),
+                    Wrap(
+                      spacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: _reviewActionButtons(),
+                    ),
                   ],
                 ),
               ),
             ),
-            if (placeholder != null)
-              SliverFillRemaining(hasScrollBody: false, child: placeholder)
+            if (placeholder != null || reviewingBusy || reviewingEmpty)
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child:
+                    placeholder ??
+                    (reviewingBusy
+                        ? const Center(child: CircularProgressIndicator())
+                        : Center(
+                            child: Text(
+                              'No cleanup suggestions — your list looks tidy',
+                              style: _emptyStyle,
+                              textAlign: TextAlign.center,
+                            ),
+                          )),
+              )
+            else if (_reviewing)
+              SliverList.separated(
+                itemCount: _candidates.length,
+                separatorBuilder: (_, _) => const Divider(height: 1),
+                itemBuilder: (context, i) => _reviewRow(_candidates[i]),
+              )
             else
               SliverList.separated(
                 itemCount: _contacts.length,
@@ -213,6 +371,38 @@ class _ContactsDialogState extends State<ContactsDialog> {
               ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// One suggested removal: checkbox plus who and why.
+  Widget _reviewRow(CleanupCandidate c) {
+    final contact = c.contact;
+    final name = contact.alias.isNotEmpty
+        ? contact.alias
+        : (contact.name.isNotEmpty ? contact.name : '(no alias)');
+    return CheckboxListTile(
+      dense: true,
+      controlAffinity: ListTileControlAffinity.leading,
+      value: _selected.contains(contact.address),
+      onChanged: (v) => setState(() {
+        if (v == true) {
+          _selected.add(contact.address);
+        } else {
+          _selected.remove(contact.address);
+        }
+      }),
+      title: Text(
+        name,
+        overflow: TextOverflow.ellipsis,
+        style: contact.alias.isEmpty && contact.name.isEmpty
+            ? const TextStyle(fontStyle: FontStyle.italic)
+            : null,
+      ),
+      subtitle: Text(
+        '${contact.address} · ${_reasonText(c)}',
+        overflow: TextOverflow.ellipsis,
+        maxLines: 2,
       ),
     );
   }
@@ -360,6 +550,47 @@ class _ContactsDialogState extends State<ContactsDialog> {
     try {
       await MailCore.instance.deleteContact(c.address);
       if (!mounted) return;
+      await _reload();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = '$e');
+    }
+  }
+
+  Future<void> _removeSelected() async {
+    final count = _selected.length;
+    if (count == 0) return;
+    final confirmed =
+        await MailDialog.show<bool>(
+          context,
+          builder: (context) => AlertDialog(
+            title: const Text('Remove contacts?'),
+            content: Text(
+              'Forget $count ${count == 1 ? 'contact' : 'contacts'}? '
+              '${count == 1 ? 'It reappears' : 'They reappear'} the next time mail arrives from '
+              '${count == 1 ? 'it' : 'them'}.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                style: MailDialog.dangerStyle(context),
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('Remove'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed || !mounted) return;
+    setState(() => _error = null);
+    try {
+      await MailCore.instance.deleteContacts(_selected.toList());
+      if (!mounted) return;
+      setState(_selected.clear);
+      await _reloadCandidates();
       await _reload();
     } catch (e) {
       if (!mounted) return;

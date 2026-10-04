@@ -712,6 +712,14 @@ class MailCore {
   Future<void> deleteContact(String address) =>
       rust_contacts.deleteContact(address: address);
 
+  Future<int> deleteContacts(List<String> addresses) async =>
+      (await rust_contacts.deleteContacts(addresses: addresses)).toInt();
+
+  Future<List<CleanupCandidate>> cleanupCandidates() async => _decodeList(
+    await rust_contacts.cleanupCandidatesJson(),
+    CleanupCandidate.fromJson,
+  );
+
   /// The recipient address currently being typed, split quote-aware by the
   /// core (`compose::recipient_segment`).
   String recipientSegment(String text) =>

@@ -157,6 +157,16 @@ pub mod qobject {
         #[qinvokable]
         fn delete_contact(&self, address: &QString) -> QString;
 
+        /// Contacts the cleanup review suggests removing (automated senders,
+        /// long-unseen one-offs), as JSON with per-row reasons.
+        #[qinvokable]
+        fn cleanup_candidates_json(&self) -> QString;
+
+        /// Remove several contacts at once (JSON array of addresses).
+        /// Returns `""` or an error.
+        #[qinvokable]
+        fn delete_contacts(&self, addresses: &QString) -> QString;
+
         /// Run a full IMAP sync for the current account (blocking).
         /// Selective + windowed: the folder LIST is always cheap, INBOX syncs
         /// the newest 200 mails fully, every other folder only refreshes flags
@@ -888,6 +898,31 @@ impl qobject::Bridge {
         });
         match result {
             Ok(()) => qstring(""),
+            Err(e) => qstring(&e),
+        }
+    }
+
+    pub fn cleanup_candidates_json(&self) -> QString {
+        let result = shared_db().and_then(|db| {
+            mailcore::store::contacts::cleanup_candidates(db, 200)
+                .map(|cands| serde_json::to_string(&cands).unwrap_or_else(|_| "[]".to_string()))
+                .map_err(|e| e.to_string())
+        });
+        qstring(&result.unwrap_or_else(|e| {
+            log::warn!("contacts: cannot load cleanup candidates: {e}");
+            "[]".to_string()
+        }))
+    }
+
+    pub fn delete_contacts(&self, addresses: &QString) -> QString {
+        let addresses = addresses.to_string();
+        let parsed: Vec<String> = serde_json::from_str(&addresses).unwrap_or_default();
+        let refs: Vec<&str> = parsed.iter().map(String::as_str).collect();
+        let result = shared_db().and_then(|db| {
+            mailcore::store::contacts::delete_many(db, &refs).map_err(|e| e.to_string())
+        });
+        match result {
+            Ok(_) => qstring(""),
             Err(e) => qstring(&e),
         }
     }

@@ -26,6 +26,18 @@ Future<void> setContactAlias({
 Future<void> deleteContact({required String address}) =>
     MailCoreApi.instance.api.crateApiContactsDeleteContact(address: address);
 
+/// Forget several auto-collected recipients at once (the cleanup review's
+/// multi-select). Returns how many were removed.
+Future<BigInt> deleteContacts({required List<String> addresses}) => MailCoreApi
+    .instance
+    .api
+    .crateApiContactsDeleteContacts(addresses: addresses);
+
+/// Contacts the cleanup review suggests removing (automated senders,
+/// long-unseen one-offs) as JSON, each with machine-readable `reasons`.
+Future<String> cleanupCandidatesJson() =>
+    MailCoreApi.instance.api.crateApiContactsCleanupCandidatesJson();
+
 /// The recipient address currently being typed: the last `,`/`;` segment
 /// outside double quotes (`compose::recipient_segment`), trimmed.
 String recipientSegment({required String text}) =>

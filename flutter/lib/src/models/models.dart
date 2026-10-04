@@ -503,6 +503,38 @@ class Contact {
       alias.isNotEmpty ? alias : (name.isNotEmpty ? name : address);
 }
 
+/// One row of the contacts cleanup review
+/// (`mailcore::store::contacts::cleanup_candidates`): a contact plus
+/// machine-readable `reasons` (`"automated"`, `"stale"`).
+class CleanupCandidate {
+  const CleanupCandidate({required this.contact, required this.reasons});
+
+  final Contact contact;
+  final List<String> reasons;
+
+  factory CleanupCandidate.fromJson(Map<String, dynamic> j) => CleanupCandidate(
+    contact: Contact.fromJson(j['contact'] as Map<String, dynamic>),
+    reasons: (j['reasons'] as List? ?? const [])
+        .map((r) => r.toString())
+        .toList(),
+  );
+
+  /// One-line, human-readable explanation of why this row was suggested.
+  String get reasonText {
+    final parts = <String>[];
+    if (reasons.contains('automated')) {
+      parts.add('looks like an automated sender');
+    }
+    if (reasons.contains('stale')) {
+      parts.add('seen only once, long ago');
+    }
+    for (final r in reasons) {
+      if (r != 'automated' && r != 'stale') parts.add(r);
+    }
+    return parts.join('; ');
+  }
+}
+
 /// One unsent mail (`mailcore::outbox::list_json`): everything the outbox
 /// dialog shows, never the MIME bytes.
 class OutboxEntry {
