@@ -542,6 +542,27 @@ class MailCore {
         snippet: m.snippet,
       );
 
+  /// Whether one list row's raw date passes an `after` (inclusive) / `before`
+  /// (exclusive) `YYYY-MM-DD` pair (`mailcore::search::date_passes`).
+  bool dateFilterMatches(String dateRaw, String after, String before) =>
+      rust_search.dateFilterMatches(
+        dateRaw: dateRaw,
+        after: after,
+        before: before,
+      );
+
+  /// A named date preset (`today` | `week` | `month` | `older_month`) as an
+  /// `(after, before)` day pair (`mailcore::search::date_preset_range`).
+  ({String after, String before}) datePresetRange(String preset) {
+    final r = rust_search.datePresetRange(preset: preset);
+    return (after: r.after, before: r.before);
+  }
+
+  /// The words for an active date quick-filter
+  /// (`mailcore::search::date_filter_label`).
+  String dateFilterLabel(String after, String before) =>
+      rust_search.dateFilterLabel(after: after, before: before);
+
   /// Top up thin local results from the server. Queued; re-run [search] when
   /// the `"Search"` job finishes.
   Future<void> searchServer(

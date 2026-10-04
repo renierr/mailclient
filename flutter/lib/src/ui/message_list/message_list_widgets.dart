@@ -45,6 +45,12 @@ class MessageListHeader extends StatelessWidget {
     final filterAttachments = context.select<MailState, bool>(
       (s) => s.filterAttachments,
     );
+    final hasDateFilter = context.select<MailState, bool>(
+      (s) => s.hasDateFilter,
+    );
+    final dateLabel = context.select<MailState, String>(
+      (s) => s.dateFilterLabel,
+    );
     return Container(
       padding: const EdgeInsets.only(left: 2, right: 4),
       child: Row(
@@ -151,6 +157,15 @@ class MessageListHeader extends StatelessWidget {
                   state.setFilterStarred(!state.filterStarred);
                 case 'attachments':
                   state.setFilterAttachments(!state.filterAttachments);
+                case 'today':
+                case 'week':
+                case 'month':
+                case 'older_month':
+                  state.applyDatePreset(v);
+                case 'custom':
+                  showDateRangeDialog(context);
+                case 'clearDates':
+                  state.clearDateFilter();
                 case 'clear':
                   state.clearListFilters();
               }
@@ -180,6 +195,51 @@ class MessageListHeader extends StatelessWidget {
                   text: 'With attachments',
                 ),
               ),
+              const PopupMenuDivider(),
+              const PopupMenuItem(
+                value: 'today',
+                child: MenuRow(icon: Icons.today_outlined, text: 'Today'),
+              ),
+              const PopupMenuItem(
+                value: 'week',
+                child: MenuRow(
+                  icon: Icons.date_range_outlined,
+                  text: 'Last 7 days',
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'month',
+                child: MenuRow(
+                  icon: Icons.date_range_outlined,
+                  text: 'Last 30 days',
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'older_month',
+                child: MenuRow(
+                  icon: Icons.history_outlined,
+                  text: 'Older than 30 days',
+                ),
+              ),
+              PopupMenuItem(
+                value: 'custom',
+                child: MenuRow(
+                  icon: Icons.event_outlined,
+                  text: hasDateFilter
+                      ? 'Custom range… ($dateLabel)'
+                      : 'Custom range…',
+                ),
+              ),
+              if (hasDateFilter)
+                PopupMenuItem(
+                  value: 'clearDates',
+                  child: MenuRow(
+                    icon: Icons.clear,
+                    text: dateLabel.isNotEmpty
+                        ? 'Clear dates ($dateLabel)'
+                        : 'Clear dates',
+                  ),
+                ),
               if (hasFilter) ...[
                 const PopupMenuDivider(),
                 const PopupMenuItem(
@@ -227,6 +287,161 @@ class MessageListHeader extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// Custom date range quick-filter: After (inclusive) / Before (exclusive)
+/// as `YYYY-MM-DD`. Both set shows the days between; either alone is an
+/// open-ended cutoff. Bounds are normalised by the core, like the
+/// `after:`/`before:` search tokens.
+Future<void> showDateRangeDialog(BuildContext context) {
+  final state = context.read<MailState>();
+  Widget form() => _DateRangeForm(
+    initialAfter: state.filterAfter,
+    initialBefore: state.filterBefore,
+    onApply: (after, before) {
+      state.setFilterAfter(after);
+      state.setFilterBefore(before);
+    },
+  );
+  return MailDialog.showForm<void>(
+    context,
+    dialog: (context) => AlertDialog(
+      title: const Text('Filter by date'),
+      content: SingleChildScrollView(child: form()),
+    ),
+    page: (context) =>
+        MailFormPage(title: 'Filter by date', body: form()),
+  );
+}
+
+class _DateRangeForm extends StatefulWidget {
+  const _DateRangeForm({
+    required this.initialAfter,
+    required this.initialBefore,
+    required this.onApply,
+  });
+
+  final String initialAfter;
+  final String initialBefore;
+  final void Function(String after, String before) onApply;
+
+  @override
+  State<_DateRangeForm> createState() => _DateRangeFormState();
+}
+
+class _DateRangeFormState extends State<_DateRangeForm> {
+  late String _after;
+  late String _before;
+
+  @override
+  void initState() {
+    super.initState();
+    _after = widget.initialAfter;
+    _before = widget.initialBefore;
+  }
+
+  static String _day(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  static DateTime? _parse(String s) {
+    final m = RegExp(r'^(\d{4})-(\d{1,2})-(\d{1,2})$').firstMatch(s.trim());
+    if (m == null) return null;
+    final d = DateTime.tryParse(
+      '${m.group(1)}-${m.group(2)!.padLeft(2, '0')}-${m.group(3)!.padLeft(2, '0')}',
+    );
+    return d;
+  }
+
+  Future<void> _pick(bool isAfter) async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _parse(isAfter ? _after : _before) ?? now,
+      firstDate: DateTime(1990),
+      lastDate: DateTime(now.year + 1, 12, 31),
+    );
+    if (picked == null) return;
+    setState(() {
+      if (isAfter) {
+        _after = _day(picked);
+      } else {
+        _before = _day(picked);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Widget row({
+      required IconData icon,
+      required String label,
+      required String value,
+      required VoidCallback onTap,
+      required VoidCallback onClear,
+    }) {
+      return ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: Icon(icon),
+        title: Text(label),
+        subtitle: Text(
+          value.isEmpty ? 'Not set' : value,
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        trailing: value.isEmpty
+            ? const Icon(Icons.chevron_right)
+            : IconButton(
+                tooltip: 'Clear',
+                icon: const Icon(Icons.clear, size: 18),
+                onPressed: onClear,
+              ),
+        onTap: onTap,
+      );
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        row(
+          icon: Icons.today_outlined,
+          label: 'After (inclusive)',
+          value: _after,
+          onTap: () => _pick(true),
+          onClear: () => setState(() => _after = ''),
+        ),
+        row(
+          icon: Icons.event_outlined,
+          label: 'Before (exclusive)',
+          value: _before,
+          onTap: () => _pick(false),
+          onClear: () => setState(() => _before = ''),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Set both for the days between, or one for an open-ended cutoff.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 12),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            const SizedBox(width: 8),
+            FilledButton(
+              onPressed: () {
+                widget.onApply(_after.trim(), _before.trim());
+                Navigator.of(context).pop();
+              },
+              child: const Text('Apply'),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

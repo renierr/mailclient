@@ -167,6 +167,7 @@ class MessageSummary {
     required this.fromName,
     required this.date,
     this.dateKey = '',
+    this.dateRaw = '',
     required this.snippet,
     required this.unread,
     required this.starred,
@@ -195,6 +196,10 @@ class MessageSummary {
   /// UI's to supply, as in Qt.
   final String dateKey;
 
+  /// Raw UTC timestamp (`mailcore::feed`: `date_raw`) for the list date
+  /// quick-filter; [date] above is display text.
+  final String dateRaw;
+
   /// What the row shows: the localized word for a named [dateKey], else
   /// the core's text.
   String get displayDate => displayMailDate(date, dateKey);
@@ -211,6 +216,7 @@ class MessageSummary {
     fromName: _str(j['from_name']),
     date: _str(j['date']),
     dateKey: _str(j['date_key']),
+    dateRaw: _str(j['date_raw']),
     snippet: _str(j['snippet']),
     unread: _bool(j['unread']),
     starred: _bool(j['starred']),
@@ -225,6 +231,7 @@ class MessageSummary {
     fromName: fromName,
     date: date,
     dateKey: dateKey,
+    dateRaw: dateRaw,
     snippet: snippet,
     unread: unread ?? this.unread,
     starred: starred ?? this.starred,

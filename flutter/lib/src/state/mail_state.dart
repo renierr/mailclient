@@ -85,35 +85,63 @@ class MailState extends ChangeNotifier {
   // --- list quick filters ------------------------------------------------
   // Each checked entry narrows the visible rows (AND-combined), in the
   // folder list and in search results alike — the Qt `MessageList`
-  // `filterUnread/filterStarred/filterAttachments` twin.
+  // `filterUnread/filterStarred/filterAttachments` twin, plus a date
+  // quick-filter (`filterAfter` inclusive, `filterBefore` exclusive,
+  // both set = the days between).
   bool _filterUnread = false;
   bool _filterStarred = false;
   bool _filterAttachments = false;
+  String _filterAfter = '';
+  String _filterBefore = '';
 
   bool get filterUnread => _filterUnread;
   bool get filterStarred => _filterStarred;
   bool get filterAttachments => _filterAttachments;
-  bool get hasListFilter =>
-      _filterUnread || _filterStarred || _filterAttachments;
 
-  bool _passesQuick(bool unread, bool starred, bool hasAttachments) =>
+  /// `YYYY-MM-DD` lower bound (inclusive), `""` = unset.
+  String get filterAfter => _filterAfter;
+
+  /// `YYYY-MM-DD` upper bound (exclusive), `""` = unset.
+  String get filterBefore => _filterBefore;
+
+  bool get hasDateFilter => _filterAfter.isNotEmpty || _filterBefore.isNotEmpty;
+  bool get hasListFilter =>
+      _filterUnread ||
+      _filterStarred ||
+      _filterAttachments ||
+      hasDateFilter;
+
+  /// The words for the active date filter, phrased once by the core.
+  String get dateFilterLabel =>
+      _core.dateFilterLabel(_filterAfter, _filterBefore);
+
+  bool _passesQuick(
+    bool unread,
+    bool starred,
+    bool hasAttachments,
+    String dateRaw,
+  ) =>
       (!_filterUnread || unread) &&
       (!_filterStarred || starred) &&
-      (!_filterAttachments || hasAttachments);
+      (!_filterAttachments || hasAttachments) &&
+      (!hasDateFilter ||
+          _core.dateFilterMatches(dateRaw, _filterAfter, _filterBefore));
 
   /// Whether a folder row is on screen: the quick filters, plus the core's
   /// instant filter for short input (`search::filter_matches`; longer input
   /// searches the index instead). The list pane and every selection entry
   /// use this, so a bulk action never reaches a row the user cannot see.
   bool isMessageShown(MessageSummary m) {
-    if (!_passesQuick(m.unread, m.starred, m.hasAttachments)) return false;
+    if (!_passesQuick(m.unread, m.starred, m.hasAttachments, m.dateRaw)) {
+      return false;
+    }
     if (_searchPlan.query.isEmpty) return true;
     return _core.searchFilterMatches(_searchPlan.query, m);
   }
 
   /// Whether a search hit is on screen (the quick filters).
   bool isHitShown(SearchHit h) =>
-      _passesQuick(h.unread, h.starred, h.hasAttachments);
+      _passesQuick(h.unread, h.starred, h.hasAttachments, h.dateRaw);
 
   Iterable<MessageSummary> get _shownMessages =>
       _messages.where(isMessageShown);
@@ -135,10 +163,37 @@ class MailState extends ChangeNotifier {
     _filtersChanged();
   }
 
+  void setFilterAfter(String day) {
+    _filterAfter = day.trim();
+    _filtersChanged();
+  }
+
+  void setFilterBefore(String day) {
+    _filterBefore = day.trim();
+    _filtersChanged();
+  }
+
+  /// A named date preset (`today` | `week` | `month` | `older_month`),
+  /// resolved by the core against today.
+  void applyDatePreset(String preset) {
+    final r = _core.datePresetRange(preset);
+    _filterAfter = r.after;
+    _filterBefore = r.before;
+    _filtersChanged();
+  }
+
+  void clearDateFilter() {
+    _filterAfter = '';
+    _filterBefore = '';
+    _filtersChanged();
+  }
+
   void clearListFilters() {
     _filterUnread = false;
     _filterStarred = false;
     _filterAttachments = false;
+    _filterAfter = '';
+    _filterBefore = '';
     _filtersChanged();
   }
 

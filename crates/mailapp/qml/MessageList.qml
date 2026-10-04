@@ -40,6 +40,12 @@ Rectangle {
     property bool filterUnread: false
     property bool filterStarred: false
     property bool filterAttachments: false
+    // Date quick-filter: `YYYY-MM-DD` bounds, "" = unset. `filterAfter` is
+    // inclusive (mail on/after that day), `filterBefore` exclusive (mail
+    // before that day); both set shows the days between. Decided by
+    // mailcore (`search::date_passes`) against each row's `date_raw`.
+    property string filterAfter: ""
+    property string filterBefore: ""
     // Account-wide FTS mode: `searchRows` are index hits across every folder
     // (newest first, each with folder/folder_id), shown instead of the folder
     // feed. Opening a hit selects its folder and keeps the search; a row
@@ -101,7 +107,9 @@ Rectangle {
     signal sortRequested(string field, bool descending)
     signal statusMessage(string text)
 
+    readonly property bool hasDateFilter: root.filterAfter !== "" || root.filterBefore !== ""
     readonly property bool hasQuickFilter: root.filterUnread || root.filterStarred || root.filterAttachments
+                                           || root.hasDateFilter
     readonly property bool hasAnyFilter: root.filterText !== "" || root.hasQuickFilter
     // Filters only narrow the loaded rows, so older mail stays reachable
     // under them (Flutter shows its Load older row the same way).
@@ -346,7 +354,7 @@ Rectangle {
         return on ? "✓ " : "";
     }
 
-    // Quick filters alone (unread/starred/attachments): used for search
+    // Quick filters alone (unread/starred/attachments/date): used for search
     // hits too, which the FTS query already matched, so the substring
     // filter must not run on them a second time.
     function matchesQuick(m) {
@@ -356,7 +364,31 @@ Rectangle {
             return false;
         if (root.filterAttachments && m.has_attachments !== true)
             return false;
+        if (root.hasDateFilter) {
+            if (!root.backend)
+                return true;
+            var raw = m.date_raw || "";
+            if (!root.backend.date_filter_matches(raw, root.filterAfter, root.filterBefore))
+                return false;
+        }
         return true;
+    }
+
+    // The words for the active date filter, phrased once by mailcore.
+    function dateLabel() {
+        if (!root.hasDateFilter || !root.backend)
+            return "";
+        return root.backend.date_filter_label(root.filterAfter, root.filterBefore);
+    }
+
+    // A named preset (`today` | `week` | `month` | `older_month`) resolved
+    // by mailcore against today.
+    function applyDatePreset(preset) {
+        if (!root.backend)
+            return;
+        var r = JSON.parse(root.backend.date_preset_range_json(preset));
+        root.filterAfter = r.after || "";
+        root.filterBefore = r.before || "";
     }
 
     // Visible rows after applying the search filter.
@@ -385,6 +417,7 @@ Rectangle {
             from: m.from,
             sender: (m.from_name || "") !== "" ? m.from_name : m.from,
             date: root.displayDate(m),
+            date_raw: m.date_raw || "",
             snippet: m.snippet,
             unread: m.unread,
             starred: m.starred,
@@ -542,6 +575,8 @@ Rectangle {
     onFilterUnreadChanged: root.scheduleRebuild()
     onFilterStarredChanged: root.scheduleRebuild()
     onFilterAttachmentsChanged: root.scheduleRebuild()
+    onFilterAfterChanged: root.scheduleRebuild()
+    onFilterBeforeChanged: root.scheduleRebuild()
     onSearchRowsChanged: {
         root.pruneSelection();
         root.scheduleRebuild();
@@ -1288,6 +1323,44 @@ Rectangle {
             label: root.filterTick(root.filterAttachments) + qsTr("With attachments")
             onTriggered: root.filterAttachments = !root.filterAttachments
         }
+        MenuSeparator {}
+        AppMenuItem {
+            glyph: Icons.schedule
+            label: qsTr("Today")
+            onTriggered: root.applyDatePreset("today")
+        }
+        AppMenuItem {
+            glyph: Icons.schedule
+            label: qsTr("Last 7 days")
+            onTriggered: root.applyDatePreset("week")
+        }
+        AppMenuItem {
+            glyph: Icons.schedule
+            label: qsTr("Last 30 days")
+            onTriggered: root.applyDatePreset("month")
+        }
+        AppMenuItem {
+            glyph: Icons.schedule
+            label: qsTr("Older than 30 days")
+            onTriggered: root.applyDatePreset("older_month")
+        }
+        AppMenuItem {
+            glyph: Icons.event
+            label: root.hasDateFilter ? qsTr("Custom range… (%1)").arg(root.dateLabel()) : qsTr("Custom range…")
+            onTriggered: dateDialog.openFor(root.filterAfter, root.filterBefore)
+        }
+        MenuSeparator {
+            visible: root.hasDateFilter
+        }
+        AppMenuItem {
+            visible: root.hasDateFilter
+            glyph: Icons.clear
+            label: root.dateLabel() !== "" ? qsTr("Clear dates (%1)").arg(root.dateLabel()) : qsTr("Clear dates")
+            onTriggered: {
+                root.filterAfter = "";
+                root.filterBefore = "";
+            }
+        }
         MenuSeparator {
             visible: root.hasQuickFilter
         }
@@ -1299,6 +1372,107 @@ Rectangle {
                 root.filterUnread = false;
                 root.filterStarred = false;
                 root.filterAttachments = false;
+                root.filterAfter = "";
+                root.filterBefore = "";
+            }
+        }
+    }
+
+    // Custom date range: After (inclusive) and Before (exclusive) as
+    // `YYYY-MM-DD`. Both set shows the days between; either alone is an
+    // open-ended cutoff. Bounds are normalised by mailcore, so `2026-9-1`
+    // reads like `2026-09-01` and nonsense stays empty.
+    AppDialog {
+        id: dateDialog
+        title: qsTr("Filter by date")
+        subtitle: qsTr("After is inclusive, Before is exclusive (YYYY-MM-DD)")
+        preferredWidth: 440
+        preferredHeight: 340
+        minWidth: 360
+        minHeight: 300
+
+        property string errorText: ""
+
+        function openFor(after, before) {
+            afterField.text = after || "";
+            beforeField.text = before || "";
+            dateDialog.errorText = "";
+            dateDialog.open();
+        }
+
+        function validDay(s) {
+            return /^\d{4}-\d{1,2}-\d{1,2}$/.test(s.trim());
+        }
+
+        footer: RowLayout {
+            spacing: Theme.sm
+            Item {
+                Layout.fillWidth: true
+            }
+            AppButton {
+                Layout.rightMargin: Theme.xs
+                Layout.bottomMargin: Theme.md
+                text: qsTr("Cancel")
+                onClicked: dateDialog.close()
+            }
+            AppButton {
+                Layout.rightMargin: Theme.lg + 8
+                Layout.bottomMargin: Theme.md
+                text: qsTr("Apply")
+                intent: "primary"
+                onClicked: {
+                    var a = afterField.text.trim();
+                    var b = beforeField.text.trim();
+                    if (a !== "" && !dateDialog.validDay(a)) {
+                        dateDialog.errorText = qsTr("After is not a date (YYYY-MM-DD)");
+                        return;
+                    }
+                    if (b !== "" && !dateDialog.validDay(b)) {
+                        dateDialog.errorText = qsTr("Before is not a date (YYYY-MM-DD)");
+                        return;
+                    }
+                    root.filterAfter = a;
+                    root.filterBefore = b;
+                    dateDialog.close();
+                }
+            }
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: Theme.sm
+            FormField {
+                Layout.fillWidth: true
+                label: qsTr("After (inclusive)")
+            }
+            AppTextField {
+                id: afterField
+                Layout.fillWidth: true
+                placeholderText: qsTr("2026-09-01")
+            }
+            FormField {
+                Layout.fillWidth: true
+                label: qsTr("Before (exclusive)")
+            }
+            AppTextField {
+                id: beforeField
+                Layout.fillWidth: true
+                placeholderText: qsTr("2026-10-01")
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: dateDialog.errorText !== ""
+                wrapMode: Text.Wrap
+                color: Theme.danger
+                font.pixelSize: Theme.fontSmall
+                text: dateDialog.errorText
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+                text: qsTr("Set both for the days between, or one for an open-ended cutoff.")
             }
         }
     }

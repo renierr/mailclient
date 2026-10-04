@@ -308,6 +308,42 @@ impl qobject::Bridge {
         )
     }
 
+    pub fn date_filter_matches(
+        &self,
+        date_raw: &QString,
+        after: &QString,
+        before: &QString,
+    ) -> bool {
+        let raw = date_raw.to_string();
+        let after = after.to_string();
+        let before = before.to_string();
+        mailcore::search::date_passes(
+            (!raw.is_empty()).then_some(raw.as_str()),
+            (!after.is_empty()).then_some(after.as_str()),
+            (!before.is_empty()).then_some(before.as_str()),
+        )
+    }
+
+    pub fn date_preset_range_json(&self, preset: &QString) -> QString {
+        let (after, before) = mailcore::search::date_preset_range(&preset.to_string());
+        qstring(
+            &serde_json::to_string(&serde_json::json!({
+                "after": after.unwrap_or_default(),
+                "before": before.unwrap_or_default(),
+            }))
+            .unwrap_or_else(|_| "{\"after\":\"\",\"before\":\"\"}".to_string()),
+        )
+    }
+
+    pub fn date_filter_label(&self, after: &QString, before: &QString) -> QString {
+        let after = after.to_string();
+        let before = before.to_string();
+        qstring(&mailcore::search::date_filter_label(
+            (!after.is_empty()).then_some(after.as_str()),
+            (!before.is_empty()).then_some(before.as_str()),
+        ))
+    }
+
     pub fn open_attachment(self: Pin<&mut Self>, attachment_id: i32) -> QString {
         if attachment_id < 0 {
             return qstring("unknown attachment");

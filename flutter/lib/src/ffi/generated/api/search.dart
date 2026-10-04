@@ -70,6 +70,32 @@ bool searchFilterMatches({
   snippet: snippet,
 );
 
+/// Whether one list row's raw date passes an `after` (inclusive) / `before`
+/// (exclusive) `YYYY-MM-DD` pair (`mailcore::search::date_passes`).
+/// Empty bounds are unset.
+bool dateFilterMatches({
+  required String dateRaw,
+  required String after,
+  required String before,
+}) => MailCoreApi.instance.api.crateApiSearchDateFilterMatches(
+  dateRaw: dateRaw,
+  after: after,
+  before: before,
+);
+
+/// A named date preset (`today` | `week` | `month` | `older_month`) as an
+/// `(after, before)` day pair (`mailcore::search::date_preset_range`).
+DateRange datePresetRange({required String preset}) =>
+    MailCoreApi.instance.api.crateApiSearchDatePresetRange(preset: preset);
+
+/// The words for an active date quick-filter
+/// (`mailcore::search::date_filter_label`).
+String dateFilterLabel({required String after, required String before}) =>
+    MailCoreApi.instance.api.crateApiSearchDateFilterLabel(
+      after: after,
+      before: before,
+    );
+
 /// Backfill thin local results from the server.
 ///
 /// Runs one IMAP SEARCH built from the query (same language as
@@ -86,6 +112,25 @@ Future<void> searchServer({
   query: query,
   folder: folder,
 );
+
+/// An `(after, before)` `YYYY-MM-DD` day pair (`""` = unset).
+class DateRange {
+  final String after;
+  final String before;
+
+  const DateRange({required this.after, required this.before});
+
+  @override
+  int get hashCode => after.hashCode ^ before.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DateRange &&
+          runtimeType == other.runtimeType &&
+          after == other.after &&
+          before == other.before;
+}
 
 /// What the search field does with its text.
 enum SearchMode {

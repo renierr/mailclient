@@ -344,6 +344,84 @@ pub fn plan(raw: &str) -> SearchPlan {
     }
 }
 
+/// Whether a stored message date passes an `after:` (inclusive) / `before:`
+/// (exclusive) day bound pair — the same whole-UTC-day semantics the FTS
+/// search (`feed::search_json`: `m.date >= after`, `m.date < before`) uses,
+/// so a list date quick-filter and an `after:`/`before:` query agree.
+///
+/// Bounds are normalised like query dates (`YYYY-MM-DD`, lenient month/day
+/// accepted); an empty or invalid bound is unset. With no bound set every
+/// row passes, including rows without a date. With a bound set a row
+/// without a date does not pass (SQL `NULL >= ?` is not true either).
+#[must_use]
+pub fn date_passes(date_raw: Option<&str>, after: Option<&str>, before: Option<&str>) -> bool {
+    let after = after.and_then(|s| normalise_date(s.trim()));
+    let before = before.and_then(|s| normalise_date(s.trim()));
+    if after.is_none() && before.is_none() {
+        return true;
+    }
+    let raw = date_raw.unwrap_or("").trim();
+    if raw.is_empty() {
+        return false;
+    }
+    if let Some(a) = after {
+        if raw < a.as_str() {
+            return false;
+        }
+    }
+    if let Some(b) = before {
+        if raw >= b.as_str() {
+            return false;
+        }
+    }
+    true
+}
+
+/// A named list preset resolved to an `(after, before)` day pair, computed
+/// against `today` so both frontends offer the same choices with the same
+/// meaning. `after` is inclusive, `before` exclusive.
+///
+/// Presets: `today` (since this morning), `week` (today + previous 6 days),
+/// `month` (today + previous 29 days), `older_month` (before the last-30-days
+/// window: everything older than a month). Unknown names yield no bounds.
+#[must_use]
+pub fn date_preset_range_at(
+    preset: &str,
+    today: chrono::NaiveDate,
+) -> (Option<String>, Option<String>) {
+    let day = |d: chrono::NaiveDate| d.format("%Y-%m-%d").to_string();
+    match preset.trim().to_ascii_lowercase().as_str() {
+        "today" => (Some(day(today)), None),
+        "week" | "last7" | "7days" => (Some(day(today - chrono::Duration::days(6))), None),
+        "month" | "last30" | "30days" => (Some(day(today - chrono::Duration::days(29))), None),
+        "older_month" | "older30" | "older" => {
+            (None, Some(day(today - chrono::Duration::days(29))))
+        }
+        _ => (None, None),
+    }
+}
+
+/// [`date_preset_range_at`] against the viewer's today.
+#[must_use]
+pub fn date_preset_range(preset: &str) -> (Option<String>, Option<String>) {
+    date_preset_range_at(preset, chrono::Local::now().date_naive())
+}
+
+/// The words for an active date quick-filter, phrased once here so both
+/// frontends show the same chip: `""` (no filter), `"Since 2026-09-01"`,
+/// `"Before 2026-10-01"`, or `"2026-09-01 – 2026-10-01"` for a range.
+#[must_use]
+pub fn date_filter_label(after: Option<&str>, before: Option<&str>) -> String {
+    let after = after.and_then(|s| normalise_date(s.trim()));
+    let before = before.and_then(|s| normalise_date(s.trim()));
+    match (after, before) {
+        (None, None) => String::new(),
+        (Some(a), None) => format!("Since {a}"),
+        (None, Some(b)) => format!("Before {b}"),
+        (Some(a), Some(b)) => format!("{a} – {b}"),
+    }
+}
+
 /// The short-input filter: `query` (trimmed, any case) appears in the
 /// subject, the sender address or name, or the preview. An empty query
 /// matches everything.
@@ -534,5 +612,101 @@ mod tests {
         assert_eq!(plan("is:read").mode, SearchMode::Index);
         assert_eq!(plan("has:attachment").mode, SearchMode::Index);
         assert_eq!(plan("a is:unread").mode, SearchMode::Index);
+    }
+
+    #[test]
+    fn date_bounds_are_inclusive_after_and_exclusive_before() {
+        // Same day semantics as the SQL search (`m.date >= after`, `m.date < before`).
+        assert!(date_passes(
+            Some("2026-09-10T08:00:00+00:00"),
+            Some("2026-09-10"),
+            None
+        ));
+        assert!(!date_passes(
+            Some("2026-09-09T23:59:59+00:00"),
+            Some("2026-09-10"),
+            None
+        ));
+        assert!(!date_passes(
+            Some("2026-09-10T00:00:00+00:00"),
+            None,
+            Some("2026-09-10")
+        ));
+        assert!(date_passes(
+            Some("2026-09-09T12:00:00+00:00"),
+            None,
+            Some("2026-09-10")
+        ));
+        assert!(date_passes(
+            Some("2026-09-12T00:00:00+00:00"),
+            Some("2026-09-10"),
+            Some("2026-09-15")
+        ));
+        assert!(!date_passes(
+            Some("2026-09-15T00:00:00+00:00"),
+            Some("2026-09-10"),
+            Some("2026-09-15")
+        ));
+    }
+
+    #[test]
+    fn date_filter_ignores_empty_and_bad_bounds_but_not_datelss_rows() {
+        assert!(date_passes(Some("2026-09-10T00:00:00+00:00"), None, None));
+        assert!(date_passes(None, None, None));
+        // Invalid bounds are unset, like query dates that stay text.
+        assert!(date_passes(
+            Some("2026-09-10T00:00:00+00:00"),
+            Some("soon"),
+            Some("")
+        ));
+        // Lenient month/day normalises, like `after:2026-9-1`.
+        assert!(date_passes(
+            Some("2026-09-01T00:00:00+00:00"),
+            Some("2026-9-1"),
+            None
+        ));
+        // A bound set hides rows without a date, as SQL does.
+        assert!(!date_passes(None, Some("2026-09-10"), None));
+        assert!(!date_passes(Some(""), None, Some("2026-09-10")));
+    }
+
+    #[test]
+    fn date_presets_resolve_against_today() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 10, 4).unwrap();
+        assert_eq!(
+            date_preset_range_at("today", today),
+            (Some("2026-10-04".to_string()), None)
+        );
+        assert_eq!(
+            date_preset_range_at("week", today),
+            (Some("2026-09-28".to_string()), None)
+        );
+        assert_eq!(
+            date_preset_range_at("month", today),
+            (Some("2026-09-05".to_string()), None)
+        );
+        assert_eq!(
+            date_preset_range_at("older_month", today),
+            (None, Some("2026-09-05".to_string()))
+        );
+        assert_eq!(date_preset_range_at("nope", today), (None, None));
+    }
+
+    #[test]
+    fn date_filter_labels_match_both_frontends() {
+        assert_eq!(date_filter_label(None, None), "");
+        assert_eq!(
+            date_filter_label(Some("2026-09-01"), None),
+            "Since 2026-09-01"
+        );
+        assert_eq!(
+            date_filter_label(None, Some("2026-10-01")),
+            "Before 2026-10-01"
+        );
+        assert_eq!(
+            date_filter_label(Some("2026-09-01"), Some("2026-10-01")),
+            "2026-09-01 – 2026-10-01"
+        );
+        assert_eq!(date_filter_label(Some("soon"), Some("")), "");
     }
 }

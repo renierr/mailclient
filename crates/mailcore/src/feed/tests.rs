@@ -54,6 +54,8 @@ fn feeds_shape_matches_qml_roles() {
     assert_eq!(rows[0]["from_name"], "Alice");
     assert!(rows[0]["unread"].as_bool().unwrap());
     assert!(!rows[0]["has_attachments"].as_bool().unwrap());
+    // Raw UTC timestamp for the list date quick-filter (`search::date_passes`).
+    assert!(rows[0].get("date_raw").is_some());
 
     // …the reader payload carries the bodies.
     let reader: serde_json::Value =

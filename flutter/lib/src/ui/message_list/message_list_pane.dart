@@ -62,7 +62,19 @@ class MessageListPaneState extends State<MessageListPane> {
     final filterAttachments = context.select<MailState, bool>(
       (s) => s.filterAttachments,
     );
-    final hasFilter = filterUnread || filterStarred || filterAttachments;
+    final filterAfter = context.select<MailState, String>((s) => s.filterAfter);
+    final filterBefore = context.select<MailState, String>(
+      (s) => s.filterBefore,
+    );
+    final dateLabel = context.select<MailState, String>(
+      (s) => s.dateFilterLabel,
+    );
+    final hasFilter =
+        filterUnread ||
+        filterStarred ||
+        filterAttachments ||
+        filterAfter.isNotEmpty ||
+        filterBefore.isNotEmpty;
     // Qt parity: 1–2 letter input filters the folder instantly (substring);
     // 3+ letters run the FTS index via `searching`. The rule lives in
     // MailState so the selection entries see exactly these rows.
@@ -88,8 +100,8 @@ class MessageListPaneState extends State<MessageListPane> {
                   child: Text(
                     q.isNotEmpty
                         ? '${shown.length} match(es) for “${query.trim()}”'
-                              '${hasFilter ? ' · filters active' : ''}'
-                        : '${shown.length} of ${messages.length} · filters active',
+                              '${hasFilter ? ' · filters active${dateLabel.isNotEmpty ? ' · $dateLabel' : ''}' : ''}'
+                        : '${shown.length} of ${messages.length} · filters active${dateLabel.isNotEmpty ? ' · $dateLabel' : ''}',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
@@ -224,8 +236,8 @@ class MessageListPaneState extends State<MessageListPane> {
       (s) => s.folder?.path,
     );
     final openUid = context.select<MailState, int>((s) => s.openUid);
-    // Each flag separately: Unread → Unread + Starred keeps `hasListFilter`
-    // true but changes which hits are shown.
+    // Each filter separately: Unread → Unread + Starred keeps `hasListFilter`
+    // true but changes which hits are shown (dates rebuild on their range).
     final filterUnread = context.select<MailState, bool>((s) => s.filterUnread);
     final filterStarred = context.select<MailState, bool>(
       (s) => s.filterStarred,
@@ -233,7 +245,19 @@ class MessageListPaneState extends State<MessageListPane> {
     final filterAttachments = context.select<MailState, bool>(
       (s) => s.filterAttachments,
     );
-    final hasFilter = filterUnread || filterStarred || filterAttachments;
+    final filterAfter = context.select<MailState, String>((s) => s.filterAfter);
+    final filterBefore = context.select<MailState, String>(
+      (s) => s.filterBefore,
+    );
+    final dateLabel = context.select<MailState, String>(
+      (s) => s.dateFilterLabel,
+    );
+    final hasFilter =
+        filterUnread ||
+        filterStarred ||
+        filterAttachments ||
+        filterAfter.isNotEmpty ||
+        filterBefore.isNotEmpty;
     final state = context.read<MailState>();
     final isSimilar = context.select<MailState, bool>((s) => s.isSimilarSearch);
     final similarSubject = context.select<MailState, String?>(
@@ -278,7 +302,7 @@ class MessageListPaneState extends State<MessageListPane> {
               children: [
                 Expanded(
                   child: Text(
-                    '${shownHits.length} of ${hits.length} · filters active',
+                    '${shownHits.length} of ${hits.length} · filters active${dateLabel.isNotEmpty ? ' · $dateLabel' : ''}',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),

@@ -247,6 +247,7 @@ class SearchHit {
     required this.from,
     required this.date,
     this.dateKey = '',
+    this.dateRaw = '',
     required this.snippet,
     required this.unread,
     required this.starred,
@@ -269,6 +270,10 @@ class SearchHit {
   /// Names the date cases that are a word rather than a number
   /// (`mailcore::feed`), carried into [summary] so hits draw like the list.
   final String dateKey;
+
+  /// Raw UTC timestamp (`mailcore::feed`: `date_raw`), carried into [summary]
+  /// so the date quick-filter covers hits too.
+  final String dateRaw;
   final String snippet;
   final bool unread;
   final bool starred;
@@ -284,6 +289,7 @@ class SearchHit {
     fromName: fromName,
     date: date,
     dateKey: dateKey,
+    dateRaw: dateRaw,
     snippet: snippet,
     unread: unread,
     starred: starred,
@@ -301,6 +307,7 @@ class SearchHit {
     badge: SenderBadge.fromJson(j),
     date: _str(j['date']),
     dateKey: _str(j['date_key']),
+    dateRaw: _str(j['date_raw']),
     snippet: _str(j['snippet']),
     unread: _truthy(j['unread']),
     starred: _truthy(j['starred']),

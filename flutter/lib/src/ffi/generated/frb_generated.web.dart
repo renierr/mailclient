@@ -67,6 +67,9 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   ReaderPalette dco_decode_box_autoadd_reader_palette(dynamic raw);
 
   @protected
+  DateRange dco_decode_date_range(dynamic raw);
+
+  @protected
   double dco_decode_f_64(dynamic raw);
 
   @protected
@@ -196,6 +199,9 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
   ReaderPalette sse_decode_box_autoadd_reader_palette(
     SseDeserializer deserializer,
   );
+
+  @protected
+  DateRange sse_decode_date_range(SseDeserializer deserializer);
 
   @protected
   double sse_decode_f_64(SseDeserializer deserializer);
@@ -345,6 +351,9 @@ abstract class MailCoreApiApiImplPlatform extends BaseApiImpl<MailCoreApiWire> {
     ReaderPalette self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_date_range(DateRange self, SseSerializer serializer);
 
   @protected
   void sse_encode_f_64(double self, SseSerializer serializer);

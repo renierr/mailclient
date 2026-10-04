@@ -78,6 +78,45 @@ pub fn search_filter_matches(
     search::filter_matches(&query, &subject, &from, &from_name, &snippet)
 }
 
+/// Whether one list row's raw date passes an `after` (inclusive) / `before`
+/// (exclusive) `YYYY-MM-DD` pair (`mailcore::search::date_passes`).
+/// Empty bounds are unset.
+#[flutter_rust_bridge::frb(sync)]
+pub fn date_filter_matches(date_raw: String, after: String, before: String) -> bool {
+    search::date_passes(
+        (!date_raw.is_empty()).then_some(date_raw.as_str()),
+        (!after.is_empty()).then_some(after.as_str()),
+        (!before.is_empty()).then_some(before.as_str()),
+    )
+}
+
+/// A named date preset (`today` | `week` | `month` | `older_month`) as an
+/// `(after, before)` day pair (`mailcore::search::date_preset_range`).
+#[flutter_rust_bridge::frb(sync)]
+pub fn date_preset_range(preset: String) -> DateRange {
+    let (after, before) = search::date_preset_range(&preset);
+    DateRange {
+        after: after.unwrap_or_default(),
+        before: before.unwrap_or_default(),
+    }
+}
+
+/// The words for an active date quick-filter
+/// (`mailcore::search::date_filter_label`).
+#[flutter_rust_bridge::frb(sync)]
+pub fn date_filter_label(after: String, before: String) -> String {
+    search::date_filter_label(
+        (!after.is_empty()).then_some(after.as_str()),
+        (!before.is_empty()).then_some(before.as_str()),
+    )
+}
+
+/// An `(after, before)` `YYYY-MM-DD` day pair (`""` = unset).
+pub struct DateRange {
+    pub after: String,
+    pub before: String,
+}
+
 /// [`mailcore::search::SearchPlan`] as a generated struct.
 pub struct SearchPlan {
     pub mode: SearchMode,

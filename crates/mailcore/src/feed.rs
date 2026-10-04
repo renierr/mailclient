@@ -306,6 +306,9 @@ pub fn messages_list_json_paged(
                     "from_name": from_name,
                     "date": date.text,
                     "date_key": date.key,
+                    // Raw UTC timestamp for the list date quick-filter
+                    // (`search::date_passes`); `date` above is display text.
+                    "date_raw": m.date,
                     "snippet": m.snippet.unwrap_or_default(),
                     "unread": if is_trash { false } else { !m.is_read },
                     "starred": m.is_starred,
@@ -659,6 +662,8 @@ pub(crate) fn hit_json(row: HitRow) -> serde_json::Value {
         "from_name": from_name,
         "date": date.text,
         "date_key": date.key,
+        // Raw UTC timestamp for the date quick-filter on search hits too.
+        "date_raw": row.date,
         "snippet": one_line(row.snippet.as_deref().unwrap_or_default()),
         "unread": !row.is_read,
         "starred": row.is_starred,

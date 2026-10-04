@@ -299,6 +299,27 @@ pub mod qobject {
             snippet: &QString,
         ) -> bool;
 
+        /// Whether one list row's raw date passes an `after` (inclusive) /
+        /// `before` (exclusive) `YYYY-MM-DD` pair (`mailcore::search::date_passes`).
+        /// Empty bounds are unset.
+        #[qinvokable]
+        fn date_filter_matches(
+            &self,
+            date_raw: &QString,
+            after: &QString,
+            before: &QString,
+        ) -> bool;
+
+        /// A named date preset (`today` | `week` | `month` | `older_month`) as
+        /// JSON (`mailcore::search::date_preset_range`): `{"after":"","before":""}`.
+        #[qinvokable]
+        fn date_preset_range_json(&self, preset: &QString) -> QString;
+
+        /// The words for an active date quick-filter
+        /// (`mailcore::search::date_filter_label`).
+        #[qinvokable]
+        fn date_filter_label(&self, after: &QString, before: &QString) -> QString;
+
         /// Server-side search backfill for thin local results: runs IMAP
         /// `TEXT` search per token across the account's folders — or just one
         /// folder when `folder` is set — and fetches missing hits into the
