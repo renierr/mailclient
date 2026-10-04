@@ -483,6 +483,107 @@ mod tests {
     }
 
     #[test]
+    fn similar_groups_hits_by_folder() {
+        let db = Db::open_in_memory().unwrap();
+        let acc = accounts::create_for_test(&db, "me@example.com");
+        let inbox = folders::upsert(&db, acc, "INBOX", "/", FolderRole::Inbox).unwrap();
+        let archive = folders::upsert(&db, acc, "Archive", "/", FolderRole::Archive).unwrap();
+
+        fn put(
+            db: &Db,
+            acc: i64,
+            folder: i64,
+            uid: u32,
+            date: &str,
+            thread: Option<&str>,
+            subject: &str,
+            from: &str,
+        ) {
+            let mut m = messages::sample_new(acc, folder, uid);
+            m.thread_id = thread.map(str::to_string);
+            m.subject = Some(subject.to_string());
+            m.from_addr = Some(from.to_string());
+            m.date = Some(date.to_string());
+            messages::upsert(db, &m).unwrap();
+        }
+
+        // Target in INBOX.
+        put(
+            &db,
+            acc,
+            inbox,
+            1,
+            "2026-01-01T10:00:00Z",
+            Some("thread-1"),
+            "Project Roadmap Discussion",
+            "alice@example.com",
+        );
+        // Tier 1 (same thread): newest hit in INBOX, older one in Archive.
+        put(
+            &db,
+            acc,
+            inbox,
+            2,
+            "2026-05-01T10:00:00Z",
+            Some("thread-1"),
+            "Unrelated",
+            "bob@example.com",
+        );
+        put(
+            &db,
+            acc,
+            archive,
+            3,
+            "2026-04-01T10:00:00Z",
+            Some("thread-1"),
+            "Unrelated",
+            "carol@example.com",
+        );
+        // Tier 2 (same sender + normalized subject): newest hit in Archive,
+        // so tier order alone would interleave the folders.
+        put(
+            &db,
+            acc,
+            archive,
+            4,
+            "2026-06-01T10:00:00Z",
+            None,
+            "Re: Project Roadmap Discussion",
+            "alice@example.com",
+        );
+        put(
+            &db,
+            acc,
+            inbox,
+            5,
+            "2026-03-01T10:00:00Z",
+            None,
+            "Re: Project Roadmap Discussion",
+            "alice@example.com",
+        );
+
+        let res_json = similar_json(&db, acc, inbox, 1, 50).unwrap();
+        let hits: Vec<serde_json::Value> = serde_json::from_str(&res_json).unwrap();
+        let got: Vec<u64> = hits.iter().map(|h| h["uid"].as_u64().unwrap()).collect();
+        // Tier order globally would be 2, 3, 4, 5; grouped by folder with
+        // tier order kept inside each folder it is 2, 5, 3, 4.
+        assert_eq!(got, vec![2, 5, 3, 4]);
+        // Each folder in exactly one contiguous run (one section header).
+        let folders: Vec<&str> = hits.iter().map(|h| h["folder"].as_str().unwrap()).collect();
+        let mut runs: Vec<&str> = Vec::new();
+        for f in &folders {
+            if runs.last() != Some(f) {
+                assert!(
+                    !runs.contains(f),
+                    "folder {f} split across runs: {folders:?}"
+                );
+                runs.push(f);
+            }
+        }
+        assert_eq!(runs.len(), 2);
+    }
+
+    #[test]
     fn similar_stops_at_the_limit() {
         let (db, acc, folder) = setup_test_db();
         add(&db, acc, folder, 1, "Weekly report", "a@example.com");

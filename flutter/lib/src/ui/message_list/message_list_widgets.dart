@@ -836,6 +836,13 @@ class SearchFolderHeader extends StatelessWidget {
   }
 }
 
+/// Whether search hits get folder headers. A folder-scoped search is all
+/// one folder, so it needs none — but similar results span the account
+/// whatever the scope toggle says (Qt forces its sections the same way),
+/// so they always get headers.
+bool showFolderHeaders({required bool folderOnly, required bool isSimilar}) =>
+    !folderOnly || isSimilar;
+
 /// Hits with a folder header (a string) wherever the folder changes. The
 /// core sends them grouped (`feed::search_json`: folders in the order of
 /// their newest hit, newest first inside each).

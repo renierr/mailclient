@@ -242,10 +242,14 @@ class MessageListPaneState extends State<MessageListPane> {
     final shownHits = hasFilter
         ? hits.where(state.isHitShown).toList(growable: false)
         : hits;
-    // A folder-scoped search is all one folder: no headers needed.
-    final rows = folderOnly
-        ? List<Object>.of(shownHits)
-        : groupHitsByFolder(shownHits);
+    // A folder-scoped search is all one folder: no headers needed. Similar
+    // spans the account whatever the scope toggle says, so it keeps them.
+    final rows = showFolderHeaders(
+      folderOnly: folderOnly,
+      isSimilar: isSimilar,
+    )
+        ? groupHitsByFolder(shownHits)
+        : List<Object>.of(shownHits);
     return Column(
       children: [
         const MessageListHeader(),

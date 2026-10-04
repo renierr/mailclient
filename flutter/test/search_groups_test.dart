@@ -35,6 +35,28 @@ void main() {
     ]);
   });
 
+  test('similar results keep folder headers whatever the scope says', () {
+    // A plain folder-scoped search is all one folder: no headers.
+    expect(
+      showFolderHeaders(folderOnly: true, isSimilar: false),
+      isFalse,
+    );
+    expect(
+      showFolderHeaders(folderOnly: false, isSimilar: false),
+      isTrue,
+    );
+    // Similar spans the account even with the Folder toggle on (Qt does
+    // the same), so the headers stay.
+    expect(
+      showFolderHeaders(folderOnly: true, isSimilar: true),
+      isTrue,
+    );
+    expect(
+      showFolderHeaders(folderOnly: false, isSimilar: true),
+      isTrue,
+    );
+  });
+
   test('the same uid in two folders is two selection keys', () {
     expect(hit(5, 'INBOX').key == hit(5, 'Archive').key, isFalse);
     expect(hit(5, 'INBOX').key == hit(5, 'INBOX').key, isTrue);
