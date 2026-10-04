@@ -218,6 +218,12 @@ pub struct Contact {
     pub name: Option<String>,
     pub alias: Option<String>,
     pub times_seen: u64,
+    /// How often mail was sent *to* this address (vs. merely harvested from
+    /// incoming mail). Ranks the contact above received-only ones and
+    /// exempts it from the cleanup's `stale` reason. Defaults to 0 so
+    /// older payloads still parse.
+    #[serde(default)]
+    pub sent_count: u64,
     pub last_seen_at: String,
 }
 

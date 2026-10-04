@@ -175,6 +175,7 @@ create table if not exists contacts (
     name         text,
     alias        text,
     times_seen   integer not null default 1,
+    sent_count   integer not null default 0,
     last_seen_at text not null
 );
 create index if not exists idx_contacts_seen on contacts (times_seen desc, last_seen_at desc);

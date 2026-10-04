@@ -173,6 +173,19 @@ void main() {
 
       expect(c.displayName, 'a@x.de');
     });
+
+    test('sent_count marks people the user wrote to, defaulting to zero', () {
+      final sent = Contact.fromJson(
+        jsonDecode('{"address": "a@x.de", "sent_count": 3}')
+            as Map<String, dynamic>,
+      );
+      expect(sent.sentCount, 3);
+
+      final old = Contact.fromJson(
+        jsonDecode('{"address": "b@x.de"}') as Map<String, dynamic>,
+      );
+      expect(old.sentCount, 0);
+    });
   });
 
   group('CleanupCandidate', () {

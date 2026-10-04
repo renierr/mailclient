@@ -182,7 +182,7 @@ fn collect_recipients(db: &Db, to: &[String], cc: &[String], bcc: &[String]) {
     all.extend(valid_mailboxes(cc));
     all.extend(valid_mailboxes(bcc));
     for mb in all {
-        if let Err(e) = contacts::seen(db, mb.email.as_ref(), mb.name.as_deref()) {
+        if let Err(e) = contacts::seen_sent(db, mb.email.as_ref(), mb.name.as_deref()) {
             log::warn!("contacts: could not collect recipient: {e}");
         }
     }

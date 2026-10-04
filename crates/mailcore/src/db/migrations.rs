@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 20;
+pub const SCHEMA_VERSION: u32 = 21;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -292,6 +292,20 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         // parsed this way from now on (see `parse_to_new`).
         if let Err(e) = migrate_cid_inline_attachments(conn) {
             log::warn!("migration v20: inline attachment repair failed: {e}");
+        }
+    }
+    if current < 21 {
+        // v21: `contacts.sent_count` — how often mail was sent *to* an
+        // address, so people you wrote to rank above merely harvested ones
+        // and are never cleanup `stale` candidates. Backfilled from cached
+        // Sent mail; only existing contacts are credited, removed ones stay
+        // forgotten.
+        add_columns(
+            conn,
+            &["alter table contacts add column sent_count integer not null default 0;"],
+        )?;
+        if let Err(e) = crate::store::contacts::backfill_sent_counts_from_connection(conn) {
+            log::warn!("migration v21: sent-count backfill failed: {e}");
         }
     }
     if current != SCHEMA_VERSION {

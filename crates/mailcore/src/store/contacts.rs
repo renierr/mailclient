@@ -84,6 +84,76 @@ pub fn seen(db: &Db, address: &str, name: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Record having sent mail to an address: it counts as seen *and* as
+/// sent-to (`sent_count`), which ranks the contact above merely harvested
+/// ones and exempts it from the cleanup's `stale` reason. Automated
+/// senders stay excluded even here.
+pub fn seen_sent(db: &Db, address: &str, name: Option<&str>) -> Result<()> {
+    let addr_clean = address.trim();
+    if addr_clean.is_empty() || is_automated_address(addr_clean) {
+        return Ok(());
+    }
+    let name_clean = name.map(str::trim).filter(|s| !s.is_empty());
+    let ts = now();
+    db.conn().execute(
+        "insert into contacts (address, name, alias, times_seen, sent_count, last_seen_at)
+         values (?1, ?2, ?2, 1, 1, ?3)
+         on conflict (address) do update set
+            name = coalesce(excluded.name, contacts.name),
+            alias = coalesce(contacts.alias, excluded.name, contacts.name),
+            times_seen = contacts.times_seen + 1,
+            sent_count = contacts.sent_count + 1,
+            last_seen_at = excluded.last_seen_at",
+        params![addr_clean, name_clean, ts],
+    )?;
+    Ok(())
+}
+
+/// Backfill `sent_count` from cached Sent-folder mail (used by the v21
+/// migration): every distinct recipient address per sent message counts
+/// once. Only updates contacts that already exist — never resurrects
+/// removed ones.
+pub fn backfill_sent_counts_from_connection(conn: &rusqlite::Connection) -> Result<usize> {
+    let mut stmt = conn.prepare(
+        "select to_addrs, cc_addrs, bcc_addrs from messages
+          join folders on messages.folder_id = folders.id
+          where folders.role = 'sent'",
+    )?;
+    let mut counts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    let rows = stmt.query_map([], |row| {
+        let to_addrs: String = row.get(0)?;
+        let cc_addrs: String = row.get(1)?;
+        let bcc_addrs: String = row.get(2)?;
+        Ok((to_addrs, cc_addrs, bcc_addrs))
+    })?;
+    for row_res in rows {
+        let (to_addrs, cc_addrs, bcc_addrs) = row_res?;
+        let mut per_message = std::collections::HashSet::new();
+        for raw in [&to_addrs, &cc_addrs, &bcc_addrs] {
+            if let Ok(addrs) = serde_json::from_str::<Vec<String>>(raw) {
+                for addr in addrs {
+                    let clean = addr.trim();
+                    if !clean.is_empty() && clean.contains('@') {
+                        per_message.insert(clean.to_ascii_lowercase());
+                    }
+                }
+            }
+        }
+        for addr in per_message {
+            *counts.entry(addr).or_default() += 1;
+        }
+    }
+
+    let mut credited = 0usize;
+    for (addr, n) in &counts {
+        credited += conn.execute(
+            "update contacts set sent_count = sent_count + ?1 where lower(address) = ?2",
+            rusqlite::params![n, addr],
+        )?;
+    }
+    Ok(credited)
+}
+
 /// Explicitly update or set a contact's custom alias.
 pub fn set_alias(db: &Db, address: &str, alias: Option<&str>) -> Result<()> {
     let addr_clean = address.trim();
@@ -295,7 +365,11 @@ fn match_score(query: &str, contact: &Contact) -> Option<i64> {
     update(score_field(&q, addr, 1.0));
     update(score_field(&q, local_part, 1.0));
 
-    best_score.map(|s| s + (contact.times_seen.min(50) as i64) * 2)
+    // People you wrote to outrank harvested ones: a single send counts as
+    // much as five sightings.
+    best_score.map(|s| {
+        s + (contact.times_seen.min(50) as i64) * 2 + (contact.sent_count.min(20) as i64) * 10
+    })
 }
 
 /// Top matches for `query` (matching alias, domain, name, or address),
@@ -304,8 +378,8 @@ pub fn suggest(db: &Db, query: &str, limit: u64) -> Result<Vec<Contact>> {
     let q = query.trim();
     if q.is_empty() {
         let mut stmt = db.conn().prepare(
-            "select address, name, alias, times_seen, last_seen_at from contacts
-             order by times_seen desc, last_seen_at desc limit ?1",
+            "select address, name, alias, times_seen, sent_count, last_seen_at from contacts
+             order by sent_count desc, times_seen desc, last_seen_at desc limit ?1",
         )?;
         let rows = stmt
             .query_map([limit as i64], |row| {
@@ -314,16 +388,17 @@ pub fn suggest(db: &Db, query: &str, limit: u64) -> Result<Vec<Contact>> {
                     name: row.get(1)?,
                     alias: row.get(2)?,
                     times_seen: row.get::<_, i64>(3)? as u64,
-                    last_seen_at: row.get(4)?,
+                    sent_count: row.get::<_, i64>(4)? as u64,
+                    last_seen_at: row.get(5)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         return Ok(rows);
     }
 
-    let mut stmt = db
-        .conn()
-        .prepare("select address, name, alias, times_seen, last_seen_at from contacts")?;
+    let mut stmt = db.conn().prepare(
+        "select address, name, alias, times_seen, sent_count, last_seen_at from contacts",
+    )?;
     let candidates = stmt
         .query_map([], |row| {
             Ok(Contact {
@@ -331,7 +406,8 @@ pub fn suggest(db: &Db, query: &str, limit: u64) -> Result<Vec<Contact>> {
                 name: row.get(1)?,
                 alias: row.get(2)?,
                 times_seen: row.get::<_, i64>(3)? as u64,
-                last_seen_at: row.get(4)?,
+                sent_count: row.get::<_, i64>(4)? as u64,
+                last_seen_at: row.get(5)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -394,7 +470,7 @@ pub fn delete_many(db: &Db, addresses: &[&str]) -> Result<u64> {
 pub fn cleanup_candidates(db: &Db, limit: u64) -> Result<Vec<CleanupCandidate>> {
     let cutoff = chrono::Utc::now() - chrono::Duration::days(STALE_AFTER_DAYS);
     let mut stmt = db.conn().prepare(
-        "select address, name, alias, times_seen, last_seen_at from contacts
+        "select address, name, alias, times_seen, sent_count, last_seen_at from contacts
           order by last_seen_at desc",
     )?;
     let rows = stmt
@@ -404,7 +480,8 @@ pub fn cleanup_candidates(db: &Db, limit: u64) -> Result<Vec<CleanupCandidate>> 
                 name: row.get(1)?,
                 alias: row.get(2)?,
                 times_seen: row.get::<_, i64>(3)? as u64,
-                last_seen_at: row.get(4)?,
+                sent_count: row.get::<_, i64>(4)? as u64,
+                last_seen_at: row.get(5)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -418,7 +495,9 @@ pub fn cleanup_candidates(db: &Db, limit: u64) -> Result<Vec<CleanupCandidate>> 
         if is_automated_address(&contact.address) {
             reasons.push("automated".to_string());
         }
-        let stale = contact.times_seen <= 1
+        // Someone you wrote to is never stale, however long ago.
+        let stale = contact.sent_count == 0
+            && contact.times_seen <= 1
             && chrono::DateTime::parse_from_rfc3339(&contact.last_seen_at)
                 .map(|seen| seen < cutoff)
                 .unwrap_or(false);
@@ -547,6 +626,154 @@ mod tests {
             .find(|c| c.contact.address == "once@example.com")
             .unwrap();
         assert_eq!(once.reasons, vec!["stale".to_string()]);
+    }
+
+    #[test]
+    fn sent_addresses_outrank_merely_seen_ones() {
+        let db = Db::open_in_memory().unwrap();
+        for _ in 0..5 {
+            seen(&db, "stranger@example.com", None).unwrap();
+        }
+        seen_sent(&db, "friend@example.com", Some("Friend")).unwrap();
+
+        let all = list(&db, 10).unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].address, "friend@example.com");
+        assert_eq!(all[0].sent_count, 1);
+        assert_eq!(all[1].sent_count, 0);
+
+        // The autocomplete agrees: same domain match, the sent contact wins.
+        let res = suggest(&db, "example", 10).unwrap();
+        assert_eq!(res[0].address, "friend@example.com");
+    }
+
+    #[test]
+    fn sent_contacts_are_never_stale_but_automated_stays_excluded() {
+        let db = Db::open_in_memory().unwrap();
+        // One send long ago: backdate the row like an old database would.
+        seen_sent(&db, "old-friend@example.com", None).unwrap();
+        db.conn()
+            .execute(
+                "update contacts set last_seen_at = '2020-01-01T00:00:00Z'
+                 where address = 'old-friend@example.com'",
+                [],
+            )
+            .unwrap();
+        // Even a deliberate send must not create automated contacts.
+        seen_sent(&db, "noreply@example.com", None).unwrap();
+
+        let cands = cleanup_candidates(&db, 50).unwrap();
+        assert!(cands
+            .iter()
+            .all(|c| c.contact.address != "old-friend@example.com"));
+        assert_eq!(list(&db, 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn backfill_credits_sent_mail_without_resurrecting_anyone() {
+        let db = Db::open_in_memory().unwrap();
+        let aid = crate::store::accounts::create(
+            &db,
+            &crate::models::NewAccount {
+                name: "Test".to_string(),
+                email_address: "me@example.com".to_string(),
+                from_name: String::new(),
+                imap_host: "imap.example.com".to_string(),
+                imap_port: 993,
+                imap_security: "tls".to_string(),
+                imap_username: "me".to_string(),
+                smtp_host: "smtp.example.com".to_string(),
+                smtp_port: 465,
+                smtp_security: "tls".to_string(),
+                smtp_username: "me".to_string(),
+                auth_vault_key: "vault".to_string(),
+                check_interval_secs: 300,
+            },
+        )
+        .unwrap();
+        let sent =
+            crate::store::folders::upsert(&db, aid, "Sent", "/", crate::models::FolderRole::Sent)
+                .unwrap();
+        let inbox =
+            crate::store::folders::upsert(&db, aid, "INBOX", "/", crate::models::FolderRole::Inbox)
+                .unwrap();
+
+        // A known contact and an unknown one, both mailed twice.
+        seen(&db, "friend@example.com", Some("Friend")).unwrap();
+        for uid in [1u32, 2] {
+            crate::store::messages::upsert(
+                &db,
+                &crate::models::NewMessage {
+                    account_id: aid,
+                    folder_id: sent,
+                    uid,
+                    message_id_header: None,
+                    thread_id: None,
+                    subject: None,
+                    from_addr: Some("me@example.com".to_string()),
+                    from_name: None,
+                    to_addrs: vec![
+                        "friend@example.com".to_string(),
+                        "ghost@example.com".to_string(),
+                    ],
+                    cc_addrs: Vec::new(),
+                    bcc_addrs: Vec::new(),
+                    reply_to: None,
+                    date: Some("2026-01-01T00:00:00Z".to_string()),
+                    snippet: None,
+                    body_text: None,
+                    body_html: None,
+                    raw_headers: None,
+                    is_read: true,
+                    is_starred: false,
+                    is_draft: false,
+                    has_attachments: false,
+                    keywords: Vec::new(),
+                    size: 0,
+                    downloaded_full: true,
+                },
+            )
+            .unwrap();
+        }
+        // Same address from the inbox must not count as sent.
+        crate::store::messages::upsert(
+            &db,
+            &crate::models::NewMessage {
+                account_id: aid,
+                folder_id: inbox,
+                uid: 1,
+                message_id_header: None,
+                thread_id: None,
+                subject: None,
+                from_addr: Some("friend@example.com".to_string()),
+                from_name: None,
+                to_addrs: vec!["me@example.com".to_string()],
+                cc_addrs: Vec::new(),
+                bcc_addrs: Vec::new(),
+                reply_to: None,
+                date: Some("2026-01-01T00:00:00Z".to_string()),
+                snippet: None,
+                body_text: None,
+                body_html: None,
+                raw_headers: None,
+                is_read: true,
+                is_starred: false,
+                is_draft: false,
+                has_attachments: false,
+                keywords: Vec::new(),
+                size: 0,
+                downloaded_full: true,
+            },
+        )
+        .unwrap();
+
+        let credited = backfill_sent_counts_from_connection(db.conn()).unwrap();
+        assert_eq!(credited, 1);
+        let friend = suggest(&db, "friend", 5).unwrap();
+        assert_eq!(friend.len(), 1);
+        assert_eq!(friend[0].sent_count, 2);
+        // The unknown recipient is not resurrected into contacts.
+        assert!(suggest(&db, "ghost", 5).unwrap().is_empty());
     }
 
     #[test]

@@ -481,6 +481,7 @@ class Contact {
     required this.name,
     required this.alias,
     required this.timesSeen,
+    this.sentCount = 0,
   });
 
   final String address;
@@ -492,11 +493,16 @@ class Contact {
   final String alias;
   final int timesSeen;
 
+  /// How often mail was sent *to* this address (vs. merely harvested from
+  /// incoming mail). Missing on payloads from older cores.
+  final int sentCount;
+
   factory Contact.fromJson(Map<String, dynamic> j) => Contact(
     address: _str(j['address']),
     name: _str(j['name']),
     alias: _str(j['alias']),
     timesSeen: _int(j['times_seen']),
+    sentCount: _int(j['sent_count']),
   );
 
   String get displayName =>

@@ -233,7 +233,7 @@ impl SmtpSender {
             for mb in all_rcpts {
                 let addr = mb.email.to_string();
                 let name = mb.name.as_deref();
-                if let Err(e) = contacts::seen(db, &addr, name) {
+                if let Err(e) = contacts::seen_sent(db, &addr, name) {
                     log::warn!("contacts: could not collect recipient: {e}");
                 }
             }
@@ -322,7 +322,7 @@ impl SmtpSender {
                         // Envelope only: the display names lived in the
                         // composer form, which is long gone by now.
                         for addr in &row.envelope_to {
-                            if let Err(e) = contacts::seen(db, addr, None) {
+                            if let Err(e) = contacts::seen_sent(db, addr, None) {
                                 log::warn!("contacts: could not collect recipient: {e}");
                             }
                         }
