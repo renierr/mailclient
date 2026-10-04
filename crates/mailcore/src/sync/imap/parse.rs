@@ -187,10 +187,18 @@ pub(crate) fn extract_attachments(
         }
         // Bytes in hand beat the header: a confident `image/jpeg` on PNG
         // bytes (or `octet-stream` on anything) is corrected, so the file
-        // written later opens with the right application.
+        // written later opens with the right application. Without bytes
+        // the filename still repairs a missing/generic/aliased header
+        // (`application/ics` → `text/calendar`), so Open offers the
+        // calendar even before the on-demand download.
+        let filename = part.attachment_name().map(str::to_string);
         let mime_type = match data.as_deref() {
-            Some(bytes) => crate::mime::corrected_mime(mime_type.as_deref(), bytes).or(mime_type),
-            None => mime_type,
+            Some(bytes) => crate::mime::corrected_mime(mime_type.as_deref(), bytes)
+                .or_else(|| crate::mime::repaired_mime(mime_type.as_deref(), filename.as_deref()))
+                .or(mime_type),
+            None => {
+                crate::mime::repaired_mime(mime_type.as_deref(), filename.as_deref()).or(mime_type)
+            }
         };
         let mut is_inline = matches!(part.body, PartType::InlineBinary(_));
         // Same rule as `parse_to_new`, for callers holding no message row
@@ -200,7 +208,7 @@ pub(crate) fn extract_attachments(
             is_inline = true;
         }
         out.push(NewAttachment {
-            filename: part.attachment_name().map(str::to_string),
+            filename,
             mime_type,
             content_id,
             size: len as u64,
@@ -232,10 +240,7 @@ fn is_calendar_part(filename: Option<&str>, mime: Option<&str>, len: usize) -> b
         return false;
     }
     let is_ics = filename.is_some_and(|f| f.to_ascii_lowercase().ends_with(".ics"));
-    let is_cal_mime = mime.is_some_and(|m| {
-        let m = m.to_ascii_lowercase();
-        m == "text/calendar" || m == "application/ics"
-    });
+    let is_cal_mime = mime.is_some_and(crate::mime::is_calendar_mime);
     is_ics || is_cal_mime
 }
 

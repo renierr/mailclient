@@ -133,13 +133,20 @@ Rectangle {
     }
 
     // Non-inline files from the Rust feed (bytes stay in SQLite until saved).
+    // The `.ics` the event card already opens and saves is left out, so one
+    // file never stacks two cards in the header (as in the Flutter reader).
     readonly property var fileAttachments: {
         if (root.message === undefined || root.message === null || root.message.attachments === undefined)
             return [];
+        var eventId = (root.message.event && root.message.event.attachment_id !== undefined)
+                ? root.message.event.attachment_id : -1;
         var out = [];
         for (var i = 0; i < root.message.attachments.length; i++) {
-            if (root.message.attachments[i].is_inline !== true)
-                out.push(root.message.attachments[i]);
+            if (root.message.attachments[i].is_inline === true)
+                continue;
+            if (root.message.attachments[i].id === eventId)
+                continue;
+            out.push(root.message.attachments[i]);
         }
         return out;
     }

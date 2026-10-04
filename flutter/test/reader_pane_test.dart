@@ -330,4 +330,163 @@ void main() {
     expect(find.text('Open in Calendar'), findsOneWidget);
     expect(find.text('Save .ics'), findsOneWidget);
   });
+
+  // One file, one card: the `.ics` the event preview already opens and
+  // saves is hidden from the attachment list, so the two cards never
+  // stack (and overlap) for the same file.
+  testWidgets('event attachment hides from the attachment card', (
+    tester,
+  ) async {
+    final body = {
+      'uid': 13,
+      'subject': 'Meeting',
+      'from': 'mail@example.com',
+      'body_text': 'Here is your test calendar',
+      'is_html': false,
+      'event': {
+        'summary': 'Mailclient Development Sync',
+        'location': 'Meeting Room Quattro',
+        'organizer': 'Cody <cody@example.com>',
+        'formatted_time': 'Tue, Oct 6, 2026 · 16:00 – 17:00',
+        'is_cancelled': false,
+        'attachment_id': 99,
+        'save_name': 'invite.ics',
+      },
+      'attachments': [
+        {
+          'id': 99,
+          'filename': 'invite.ics',
+          'file_name': 'invite.ics',
+          'mime_type': 'text/calendar',
+          'size': 594,
+          'size_text': '594 B',
+        },
+      ],
+    };
+    MailCore.debugInstance = _OneMessageCore(body);
+    final state = MailState(MailCore.instance);
+    addTearDown(state.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ChangeNotifierProvider<MailState>.value(
+            value: state,
+            child: const ReaderPane(),
+          ),
+        ),
+      ),
+    );
+    await state.openMessage(13);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.byType(EventCard), findsOneWidget);
+    // No second card for the same file, and no dangling empty card.
+    expect(find.byType(AttachmentCard), findsNothing);
+    expect(find.text('1 attachment'), findsNothing);
+    expect(find.text('invite.ics'), findsNothing);
+    // The event card still offers both actions.
+    expect(find.text('Open in Calendar'), findsOneWidget);
+  });
+
+  // An invite next to a real file: the card lists only the other file.
+  testWidgets('attachment card lists files besides the event invite', (
+    tester,
+  ) async {
+    final body = {
+      'uid': 14,
+      'subject': 'Meeting',
+      'from': 'mail@example.com',
+      'body_text': 'x',
+      'is_html': false,
+      'event': {
+        'summary': 'Sync',
+        'formatted_time': 'Tue, Oct 6, 2026 · 16:00 – 17:00',
+        'is_cancelled': false,
+        'attachment_id': 99,
+        'save_name': 'invite.ics',
+      },
+      'attachments': [
+        {
+          'id': 99,
+          'filename': 'invite.ics',
+          'file_name': 'invite.ics',
+          'mime_type': 'text/calendar',
+          'size': 594,
+          'size_text': '594 B',
+        },
+        {
+          'id': 100,
+          'filename': 'agenda.pdf',
+          'file_name': 'agenda.pdf',
+          'mime_type': 'application/pdf',
+          'size': 10,
+          'size_text': '10 B',
+        },
+      ],
+    };
+    MailCore.debugInstance = _OneMessageCore(body);
+    final state = MailState(MailCore.instance);
+    addTearDown(state.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ChangeNotifierProvider<MailState>.value(
+            value: state,
+            child: const ReaderPane(),
+          ),
+        ),
+      ),
+    );
+    await state.openMessage(14);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.byType(EventCard), findsOneWidget);
+    expect(find.byType(AttachmentCard), findsOneWidget);
+    expect(find.text('agenda.pdf'), findsOneWidget);
+    expect(find.text('invite.ics'), findsNothing);
+  });
+
+  // The OS open hands the calendar the type it registers, not the mail's
+  // header spelling — and never an empty or generic lie.
+  test('open mime canonicalizes calendar and falls back by extension', () {
+    AttachmentInfo ics(String mime) => AttachmentInfo(
+      id: 1,
+      filename: 'invite.ics',
+      fileName: 'invite.ics',
+      mimeType: mime,
+      size: 594,
+      sizeText: '594 B',
+      isInline: false,
+    );
+    expect(openMimeType(ics('text/calendar')), 'text/calendar');
+    expect(openMimeType(ics('application/ics')), 'text/calendar');
+    expect(openMimeType(ics('TEXT/X-VCALENDAR')), 'text/calendar');
+    expect(
+      openMimeType(ics('application/octet-stream')),
+      'text/calendar',
+    );
+    expect(openMimeType(ics('')), 'text/calendar');
+    const pdf = AttachmentInfo(
+      id: 2,
+      filename: 'a.pdf',
+      fileName: 'a.pdf',
+      mimeType: 'application/octet-stream',
+      size: 10,
+      sizeText: '10 B',
+      isInline: false,
+    );
+    expect(openMimeType(pdf), 'application/pdf');
+    const unknown = AttachmentInfo(
+      id: 3,
+      filename: 'blob.dat',
+      fileName: 'blob.dat',
+      mimeType: 'application/octet-stream',
+      size: 3,
+      sizeText: '3 B',
+      isInline: false,
+    );
+    expect(openMimeType(unknown), '*/*');
+  });
 }

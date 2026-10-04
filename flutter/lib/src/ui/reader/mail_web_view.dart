@@ -204,16 +204,17 @@ class _MailWebViewState extends State<MailWebView> {
 
   /// Before the first load, wait for the triggers to go quiet (the header
   /// rebuilds and is measured a frame after its content arrives); after
-  /// it, apply changes right away.
+  /// it, debounce as well: a reload resets the scroll position, so rapid
+  /// header resizes (headers arriving, details toggled) must settle into
+  /// one load instead of juddering the page.
   void _requestSync() {
-    if (_shown) {
-      _sync();
-      return;
-    }
     _settle?.cancel();
-    _settle = Timer(const Duration(milliseconds: 50), () {
-      if (mounted) _sync();
-    });
+    _settle = Timer(
+      Duration(milliseconds: _shown ? 150 : 50),
+      () {
+        if (mounted) _sync();
+      },
+    );
   }
 
   /// Load only what changed: a reload resets the scroll position.

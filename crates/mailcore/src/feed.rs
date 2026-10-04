@@ -386,10 +386,10 @@ pub fn find_calendar_event(
                 .filename
                 .as_deref()
                 .is_some_and(|f| f.to_ascii_lowercase().ends_with(".ics"));
-            let is_cal = att.mime_type.as_deref().is_some_and(|m| {
-                let m = m.to_ascii_lowercase();
-                m == "text/calendar" || m == "application/ics"
-            });
+            let is_cal = att
+                .mime_type
+                .as_deref()
+                .is_some_and(crate::mime::is_calendar_mime);
             if is_ics || is_cal {
                 if let Ok(full) = messages::get_attachment(db, att.id) {
                     if let Some(bytes) = full.data.as_deref() {

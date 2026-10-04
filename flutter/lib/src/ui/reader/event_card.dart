@@ -86,6 +86,12 @@ class EventCard extends StatelessWidget {
                             style: theme.textTheme.titleSmall?.copyWith(
                               fontWeight: FontWeight.bold,
                             ),
+                            // A long subject line must wrap to a bounded
+                            // height: unbounded growth resizes the WebView
+                            // spacer on every frame and overlaps the card
+                            // below it.
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       ),

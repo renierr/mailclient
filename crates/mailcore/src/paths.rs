@@ -155,13 +155,7 @@ pub fn safe_attachment_name_for_mime(name: Option<&str>, mime: Option<&str>, id:
             MAX_ATTACHMENT_NAME_BYTES,
         );
     }
-    let want_mime = mime.map(|m| m.trim().to_ascii_lowercase()).map(|m| {
-        if m == "image/jpg" {
-            "image/jpeg".to_string()
-        } else {
-            m
-        }
-    });
+    let want_mime = mime.map(crate::mime::canonical_mime);
     match named.rfind('.') {
         // A known extension naming another type is swapped; anything
         // unmapped (`.dat`) is left alone rather than guessed at.

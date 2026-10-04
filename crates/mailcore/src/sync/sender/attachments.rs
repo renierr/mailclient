@@ -8,34 +8,16 @@ pub const MAX_SEND_ATTACHMENT_BYTES: u64 = 25 * 1024 * 1024;
 pub const MAX_SEND_ATTACHMENT_COUNT: usize = 20;
 #[must_use]
 pub fn guess_mime(filename: &str) -> String {
-    let ext = filename
-        .rsplit('.')
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    match ext.as_str() {
-        "txt" | "log" | "md" => "text/plain",
-        "html" | "htm" => "text/html",
-        "csv" => "text/csv",
-        "ics" => "text/calendar",
-        "pdf" => "application/pdf",
-        "json" => "application/json",
-        "zip" => "application/zip",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "svg" => "image/svg+xml",
-        "mp3" => "audio/mpeg",
-        "mp4" => "video/mp4",
-        "doc" => "application/msword",
-        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "xls" => "application/vnd.ms-excel",
-        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "ppt" | "pptx" => "application/vnd.ms-powerpoint",
-        _ => "application/octet-stream",
+    // Single source of truth lives in `crate::mime`: the extension table
+    // there is what the opener and the saver both use.
+    let ext = filename.rsplit('.').next().unwrap_or("");
+    // A trailing dot or dot-file without extension is not a type.
+    if ext.is_empty() || ext.len() == filename.len() {
+        return "application/octet-stream".to_string();
     }
-    .to_string()
+    crate::mime::mime_for_extension(ext)
+        .unwrap_or("application/octet-stream")
+        .to_string()
 }
 /// Rejects missing files, directories, oversized files and over-count sends
 /// with a human-readable error for the status bar.

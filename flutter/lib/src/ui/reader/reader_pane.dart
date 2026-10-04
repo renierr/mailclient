@@ -147,8 +147,14 @@ class ReaderPaneState extends State<ReaderPane> {
             onDownload: () => _downloadInlineImages(message),
             passThrough: passThrough,
           ),
-        if (message.attachments.any((a) => !a.isInline))
-          AttachmentCard(message: message, passThrough: passThrough),
+        if (message.attachments.any(
+          (a) => !a.isInline && a.id != message.event?.attachmentId,
+        ))
+          AttachmentCard(
+            message: message,
+            passThrough: passThrough,
+            hideAttachmentId: message.event?.attachmentId,
+          ),
       ],
     );
     final body = message.isHtml
