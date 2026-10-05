@@ -661,16 +661,21 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
      * ignored rather than failed: the running job's finished event still
      * clears the spinner, so the UI never sticks on an error while mail
      * keeps arriving underneath.
+     *
+     * The spinner is set only when a job was actually queued. Setting it
+     * before the queue call sticks it on forever when the call is refused:
+     * no job means no finish event, and a finish already on its way clears
+     * the flag before it is even set.
      */
     fun syncAccount(id: Long) = io {
         MailNative.ensureInit(appContext)
-        withContext(Dispatchers.Main) { syncing = true }
-        runCatching { MailNative.syncAccount(id) }
+        val queued = runCatching { MailNative.syncAccount(id) }
             .onFailure { e ->
                 if (!e.message.orEmpty().contains("already running", ignoreCase = true)) {
                     fail(e.message ?: "sync failed")
                 }
-            }
+            }.isSuccess
+        if (queued) withContext(Dispatchers.Main) { syncing = true }
     }
 
     /**
@@ -682,26 +687,30 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         MailNative.ensureInit(appContext)
         val account = activeAccountId
         if (account < 0 || id < 0) return@io
-        withContext(Dispatchers.Main) { syncing = true }
-        runCatching { MailNative.syncFolder(account, id) }
+        // Set only when queued (see syncAccount): a refused pull must not
+        // light the spinner with no job behind it.
+        val queued = runCatching { MailNative.syncFolder(account, id) }
             .onFailure { e ->
                 if (!e.message.orEmpty().contains("already running", ignoreCase = true)) {
                     fail(e.message ?: "sync failed")
                 }
-            }
+            }.isSuccess
+        if (queued) withContext(Dispatchers.Main) { syncing = true }
     }
 
     /** Re-read the folder list from the server (LIST); the event reloads. */
     fun refreshFolderList() {
         val id = activeAccountId
         if (id < 0) return
-        foldersBusy = true
         io {
-            runCatching { MailNative.refreshFolders(id) }
-                .onFailure {
-                    withContext(Dispatchers.Main) { foldersBusy = false }
-                    fail(it.message ?: "refresh failed")
-                }
+            val error = runCatching { MailNative.refreshFolders(id) }.exceptionOrNull()
+            if (error == null) {
+                // Set only when queued (see syncAccount): no job, no spinner.
+                withContext(Dispatchers.Main) { foldersBusy = true }
+            } else if (!error.message.orEmpty().contains("already running", ignoreCase = true)) {
+                withContext(Dispatchers.Main) { foldersBusy = false }
+                fail(error.message ?: "refresh failed")
+            }
         }
     }
 
