@@ -33,7 +33,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import de.renier.mailclient.JobCallbacks
+import de.renier.mailclient.JobEvents
 import de.renier.mailclient.MainActivity
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.ReaderActivity
@@ -339,13 +339,11 @@ private fun SyncJobsProbe() {
 
     // The listener fires on Rust's net thread; hop to Main for state.
     DisposableEffect(Unit) {
-        MailNative.ensureInit(context)
-        MailNative.setJobListener(object : JobCallbacks {
-            override fun onJobEvent(json: String) {
+        val sub =
+            JobEvents.subscribe(context) { json ->
                 scope.launch(Dispatchers.Main) { lastEvent = json.take(300) }
             }
-        })
-        onDispose { MailNative.clearJobListener() }
+        onDispose { sub.close() }
     }
 
     fun queue(name: String, call: () -> Unit) {

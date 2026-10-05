@@ -33,7 +33,7 @@ impl qobject::Bridge {
             // the GUI lends its pooled session, the CLI brings a fresh one.
             let mut imap = checkout_session(&acc).await?;
             let report_progress = |done: usize, total: usize, path: &str| {
-                progress.report(&format!("Syncing {done}/{total}: {path}"));
+                progress.report(&headless::sync_progress_status(done, total, path));
             };
             let r = headless::sync_account(
                 db,

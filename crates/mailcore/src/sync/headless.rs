@@ -127,6 +127,11 @@ impl SyncScope {
 /// spinner; the headless CLI passes `None`.
 pub type SyncProgress<'a> = &'a dyn Fn(usize, usize, &str);
 
+/// The status line every frontend shows for one [`SyncProgress`] step.
+pub fn sync_progress_status(done: usize, total: usize, path: &str) -> String {
+    format!("Syncing {done}/{total}: {path}")
+}
+
 /// Sync one account over an already-connected session.
 ///
 /// Flushes the SMTP outbox, pushes local flag changes, refreshes the folder
@@ -518,6 +523,11 @@ pub(crate) mod tests {
     use super::*;
     use crate::models::{FolderRole, NewAccount};
     use crate::store::{accounts, folders, messages};
+
+    #[test]
+    fn progress_status_names_step_total_and_folder() {
+        assert_eq!(sync_progress_status(3, 9, "Sent"), "Syncing 3/9: Sent");
+    }
 
     #[test]
     fn an_outbox_error_still_counts_the_inbox_as_checked() {

@@ -20,13 +20,23 @@ pub fn sync_account(account_id: i64) -> anyhow::Result<()> {
     spawn(
         "Sync",
         format!("sync:{account_id}"),
-        move |db, _progress| async move {
+        move |db, progress| async move {
             let acc = resolve_account(db, account_id)?;
             // The shared orchestration `mailapp` and the CLI both use; we only
             // lend it a pooled session.
             let mut imap = checkout_session(&acc).await?;
-            let r =
-                headless::sync_account(db, &acc, &mut imap, headless::SyncScope::All, None).await;
+            // Per-folder milestones, so a long first sync is visibly moving.
+            let report_progress = |done: usize, total: usize, path: &str| {
+                progress.report(&headless::sync_progress_status(done, total, path));
+            };
+            let r = headless::sync_account(
+                db,
+                &acc,
+                &mut imap,
+                headless::SyncScope::All,
+                Some(&report_progress),
+            )
+            .await;
             imap.checkin();
 
             let flags = match r.pushed_flags {

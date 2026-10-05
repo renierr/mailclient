@@ -1,7 +1,7 @@
 # Native Android frontend (Kotlin + Jetpack Compose)
 
-The all-in native app, replacing the Flutter Android embedding screen by
-screen. Same `mailcore` over the same JNI the experiment proved — the
+The all-in native app, a peer of the Flutter Android client (which
+stays), built screen by screen. Same `mailcore` over the same JNI the experiment proved — the
 backend files (`MailNative`, workers, push, notifications) moved here
 unchanged; only the UI is new, written in Compose.
 
@@ -72,7 +72,7 @@ x86_64 only, so the loop stays fast).
 - **Namespace `de.renier.mailclient` never changes.** The Rust JNI exports
   (`Java_de_renier_mailclient_MailNative_*`) encode it. The `applicationId`
   is free — currently `de.renier.mailclient.native` so this installs next to
-  the Flutter app; drop the suffix at the flip, when it replaces it.
+  the Flutter app. It stays: both apps are kept side by side.
 - Behaviour changes belong in `mailcore` (AGENTS.md core-first rule); this
   app only translates ids and renders. New screens that need core data add
   `MailNative` externs in `crates/mailffi/src/android.rs` next to the reader
@@ -83,5 +83,5 @@ x86_64 only, so the loop stays fast).
 ## Screen roadmap
 
 Reader (done, Views) → message list → folder shell + accounts → composer →
-settings → drop the Flutter embedding. Each step stays shippable: every
+settings → no delegation left. Each step stays shippable: every
 screen talks to the same database the other frontends use.

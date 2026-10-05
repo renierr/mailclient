@@ -153,7 +153,8 @@ object MailNative {
 
     // Step 0b sync jobs: queue onto mailclient-net, results arrive on the
     // JobCallbacks listener as one JSON event each. Registering replaces
-    // the previous listener.
+    // the previous listener, so only JobEvents calls these; screens
+    // subscribe there.
     @JvmStatic external fun setJobListener(callbacks: JobCallbacks)
     @JvmStatic external fun clearJobListener()
     @JvmStatic external fun syncAccount(accountId: Long)

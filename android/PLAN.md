@@ -3,8 +3,9 @@
 Goal: a standalone native Android app (Kotlin + Jetpack Compose, `android/`)
 with full feature parity to the QML desktop client and the Flutter app, over
 the same Rust `mailcore` through JNI (`MailNative`, package
-`de.renier.mailclient` stays JNI-bound). When done, the Flutter Android
-embedding is removed and the native app is the shipped Android client.
+`de.renier.mailclient` stays JNI-bound). The Flutter app stays: it is a
+peer frontend next to Qt and the native app, not something this plan
+removes. When done, the native app no longer delegates any flow to Flutter.
 
 ## Ground rules (from AGENTS.md, non-negotiable)
 
@@ -231,7 +232,7 @@ fed from the same `mailclient-net` thread the FRB `job_events` stream uses.
   pushed-off-screen actions), dialogs become fullscreen pages on small
   screens.
 
-## Step 11 — Parity audit + Flutter removal (the finish line)
+## Step 11 — Parity audit + delegation removal (the finish line)
 
 - Walk the QML and Flutter inventories (attached in chat during planning:
   shell, toolbar, folders, list, reader, composer, contacts, accounts,
@@ -239,10 +240,10 @@ fed from the same `mailclient-net` thread the FRB `job_events` stream uses.
   becomes a step-4–9 sub-item or a `SHARED-CORE.md` deliberate exception.
 - `flutter test`, `cargo test --workspace` green; `./build.sh --android`
   produces the signed APK; live-mailbox pass with per-run consent.
-- Flip: drop the `.native` `applicationId` suffix, remove `DelegateScreen`
-  + reader delegation, remove the Flutter Android embedding, update
+- Remove `DelegateScreen` + reader delegation. Keep the `.native`
+  `applicationId` suffix so both apps install side by side. Update
   `PROJECT.md` milestone 14 → done, `AGENTS.md`, `android/README.md`,
   `flutter/README.md` ("Shared code still to promote" + Android chapter).
-- Definition of done for the branch: a reviewer can uninstall Flutter's
-  APK, install only the native APK on a phone, and do everything the
-  Flutter app does — same core, same data, no delegation left.
+- Definition of done for the branch: on a phone without the Flutter APK,
+  the native APK alone does everything the Flutter app does — same core,
+  no delegation left. Flutter keeps building and shipping alongside.

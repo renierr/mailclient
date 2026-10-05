@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import de.renier.mailclient.JobCallbacks
+import de.renier.mailclient.JobEvents
 import de.renier.mailclient.MailNative
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -59,6 +59,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     // All writes already hop to Dispatchers.Main (see io/putStatus).
     var initialized by mutableStateOf(false)
         private set
+    private var jobEvents: AutoCloseable? = null
     var accounts: List<Account> by mutableStateOf(emptyList())
         private set
     var activeAccountId by mutableStateOf(-1L)
@@ -128,25 +129,26 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
 
     /** First load + job-event listener. Idempotent for the composition. */
     fun ensureInit() {
+        if (jobEvents == null) {
+            jobEvents =
+                JobEvents.subscribe(appContext) { json ->
+                    scope.launch(Dispatchers.Main) { onJobEvent(json) }
+                }
+        }
         if (initialized) {
             refreshAll()
             return
         }
         initialized = true
         MailNative.ensureInit(appContext)
-        MailNative.setJobListener(
-            object : JobCallbacks {
-                override fun onJobEvent(json: String) {
-                    scope.launch(Dispatchers.Main) { onJobEvent(json) }
-                }
-            },
-        )
         refreshAll()
     }
 
     fun release() {
-        runCatching { MailNative.clearJobListener() }
+        jobEvents?.close()
+        jobEvents = null
     }
+
 
     private fun onJobEvent(json: String) {
         val e = runCatching { JSONObject(json) }.getOrNull() ?: return

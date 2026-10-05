@@ -21,9 +21,9 @@ This file is normative for all coding agents (human or AI) working in this repo.
     `./build.sh --apk`). Its Linux and Windows desktop builds exist so the
     app is easy to run, develop and check on a desktop; they are not the
     shipped desktop client. See `flutter/README.md`.
-  - **Native Android** (`android/`) — Jetpack Compose app growing to replace
-    the Flutter embedding on Android, screen by screen (reader first, same
-    JNI). Until the flip, Flutter remains the shipped Android client.
+  - **Native Android** (`android/`) — Jetpack Compose app built screen by
+    screen (reader first, same JNI) as a peer of the Flutter Android client.
+    Flutter stays; both Android apps are kept and installed side by side.
     `./build.sh --android`. See `android/README.md`. The Kotlin package
     `de.renier.mailclient` is JNI-bound (Rust `Java_*` symbols) and must not
     be renamed; only the `applicationId` is free.
