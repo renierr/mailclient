@@ -18,7 +18,8 @@
 #
 # Machine-specific config never lives in git. Resolution order, first hit wins:
 #   SDK dir : ANDROID_SDK_ROOT / ANDROID_HOME env, then sdk.dir in
-#             android/local.properties (gitignored), then ~/Android/Sdk.
+#             android/local.properties (gitignored; forward slashes even on
+#             Windows — AGP 9 rejects backslash paths), then ~/Android/Sdk.
 #   AVD     : --avd, then ANDROID_AVD env, then avd.name in
 #             android/local.properties, then the only AVD if exactly one exists.
 #   JDK     : JAVA_HOME env, then an Android Studio JBR if one is installed,
@@ -31,7 +32,10 @@ cd "$(dirname "$0")/.."
 
 APP_ID="de.renier.mailclient.native"
 FLUTTER_ID="de.renier.mailclient"
-ACTIVITY="$APP_ID/.MainActivity"
+# Fully qualified: the class lives in namespace de.renier.mailclient while
+# the applicationId carries the .native suffix, so the .MainActivity
+# shorthand would resolve to a class that does not exist.
+ACTIVITY="$APP_ID/de.renier.mailclient.MainActivity"
 
 AVD="" SERIAL="" BUILD=1 BOOT=1 LAUNCH=1 SEED="" LOGS=""
 

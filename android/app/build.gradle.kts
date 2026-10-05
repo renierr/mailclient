@@ -3,7 +3,9 @@ import java.io.FileInputStream
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
+    // No org.jetbrains.kotlin.android: AGP 9 has Kotlin support built in
+    // (it fails the build if the plugin is still applied). The Compose
+    // compiler plugin below is still needed.
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
@@ -94,8 +96,9 @@ dependencies {
     // WorkManager for the native background checks (MailCheckWorker.kt,
     // enqueued by the periodic schedule and every alarm shot).
     implementation("androidx.work:work-runtime:2.11.2")
-    // FileProvider for the attachment viewer copies (reader_paths.xml).
-    implementation("androidx.core:core-ktx:1.19.1")
+    // No explicit androidx.core: the FileProvider for the attachment viewer
+    // copies (reader_paths.xml) arrives transitively, and the newest core
+    // line already wants compileSdk 37 (see README).
 
     // Jetpack Compose (approved UI toolkit for the native frontend).
     // Versions come from the BOM; the compiler is the Kotlin plugin above.
@@ -103,7 +106,8 @@ dependencies {
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
-    implementation("androidx.activity:activity-compose")
+    // androidx.activity is versioned outside the Compose BOM.
+    implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.compose.runtime:runtime")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
