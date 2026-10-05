@@ -15,14 +15,22 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,14 +45,13 @@ import de.renier.mailclient.ui.folders.MoveToDialog
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.state.MessageRow
 import de.renier.mailclient.ui.theme.starColor
+import kotlinx.coroutines.launch
 
-// Message list: a header naming the folder (or the search), then rows with
-// avatar + unread dot, sender/date, subject with star and attachment cues,
-// snippet, and the "load older" tail. While searching, the rows are the
-// hits, each carrying its own folder. Sort, filter, selection and bulk
-// arrive in Step 4. Long-press opens the move picker for that row until
-// Step 4d makes long-press start a selection (the bulk bar's Move then
-// opens the same picker).
+// Message list: a pinned header (folder or search title, sort, filter,
+// selection), an active-filter bar, rows with avatar + unread dot (a
+// checkbox in selection mode), sender/date, subject with star and
+// attachment cues, snippet, and the "load older" tail. Jump buttons float
+// over long lists; the bulk bar docks at the bottom while selected.
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ListScreen(state: MailState, onOpenReader: (Long, Long, Int) -> Unit) {
@@ -58,58 +65,308 @@ fun ListScreen(state: MailState, onOpenReader: (Long, Long, Int) -> Unit) {
         )
         return
     }
-    val rows = if (searching) state.searchHits else state.messages
+    val rows = if (searching) state.shownHits else state.shownMessages
+    val total = if (searching) state.searchHits.size else state.messages.size
     // Account-wide hits name their folder; in-folder rows need not.
     val showFolder = searching && !state.searchFolderOnly
     val folderNames = remember(state.folders) { state.folders.associate { it.id to it.leaf } }
+    val listState = rememberLazyListState()
+    val jumpScope = rememberCoroutineScope()
 
-    var moving by remember { mutableStateOf<MessageRow?>(null) }
-    moving?.let { m ->
-        val from = if (m.folderId >= 0) m.folderId else folder?.id ?: -1
+    var dateDialog by remember { mutableStateOf(false) }
+    var bulkMove by remember { mutableStateOf(false) }
+    var confirmTrash by remember { mutableStateOf(false) }
+    var confirmPurge by remember { mutableStateOf(false) }
+
+    if (bulkMove) {
+        // One shared folder when the selection sits in it, else none
+        // disabled — search selections can span folders.
+        val singleFolder = if (searching) {
+            rows.filter { state.selectedKeys.contains(state.selectionKey(it)) }
+                .map { if (it.folderId >= 0) it.folderId else state.folderId }
+                .toSet().singleOrNull() ?: -1
+        } else {
+            state.folderId
+        }
         MoveToDialog(
             folders = state.visibleFolders,
-            currentFolderId = from,
-            count = 1,
-            subject = m.subject,
+            currentFolderId = singleFolder,
+            count = state.selectionCount,
+            subject = null,
             onPick = { dest ->
-                moving = null
-                state.moveMessage(from, m.uid, dest.path)
+                bulkMove = false
+                state.bulkMove(dest.path)
             },
-            onDismiss = { moving = null },
+            onDismiss = { bulkMove = false },
         )
+    }
+    if (confirmTrash) {
+        // Bulk delete always confirms — even where delete is permanent
+        // (no undo there) and even with the confirm preference off. The
+        // preference only governs single-message reader deletes.
+        val permanent = state.selectionDeleteIsPermanent
+        DeleteConfirmDialog(
+            title = if (permanent) "Delete permanently?" else "Move to Trash?",
+            text = if (permanent) {
+                "Permanently delete ${state.selectionCount} messages? This cannot be undone."
+            } else {
+                "Move ${state.selectionCount} messages to Trash? You can undo this."
+            },
+            confirmLabel = if (permanent) "Delete" else "Move to Trash",
+            onConfirm = {
+                confirmTrash = false
+                state.bulkTrash()
+            },
+            onDismiss = { confirmTrash = false },
+        )
+    }
+    if (confirmPurge) {
+        DeleteConfirmDialog(
+            title = "Delete permanently?",
+            text = "Permanently delete ${state.selectionCount} messages? This cannot be undone.",
+            confirmLabel = "Delete",
+            onConfirm = {
+                confirmPurge = false
+                state.bulkPurge()
+            },
+            onDismiss = { confirmPurge = false },
+        )
+    }
+    if (dateDialog) {
+        DateRangeDialog(state) { dateDialog = false }
     }
 
     PullToSync(syncing = state.syncing, onSync = { state.syncNow() }) {
-        LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 8.dp)) {
-            item {
-                ListHeader(
-                    title = if (searching) "Search results" else folder?.leaf.orEmpty(),
-                    subtitle = when {
-                        searching && rows.isEmpty() -> "No matches"
-                        searching -> "${rows.size} found" + if (state.searchFolderOnly && folder != null) " in ${folder.leaf}" else ""
-                        folder != null && folder.unread > 0 -> "${folder.count} messages · ${folder.unread} unread"
-                        folder != null -> "${folder.count} messages"
-                        else -> ""
-                    },
-                )
+        Column(modifier = Modifier.fillMaxSize()) {
+            ListHeaderRow(
+                state = state,
+                title = if (searching) {
+                    state.similarLabel ?: "Search results"
+                } else {
+                    folder?.leaf.orEmpty()
+                },
+                subtitle = when {
+                    searching && total == 0 -> "No matches"
+                    searching -> "${rows.size} found" +
+                        if (state.searchFolderOnly && folder != null) " in ${folder.leaf}" else ""
+                    folder != null && state.hasListFilter -> "${rows.size} of $total shown"
+                    folder != null && folder.unread > 0 -> "${folder.count} messages · ${folder.unread} unread"
+                    folder != null -> "${folder.count} messages"
+                    else -> ""
+                },
+                onCustomRange = { dateDialog = true },
+            )
+            if (state.hasListFilter) {
+                FilterBar(state)
             }
-            items(rows, key = { "${it.folderId}:${it.uid}" }) { m ->
-                val rowFolder = if (m.folderId >= 0) m.folderId else folder?.id ?: -1
-                MessageItem(
-                    m = m,
-                    folderLabel = if (showFolder) folderNames[m.folderId] else null,
-                    modifier = Modifier.combinedClickable(
-                        onClick = { onOpenReader(state.activeAccountId, rowFolder, m.uid) },
-                        onLongClick = { moving = m },
-                        onLongClickLabel = "Move to folder",
-                    ),
-                )
-            }
-            if (!searching && state.canLoadOlder) {
-                item {
-                    Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                        OutlinedButton(onClick = { state.loadMore() }) { Text("Load older messages") }
+            Box(modifier = Modifier.weight(1f)) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    // Room for the floating jump buttons over the last row.
+                    contentPadding = PaddingValues(bottom = 96.dp),
+                ) {
+                    items(rows, key = { state.selectionKey(it) }) { m ->
+                        val key = state.selectionKey(m)
+                        val rowFolder = if (m.folderId >= 0) m.folderId else folder?.id ?: -1
+                        MessageItem(
+                            m = m,
+                            folderLabel = if (showFolder) folderNames[m.folderId] else null,
+                            selected = if (state.selectionMode) key in state.selectedKeys else null,
+                            modifier = Modifier.combinedClickable(
+                                onClick = {
+                                    if (state.selectionMode) {
+                                        state.toggleSelected(key)
+                                    } else {
+                                        onOpenReader(state.activeAccountId, rowFolder, m.uid)
+                                    }
+                                },
+                                onLongClick = {
+                                    if (!state.selectionMode) state.enterSelectionMode(key)
+                                },
+                                onLongClickLabel = "Select message",
+                            ),
+                            onToggle = { state.toggleSelected(key) },
+                        )
                     }
+                    // Always-on footer (Qt loadOlderBar, Flutter LoadOlderTile):
+                    // the server status stays visible even with nothing left
+                    // to load, so the list never ends in silence.
+                    if (!searching && state.olderState.isNotEmpty() && state.olderState != "empty") {
+                        item {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                Text(
+                                    state.olderLabel +
+                                        if (state.hasListFilter) " · filters cover loaded mail only" else "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                if (state.canLoadOlder) {
+                                    OutlinedButton(
+                                        onClick = { state.loadMore() },
+                                        enabled = !state.syncing,
+                                        modifier = Modifier.padding(top = 8.dp),
+                                    ) {
+                                        Text("Load older messages")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // Jump to top / bottom (Qt ScrollJumpButtons, Flutter
+                // ScrollJumpOverlay): only over long lists, each end only
+                // while it is off-screen.
+                val long = listState.layoutInfo.totalItemsCount > 12
+                if (long && (listState.canScrollBackward || listState.canScrollForward)) {
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 16.dp, bottom = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        if (listState.canScrollBackward) {
+                            FilledTonalIconButton(
+                                onClick = { jumpScope.launch { listState.scrollToItem(0) } },
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_arrow_up),
+                                    contentDescription = "Jump to top",
+                                )
+                            }
+                        }
+                        if (listState.canScrollForward) {
+                            FilledTonalIconButton(
+                                onClick = {
+                                    jumpScope.launch {
+                                        listState.scrollToItem(listState.layoutInfo.totalItemsCount - 1)
+                                    }
+                                },
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_arrow_down),
+                                    contentDescription = "Jump to bottom",
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            if (state.selectionMode && state.selectionCount > 0) {
+                ListBulkBar(
+                    state = state,
+                    onMove = { bulkMove = true },
+                    onTrash = { confirmTrash = true },
+                    onPurge = { confirmPurge = true },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ListHeaderRow(
+    state: MailState,
+    title: String,
+    subtitle: String,
+    onCustomRange: () -> Unit,
+) {
+    // Each menu renders inside a Box around its own button, so it anchors
+    // to the button instead of floating at the screen edge.
+    var sortOpen by remember { mutableStateOf(false) }
+    var filterOpen by remember { mutableStateOf(false) }
+    var selectOpen by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (state.selectionMode) {
+            val visible = state.visibleRows()
+            val all = visible.isNotEmpty() && state.selectedKeys.size == visible.size
+            Checkbox(
+                checked = all,
+                onCheckedChange = {
+                    if (it) state.selectAllVisible() else state.exitSelectionMode()
+                },
+            )
+        }
+        Column(modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
+            Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (subtitle.isNotEmpty()) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (state.selectionMode) {
+            Box {
+                IconButton(onClick = { selectOpen = true }) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_expand_more),
+                        contentDescription = "Select messages",
+                    )
+                }
+                if (selectOpen) {
+                    DropdownMenu(expanded = true, onDismissRequest = { selectOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Select all") },
+                            onClick = { selectOpen = false; state.selectAllVisible() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Select unread") },
+                            onClick = { selectOpen = false; state.selectUnreadVisible() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Select starred") },
+                            onClick = { selectOpen = false; state.selectStarredVisible() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Invert selection") },
+                            onClick = { selectOpen = false; state.invertSelection() },
+                        )
+                    }
+                }
+            }
+            IconButton(onClick = { state.exitSelectionMode() }) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_close),
+                    contentDescription = "Leave selection",
+                )
+            }
+        } else {
+            if (!state.searchActive) {
+                Box {
+                    IconButton(onClick = { sortOpen = true }) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_sort),
+                            contentDescription = "Sort: ${sortShortLabel(state)}",
+                        )
+                    }
+                    if (sortOpen) SortMenu(state) { sortOpen = false }
+                }
+            }
+            Box {
+                IconButton(onClick = { filterOpen = true }) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_filter),
+                        contentDescription = "Filter messages",
+                        tint = if (state.hasListFilter) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+                if (filterOpen) {
+                    FilterMenu(
+                        state,
+                        onCustomRange = { filterOpen = false; onCustomRange() },
+                    ) { filterOpen = false }
                 }
             }
         }
@@ -117,21 +374,37 @@ fun ListScreen(state: MailState, onOpenReader: (Long, Long, Int) -> Unit) {
 }
 
 @Composable
-private fun ListHeader(title: String, subtitle: String) {
-    Column(modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp)) {
-        Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        if (subtitle.isNotEmpty()) {
-            Text(
-                subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+private fun FilterBar(state: MailState) {
+    val parts = buildList {
+        if (state.filterUnread) add("Unread")
+        if (state.filterStarred) add("Starred")
+        if (state.filterAttachments) add("Attachments")
+        if (state.dateFilterLabel.isNotEmpty()) add(state.dateFilterLabel)
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            parts.joinToString(" · "),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = { state.clearListFilters() }) { Text("Clear") }
     }
 }
 
 @Composable
-private fun MessageItem(m: MessageRow, folderLabel: String?, modifier: Modifier) {
+private fun MessageItem(
+    m: MessageRow,
+    folderLabel: String?,
+    selected: Boolean?,
+    modifier: Modifier,
+    onToggle: () -> Unit,
+) {
     val scheme = MaterialTheme.colorScheme
     val unreadDot = scheme.primary
     val ring = scheme.surface
@@ -141,17 +414,21 @@ private fun MessageItem(m: MessageRow, folderLabel: String?, modifier: Modifier)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Box {
-            Avatar(initials = m.initials, avatarLight = m.avatarLight, avatarDark = m.avatarDark)
-            if (m.unread) {
-                Canvas(
-                    modifier = Modifier
-                        .size(14.dp)
-                        .align(Alignment.TopEnd)
-                        .offset(x = 3.dp, y = (-3).dp),
-                ) {
-                    drawCircle(color = ring, radius = size.minDimension / 2)
-                    drawCircle(color = unreadDot, radius = size.minDimension / 2 - 3.dp.toPx() / 2)
+        if (selected != null) {
+            Checkbox(checked = selected, onCheckedChange = { onToggle() })
+        } else {
+            Box {
+                Avatar(initials = m.initials, avatarLight = m.avatarLight, avatarDark = m.avatarDark)
+                if (m.unread) {
+                    Canvas(
+                        modifier = Modifier
+                            .size(14.dp)
+                            .align(Alignment.TopEnd)
+                            .offset(x = 3.dp, y = (-3).dp),
+                    ) {
+                        drawCircle(color = ring, radius = size.minDimension / 2)
+                        drawCircle(color = unreadDot, radius = size.minDimension / 2 - 3.dp.toPx() / 2)
+                    }
                 }
             }
         }

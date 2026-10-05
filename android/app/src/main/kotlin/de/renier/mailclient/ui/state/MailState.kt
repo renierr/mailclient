@@ -63,6 +63,9 @@ data class MessageRow(
     val unread: Boolean,
     val starred: Boolean,
     val hasAttachments: Boolean,
+    // Raw UTC timestamp for the date quick-filter (`dateFilterMatches`);
+    // `date` above is display text.
+    val dateRaw: String = "",
     // Core-decided avatar (mailcore::badge): initials + per-theme hex.
     val initials: String = "?",
     val avatarLight: String = "",
@@ -90,6 +93,13 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     var messages: List<MessageRow> by mutableStateOf(emptyList())
         private set
     var canLoadOlder by mutableStateOf(false)
+        private set
+    // The load-older footer's words ("Cached 200 (server not checked)",
+    // "Cached 200 of 350", "All 350 loaded") plus its raw state; hidden
+    // when the server holds nothing ("empty"), like the desktop footer.
+    var olderState by mutableStateOf("")
+        private set
+    var olderLabel by mutableStateOf("")
         private set
     var status by mutableStateOf("Starting…")
         private set
@@ -122,6 +132,38 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         private set
     // "Similar to: …" when the hits are a find-similar result, not a query.
     var similarLabel: String? by mutableStateOf(null)
+        private set
+    // Step 4 list state: sort (persisted in core settings), AND-combined
+    // quick filters, and multi-select. The core sorts the page itself; the
+    // filters apply client-side to loaded rows and search hits alike, like
+    // the Flutter list — they never fetch.
+    var sortField by mutableStateOf("date")
+        private set
+    var sortDesc by mutableStateOf(true)
+        private set
+    var filterUnread by mutableStateOf(false)
+        private set
+    var filterStarred by mutableStateOf(false)
+        private set
+    var filterAttachments by mutableStateOf(false)
+        private set
+    // YYYY-MM-DD day bounds, After inclusive / Before exclusive, "" = unset.
+    var filterAfter by mutableStateOf("")
+        private set
+    var filterBefore by mutableStateOf("")
+        private set
+    // Words for the active date filter ("Today", "Mar 3 – Mar 9", …).
+    var dateFilterLabel by mutableStateOf("")
+        private set
+    var selectionMode by mutableStateOf(false)
+        private set
+    // Folder rows key by uid; search hits span folders, keyed folderId:uid.
+    var selectedKeys: Set<String> by mutableStateOf(emptySet())
+        private set
+    // Loaded rows minus the quick filters; what the list actually paints.
+    var shownMessages: List<MessageRow> by mutableStateOf(emptyList())
+        private set
+    var shownHits: List<MessageRow> by mutableStateOf(emptyList())
         private set
     var readerPrefs by mutableStateOf(ReaderPrefs())
         private set
@@ -233,8 +275,267 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         }
         loadFolders()
         refreshOutbox()
+        loadSort()
         if (folderId >= 0) reloadMessages()
         putStatus(if (accountId < 0) "No accounts yet" else "Ready", false)
+    }
+
+    // ---- Step 4: sort, filters, selection, bulk actions ----
+
+    /** Sort the list; hidden while searching (hits stay newest-first). */
+    fun setSort(field: String, descending: Boolean) = io {
+        MailNative.ensureInit(appContext)
+        MailNative.setSort(field, descending)
+        loadSort()
+        reloadMessages()
+    }
+
+    private fun loadSort() = io {
+        MailNative.ensureInit(appContext)
+        val o = runCatching { JSONObject(MailNative.settingsJson()) }.getOrDefault(JSONObject())
+        withContext(Dispatchers.Main) {
+            sortField = o.optString("message_sort_field", "date").ifEmpty { "date" }
+            sortDesc = o.optBoolean("message_sort_desc", true)
+        }
+    }
+
+    val hasDateFilter: Boolean get() = filterAfter.isNotEmpty() || filterBefore.isNotEmpty()
+    val hasListFilter: Boolean
+        get() = filterUnread || filterStarred || filterAttachments || hasDateFilter
+
+    fun setUnreadOnly(only: Boolean) {
+        filterUnread = only
+        recomputeShown()
+    }
+
+    fun setStarredOnly(only: Boolean) {
+        filterStarred = only
+        recomputeShown()
+    }
+
+    fun setAttachmentsOnly(only: Boolean) {
+        filterAttachments = only
+        recomputeShown()
+    }
+
+    fun setAfterDay(day: String) {
+        filterAfter = day
+        refreshDateLabel()
+        recomputeShown()
+    }
+
+    fun setBeforeDay(day: String) {
+        filterBefore = day
+        refreshDateLabel()
+        recomputeShown()
+    }
+
+    /** A `today` / `week` / `month` / `older_month` preset from the core. */
+    fun applyDatePreset(preset: String) {
+        val o = runCatching { JSONObject(MailNative.datePresetRange(preset)) }.getOrDefault(JSONObject())
+        filterAfter = o.optString("after")
+        filterBefore = o.optString("before")
+        refreshDateLabel()
+        recomputeShown()
+    }
+
+    fun clearDateFilter() {
+        filterAfter = ""
+        filterBefore = ""
+        dateFilterLabel = ""
+        recomputeShown()
+    }
+
+    fun clearListFilters() {
+        filterUnread = false
+        filterStarred = false
+        filterAttachments = false
+        clearDateFilter()
+    }
+
+    private fun refreshDateLabel() {
+        dateFilterLabel =
+            if (hasDateFilter) MailNative.dateFilterLabel(filterAfter, filterBefore) else ""
+    }
+
+    /** AND-combined quick filters over one row; never fetches. */
+    private fun rowShown(m: MessageRow): Boolean {
+        if (filterUnread && !m.unread) return false
+        if (filterStarred && !m.starred) return false
+        if (filterAttachments && !m.hasAttachments) return false
+        if (hasDateFilter &&
+            MailNative.dateFilterMatches(m.dateRaw, filterAfter, filterBefore) != "true"
+        ) {
+            return false
+        }
+        return true
+    }
+
+    /** What the list paints; the backing rows stay untouched. */
+    private fun recomputeShown() {
+        shownMessages = messages.filter { rowShown(it) }
+        shownHits = searchHits.filter { rowShown(it) }
+        pruneSelection()
+    }
+
+    /** Rows of the active pane (folder or search), after filters. */
+    fun visibleRows(): List<MessageRow> = if (searchActive) shownHits else shownMessages
+
+    fun selectionKey(m: MessageRow): String =
+        if (searchActive) "${if (m.folderId >= 0) m.folderId else folderId}:${m.uid}"
+        else m.uid.toString()
+
+    fun enterSelectionMode(withKey: String? = null) {
+        selectionMode = true
+        selectedKeys = if (withKey != null) setOf(withKey) else emptySet()
+    }
+
+    fun exitSelectionMode() {
+        selectionMode = false
+        selectedKeys = emptySet()
+    }
+
+    fun toggleSelected(key: String) {
+        selectedKeys = if (key in selectedKeys) selectedKeys - key else selectedKeys + key
+    }
+
+    fun selectAllVisible() {
+        selectedKeys = visibleRows().map { selectionKey(it) }.toSet()
+    }
+
+    fun selectUnreadVisible() {
+        selectedKeys = visibleRows().filter { it.unread }.map { selectionKey(it) }.toSet()
+    }
+
+    fun selectStarredVisible() {
+        selectedKeys = visibleRows().filter { it.starred }.map { selectionKey(it) }.toSet()
+    }
+
+    fun invertSelection() {
+        val all = visibleRows().map { selectionKey(it) }.toSet()
+        selectedKeys = all - selectedKeys
+    }
+
+    /** Drop keys that are no longer on screen (folder change, sync, filter). */
+    private fun pruneSelection() {
+        if (selectedKeys.isEmpty()) return
+        val live = visibleRows().map { selectionKey(it) }.toSet()
+        selectedKeys = selectedKeys.intersect(live)
+        if (selectedKeys.isEmpty()) selectionMode = false
+    }
+
+    val selectionCount: Int get() = selectedKeys.size
+
+    /** The selected rows, resolved against the active pane. */
+    private fun selectedRows(): List<MessageRow> {
+        val keys = selectedKeys
+        if (keys.isEmpty()) return emptyList()
+        return visibleRows().filter { selectionKey(it) in keys }
+    }
+
+    val selectionAllStarred: Boolean get() = selectedRows().all { it.starred }
+
+    /** Delete here destroys instead of moving to Trash (core decides). */
+    val selectionDeleteIsPermanent: Boolean
+        get() {
+            val rows = selectedRows()
+            if (rows.isEmpty()) return false
+            return rows.all { rowFolder(it)?.deleteIsPermanent == true }
+        }
+
+    /** The folder a row lives in: hits carry their own, rows use the open one. */
+    private fun rowFolder(m: MessageRow): Folder? {
+        val id = if (searchActive) {
+            if (m.folderId >= 0) m.folderId else folderId
+        } else {
+            folderId
+        }
+        return folders.firstOrNull { it.id == id }
+    }
+
+    private fun selectionUidsJson(): String =
+        "[${selectedRows().joinToString(",") { it.uid.toString() }}]"
+
+    /** `[{"folder": path, "uid": n}]` for the `*Hits` bulk calls. */
+    private fun selectionHitsJson(): String {
+        val arr = org.json.JSONArray()
+        for (m in selectedRows()) {
+            val path = rowFolder(m)?.path ?: continue
+            arr.put(JSONObject().put("folder", path).put("uid", m.uid))
+        }
+        return arr.toString()
+    }
+
+    fun bulkMarkRead(read: Boolean) = io {
+        MailNative.ensureInit(appContext)
+        if (searchActive) {
+            MailNative.markReadHits(activeAccountId, selectionHitsJson(), read)
+        } else {
+            MailNative.markReadMany(activeAccountId, folderId, selectionUidsJson(), read)
+        }
+        afterBulk()
+    }
+
+    fun bulkStar(starred: Boolean) = io {
+        MailNative.ensureInit(appContext)
+        if (searchActive) {
+            MailNative.setStarHits(activeAccountId, selectionHitsJson(), starred)
+        } else {
+            MailNative.setStarMany(activeAccountId, folderId, selectionUidsJson(), starred)
+        }
+        afterBulk()
+    }
+
+    fun bulkArchive() = io {
+        MailNative.ensureInit(appContext)
+        val result = if (searchActive) {
+            MailNative.archiveHits(activeAccountId, selectionHitsJson())
+        } else {
+            MailNative.archiveMessages(activeAccountId, folderId, selectionUidsJson())
+        }
+        withContext(Dispatchers.Main) { offerUndo(result) }
+        afterBulk()
+    }
+
+    fun bulkMove(destPath: String) = io {
+        MailNative.ensureInit(appContext)
+        val result = if (searchActive) {
+            MailNative.moveHits(activeAccountId, selectionHitsJson(), destPath)
+        } else {
+            MailNative.moveMessages(activeAccountId, folderId, selectionUidsJson(), destPath)
+        }
+        withContext(Dispatchers.Main) { offerUndo(result) }
+        afterBulk()
+    }
+
+    /** To Trash (undoable); the UI confirms first per the delete preference. */
+    fun bulkTrash() = io {
+        MailNative.ensureInit(appContext)
+        val result = if (searchActive) {
+            MailNative.deleteHits(activeAccountId, selectionHitsJson())
+        } else {
+            MailNative.deleteMessages(activeAccountId, folderId, selectionUidsJson())
+        }
+        withContext(Dispatchers.Main) { offerUndo(result) }
+        afterBulk()
+    }
+
+    /** Destroy server-side. No undo — the UI always confirms first. */
+    fun bulkPurge() = io {
+        MailNative.ensureInit(appContext)
+        if (searchActive) {
+            MailNative.purgeHits(activeAccountId, selectionHitsJson())
+        } else {
+            MailNative.purgeMessages(activeAccountId, folderId, selectionUidsJson())
+        }
+        afterBulk()
+    }
+
+    private suspend fun afterBulk() {
+        withContext(Dispatchers.Main) { exitSelectionMode() }
+        reloadMessages()
+        loadFolders()
+        if (searchActive && similarLabel == null) runSearch()
     }
 
     fun selectAccount(id: Long) = io {
@@ -279,9 +580,13 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         // Re-picking the shown folder just returns to its list, like Qt and
         // Flutter: no second fill of what is already showing.
         if (id == folderId && messages.isNotEmpty()) return
+        exitSelectionMode()
         folderId = id
         messages = emptyList()
+        shownMessages = emptyList()
         canLoadOlder = false
+        olderState = ""
+        olderLabel = ""
         reloadMessages()
         io {
             runCatching { MailNative.syncFolder(activeAccountId, id) }
@@ -298,7 +603,17 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         withContext(Dispatchers.Main) {
             if (folderId == id) {
                 messages = rows
+                val older = counts.optString("older")
+                val cached = counts.optInt("cached", rows.size)
+                val server = counts.optInt("server", -1)
                 canLoadOlder = counts.optBoolean("can_load_older", false)
+                olderState = older
+                olderLabel = when (older) {
+                    "unchecked" -> "Cached $cached (server not checked)"
+                    "partial" -> "Cached $cached of $server"
+                    else -> "All $cached loaded"
+                }
+                recomputeShown()
             }
         }
     }
@@ -395,6 +710,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     }
 
     fun setSearch(query: String) {
+        exitSelectionMode()
         searchQuery = query
         runSearch()
     }
@@ -406,6 +722,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
 
     fun clearSearch() {
         searchJob?.cancel()
+        exitSelectionMode()
         searchQuery = ""
         searchHits = emptyList()
         searchActive = false
@@ -419,9 +736,11 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         val subject = runCatching { MailNative.similarSubject(accountId, folder, uid) }.getOrDefault("")
         withContext(Dispatchers.Main) {
             searchJob?.cancel()
+            exitSelectionMode()
             searchQuery = ""
             searchHits = hits
             searchActive = true
+            shownHits = hits.filter { rowShown(it) }
             similarLabel = "Similar to: ${subject.ifEmpty { "this message" }}"
         }
     }
@@ -481,6 +800,8 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
                 if (searchQuery != query) return@withContext
                 searchActive = rows != null
                 searchHits = rows.orEmpty()
+                shownHits = rows.orEmpty().filter { rowShown(it) }
+                pruneSelection()
             }
         }
     }
@@ -586,6 +907,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
                     unread = o.optBoolean("unread", false),
                     starred = o.optBoolean("starred", false),
                     hasAttachments = o.optBoolean("has_attachments", false),
+                    dateRaw = o.optString("date_raw"),
                     initials = o.optString("initials", "?"),
                     avatarLight = o.optString("avatar_light"),
                     avatarDark = o.optString("avatar_dark"),
