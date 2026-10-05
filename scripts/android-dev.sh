@@ -28,6 +28,7 @@ ACTIVITY="$APP_ID/de.renier.mailclient.MainActivity"
 
 AVD="" SERIAL="" ASSUME_YES=0
 WANT_CLEAN="" WANT_BUILD="" WANT_DIST="" WANT_EMU="" WANT_RUN="" WANT_LOG="" WANT_UNINSTALL=""
+WANT_SEED_DB="" SEED_SRC="data/dev.sqlite"
 
 show_help() {
     cat <<'EOF'
@@ -42,6 +43,11 @@ Tasks (several combine; they run in the order listed here):
   --emulator      boot the emulator and wait for it (asks first, see below)
   --run           install the debug build on the device and launch the app
   --uninstall     remove the app from the device (fresh reinstall: add --run)
+  --seed-db [FILE] copy a desktop database (default: data/dev.sqlite,
+                  gitignored, never committed) into the app as
+                  mailclient.sqlite — dev-only fixture for offline reads;
+                  secrets stay in the desktop keyring, so on-device
+                  sync/send needs the account password (Step 2)
   --log           tail logcat for the app (it must be running; blocking)
 
 Options:
@@ -68,6 +74,7 @@ Examples:
   ./scripts/android-dev.sh --run --log
   ./scripts/android-dev.sh --emulator --avd Pixel_4a
   ./scripts/android-dev.sh --uninstall --run
+  ./scripts/android-dev.sh --seed-db --run
   ./scripts/android-dev.sh --dist
 EOF
 }
@@ -82,6 +89,14 @@ while [ $# -gt 0 ]; do
         --emulator) WANT_EMU=1; shift ;;
         --run) WANT_RUN=1; shift ;;
         --uninstall) WANT_UNINSTALL=1; shift ;;
+        --seed-db)
+            WANT_SEED_DB=1
+            if [ -n "${2:-}" ] && [ "${2:0:2}" != "--" ]; then
+                SEED_SRC="$2"; shift 2
+            else
+                shift
+            fi
+            ;;
         --log) WANT_LOG=1; shift ;;
         --avd) AVD="${2:-}"; shift 2 ;;
         --serial) SERIAL="${2:-}"; shift 2 ;;
@@ -233,6 +248,45 @@ fi
 
 if [ -n "$WANT_DIST" ]; then
     ./build.sh --android
+fi
+
+if [ -n "$WANT_SEED_DB" ]; then
+    [ -f "$SEED_SRC" ] || {
+        echo "Seed database not found: $SEED_SRC" >&2
+        echo "Pass a path: ./scripts/android-dev.sh --seed-db /path/to.db" >&2
+        exit 1
+    }
+    ensure_device
+    echo "==> seeding app DB from $SEED_SRC (dev-only fixture, never committed)"
+    adb shell am force-stop "$APP_ID" >/dev/null
+    if command -v sqlite3 >/dev/null; then
+        sqlite3 "$SEED_SRC" "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null
+    fi
+    tmp="/data/local/tmp/mailclient-seed.sqlite"
+    # MSYS2 rewrites leading-slash args to Windows paths, including this
+    # remote one — exempt exactly this call from conversion.
+    MSYS_NO_PATHCONV=1 adb push "$SEED_SRC" "$tmp" >/dev/null
+    # Absolute package paths (run-as does not guarantee its working dir),
+    # one command per call: `run-as pkg a && b` would run b as shell.
+    datadir="/data/data/$APP_ID/files"
+    as_app="run-as $APP_ID"
+    if ! {
+        adb shell "$as_app mkdir -p $datadir" >/dev/null &&
+        adb shell "$as_app cp $tmp $datadir/mailclient.sqlite" >/dev/null &&
+        adb shell "$as_app chmod 600 $datadir/mailclient.sqlite" >/dev/null &&
+        adb shell "$as_app rm -f $datadir/mailclient.sqlite-wal $datadir/mailclient.sqlite-shm" >/dev/null &&
+        adb shell "rm -f $tmp" >/dev/null
+    }; then
+        echo "Seed needs a debuggable build (run-as failed)." >&2
+        exit 1
+    fi
+    src_bytes="$(wc -c <"$SEED_SRC" | tr -d ' ')"
+    dst_bytes="$(adb shell "run-as $APP_ID stat -c %s $datadir/mailclient.sqlite" 2>/dev/null | tr -d '\r')"
+    [ "$src_bytes" = "$dst_bytes" ] || {
+        echo "Seed copy size mismatch: host $src_bytes vs device $dst_bytes." >&2
+        exit 1
+    }
+    echo "    seeded ($src_bytes bytes): offline reads work; sync/send need the account password (PLAN.md Step 2)"
 fi
 
 if [ -n "$WANT_EMU" ]; then

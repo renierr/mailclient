@@ -45,6 +45,7 @@ android/
 
 ```sh
 ./scripts/android-dev.sh --run         # emulator + install + launch
+./scripts/android-dev.sh --seed-db --run  # + copy data/dev.sqlite in first (offline reads)
 ./scripts/android-dev.sh --run --log   # + tail logcat for the app
 ./scripts/android-dev.sh --build       # debug build only, no device needed
 ./scripts/android-dev.sh --dist        # signed release APK → dist/mailclient-android/
