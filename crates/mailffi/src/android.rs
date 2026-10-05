@@ -1609,3 +1609,187 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_createFolder<'caller
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
+
+/// Step 0d composer/send (`android/PLAN.md`): thin wraps of
+/// `mailffi::api::composer`. Sends and draft saves queue onto
+/// `mailclient-net` (progress/finished events on the 0b listener);
+/// validation runs inline, so a bad form throws with the composer open.
+///
+/// `MailNative.sendMail(accountId, folderId, form)`: validate + MIME + queue.
+/// The composer's JSON form is `{to, cc?, bcc?, from?, from_name?,
+/// reply_to?, subject, body, body_html?, attachments?, draft_uid?}`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_sendMail<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+    form: JString<'caller>,
+) {
+    unowned
+        .with_env(|env| -> Result<()> {
+            crate::api::composer::send_mail(account_id, folder_id, string(env, &form)?)?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.saveDraft(accountId, form)`: append the current text to
+/// Drafts (created server-side when missing), replacing the opened version.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_saveDraft<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    form: JString<'caller>,
+) {
+    unowned
+        .with_env(|env| -> Result<()> {
+            crate::api::composer::save_draft(account_id, string(env, &form)?)?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.draftForm(accountId, uid)`: a stored draft back as an editable
+/// form (attachments as metadata, never paths).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_draftForm<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    uid: i32,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::composer::draft_form(
+                account_id,
+                uid.max(0) as u32,
+            )?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.deleteDraft(accountId, uid)`: destroy a server draft
+/// (`\Deleted` + expunge) — what Discard means for a draft from Drafts.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_deleteDraft<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    uid: i32,
+) {
+    unowned
+        .with_env(|_env| -> Result<()> {
+            crate::api::composer::delete_draft(account_id, uid.max(0) as u32)?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.answerDraft(folderId, uid, mode)`: reply/reply-all/forward
+/// draft JSON — `mode` is `reply`, `reply_all` or `forward`. Local read.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_answerDraft<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+    uid: i32,
+    mode: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::composer::answer_draft(
+                folder_id,
+                uid.max(0) as u32,
+                string(env, &mode)?,
+            )?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.blankDraft()`: new-mail draft (just the signature), same
+/// shape as `answerDraft`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_blankDraft<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::composer::blank_draft()?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.imageDataUrl(path)`: an image file as a `data:` URL for
+/// inline display. Throws for non-images and oversize files.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_imageDataUrl<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    path: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::composer::image_data_url(string(env, &path)?)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.isInlineImage(path)`: whether a file is offered inline (by
+/// type) — `"true"`/`"false"`, like every other boolean here crosses as a
+/// string.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_isInlineImage<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    path: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(
+                crate::api::composer::is_inline_image(string(env, &path)?).to_string(),
+            )?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.senderParts(address)`: the From field split —
+/// `{"local","domain"}`, domain locked with its `@`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_senderParts<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    address: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let p = crate::api::composer::sender_parts(string(env, &address)?);
+            let json = serde_json::json!({
+                "local": p.local,
+                "domain": p.domain,
+            });
+            Ok(env.new_string(serde_json::to_string(&json)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.effectiveFrom(local, accountEmail)`: the address a From field
+/// sends as.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_effectiveFrom<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    local: JString<'caller>,
+    account_email: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::composer::effective_from(
+                string(env, &local)?,
+                string(env, &account_email)?,
+            ))?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}

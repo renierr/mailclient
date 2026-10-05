@@ -50,7 +50,8 @@ fed from the same `mailclient-net` thread the FRB `job_events` stream uses.
   `Vec<u32>` selections, `delete/archive/move/purgeHits` (cross-folder),
   `markReadHits`/`setStarHits`, `undoMove` (exists), `undoGraceSecs`
   (exists), `createFolder`.
-- **0d — composer/send**: `sendMail`, `saveDraft`, `draftForm`,
+- **0d — composer/send** ✅ done (queued jobs report on the 0b listener;
+  `ComposerProbe` card, verified on emulator): `sendMail`, `saveDraft`, `draftForm`,
   `deleteDraft`, `answerDraft`, `blankDraft`, `imageDataUrl`,
   `isInlineImage`, `senderParts`, `effectiveFrom`.
 - **0e — search/contacts/settings/misc**: `searchJson`, `searchServer`,

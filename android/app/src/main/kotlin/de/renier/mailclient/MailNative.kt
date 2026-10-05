@@ -181,6 +181,19 @@ object MailNative {
     @JvmStatic external fun moveHits(accountId: Long, hits: String, destPath: String): String
     @JvmStatic external fun purgeHits(accountId: Long, hits: String)
     @JvmStatic external fun createFolder(accountId: Long, path: String)
+
+    // Step 0d composer/send. Sends and draft saves queue onto
+    // mailclient-net (0b events); bad forms throw inline.
+    @JvmStatic external fun sendMail(accountId: Long, folderId: Long, form: String)
+    @JvmStatic external fun saveDraft(accountId: Long, form: String)
+    @JvmStatic external fun draftForm(accountId: Long, uid: Int): String
+    @JvmStatic external fun deleteDraft(accountId: Long, uid: Int)
+    @JvmStatic external fun answerDraft(folderId: Long, uid: Int, mode: String): String
+    @JvmStatic external fun blankDraft(): String
+    @JvmStatic external fun imageDataUrl(path: String): String
+    @JvmStatic external fun isInlineImage(path: String): String
+    @JvmStatic external fun senderParts(address: String): String
+    @JvmStatic external fun effectiveFrom(local: String, accountEmail: String): String
 }
 
 // What the net thread calls back with per finished (or progress) job event:

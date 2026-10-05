@@ -121,6 +121,8 @@ fun HomeScreen(openPayload: String?, onConsumeOpen: () -> Unit) {
 
         ListBulkProbe()
 
+        ComposerProbe()
+
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp)) {
                 Text("Background check", style = MaterialTheme.typography.titleSmall)
@@ -532,6 +534,118 @@ private fun ListBulkProbe() {
                     if (a == null || path.isBlank()) { output = "Account must be a number and path non-empty."; return@TextButton }
                     run("create") { MailNative.createFolder(a, path); "create queued" }
                 }) { Text("Create") }
+            }
+            if (busy) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Working…", style = MaterialTheme.typography.bodySmall)
+            }
+            output?.let {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+// Step 0d smoke probe: draft shapes (blank/reply/forward/stored), From
+// helpers and the send validation path. Live send/save need the account
+// password, which the seeded DB does not carry — a queued job failing at
+// SMTP with an honest event is the expected proof. Delete when the composer
+// lands.
+@Composable
+private fun ComposerProbe() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var account by remember { mutableStateOf("") }
+    var folder by remember { mutableStateOf("") }
+    var uid by remember { mutableStateOf("") }
+    var text by remember { mutableStateOf("") }
+    var output by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+
+    fun run(name: String, call: () -> String) {
+        busy = true
+        scope.launch(Dispatchers.IO) {
+            val result = try {
+                MailNative.ensureInit(context)
+                call()
+            } catch (e: Exception) {
+                "$name failed: ${e.message}"
+            }
+            withContext(Dispatchers.Main) {
+                output = result.take(400)
+                busy = false
+            }
+        }
+    }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text("Composer (0d probe)", style = MaterialTheme.typography.titleSmall)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = account,
+                    onValueChange = { account = it },
+                    label = { Text("Account") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    value = folder,
+                    onValueChange = { folder = it },
+                    label = { Text("Folder") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    value = uid,
+                    onValueChange = { uid = it },
+                    label = { Text("UID") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                label = { Text("Address / path (parts, from, inline)") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val f = folder.toLongOrNull()
+                val u = uid.toIntOrNull()
+                TextButton(onClick = { run("blank") { MailNative.blankDraft() } }) { Text("Blank") }
+                TextButton(onClick = {
+                    if (f == null || u == null) { output = "Folder and UID must be numbers."; return@TextButton }
+                    run("reply") { MailNative.answerDraft(f, u, "reply") }
+                }) { Text("Reply") }
+                TextButton(onClick = {
+                    if (f == null || u == null) { output = "Folder and UID must be numbers."; return@TextButton }
+                    run("forward") { MailNative.answerDraft(f, u, "forward") }
+                }) { Text("Forward") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val a = account.toLongOrNull()
+                val u = uid.toIntOrNull()
+                TextButton(onClick = {
+                    if (a == null || u == null) { output = "Account and UID must be numbers."; return@TextButton }
+                    run("draft") { MailNative.draftForm(a, u) }
+                }) { Text("Draft") }
+                TextButton(onClick = {
+                    if (text.isBlank()) { output = "Enter an address first."; return@TextButton }
+                    run("parts") { MailNative.senderParts(text) }
+                }) { Text("Parts") }
+                TextButton(onClick = {
+                    if (text.isBlank()) { output = "Enter a local part first."; return@TextButton }
+                    run("from") { MailNative.effectiveFrom(text, "me@example.com") }
+                }) { Text("From") }
+                TextButton(onClick = {
+                    if (text.isBlank()) { output = "Enter a file path first."; return@TextButton }
+                    run("inline") { MailNative.isInlineImage(text) }
+                }) { Text("Inline?") }
             }
             if (busy) {
                 Spacer(modifier = Modifier.height(4.dp))
