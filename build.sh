@@ -13,7 +13,7 @@
 # --aab:     flutter build appbundle --release (signed; needs key.properties)
 #            Output: dist/mailclient-aab/mailclient-release.aab
 # --android: native Compose Android APK --release (signed; needs key.properties)
-#            Output: dist/mailclient-android/mailclient-release.apk
+#            Output: dist/mailclient-android/mailclient-native-release.apk
 # --all:     Qt + Flutter Linux desktop bundles
 # Works on Linux and in MSYS2/Git Bash on Windows (Qt path, see scripts/qt-env.sh).
 set -euo pipefail
@@ -35,7 +35,7 @@ Available targets:
   --aab, --bundle              Build signed Flutter Android App Bundle (AAB)
                                 Output: dist/mailclient-aab/mailclient-release.aab
   --android                    Build signed native Compose Android APK
-                                Output: dist/mailclient-android/mailclient-release.apk
+                                Output: dist/mailclient-android/mailclient-native-release.apk
   --all                        Build all desktop targets (Qt + Flutter Linux)
   -h, --help                   Show this help message
 
@@ -229,12 +229,12 @@ build_android() {
         exit 1
     fi
     mkdir -p dist/mailclient-android
-    cp "$apk" dist/mailclient-android/mailclient-release.apk
+    cp "$apk" dist/mailclient-android/mailclient-native-release.apk
     write_version dist/mailclient-android
 
     cat <<'EOF'
 Done. APK available at:
-    ./dist/mailclient-android/mailclient-release.apk
+    ./dist/mailclient-android/mailclient-native-release.apk
 Signed with the release keystore from android/key.properties.
 EOF
 }
