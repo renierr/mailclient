@@ -815,6 +815,10 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
             .getOrElse { it.message ?: "undo failed" }
         putStatus(text, false)
         reloadMessages()
+        // The rows are visible again: the tree counts must come back too,
+        // like the Flutter undo does (messages + folders + hits).
+        loadFolders()
+        if (searchActive && similarLabel == null) runSearch()
     }
 
     fun offerUndo(resultJson: String) {
