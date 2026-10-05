@@ -77,7 +77,13 @@ fed from the same `mailclient-net` thread the FRB `job_events` stream uses.
   (already the pattern) before building UI on it; delete the smoke buttons
   when the real screen lands.
 
-## Step 1 — App shell + navigation + global state
+## Step 1 — App shell + navigation + global state ✅ done
+
+- `MailState` (`ui/state/`), `MailShell` + top bar + status line (`ui/shell/`),
+  `FoldersScreen`, `ListScreen` (placeholders — full versions in Steps 3–4),
+  probes moved to the Dev route, reader stays its activity. Verified with the
+  seeded DB: folders → list → reader → back, account switcher, sync status,
+  outbox pill, undo snackbar wiring, notification deep-link parsing.
 
 - `MailApp` root: Material3 theme (light/dark, follow system), ui-scale
   plumbing, `MailViewModel` (StateFlow: accounts, active account, folders,
