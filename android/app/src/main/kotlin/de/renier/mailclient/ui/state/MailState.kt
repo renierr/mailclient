@@ -283,6 +283,14 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         undoOffer = UndoOffer(batch, o.optString("label"))
     }
 
+    /** Delete with folders, messages and secrets; land on the next account. */
+    fun removeAccount(id: Long) = io {
+        MailNative.ensureInit(appContext)
+        runCatching { MailNative.deleteAccount(id) }
+            .onFailure { fail(it.message ?: "delete failed") }
+        refreshAll()
+    }
+
     fun markSeen() = io {
         runCatching {
             MailNative.ensureInit(appContext)

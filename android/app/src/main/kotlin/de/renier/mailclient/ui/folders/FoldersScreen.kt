@@ -35,7 +35,11 @@ import de.renier.mailclient.ui.state.MailState
 // pills. Folder management (create/subscribe/refresh) arrives in Step 3;
 // this screen proves selection, switching and navigation with real data.
 @Composable
-fun FoldersScreen(state: MailState, onOpenFolder: () -> Unit) {
+fun FoldersScreen(
+    state: MailState,
+    onOpenFolder: () -> Unit,
+    onAddAccount: () -> Unit,
+) {
     Column(modifier = Modifier.fillMaxSize()) {
         if (state.accounts.isEmpty()) {
             Card(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
@@ -45,7 +49,7 @@ fun FoldersScreen(state: MailState, onOpenFolder: () -> Unit) {
                         "Add your first mail account to get started.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                    TextButton(onClick = { state.info("Account setup arrives in Step 2") }) {
+                    TextButton(onClick = onAddAccount) {
                         Text("Add account")
                     }
                 }

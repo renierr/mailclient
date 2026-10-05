@@ -1,6 +1,7 @@
 package de.renier.mailclient.ui.shell
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -39,6 +40,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import de.renier.mailclient.MainActivity
 import de.renier.mailclient.ReaderActivity
+import de.renier.mailclient.ui.accounts.AccountSetupScreen
+import de.renier.mailclient.ui.accounts.AccountsScreen
 import de.renier.mailclient.ui.folders.FoldersScreen
 import de.renier.mailclient.ui.home.HomeScreen
 import de.renier.mailclient.ui.list.ListScreen
@@ -51,6 +54,9 @@ import de.renier.mailclient.ui.state.MailState
 private sealed interface Route {
     data object Folders : Route
     data object List : Route
+    data object Accounts : Route
+    // -1: add; else edit.
+    data class Setup(val accountId: Long) : Route
     data object Dev : Route
 }
 
@@ -147,6 +153,8 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                 title = when (route) {
                     Route.Folders -> state.activeAccount?.email ?: "mailclient"
                     Route.List -> state.openFolder?.leaf ?: "Messages"
+                    Route.Accounts -> "Accounts"
+                    is Route.Setup -> if (route.accountId >= 0) "Edit account" else "Add account"
                     Route.Dev -> "Dev probes"
                 },
                 canGoBack = stack.size > 1,
@@ -168,7 +176,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                     text = { Text("Accounts") },
                     onClick = {
                         menu = false
-                        state.info("Account setup arrives in Step 2")
+                        go(Route.Accounts)
                     },
                 )
                 DropdownMenuItem(
@@ -205,6 +213,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                     FoldersScreen(
                         state = state,
                         onOpenFolder = { go(Route.List) },
+                        onAddAccount = { go(Route.Setup(-1)) },
                     )
                 Route.List ->
                     ListScreen(
@@ -217,6 +226,19 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                                 ),
                             )
                         },
+                    )
+                Route.Accounts ->
+                    AccountsScreen(
+                        state = state,
+                        onAdd = { go(Route.Setup(-1)) },
+                        onEdit = { go(Route.Setup(it)) },
+                    )
+                is Route.Setup ->
+                    AccountSetupScreen(
+                        state = state,
+                        accountId = route.accountId,
+                        onSaved = { stack = listOf(Route.Folders) },
+                        onClose = ::back,
                     )
                 Route.Dev -> HomeScreen(openPayload = null, onConsumeOpen = {})
             }
@@ -266,6 +288,7 @@ private fun StatusLine(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
             .padding(horizontal = 12.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {

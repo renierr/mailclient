@@ -101,7 +101,13 @@ fed from the same `mailclient-net` thread the FRB `job_events` stream uses.
   generalized to list/sidebar.
 - Verify: rotate, back-stack, dark/light, 360dp width, kill-and-restore.
 
-## Step 2 — Accounts (add / edit / remove / switch)
+## Step 2 — Accounts (add / edit / remove / switch) ✅ done
+
+- `AccountsScreen` (manager) + `AccountSetupScreen` (full form over the 0a
+  JNI: guesses, port-follow, inline check, blank-password-keeps-stored,
+  dirty-guarded close). Verified on the seeded DB incl. a full add → save →
+  auto-select → remove round trip and the discard guard; device left on the
+  pristine seed.
 
 - Account switcher + manager (use/switch, edit, remove with confirm:
   "local cache dropped, server untouched"); `Add account` → setup form.
