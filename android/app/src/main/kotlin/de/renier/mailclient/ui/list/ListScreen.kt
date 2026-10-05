@@ -176,7 +176,12 @@ fun ListScreen(state: MailState, onOpenReader: (Long, Long, Int) -> Unit) {
         DateRangeDialog(state) { dateDialog = false }
     }
 
-    PullToSync(syncing = state.syncing, onSync = { state.syncNow() }) {
+    PullToSync(
+        syncing = state.syncing,
+        // Inside a folder only that folder refreshes; account-wide search
+        // pulls the whole account like the Sync button.
+        onSync = { if (state.searchActive) state.syncNow() else state.syncFolder() },
+    ) {
         Column(modifier = Modifier.fillMaxSize()) {
             ListHeaderRow(
                 state = state,

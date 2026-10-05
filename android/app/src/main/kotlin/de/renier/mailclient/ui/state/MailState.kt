@@ -673,6 +673,24 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
             }
     }
 
+    /**
+     * Pull-to-refresh inside a folder syncs just that folder: new mail,
+     * flags and pending moves for what is showing. The account-wide
+     * [syncAccount] stays on the Sync button and the folders pane.
+     */
+    fun syncFolder(id: Long = folderId) = io {
+        MailNative.ensureInit(appContext)
+        val account = activeAccountId
+        if (account < 0 || id < 0) return@io
+        withContext(Dispatchers.Main) { syncing = true }
+        runCatching { MailNative.syncFolder(account, id) }
+            .onFailure { e ->
+                if (!e.message.orEmpty().contains("already running", ignoreCase = true)) {
+                    fail(e.message ?: "sync failed")
+                }
+            }
+    }
+
     /** Re-read the folder list from the server (LIST); the event reloads. */
     fun refreshFolderList() {
         val id = activeAccountId
