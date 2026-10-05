@@ -165,6 +165,17 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         private set
     var shownHits: List<MessageRow> by mutableStateOf(emptyList())
         private set
+    // List scroll memory (Qt keeps per-folder scroll by UID, Flutter by
+    // PageStorageKey): first-visible index + offset per folder, so leaving
+    // for the reader and coming back lands where you left. Search scroll
+    // is keyed separately and likewise restored.
+    private val listScroll = mutableMapOf<String, Pair<Int, Int>>()
+
+    fun saveListScroll(key: String, index: Int, offset: Int) {
+        listScroll[key] = index to offset
+    }
+
+    fun listScrollFor(key: String): Pair<Int, Int>? = listScroll[key]
     var readerPrefs by mutableStateOf(ReaderPrefs())
         private set
     private var searchJob: Job? = null

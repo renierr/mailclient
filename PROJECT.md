@@ -344,7 +344,7 @@ Update this section when a step lands (see AGENTS.md §7.4).
 | Folder-scoped search toggle | ✅ | ✅ | ✅ | Native: tools-menu checkbox |
 | Status line + details + copy | ✅ | ✅ | 🔄 | Native StatusStrip only when busy/error/outbox; no details dialog |
 | Outbox pill + dialog | ✅ | ✅ | ❌ | Native: chip only (Outbox screen is Step 9) |
-| Undo offer + Ctrl+Z | ✅ | ✅ | ✅ | All honour the 8s `UNDO_GRACE_SECS` window |
+| Undo offer (snackbar/toast; Ctrl+Z where a keyboard exists) | ✅ | ✅ | ✅ | All honour the 8s `UNDO_GRACE_SECS` window |
 | Keyboard shortcuts | ✅ | ✅ | — | Touch: no shortcuts by design |
 | Auto-sync timer, quiet hours | ✅ | ✅ | 🔄 | Native: resume refresh only |
 
@@ -370,7 +370,8 @@ Update this section when a step lands (see AGENTS.md §7.4).
 |---|---|---|---|---|
 | Short input = row filter, 3+ = FTS + server backfill | ✅ | ✅ | ✅ | Core `search::plan`; same thresholds |
 | Folder-scoped vs account-wide | ✅ | ✅ | ✅ | |
-| Hits grouped by folder, jump to hit | ✅ | ✅ | ✅ | Native opens hit directly |
+| Hits grouped under folder section headers | ✅ | ✅ | ✅ | Account-wide + similar only; folder-scoped stays flat everywhere |
+| Jump to hit (opens in its folder) | ✅ | ✅ | ✅ | Native opens hit directly |
 
 ### Reader
 

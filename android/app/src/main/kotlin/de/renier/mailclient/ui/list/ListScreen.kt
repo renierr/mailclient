@@ -14,8 +14,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -27,6 +27,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -70,7 +71,46 @@ fun ListScreen(state: MailState, onOpenReader: (Long, Long, Int) -> Unit) {
     // Account-wide hits name their folder; in-folder rows need not.
     val showFolder = searching && !state.searchFolderOnly
     val folderNames = remember(state.folders) { state.folders.associate { it.id to it.leaf } }
-    val listState = rememberLazyListState()
+    // Search/similar hits arrive grouped by folder (core keeps each
+    // folder's hits together in first-hit order): render a section header
+    // per group like Qt and Flutter, instead of a flat list.
+    val entries: List<ListEntry> = remember(rows, searching, showFolder) {
+        if (!searching || !showFolder) {
+            rows.map { ListEntry.Row(it) }
+        } else {
+            buildList {
+                var lastFolder = Long.MIN_VALUE
+                for (m in rows) {
+                    val fid = if (m.folderId >= 0) m.folderId else folder?.id ?: -1
+                    if (fid != lastFolder) {
+                        lastFolder = fid
+                        add(ListEntry.Header(fid, folderNames[fid] ?: "?"))
+                    }
+                    add(ListEntry.Row(m))
+                }
+            }
+        }
+    }
+    // Scroll memory: one position per folder (search has its own), restored
+    // when the list is rebuilt after the reader or a folder switch, saved
+    // when it leaves the composition.
+    val scrollKey = if (searching) "search" else "folder:${folder?.id ?: -1}"
+    val saved = remember(scrollKey) { state.listScrollFor(scrollKey) }
+    val listState = remember(scrollKey) {
+        LazyListState(
+            firstVisibleItemIndex = saved?.first ?: 0,
+            firstVisibleItemScrollOffset = saved?.second ?: 0,
+        )
+    }
+    DisposableEffect(scrollKey) {
+        onDispose {
+            state.saveListScroll(
+                scrollKey,
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset,
+            )
+        }
+    }
     val jumpScope = rememberCoroutineScope()
 
     var dateDialog by remember { mutableStateOf(false) }
@@ -166,7 +206,21 @@ fun ListScreen(state: MailState, onOpenReader: (Long, Long, Int) -> Unit) {
                     // Room for the floating jump buttons over the last row.
                     contentPadding = PaddingValues(bottom = 96.dp),
                 ) {
-                    items(rows, key = { state.selectionKey(it) }) { m ->
+                    items(entries, key = { if (it is ListEntry.Header) "h:${it.folderId}" else state.selectionKey((it as ListEntry.Row).row) }) { entry ->
+                        if (entry is ListEntry.Header) {
+                            Text(
+                                entry.label,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
+                            )
+                            return@items
+                        }
+                        val m = (entry as ListEntry.Row).row
                         val key = state.selectionKey(m)
                         val rowFolder = if (m.folderId >= 0) m.folderId else folder?.id ?: -1
                         MessageItem(
@@ -265,6 +319,13 @@ fun ListScreen(state: MailState, onOpenReader: (Long, Long, Int) -> Unit) {
             }
         }
     }
+}
+
+// One visible list entry: a folder section header over account-wide
+// search/similar hits, or a message row.
+sealed interface ListEntry {
+    data class Header(val folderId: Long, val label: String) : ListEntry
+    data class Row(val row: MessageRow) : ListEntry
 }
 
 @Composable
