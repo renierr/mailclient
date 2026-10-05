@@ -159,74 +159,6 @@ class AttachmentDownloadFailed implements Exception {
   String toString() => message;
 }
 
-/// The MIME to hand the OS when opening or saving: the stored type
-/// canonicalized (`application/ics` → `text/calendar`, `image/jpg` →
-/// `image/jpeg`), or the filename's extension when the stored type is
-/// missing or generic (`octet-stream` on an `.ics` still opens the
-/// calendar). Never empty: the opener falls back to `*/*` rather than a
-/// lie.
-String openMimeType(AttachmentInfo attachment) {
-  final stored = attachment.mimeType.trim().toLowerCase();
-  const generic = {
-    '',
-    'application/octet-stream',
-    'application/unknown',
-    'application/binary',
-  };
-  String canon(String m) {
-    if (m == 'image/jpg' || m == 'image/x-png') return 'image/jpeg';
-    if (m == 'application/ics' ||
-        m == 'text/x-vcalendar' ||
-        m == 'application/x-vcalendar' ||
-        m == 'text/x-vcal') {
-      return 'text/calendar';
-    }
-    if (m == 'text/x-vcard' || m == 'text/directory') return 'text/vcard';
-    if (m == 'audio/x-mp3') return 'audio/mpeg';
-    return m;
-  }
-
-  if (!generic.contains(stored)) return canon(stored);
-  final name = attachment.fileName.isNotEmpty
-      ? attachment.fileName
-      : attachment.filename;
-  final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
-  const byExt = {
-    'ics': 'text/calendar',
-    'vcf': 'text/vcard',
-    'eml': 'message/rfc822',
-    'pdf': 'application/pdf',
-    'html': 'text/html',
-    'htm': 'text/html',
-    'txt': 'text/plain',
-    'csv': 'text/csv',
-    'json': 'application/json',
-    'xml': 'application/xml',
-    'zip': 'application/zip',
-    'png': 'image/png',
-    'jpg': 'image/jpeg',
-    'jpeg': 'image/jpeg',
-    'gif': 'image/gif',
-    'webp': 'image/webp',
-    'svg': 'image/svg+xml',
-    'mp3': 'audio/mpeg',
-    'wav': 'audio/wav',
-    'ogg': 'audio/ogg',
-    'flac': 'audio/flac',
-    'mp4': 'video/mp4',
-    'doc': 'application/msword',
-    'docx':
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'xls': 'application/vnd.ms-excel',
-    'xlsx':
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    'pptx':
-        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    'odt': 'application/vnd.oasis.opendocument.text',
-  };
-  return byExt[ext] ?? '*/*';
-}
-
 /// Cached bytes, downloading first when the message arrived without them.
 ///
 /// `downloadAttachments` only queues the job — the bytes land when its
@@ -301,7 +233,7 @@ Future<void> openAttachment(
     // An explicit type, not the extension guess: a stored
     // `application/octet-stream` on an `.ics` opened the wrong app, and
     // `application/ics` is not what calendars register.
-    final result = await OpenFilex.open(path, type: openMimeType(attachment));
+    final result = await OpenFilex.open(path, type: attachment.openMime);
     if (result.type != ResultType.done) {
       state.showStatus(
         'Could not open ${attachment.filename}: ${result.message}',
@@ -338,7 +270,7 @@ Future<void> saveAttachment(
       dialogTitle: 'Save attachment',
       fileName: attachment.fileName,
       bytes: Uint8List.fromList(bytes),
-      mimeType: openMimeType(attachment),
+      mimeType: attachment.openMime,
     );
     if (uri == null) return;
     state.showStatus('Saved ${attachment.filename}');

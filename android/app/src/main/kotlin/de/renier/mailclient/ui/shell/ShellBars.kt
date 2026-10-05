@@ -13,7 +13,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -52,20 +51,21 @@ fun ShellIcon(res: Int, description: String?, modifier: Modifier = Modifier) {
     Icon(painter = painterResource(res), contentDescription = description, modifier = modifier)
 }
 
-// The mail panes' bar: one rounded search field holding navigation, Sync and
-// the tools menu — the phone form of the Qt toolbar (AGENTS.md: back, search,
-// Sync, tools; Compose is the FAB). No folder name here: the list header
-// shows it.
+// The mail panes' bar: one rounded search field holding the Qt toolbar's
+// order in phone form (AGENTS.md: back, Compose, search, tools). Compose is an
+// icon here, not a FAB, so nothing floats over the list or the bottom
+// actions it will get. Sync is pull-to-refresh on the panes (plus a tools
+// entry), which keeps the bar to four slots at 360dp. No folder name here:
+// the list header shows it.
 @Composable
 fun SearchTopBar(
     query: String,
     placeholder: String,
     canGoBack: Boolean,
     onBack: () -> Unit,
+    onCompose: (() -> Unit)?,
     onQuery: (String) -> Unit,
     onClear: () -> Unit,
-    syncing: Boolean,
-    onSync: () -> Unit,
     menu: List<ShellMenuItem>,
 ) {
     val focus = LocalFocusManager.current
@@ -80,12 +80,19 @@ fun SearchTopBar(
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) {
             if (canGoBack) {
                 IconButton(onClick = onBack) { ShellIcon(R.drawable.ic_arrow_back, "Back") }
-            } else {
+            }
+            if (onCompose != null) {
+                IconButton(onClick = onCompose) { ShellIcon(R.drawable.ic_edit, "Compose") }
+            }
+            if (!canGoBack && onCompose == null) {
                 Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
                     ShellIcon(R.drawable.ic_search, null, Modifier.size(22.dp))
                 }
             }
-            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            Box(
+                modifier = Modifier.weight(1f).padding(start = 4.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
                 if (query.isEmpty()) {
                     Text(
                         placeholder,
@@ -110,13 +117,6 @@ fun SearchTopBar(
             }
             if (query.isNotEmpty()) {
                 IconButton(onClick = onClear) { ShellIcon(R.drawable.ic_close, "Clear search") }
-            }
-            IconButton(onClick = onSync, enabled = !syncing) {
-                if (syncing) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                } else {
-                    ShellIcon(R.drawable.ic_sync, "Sync")
-                }
             }
             OverflowMenu(menu)
         }

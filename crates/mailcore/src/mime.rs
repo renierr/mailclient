@@ -339,6 +339,21 @@ pub fn repaired_mime(declared: Option<&str>, filename: Option<&str>) -> Option<S
     mime_for_extension(ext).map(str::to_string)
 }
 
+/// The MIME to hand the OS when opening or saving an attachment: the stored
+/// type canonicalized, or the filename's extension when the stored type is
+/// missing or generic (`octet-stream` on an `.ics` still opens the
+/// calendar). Never empty: `*/*` rather than a lie.
+pub fn open_mime(declared: Option<&str>, filename: Option<&str>) -> String {
+    if let Some(m) = repaired_mime(declared, filename) {
+        return m;
+    }
+    let d = declared.unwrap_or("").trim();
+    if !d.is_empty() && !is_generic(d) {
+        return canonical_mime(d);
+    }
+    "*/*".to_string()
+}
+
 /// File extension (no dot, lowercase) → MIME, the sender's `guess_mime`
 /// table as a lookup. `None` for unknown extensions.
 pub fn mime_for_extension(ext: &str) -> Option<&'static str> {
@@ -585,6 +600,29 @@ mod tests {
             corrected_mime(Some("application/octet-stream"), b"BEGIN:VCALENDAR").as_deref(),
             Some("text/calendar")
         );
+    }
+
+    #[test]
+    fn open_mime_canonicalizes_or_falls_back_to_the_extension() {
+        assert_eq!(
+            open_mime(Some("application/ics"), Some("a.ics")),
+            "text/calendar"
+        );
+        assert_eq!(open_mime(Some("image/jpg"), None), "image/jpeg");
+        assert_eq!(
+            open_mime(Some("application/pdf"), Some("x.bin")),
+            "application/pdf"
+        );
+        assert_eq!(
+            open_mime(Some("application/octet-stream"), Some("invite.ics")),
+            "text/calendar"
+        );
+        assert_eq!(open_mime(None, Some("report.PDF")), "application/pdf");
+        assert_eq!(
+            open_mime(Some("application/octet-stream"), Some("blob")),
+            "*/*"
+        );
+        assert_eq!(open_mime(None, None), "*/*");
     }
 
     #[test]

@@ -38,6 +38,19 @@ data class Folder(
     val count: Int,
     // Sidebar visibility only: hidden folders keep their cache and syncing.
     val subscribed: Boolean = true,
+    // Delete here destroys instead of moving to Trash (core decides).
+    val deleteIsPermanent: Boolean = false,
+)
+
+// The settings the reader acts on, from the core's settingsJson.
+data class ReaderPrefs(
+    val autoMarkRead: Boolean = true,
+    val markReadDelaySecs: Long = 0,
+    val loadRemoteImages: Boolean = false,
+    val confirmDelete: Boolean = true,
+    val linkClickAction: String = "examine",
+    // Text size multiplier: the Qt reader's 12 / 14 / 18 px steps.
+    val scale: Float = 1f,
 )
 
 data class MessageRow(
@@ -107,6 +120,11 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         private set
     var searchActive by mutableStateOf(false)
         private set
+    // "Similar to: …" when the hits are a find-similar result, not a query.
+    var similarLabel: String? by mutableStateOf(null)
+        private set
+    var readerPrefs by mutableStateOf(ReaderPrefs())
+        private set
     private var searchJob: Job? = null
 
     // One-shot callbacks for the next finished event of a job kind, keyed by
@@ -171,6 +189,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         initialized = true
         MailNative.ensureInit(appContext)
         refreshAll()
+        loadReaderPrefs()
     }
 
     fun release() {
@@ -198,7 +217,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
             reloadMessages()
         }
         refreshOutbox()
-        if (searchActive) runSearch()
+        if (searchActive && similarLabel == null) runSearch()
     }
 
     fun refreshAll() = io {
@@ -355,7 +374,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         val result = MailNative.moveMessages(activeAccountId, fromFolder, "[$uid]", destPath)
         withContext(Dispatchers.Main) {
             offerUndo(result)
-            if (searchActive) runSearch()
+            if (searchActive && similarLabel == null) runSearch()
         }
         reloadMessages()
         loadFolders()
@@ -376,10 +395,51 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         searchQuery = ""
         searchHits = emptyList()
         searchActive = false
+        similarLabel = null
+    }
+
+    /** Mail like this one across the account, shown as list hits. */
+    fun findSimilar(folder: Long, uid: Int) = io {
+        val accountId = activeAccountId
+        val hits = parseMessages(MailNative.similarJson(accountId, folder, uid))
+        val subject = runCatching { MailNative.similarSubject(accountId, folder, uid) }.getOrDefault("")
+        withContext(Dispatchers.Main) {
+            searchJob?.cancel()
+            searchQuery = ""
+            searchHits = hits
+            searchActive = true
+            similarLabel = "Similar to: ${subject.ifEmpty { "this message" }}"
+        }
+    }
+
+    fun loadReaderPrefs() = io {
+        MailNative.ensureInit(appContext)
+        val o = JSONObject(MailNative.settingsJson())
+        val prefs = ReaderPrefs(
+            autoMarkRead = o.optBoolean("auto_mark_read", true),
+            markReadDelaySecs = o.optLong("mark_read_delay_secs", 0),
+            loadRemoteImages = o.optBoolean("load_remote_images", false),
+            confirmDelete = o.optBoolean("confirm_delete", true),
+            linkClickAction = o.optString("link_click_action", "examine"),
+            scale = when (o.optString("reader_font_size")) {
+                "small" -> 12f / 14f
+                "large" -> 18f / 14f
+                else -> 1f
+            },
+        )
+        withContext(Dispatchers.Main) { readerPrefs = prefs }
+    }
+
+    /** After the reader changed a message: re-read list, tree and search. */
+    fun afterReaderChange() {
+        reloadMessages()
+        loadFolders()
+        if (searchActive && similarLabel == null) runSearch()
     }
 
     private fun runSearch() {
         searchJob?.cancel()
+        similarLabel = null
         val query = searchQuery
         val accountId = activeAccountId
         val folderScope = if (searchFolderOnly) openFolder?.path.orEmpty() else ""
@@ -493,6 +553,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
                     unread = o.optInt("unread", 0),
                     count = o.optInt("count", 0),
                     subscribed = o.optBoolean("subscribed", true),
+                    deleteIsPermanent = o.optBoolean("delete_is_permanent", false),
                 )
             }.filter { it.id >= 0 }
         }

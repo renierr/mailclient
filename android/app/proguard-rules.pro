@@ -9,5 +9,4 @@
     native <methods>;
 }
 # Referenced from the manifest and started by explicit intent, so keep whole.
--keep class de.renier.mailclient.ReaderActivity { *; }
 -keep class de.renier.mailclient.MainActivity { *; }

@@ -59,10 +59,8 @@ object MailNative {
 
     @JvmStatic external fun pushStop()
 
-    // Experiment: native reader (branch `experiment/native-reader`).
-    // ReaderActivity passes ids only and re-reads from the same database
-    // Dart uses — bodies with inline images exceed the Binder limit.
-    // Full reader payload, same JSON as mailffi `message_json`.
+    // Reader: ids in, everything re-read from the same database the other
+    // frontends use. Full reader payload, same JSON as mailffi `message_json`.
     @JvmStatic external fun readerMessage(folderId: Long, uid: Int): String
 
     // `{from, to, cc, date, subject, message_id, reply_to}` headers view.
@@ -70,7 +68,7 @@ object MailNative {
 
     // Full WebView document for a sanitized body. `paint` is
     // `theme`/`original`/`darkened`; colours are `0xRRGGBB`; `top_space` is
-    // always 0 (the header is native views above the WebView, no overlay).
+    // ignored here (readerDocumentFull takes the header overlay's spacer).
     @JvmStatic external fun readerDocument(
         body: String,
         paint: String,

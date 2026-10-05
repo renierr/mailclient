@@ -447,46 +447,4 @@ void main() {
     expect(find.text('agenda.pdf'), findsOneWidget);
     expect(find.text('invite.ics'), findsNothing);
   });
-
-  // The OS open hands the calendar the type it registers, not the mail's
-  // header spelling — and never an empty or generic lie.
-  test('open mime canonicalizes calendar and falls back by extension', () {
-    AttachmentInfo ics(String mime) => AttachmentInfo(
-      id: 1,
-      filename: 'invite.ics',
-      fileName: 'invite.ics',
-      mimeType: mime,
-      size: 594,
-      sizeText: '594 B',
-      isInline: false,
-    );
-    expect(openMimeType(ics('text/calendar')), 'text/calendar');
-    expect(openMimeType(ics('application/ics')), 'text/calendar');
-    expect(openMimeType(ics('TEXT/X-VCALENDAR')), 'text/calendar');
-    expect(
-      openMimeType(ics('application/octet-stream')),
-      'text/calendar',
-    );
-    expect(openMimeType(ics('')), 'text/calendar');
-    const pdf = AttachmentInfo(
-      id: 2,
-      filename: 'a.pdf',
-      fileName: 'a.pdf',
-      mimeType: 'application/octet-stream',
-      size: 10,
-      sizeText: '10 B',
-      isInline: false,
-    );
-    expect(openMimeType(pdf), 'application/pdf');
-    const unknown = AttachmentInfo(
-      id: 3,
-      filename: 'blob.dat',
-      fileName: 'blob.dat',
-      mimeType: 'application/octet-stream',
-      size: 3,
-      sizeText: '3 B',
-      isInline: false,
-    );
-    expect(openMimeType(unknown), '*/*');
-  });
 }

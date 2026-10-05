@@ -32,6 +32,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.R
 import de.renier.mailclient.ui.common.Avatar
+import de.renier.mailclient.ui.common.PullToSync
 import de.renier.mailclient.ui.folders.MoveToDialog
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.state.MessageRow
@@ -78,36 +79,37 @@ fun ListScreen(state: MailState, onOpenReader: (Long, Long, Int) -> Unit) {
         )
     }
 
-    // Bottom padding keeps the last row clear of the Compose FAB.
-    LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 88.dp)) {
-        item {
-            ListHeader(
-                title = if (searching) "Search results" else folder?.leaf.orEmpty(),
-                subtitle = when {
-                    searching && rows.isEmpty() -> "No matches"
-                    searching -> "${rows.size} found" + if (state.searchFolderOnly && folder != null) " in ${folder.leaf}" else ""
-                    folder != null && folder.unread > 0 -> "${folder.count} messages · ${folder.unread} unread"
-                    folder != null -> "${folder.count} messages"
-                    else -> ""
-                },
-            )
-        }
-        items(rows, key = { "${it.folderId}:${it.uid}" }) { m ->
-            val rowFolder = if (m.folderId >= 0) m.folderId else folder?.id ?: -1
-            MessageItem(
-                m = m,
-                folderLabel = if (showFolder) folderNames[m.folderId] else null,
-                modifier = Modifier.combinedClickable(
-                    onClick = { onOpenReader(state.activeAccountId, rowFolder, m.uid) },
-                    onLongClick = { moving = m },
-                    onLongClickLabel = "Move to folder",
-                ),
-            )
-        }
-        if (!searching && state.canLoadOlder) {
+    PullToSync(syncing = state.syncing, onSync = { state.syncNow() }) {
+        LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 8.dp)) {
             item {
-                Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                    OutlinedButton(onClick = { state.loadMore() }) { Text("Load older messages") }
+                ListHeader(
+                    title = if (searching) "Search results" else folder?.leaf.orEmpty(),
+                    subtitle = when {
+                        searching && rows.isEmpty() -> "No matches"
+                        searching -> "${rows.size} found" + if (state.searchFolderOnly && folder != null) " in ${folder.leaf}" else ""
+                        folder != null && folder.unread > 0 -> "${folder.count} messages · ${folder.unread} unread"
+                        folder != null -> "${folder.count} messages"
+                        else -> ""
+                    },
+                )
+            }
+            items(rows, key = { "${it.folderId}:${it.uid}" }) { m ->
+                val rowFolder = if (m.folderId >= 0) m.folderId else folder?.id ?: -1
+                MessageItem(
+                    m = m,
+                    folderLabel = if (showFolder) folderNames[m.folderId] else null,
+                    modifier = Modifier.combinedClickable(
+                        onClick = { onOpenReader(state.activeAccountId, rowFolder, m.uid) },
+                        onLongClick = { moving = m },
+                        onLongClickLabel = "Move to folder",
+                    ),
+                )
+            }
+            if (!searching && state.canLoadOlder) {
+                item {
+                    Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                        OutlinedButton(onClick = { state.loadMore() }) { Text("Load older messages") }
+                    }
                 }
             }
         }

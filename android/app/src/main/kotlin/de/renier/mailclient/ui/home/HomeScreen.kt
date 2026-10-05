@@ -36,15 +36,12 @@ import androidx.lifecycle.LifecycleEventObserver
 import de.renier.mailclient.JobEvents
 import de.renier.mailclient.MainActivity
 import de.renier.mailclient.MailNative
-import de.renier.mailclient.ReaderActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-// Scaffold home: core status, a dev opener for the native reader, and a
-// manual background check. The message list, folders and composer arrive
-// here screen by screen; until then this is the launcher that proves the
-// core, the workers and the reader all run without Flutter.
+// Dev probes page: core status, a manual background check, and the JNI
+// smoke cards whose screens have not landed yet.
 @Composable
 fun HomeScreen(openPayload: String?, onConsumeOpen: () -> Unit) {
     val context = LocalContext.current
@@ -54,28 +51,12 @@ fun HomeScreen(openPayload: String?, onConsumeOpen: () -> Unit) {
     var checkBusy by remember { mutableStateOf(false) }
     var resumeTick by remember { mutableStateOf(0) }
 
-    // The native reader mutates mail behind us (readerDirty): reload status
-    // whenever we come back, like the lists will.
-    val lifecycle = LocalLifecycleOwner.current.lifecycle
-    DisposableEffect(lifecycle) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                if (MainActivity.readerDirty) {
-                    MainActivity.readerDirty = false
-                    resumeTick++
-                }
-            }
-        }
-        lifecycle.addObserver(observer)
-        onDispose { lifecycle.removeObserver(observer) }
-    }
-
     fun initCore() {
         scope.launch(Dispatchers.IO) {
             val status = try {
                 MailNative.ensureInit(context)
                 val plan = MailNative.backgroundPlan()
-                "Core ready (resumed $resumeTick×). Background plan: $plan"
+                "Core ready. Background plan: $plan"
             } catch (e: Exception) {
                 "Core failed: ${e.message}"
             }
@@ -83,8 +64,6 @@ fun HomeScreen(openPayload: String?, onConsumeOpen: () -> Unit) {
         }
     }
 
-    // Re-read status after the reader changed mail. The open payload is
-    // a notification tap target for the future message-list screen.
     androidx.compose.runtime.LaunchedEffect(resumeTick) {
         initCore()
         if (openPayload != null) onConsumeOpen()
@@ -112,8 +91,6 @@ fun HomeScreen(openPayload: String?, onConsumeOpen: () -> Unit) {
                 }
             }
         }
-
-        ReaderOpener()
 
         SyncJobsProbe()
 
@@ -169,70 +146,6 @@ fun HomeScreen(openPayload: String?, onConsumeOpen: () -> Unit) {
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-            }
-        }
-    }
-}
-
-// Dev opener for the native reader: ids only (settings ride the defaults),
-// like the Flutter experiment channel. Replace with the message list.
-@Composable
-private fun ReaderOpener() {
-    val context = LocalContext.current
-    var account by remember { mutableStateOf("") }
-    var folder by remember { mutableStateOf("") }
-    var uid by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Text("Open reader", style = MaterialTheme.typography.titleSmall)
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = account,
-                    onValueChange = { account = it },
-                    label = { Text("Account") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.weight(1f),
-                )
-                OutlinedTextField(
-                    value = folder,
-                    onValueChange = { folder = it },
-                    label = { Text("Folder") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.weight(1f),
-                )
-                OutlinedTextField(
-                    value = uid,
-                    onValueChange = { uid = it },
-                    label = { Text("UID") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.weight(1f),
-                )
-            }
-            error?.let {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(it, color = MaterialTheme.colorScheme.error)
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Button(onClick = {
-                val a = account.toLongOrNull()
-                val f = folder.toLongOrNull()
-                val u = uid.toIntOrNull()
-                if (a == null || f == null || u == null) {
-                    error = "Account, folder and UID must all be numbers."
-                    return@Button
-                }
-                error = null
-                context.startActivity(
-                    ReaderActivity.openIntent(
-                        context,
-                        mapOf("accountId" to a, "folderId" to f, "uid" to u),
-                    ),
-                )
-            }) {
-                Text("Open message")
             }
         }
     }

@@ -460,15 +460,18 @@ fn attachment_row(a: &crate::models::Attachment) -> serde_json::Value {
             || crate::paths::safe_attachment_name_for_mime(None, a.mime_type.as_deref(), a.id),
             String::from,
         );
+    let file_name = crate::paths::safe_attachment_name_for_mime(
+        a.filename.as_deref(),
+        a.mime_type.as_deref(),
+        a.id,
+    );
     json!({
         "id": a.id,
         "filename": a.filename,
         "display_name": display_name,
-        "file_name": crate::paths::safe_attachment_name_for_mime(
-            a.filename.as_deref(),
-            a.mime_type.as_deref(),
-            a.id
-        ),
+        // What the OS opener / save picker gets (`mime::open_mime`).
+        "open_mime": crate::mime::open_mime(a.mime_type.as_deref(), Some(&file_name)),
+        "file_name": file_name,
         "mime_type": a.mime_type,
         "size": a.size,
         "size_text": crate::maintenance::format_bytes(a.size),

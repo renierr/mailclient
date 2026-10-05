@@ -36,6 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.R
 import de.renier.mailclient.ui.common.Avatar
+import de.renier.mailclient.ui.common.PullToSync
 import de.renier.mailclient.ui.state.Folder
 import de.renier.mailclient.ui.state.MailState
 
@@ -69,27 +70,30 @@ fun FoldersScreen(
         HorizontalDivider()
 
         val folders = state.visibleFolders
-        if (folders.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
-                Text(
-                    if (state.syncing || state.foldersBusy) "Syncing folders…"
-                    else "No folders yet — sync or manage folders.",
-                    textAlign = TextAlign.Center,
-                    color = MaterialTheme.colorScheme.outline,
-                )
-            }
-            return
-        }
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(folders, key = { it.id }) { folder ->
-                FolderRow(
-                    folder = folder,
-                    selected = folder.id == state.folderId,
-                    onClick = {
-                        state.openFolder(folder.id)
-                        onOpenFolder()
-                    },
-                )
+        PullToSync(syncing = state.syncing, onSync = { state.syncNow() }) {
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                if (folders.isEmpty()) {
+                    item {
+                        Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                            Text(
+                                if (state.syncing || state.foldersBusy) "Syncing folders…"
+                                else "No folders yet — pull down to sync, or manage folders.",
+                                textAlign = TextAlign.Center,
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                        }
+                    }
+                }
+                items(folders, key = { it.id }) { folder ->
+                    FolderRow(
+                        folder = folder,
+                        selected = folder.id == state.folderId,
+                        onClick = {
+                            state.openFolder(folder.id)
+                            onOpenFolder()
+                        },
+                    )
+                }
             }
         }
     }

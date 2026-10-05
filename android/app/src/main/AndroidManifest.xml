@@ -37,8 +37,7 @@
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:usesCleartextTraffic="true">
-        <!-- Compose launcher. Home today, the full shell screen by screen;
-             the reader already lives in ReaderActivity below. -->
+        <!-- The one activity: the Compose shell, reader included. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -51,17 +50,7 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
-        <!-- Native reader (moved from the experiment/native-reader branch):
-             opened with ids plus a settings snapshot and re-reads everything
-             else over JNI. Shell flows it cannot do yet (composer,
-             find-similar) come back to MainActivity as ACTION_READER. -->
-        <activity
-            android:name=".ReaderActivity"
-            android:exported="false"
-            android:theme="@android:style/Theme.DeviceDefault.DayNight"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
-            android:hardwareAccelerated="true" />
-        <!-- Experiment: viewer copies of attachments for ACTION_VIEW.
+        <!-- Viewer copies of attachments for ACTION_VIEW.
              Cache-private; the URI grant hands one file to the viewer. -->
         <provider
             android:name="androidx.core.content.FileProvider"

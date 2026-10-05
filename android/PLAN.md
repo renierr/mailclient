@@ -5,8 +5,8 @@ with full feature parity to the QML desktop client and the Flutter app, over
 the same Rust `mailcore` through JNI (`MailNative`, package
 `de.renier.mailclient` stays JNI-bound). The Flutter app stays: it is a
 peer frontend next to Qt and the native app, not something this plan
-removes. When done, the native app has no placeholder flows left
-(`DelegateScreen`). Flutter's own native-reader experiment
+removes. When done, the native app has no placeholder flows left (no
+action ends in an "arrives in Step N" notice). Flutter's own native-reader experiment
 (`flutter/lib/src/ui/reader/native_reader.dart`) is Flutter's business and
 stays untouched by this plan.
 
@@ -103,8 +103,8 @@ thread the FRB stream uses, each event (`kind`, `phase` progress/finished,
   dependencies). Still open from the original scope, picked up by later
   steps: 2-pane wide layout (step 10), ui-scale plumbing (step 8).
 - Layout pass (after step 3): the mail panes' bar is one rounded search
-  field (back, query, Sync, tools menu anchored to its button); Compose is
-  the FAB; other pages get back + title; status strip only when busy, on
+  field (back, Compose icon, query, Sync, tools menu anchored to its
+  button) — no FAB, so nothing floats over the list; other pages get back + title; status strip only when busy, on
   error or with outbox mail; icons throughout, Material You colours on
   Android 12+. Search runs the core plan (row filter / FTS, debounce,
   folder-scope toggle); 4c adds server backfill, grouping and similar.
@@ -151,7 +151,7 @@ thread the FRB stream uses, each event (`kind`, `phase` progress/finished,
   current disabled, single + bulk modes).
 - Verify: multi-account trees, special-use roles, junk/trash semantics.
 
-## Step 4 — Message list (the biggest step; split as 4a–4e)
+## Step 4 — Message list (the biggest step; split as 4a–4e; after step 5)
 
 - **4a rows + paging**: avatar + unread dot + paperclip, sender, date
   (`date_key` "Yesterday"), star cue, subject, snippet (comfortable density;
@@ -174,6 +174,17 @@ thread the FRB stream uses, each event (`kind`, `phase` progress/finished,
   filters AND-combined, bulk across folders, trash/junk purge rules.
 
 ## Step 5 — Reader (Compose port of the `ReaderActivity` experiment)
+
+- Built (awaiting the device pass): `ui/reader/` — a shell route, not an
+  activity. Top bar back / archive / delete / star / ⋮ (move, find similar,
+  remote images, original colours, save .eml, headers, purge); bottom bar
+  Reply / Reply all / Forward (notice until step 6). Header + cards overlay
+  the WebView and follow its scroll (`#mc-top` spacer, Flutter's design);
+  plain text scrolls with the header. Leaving via delete/archive/move goes
+  back to the list with the shell's undo snackbar. Find similar shows hits
+  in the list. Attachment open type is the core's (`open_mime`, Dart moved
+  onto it too). `ReaderActivity`, `DelegateScreen`, `ACTION_READER` and
+  `readerDirty` are gone. Open: fullscreen toggle (step 10).
 
 - Migrate the Views experiment into Compose: header (avatar, sender, date,
   To/Cc, reply-to-differs banner, expandable technical headers), action row
@@ -266,7 +277,7 @@ thread the FRB stream uses, each event (`kind`, `phase` progress/finished,
   becomes a step-4–9 sub-item or a `SHARED-CORE.md` deliberate exception.
 - `flutter test`, `cargo test --workspace` green; `./build.sh --android`
   produces the signed APK; live-mailbox pass with per-run consent.
-- Remove `DelegateScreen` + `ACTION_READER` if anything still uses them. Keep the `.native`
+- Keep the `.native`
   `applicationId` suffix so both apps install side by side. Update
   `PROJECT.md` milestone 14 → done, `AGENTS.md`, `android/README.md`,
   `flutter/README.md` ("Shared code still to promote" + Android chapter).

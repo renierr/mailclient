@@ -19,15 +19,18 @@ android/
     src/main/
       AndroidManifest.xml
       kotlin/de/renier/mailclient/
-        MainActivity.kt              (Compose launcher + delegation intake)
-        ReaderActivity.kt            (native reader, from the experiment)
+        MainActivity.kt              (the one activity: Compose shell, notification taps)
         MailNative.kt + Mail*.kt     (core JNI, background, push, notify)
+        JobEvents.kt                 (process-lifetime job-event fan-out)
         ui/
-          MailApp.kt                 (root: Home or delegation placeholder)
-          theme/Theme.kt             (Material3, brand blue #3B82F6)
-          home/HomeScreen.kt         (core status, dev reader opener, manual check)
-          delegate/DelegateScreen.kt (placeholder for missing shell flows)
-      res/                           (launcher icons, reader icons, FileProvider paths)
+          MailApp.kt                 (root: theme around the shell)
+          shell/                     (route stack, search bar, status strip)
+          state/MailState.kt         (what the shell shows, over JNI)
+          folders/ list/ reader/     (panes: tree + manager, list, reader)
+          accounts/                  (manager + setup form)
+          theme/Theme.kt             (Material You, brand blue #3B82F6 below Android 12)
+          home/HomeScreen.kt         (dev probes page)
+      res/                           (launcher icons, vector icons, FileProvider paths)
 ```
 
 ## Prerequisites (nothing here installs them for you)

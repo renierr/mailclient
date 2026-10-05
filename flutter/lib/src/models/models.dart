@@ -439,6 +439,7 @@ class AttachmentInfo {
     required this.isInline,
     this.fileName = '',
     this.sizeText = '',
+    this.openMime = '*/*',
   });
 
   final int id;
@@ -450,6 +451,11 @@ class AttachmentInfo {
   /// dialog suggests. Never build a path from [filename].
   final String fileName;
   final String mimeType;
+
+  /// What the OS opener and save picker get (`open_mime`,
+  /// `mailcore::mime::open_mime`): the stored type canonicalized, or the
+  /// extension's when it is missing or generic; `*/*` when unknown.
+  final String openMime;
   final int size;
 
   /// Preformatted byte count from the feed (`size_text`,
@@ -468,6 +474,7 @@ class AttachmentInfo {
     ),
     fileName: _str(j['file_name'], orElse: 'attachment-${_int(j['id'])}.bin'),
     mimeType: _str(j['mime_type'], orElse: 'application/octet-stream'),
+    openMime: _str(j['open_mime'], orElse: '*/*'),
     size: _int(j['size']),
     sizeText: _str(j['size_text']),
     isInline: _bool(j['is_inline']),
