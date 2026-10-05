@@ -326,3 +326,106 @@ Found by code review rather than reported; all closed.
 
 Reported working (keep while fixing): account setup + keyring, manual ⟳ sync, folder tree, send + Sent-copy, star/delete, remote-image blocking default.
 
+## 9. Frontend feature parity (QML-first reference)
+
+Rules: Qt/QML is the mature frontend and the reference for what exists.
+Flutter and native match it feature-for-feature or record the exception
+here. UI may differ (touch vs desktop: bottom bars, fullscreen pages,
+long-press instead of hover/menus); behaviour must not — it lives in
+`mailcore`, frontends only translate. ✅ present, 🔄 partial, ❌ missing.
+Update this section when a step lands (see AGENTS.md §7.4).
+
+### Shell, toolbar, status
+
+| Feature | Qt | Flutter | Native | Notes |
+|---|---|---|---|---|
+| 3-pane / responsive / 1-pane | ✅ | ✅ | 🔄 | Native is a 1-pane stack (Folders→List→Reader); no tablet layout |
+| Compose, Sync, search field, tools | ✅ | ✅ | ✅ | Narrow Flutter collapses tools into overflow; native has overflow menu |
+| Folder-scoped search toggle | ✅ | ✅ | ✅ | Native: tools-menu checkbox |
+| Status line + details + copy | ✅ | ✅ | 🔄 | Native StatusStrip only when busy/error/outbox; no details dialog |
+| Outbox pill + dialog | ✅ | ✅ | ❌ | Native: chip only (Outbox screen is Step 9) |
+| Undo offer + Ctrl+Z | ✅ | ✅ | ✅ | All honour the 8s `UNDO_GRACE_SECS` window |
+| Keyboard shortcuts | ✅ | ✅ | — | Touch: no shortcuts by design |
+| Auto-sync timer, quiet hours | ✅ | ✅ | 🔄 | Native: resume refresh only |
+
+### Message list
+
+| Feature | Qt | Flutter | Native | Notes |
+|---|---|---|---|---|
+| Rows (avatar, unread, star, attach, snippet) | ✅ | ✅ | ✅ | |
+| Sort (date/from/subject ±) | ✅ | ✅ | ✅ | Hidden during search everywhere |
+| Quick filters (unread/starred/attach + dates + custom range) | ✅ | ✅ | ✅ | AND-combined; client-side over loaded rows + hits |
+| Full query syntax (`is:`, `has:`, `after:`…) | ✅ | ✅ | 🔄 | Core parses everywhere; native has no syntax-help UI |
+| Selection + bulk bar (read/star/archive/move/trash/purge) | ✅ | ✅ | ✅ | Native bar docks at bottom; purge always confirms |
+| Row menu (read/star/archive/move/trash/similar/eml) | ✅ | ✅ | ❌ | Native: tap opens, long-press selects; no per-row menu |
+| Jump top/bottom buttons | ✅ | ✅ | ✅ | |
+| Load-older footer (Cached N [of M] / All loaded) | ✅ | ✅ | ✅ | |
+| Find-similar mode + chip | ✅ | ✅ | ✅ | From native reader only (no row menu yet) |
+| Swipe actions, mark-all-read | ❌ | ❌ | ❌ | None anywhere; not planned |
+| Save as .eml | ✅ | ✅ | ✅ | Native via reader menu |
+
+### Search
+
+| Feature | Qt | Flutter | Native | Notes |
+|---|---|---|---|---|
+| Short input = row filter, 3+ = FTS + server backfill | ✅ | ✅ | ✅ | Core `search::plan`; same thresholds |
+| Folder-scoped vs account-wide | ✅ | ✅ | ✅ | |
+| Hits grouped by folder, jump to hit | ✅ | ✅ | ✅ | Native opens hit directly |
+
+### Reader
+
+| Feature | Qt | Flutter | Native | Notes |
+|---|---|---|---|---|
+| Header (subject/sender/date/To, expandable) | ✅ | ✅ | ✅ | |
+| Reply-To warning, link examine, headers view | ✅ | ✅ | ✅ | |
+| Attachments (open/save/save-all) | ✅ | ✅ | ✅ | Native via SAF + FileProvider |
+| Event card (ICS) | ✅ | ✅ | ✅ | |
+| Remote-image block + show-once | ✅ | ✅ | ✅ | |
+| Original/darkened colours, zoom | ✅ | ✅ | 🔄 | Native: paint + prefs scale, no in-UI zoom |
+| Reply / Reply-all / Forward | ✅ | ✅ | ❌ | Native stubs with toast (composer is Step 6) |
+| Archive / Move / Delete / Star | ✅ | ✅ | ✅ | |
+| Prev/next message | ❌ | ❌ | ❌ | None anywhere |
+
+### Composer
+
+| Feature | Qt | Flutter | Native | Notes |
+|---|---|---|---|---|
+| Full composer (To/Cc/Bcc, editor, attach, drafts, send) | ✅ dialog | ✅ page | ❌ | Flutter fullscreen page is deliberate (keyboard); native is Step 6 |
+
+### Folders
+
+| Feature | Qt | Flutter | Native | Notes |
+|---|---|---|---|---|
+| Sidebar tree + unread pills + account switch | ✅ | ✅ | ✅ | |
+| Manager (create, refresh, hide) | ✅ | ✅ | ✅ | Hide is display-only everywhere (no IMAP unsubscribe) |
+| Move picker | ✅ | ✅ | ✅ | |
+| Rename / delete / empty folder | ❌ | ❌ | ❌ | None anywhere |
+
+### Accounts & setup
+
+| Feature | Qt | Flutter | Native | Notes |
+|---|---|---|---|---|
+| List (use/edit/remove + confirm) | ✅ | ✅ | ✅ | |
+| Setup form (identity, IMAP+SMTP, guess, port-follow) | ✅ | ✅ | ✅ | |
+| Pre-save connection test | ❌ | ❌ | ✅ | Native-only so far; promote to Qt/Flutter on demand |
+| OAuth | ❌ | ❌ | ❌ | None anywhere |
+
+### Contacts
+
+| Feature | Qt | Flutter | Native | Notes |
+|---|---|---|---|---|
+| Manager (alias, search, remove, cleanup review) | ✅ | ✅ | ❌ | Native is Step 7 |
+
+### Settings
+
+| Feature | Qt | Flutter | Native | Notes |
+|---|---|---|---|---|
+| Full settings (interface/mailbox/reading/composing/sync/maintenance/about) | ✅ dialog | ✅ page | ❌ | Native is Step 8; reader prefs + outbox state read from core read-only |
+
+### Background & notifications (Android)
+
+| Feature | Qt | Flutter | Native | Notes |
+|---|---|---|---|---|
+| Poll / push / alarm schedulers, quiet hours | — | ✅ | ✅ | Shared `mailcore::sync::background`; desktop uses poll timer |
+| Grouped notifications + Mark read buttons | — | ✅ | ✅ | Same native path (`MailAlarm`, `MailPushService`) |
+
