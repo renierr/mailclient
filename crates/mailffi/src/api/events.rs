@@ -65,6 +65,8 @@ pub fn job_events(sink: StreamSink<JobEvent>) {
 /// A dropped event is not an error: before Dart subscribes, and after a hot
 /// restart tears the old sink down, there is genuinely no one to tell.
 pub(crate) fn emit_event(event: JobEvent) {
+    #[cfg(target_os = "android")]
+    crate::android::forward_job_event(&event);
     let guard = sink().lock().unwrap_or_else(|e| e.into_inner());
     if let Some(s) = guard.as_ref() {
         if s.add(event).is_err() {

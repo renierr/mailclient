@@ -818,3 +818,459 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_exportEmlBytes<'call
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
+
+/// Step 0a shell reads (`android/PLAN.md`): accounts, folder navigation and
+/// the outbox pill. Thin wraps of `mailffi::api` — JSON or plain strings
+/// across, ids back as strings.
+///
+/// `MailNative.accountsJson()`: every account, for the switcher.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_accountsJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::accounts::accounts_json()?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.accountForm(id)`: one account as edit-form JSON. Never carries
+/// a password — blank stays "keep the stored one".
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_accountForm<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    id: i64,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::accounts::account_form(id)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.accountFormDefaults()`: a new form's starting values and
+/// security choices.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_accountFormDefaults<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::accounts::account_form_defaults())?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.accountGuess(email)`: server guesses for a typed address.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_accountGuess<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    email: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::accounts::account_guess(string(env, &email)?))?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.accountPortForSecurity(protocol, oldSec, newSec, port)`: the
+/// port field after a security change.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_accountPortForSecurity<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    protocol: JString<'caller>,
+    old_sec: JString<'caller>,
+    new_sec: JString<'caller>,
+    port: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(
+                env.new_string(crate::api::accounts::account_port_for_security(
+                    string(env, &protocol)?,
+                    string(env, &old_sec)?,
+                    string(env, &new_sec)?,
+                    string(env, &port)?,
+                ))?,
+            )
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.accountFormCheck(form, editing)`: per-field errors and
+/// warnings, the same check saving runs.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_accountFormCheck<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    form: JString<'caller>,
+    editing: bool,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::accounts::account_form_check(
+                string(env, &form)?,
+                editing,
+            ))?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.saveAccount(form)`: create or update an account; the id back
+/// as a string.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_saveAccount<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    form: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let id = crate::api::accounts::save_account(string(env, &form)?)?;
+            Ok(env.new_string(id.to_string())?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.deleteAccount(id)`: delete with folders, messages and secrets;
+/// the account to show instead back as a string (`-1`: none left).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_deleteAccount<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    id: i64,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let next = crate::api::accounts::delete_account(id)?;
+            Ok(env.new_string(next.to_string())?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.initialSelection()`: where the app opens —
+/// `{"account_id","folder_id"}`, `-1` when there is nothing.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_initialSelection<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let s = crate::api::accounts::initial_selection()?;
+            let json = serde_json::json!({
+                "account_id": s.account_id,
+                "folder_id": s.folder_id,
+            });
+            Ok(env.new_string(serde_json::to_string(&json)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.selectAccount(id)`: switch the active account, landing folder
+/// back as `{"account_id","folder_id"}`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_selectAccount<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    id: i64,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let s = crate::api::accounts::select_account(id)?;
+            let json = serde_json::json!({
+                "account_id": s.account_id,
+                "folder_id": s.folder_id,
+            });
+            Ok(env.new_string(serde_json::to_string(&json)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.folderIdForPath(accountId, path)`: path to local id, back as
+/// a string.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_folderIdForPath<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    path: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let id = crate::api::folders::folder_id_for_path(account_id, string(env, &path)?)?;
+            Ok(env.new_string(id.to_string())?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.folderPath(folderId)`: the IMAP path of a folder.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_folderPath<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::folders::folder_path(folder_id)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.setFolderSubscribed(folderId, subscribed)`: show or hide a
+/// folder in the sidebar (display-only, cache kept).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_setFolderSubscribed<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+    subscribed: bool,
+) {
+    unowned
+        .with_env(|_env| -> Result<()> {
+            crate::api::folders::set_folder_subscribed(folder_id, subscribed)?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.folderCounts(folderId)`: local vs server totals plus the "Show
+/// older" state — `{"cached","server","older","can_load_older"}`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_folderCounts<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let c = crate::api::folders::folder_counts(folder_id)?;
+            let older = match c.older {
+                crate::api::folders::OlderState::Unchecked => "unchecked",
+                crate::api::folders::OlderState::Partial => "partial",
+                crate::api::folders::OlderState::Empty => "empty",
+                crate::api::folders::OlderState::Complete => "complete",
+            };
+            let json = serde_json::json!({
+                "cached": c.cached,
+                "server": c.server,
+                "older": older,
+                "can_load_older": c.can_load_older,
+            });
+            Ok(env.new_string(serde_json::to_string(&json)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.outboxStatusJson(accountId)`: the status pill's counts —
+/// `{queued, sending, failed, retryable, pending}`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_outboxStatusJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::outbox::outbox_status_json(account_id)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// Step 0b sync jobs (`android/PLAN.md`): queue onto `mailclient-net` like
+/// the FRB calls, and hear back through a listener instead of the Dart
+/// stream. Registering replaces the previous listener (same hot-restart
+/// rule as `job_events`); every event also crosses as one JSON string, the
+/// same convention as every other JNI read.
+///
+/// The Kotlin listener object the net thread calls back.
+fn job_listener() -> &'static Mutex<Option<(JavaVM, Global<JObject<'static>>)>> {
+    static LISTENER: Mutex<Option<(JavaVM, Global<JObject<'static>>)>> = Mutex::new(None);
+    &LISTENER
+}
+
+/// `MailNative.setJobListener(callbacks)`: subscribe `onJobEvent(json)` for
+/// the life of the process.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_setJobListener<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    callbacks: JObject<'caller>,
+) {
+    unowned
+        .with_env(|env| -> Result<()> {
+            let mut slot = job_listener().lock().unwrap_or_else(|e| e.into_inner());
+            *slot = Some((env.get_java_vm()?, env.new_global_ref(&callbacks)?));
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.clearJobListener()`: stop delivering job events to Kotlin.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_clearJobListener<'caller>(
+    _unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) {
+    job_listener()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
+}
+
+/// Forward one finished (or progress) job event to the Kotlin listener, if
+/// registered. Called from [`crate::api::events::emit_event`], i.e. on the
+/// net thread — the VM attach is per call, like the push monitor's.
+pub(crate) fn forward_job_event(event: &crate::api::events::JobEvent) {
+    use crate::api::events::JobPhase;
+    let guard = job_listener().lock().unwrap_or_else(|e| e.into_inner());
+    let Some((vm, callbacks)) = guard.as_ref() else {
+        return;
+    };
+    let json = serde_json::json!({
+        "kind": event.kind,
+        "phase": match event.phase {
+            JobPhase::Progress => "progress",
+            JobPhase::Finished => "finished",
+        },
+        "status": event.status,
+        "ok": event.ok,
+        "outcome": event.outcome,
+        "account_id": event.account_id,
+        "folder_id": event.folder_id,
+    })
+    .to_string();
+    let outcome = vm.attach_current_thread(|env| -> Result<()> {
+        let json = env.new_string(&json)?;
+        env.call_method(
+            callbacks.as_obj(),
+            jni_str!("onJobEvent"),
+            jni_sig!("(Ljava/lang/String;)V"),
+            &[JValue::Object(&json)],
+        )?;
+        Ok(())
+    });
+    if let Err(e) = outcome {
+        log::warn!("jobs: onJobEvent callback failed: {e}");
+    }
+}
+
+/// `MailNative.syncAccount(accountId)`: queue a full account sync; returns
+/// at once, the result arrives as a `Sync` finished event. Throws when a
+/// sync for the account is already queued (`spawn` dedupe).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_syncAccount<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+) {
+    unowned
+        .with_env(|_env| -> Result<()> {
+            crate::api::sync::sync_account(account_id)?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.syncFolder(accountId, folderId)`: fill one opened folder's
+/// newest window, after the cached rows have painted.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_syncFolder<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+) {
+    unowned
+        .with_env(|_env| -> Result<()> {
+            crate::api::sync::sync_folder(account_id, folder_id)?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.loadOlderMessages(accountId, folderId)`: the next older batch,
+/// for the list's "Show older" row.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_loadOlderMessages<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+) {
+    unowned
+        .with_env(|_env| -> Result<()> {
+            crate::api::sync::load_older_messages(account_id, folder_id)?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.refreshFolders(accountId)`: LIST only — new/renamed/deleted
+/// folders appear. A `Folders` finished event says when.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_refreshFolders<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+) {
+    unowned
+        .with_env(|_env| -> Result<()> {
+            crate::api::sync::refresh_folders(account_id)?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.refreshServerCapabilities(accountId)`: the About view's
+/// capability list, as the finishing event's JSON status payload.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_refreshServerCapabilities<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+) {
+    unowned
+        .with_env(|_env| -> Result<()> {
+            crate::api::sync::refresh_server_capabilities(account_id)?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.backgroundMarkSeen()`: the inbox cache counts as seen while
+/// the app is open — no network, answers inline.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_backgroundMarkSeen<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) {
+    unowned
+        .with_env(|_env| -> Result<()> {
+            crate::api::sync::background_mark_seen()?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.backgroundRunHistory()`: recent background ticks for the
+/// Settings diagnostics.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_backgroundRunHistory<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::sync::background_run_history()?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}

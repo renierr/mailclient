@@ -132,6 +132,43 @@ object MailNative {
 
     // Download-then-assemble as one blocking call (Dart waits for a job).
     @JvmStatic external fun exportEmlBytes(folderId: Long, uid: Int): ByteArray
+
+    // Step 0a shell reads: accounts, folder navigation, outbox pill.
+    // JSON or plain strings across, ids back as strings.
+    @JvmStatic external fun accountsJson(): String
+    @JvmStatic external fun accountForm(id: Long): String
+    @JvmStatic external fun accountFormDefaults(): String
+    @JvmStatic external fun accountGuess(email: String): String
+    @JvmStatic external fun accountPortForSecurity(protocol: String, oldSec: String, newSec: String, port: String): String
+    @JvmStatic external fun accountFormCheck(form: String, editing: Boolean): String
+    @JvmStatic external fun saveAccount(form: String): String
+    @JvmStatic external fun deleteAccount(id: Long): String
+    @JvmStatic external fun initialSelection(): String
+    @JvmStatic external fun selectAccount(id: Long): String
+    @JvmStatic external fun folderIdForPath(accountId: Long, path: String): String
+    @JvmStatic external fun folderPath(folderId: Long): String
+    @JvmStatic external fun setFolderSubscribed(folderId: Long, subscribed: Boolean)
+    @JvmStatic external fun folderCounts(folderId: Long): String
+    @JvmStatic external fun outboxStatusJson(accountId: Long): String
+
+    // Step 0b sync jobs: queue onto mailclient-net, results arrive on the
+    // JobCallbacks listener as one JSON event each. Registering replaces
+    // the previous listener.
+    @JvmStatic external fun setJobListener(callbacks: JobCallbacks)
+    @JvmStatic external fun clearJobListener()
+    @JvmStatic external fun syncAccount(accountId: Long)
+    @JvmStatic external fun syncFolder(accountId: Long, folderId: Long)
+    @JvmStatic external fun loadOlderMessages(accountId: Long, folderId: Long)
+    @JvmStatic external fun refreshFolders(accountId: Long)
+    @JvmStatic external fun refreshServerCapabilities(accountId: Long)
+    @JvmStatic external fun backgroundMarkSeen()
+    @JvmStatic external fun backgroundRunHistory(): String
+}
+
+// What the net thread calls back with per finished (or progress) job event:
+// one JSON object {kind, phase, status, ok, outcome, account_id, folder_id}.
+interface JobCallbacks {
+    fun onJobEvent(json: String)
 }
 
 // What the push monitor calls back on its own thread (MailNative.pushStart).

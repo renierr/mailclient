@@ -33,6 +33,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import de.renier.mailclient.JobCallbacks
 import de.renier.mailclient.MainActivity
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.ReaderActivity
@@ -113,6 +114,10 @@ fun HomeScreen(openPayload: String?, onConsumeOpen: () -> Unit) {
         }
 
         ReaderOpener()
+
+        ShellReadsProbe()
+
+        SyncJobsProbe()
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp)) {
@@ -224,6 +229,197 @@ private fun ReaderOpener() {
                 )
             }) {
                 Text("Open message")
+            }
+        }
+    }
+}
+
+// Step 0a smoke probe: exercises every new shell-read JNI function in one
+// tap. Read-only except selectAccount (persists the active account, like the
+// account switcher will). Delete when the folder shell lands.
+@Composable
+private fun ShellReadsProbe() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var output by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text("Shell reads (0a probe)", style = MaterialTheme.typography.titleSmall)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "accounts, selection, folders, counts, outbox pill, form helpers.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(
+                enabled = !busy,
+                onClick = {
+                    busy = true
+                    scope.launch(Dispatchers.IO) {
+                        val lines = mutableListOf<String>()
+                        try {
+                            MailNative.ensureInit(context)
+                            val accounts = MailNative.accountsJson()
+                            lines += "accounts: ${accounts.take(160)}"
+                            val selection = MailNative.initialSelection()
+                            lines += "initialSelection: $selection"
+                            val accountId = Regex(""""account_id":(-?\d+)""")
+                                .find(selection)?.groupValues?.get(1)?.toLongOrNull() ?: -1
+                            if (accountId >= 0) {
+                                lines += "folders: ${MailNative.foldersJson(accountId).take(160)}"
+                                lines += "outbox: ${MailNative.outboxStatusJson(accountId)}"
+                                val reselected = MailNative.selectAccount(accountId)
+                                lines += "selectAccount: $reselected"
+                                val folderId = Regex(""""folder_id":(-?\d+)""")
+                                    .find(reselected)?.groupValues?.get(1)?.toLongOrNull() ?: -1
+                                if (folderId >= 0) {
+                                    val path = MailNative.folderPath(folderId)
+                                    lines += "folderPath: $path"
+                                    lines += "folderIdForPath: ${
+                                        MailNative.folderIdForPath(accountId, path)
+                                    }"
+                                    lines += "folderCounts: ${MailNative.folderCounts(folderId)}"
+                                } else {
+                                    lines += "no folders for account $accountId"
+                                }
+                            } else {
+                                lines += "no accounts yet (fresh install)"
+                            }
+                            lines += "formDefaults: ${
+                                MailNative.accountFormDefaults().take(120)
+                            }"
+                            lines += "guess: ${MailNative.accountGuess("test@example.com")}"
+                            lines += "port: ${
+                                MailNative.accountPortForSecurity("imap", "tls", "starttls", "993")
+                            }"
+                            lines += "formCheck: ${
+                                MailNative.accountFormCheck("{}", false).take(160)
+                            }"
+                        } catch (e: Exception) {
+                            lines += "failed: ${e.message}"
+                        }
+                        withContext(Dispatchers.Main) {
+                            output = lines.joinToString("\n")
+                            busy = false
+                        }
+                    }
+                },
+            ) {
+                Text(if (busy) "Loading…" else "Load shell data")
+            }
+            output?.let {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+// Step 0b smoke probe: queue sync jobs and watch the finished events come
+// back through the JobCallbacks listener. With no accounts yet the jobs
+// fail honestly (ok=false events) — the round trip is the proof. Delete
+// when the message list owns syncing.
+@Composable
+private fun SyncJobsProbe() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var account by remember { mutableStateOf("") }
+    var folder by remember { mutableStateOf("") }
+    var lastEvent by remember { mutableStateOf<String?>(null) }
+    var history by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    // The listener fires on Rust's net thread; hop to Main for state.
+    DisposableEffect(Unit) {
+        MailNative.ensureInit(context)
+        MailNative.setJobListener(object : JobCallbacks {
+            override fun onJobEvent(json: String) {
+                scope.launch(Dispatchers.Main) { lastEvent = json.take(300) }
+            }
+        })
+        onDispose { MailNative.clearJobListener() }
+    }
+
+    fun queue(name: String, call: () -> Unit) {
+        error = null
+        try {
+            MailNative.ensureInit(context)
+            call()
+        } catch (e: Exception) {
+            error = "$name not queued: ${e.message}"
+        }
+    }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text("Sync jobs (0b probe)", style = MaterialTheme.typography.titleSmall)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = account,
+                    onValueChange = { account = it },
+                    label = { Text("Account") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    value = folder,
+                    onValueChange = { folder = it },
+                    label = { Text("Folder") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val a = account.toLongOrNull()
+                val f = folder.toLongOrNull()
+                TextButton(onClick = {
+                    if (a == null) { error = "Account must be a number."; return@TextButton }
+                    queue("syncAccount") { MailNative.syncAccount(a) }
+                }) { Text("Sync") }
+                TextButton(onClick = {
+                    if (a == null || f == null) { error = "Account and folder must be numbers."; return@TextButton }
+                    queue("syncFolder") { MailNative.syncFolder(a, f) }
+                }) { Text("Folder") }
+                TextButton(onClick = {
+                    if (a == null || f == null) { error = "Account and folder must be numbers."; return@TextButton }
+                    queue("loadOlder") { MailNative.loadOlderMessages(a, f) }
+                }) { Text("Older") }
+                TextButton(onClick = {
+                    if (a == null) { error = "Account must be a number."; return@TextButton }
+                    queue("refreshFolders") { MailNative.refreshFolders(a) }
+                }) { Text("LIST") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = {
+                    queue("markSeen") { MailNative.backgroundMarkSeen() }
+                }) { Text("Mark seen") }
+                TextButton(onClick = {
+                    scope.launch(Dispatchers.IO) {
+                        val h = try {
+                            MailNative.ensureInit(context)
+                            MailNative.backgroundRunHistory().take(300)
+                        } catch (e: Exception) {
+                            "failed: ${e.message}"
+                        }
+                        withContext(Dispatchers.Main) { history = h }
+                    }
+                }) { Text("Run history") }
+            }
+            error?.let {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(it, color = MaterialTheme.colorScheme.error)
+            }
+            lastEvent?.let {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("last event: $it", style = MaterialTheme.typography.bodySmall)
+            }
+            history?.let {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("history: $it", style = MaterialTheme.typography.bodySmall)
             }
         }
     }

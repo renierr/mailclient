@@ -32,12 +32,16 @@ list/sync paths need the queued-job + event model, so this step also adds a
 `jobEvents`-equivalent: a `JobCallback { onProgress/onFinished }` listener
 fed from the same `mailclient-net` thread the FRB `job_events` stream uses.
 
-- **0a — shell reads**: `accountsJson`, `accountForm`, `accountFormDefaults`,
+- **0a — shell reads** ✅ done (all 15 symbols in `android.rs` + `MailNative.kt`,
+  `ShellReadsProbe` smoke card in `HomeScreen`, verified on emulator):
+  `accountsJson`, `accountForm`, `accountFormDefaults`,
   `accountGuess`, `accountPortForSecurity`, `accountFormCheck`, `saveAccount`,
   `deleteAccount`, `initialSelection`, `selectAccount`, `foldersJson`
   (exists), `folderIdForPath`, `folderPath`, `setFolderSubscribed`,
   `folderCounts`, `outboxStatusJson`.
-- **0b — sync jobs + events**: `syncAccount`, `syncFolder`, `loadOlderMessages`,
+- **0b — sync jobs + events** ✅ done (listener replaces like `job_events`,
+  events cross as one JSON string; `SyncJobsProbe` card, verified on
+  emulator): `syncAccount`, `syncFolder`, `loadOlderMessages`,
   `refreshFolders`, `refreshServerCapabilities`, `backgroundMarkSeen`,
   `backgroundRunHistory`, plus the job listener above.
 - **0c — list reads + bulk mutate**: `messagesJson` (paged), `markReadMany`,
