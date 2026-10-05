@@ -163,6 +163,24 @@ object MailNative {
     @JvmStatic external fun refreshServerCapabilities(accountId: Long)
     @JvmStatic external fun backgroundMarkSeen()
     @JvmStatic external fun backgroundRunHistory(): String
+
+    // Step 0c list reads + bulk mutate. Selections cross as JSON
+    // ([1,2,3], [{"folder":"INBOX","uid":1}]); undoable moves answer
+    // {"batch","label","purging"}.
+    @JvmStatic external fun messagesJson(folderId: Long, limit: Long, offset: Long): String
+    @JvmStatic external fun markReadMany(accountId: Long, folderId: Long, uids: String, read: Boolean): String
+    @JvmStatic external fun setStarMany(accountId: Long, folderId: Long, uids: String, starred: Boolean): String
+    @JvmStatic external fun markReadHits(accountId: Long, hits: String, read: Boolean): String
+    @JvmStatic external fun setStarHits(accountId: Long, hits: String, starred: Boolean): String
+    @JvmStatic external fun deleteMessages(accountId: Long, folderId: Long, uids: String): String
+    @JvmStatic external fun archiveMessages(accountId: Long, folderId: Long, uids: String): String
+    @JvmStatic external fun moveMessages(accountId: Long, folderId: Long, uids: String, destPath: String): String
+    @JvmStatic external fun purgeMessages(accountId: Long, folderId: Long, uids: String)
+    @JvmStatic external fun deleteHits(accountId: Long, hits: String): String
+    @JvmStatic external fun archiveHits(accountId: Long, hits: String): String
+    @JvmStatic external fun moveHits(accountId: Long, hits: String, destPath: String): String
+    @JvmStatic external fun purgeHits(accountId: Long, hits: String)
+    @JvmStatic external fun createFolder(accountId: Long, path: String)
 }
 
 // What the net thread calls back with per finished (or progress) job event:

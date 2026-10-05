@@ -119,6 +119,8 @@ fun HomeScreen(openPayload: String?, onConsumeOpen: () -> Unit) {
 
         SyncJobsProbe()
 
+        ListBulkProbe()
+
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp)) {
                 Text("Background check", style = MaterialTheme.typography.titleSmall)
@@ -420,6 +422,124 @@ private fun SyncJobsProbe() {
             history?.let {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text("history: $it", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+// Step 0c smoke probe: one list page plus the selection-shaped writes,
+// moves and folder creation. Delete is undoable (Undo button takes it
+// back); purge is not offered here — the list screen will confirm it.
+// Delete when the message list lands.
+@Composable
+private fun ListBulkProbe() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var account by remember { mutableStateOf("") }
+    var folder by remember { mutableStateOf("") }
+    var uid by remember { mutableStateOf("") }
+    var path by remember { mutableStateOf("") }
+    var output by remember { mutableStateOf<String?>(null) }
+    var lastBatch by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+
+    fun run(name: String, call: () -> String) {
+        busy = true
+        scope.launch(Dispatchers.IO) {
+            val result = try {
+                MailNative.ensureInit(context)
+                call()
+            } catch (e: Exception) {
+                "$name failed: ${e.message}"
+            }
+            withContext(Dispatchers.Main) {
+                output = result.take(400)
+                busy = false
+            }
+        }
+    }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text("List + bulk (0c probe)", style = MaterialTheme.typography.titleSmall)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = account,
+                    onValueChange = { account = it },
+                    label = { Text("Account") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    value = folder,
+                    onValueChange = { folder = it },
+                    label = { Text("Folder") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    value = uid,
+                    onValueChange = { uid = it },
+                    label = { Text("UID") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = path,
+                onValueChange = { path = it },
+                label = { Text("Folder path (create / move destination)") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val a = account.toLongOrNull()
+                val f = folder.toLongOrNull()
+                val u = uid.toIntOrNull()
+                TextButton(onClick = {
+                    if (f == null) { output = "Folder must be a number."; return@TextButton }
+                    run("page") { MailNative.messagesJson(f, 20, 0) }
+                }) { Text("Page") }
+                TextButton(onClick = {
+                    if (a == null || f == null || u == null) { output = "Account, folder, UID must be numbers."; return@TextButton }
+                    run("read") { MailNative.markReadMany(a, f, "[$u]", true) }
+                }) { Text("Read") }
+                TextButton(onClick = {
+                    if (a == null || f == null || u == null) { output = "Account, folder, UID must be numbers."; return@TextButton }
+                    run("star") { MailNative.setStarMany(a, f, "[$u]", true) }
+                }) { Text("Star") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val a = account.toLongOrNull()
+                val f = folder.toLongOrNull()
+                val u = uid.toIntOrNull()
+                TextButton(onClick = {
+                    if (a == null || f == null || u == null) { output = "Account, folder, UID must be numbers."; return@TextButton }
+                    run("delete") {
+                        val r = MailNative.deleteMessages(a, f, "[$u]")
+                        lastBatch = Regex(""""batch":"([^"]*)"""").find(r)?.groupValues?.get(1)
+                        r
+                    }
+                }) { Text("Delete") }
+                TextButton(onClick = {
+                    val b = lastBatch
+                    if (b.isNullOrEmpty()) { output = "Nothing to undo yet."; return@TextButton }
+                    run("undo") { MailNative.undoMove(b) }
+                }) { Text("Undo") }
+                TextButton(onClick = {
+                    if (a == null || path.isBlank()) { output = "Account must be a number and path non-empty."; return@TextButton }
+                    run("create") { MailNative.createFolder(a, path); "create queued" }
+                }) { Text("Create") }
+            }
+            if (busy) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Working…", style = MaterialTheme.typography.bodySmall)
+            }
+            output?.let {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall)
             }
         }
     }

@@ -1274,3 +1274,338 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_backgroundRunHistory
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
+
+/// Step 0c list reads + bulk mutate (`android/PLAN.md`): one page of rows
+/// plus the selection-shaped flag writes, moves and purges — single-folder
+/// (`Vec<u32>`) and cross-folder search-hit flavours, like `mailffi::api`.
+///
+/// Selections cross as JSON (`[1,2,3]`, `[{"folder":"INBOX","uid":1}]`), the
+/// same convention as everything else here — no JNI array plumbing.
+fn uids_json(raw: &str) -> Result<Vec<u32>> {
+    let v: serde_json::Value = serde_json::from_str(raw)?;
+    let arr = v
+        .as_array()
+        .ok_or_else(|| BridgeError("uids must be a JSON array".to_string()))?;
+    arr.iter()
+        .map(|u| {
+            u.as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| BridgeError(format!("bad uid in {raw}")))
+        })
+        .collect()
+}
+
+fn hits_json(raw: &str) -> Result<Vec<crate::api::mutate::Hit>> {
+    let v: serde_json::Value = serde_json::from_str(raw)?;
+    let arr = v
+        .as_array()
+        .ok_or_else(|| BridgeError("hits must be a JSON array".to_string()))?;
+    arr.iter()
+        .map(|h| {
+            let folder = h
+                .get("folder")
+                .and_then(|f| f.as_str())
+                .ok_or_else(|| BridgeError(format!("hit without folder in {raw}")))?
+                .to_string();
+            let uid = h
+                .get("uid")
+                .and_then(|u| u.as_u64())
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| BridgeError(format!("hit without uid in {raw}")))?;
+            Ok(crate::api::mutate::Hit { folder, uid })
+        })
+        .collect()
+}
+
+/// `MailNative.messagesJson(folderId, limit, offset)`: one list page in the
+/// persisted sort order — `[{uid, subject, from, date, date_key, snippet,
+/// unread, starred, has_attachments}]`, no bodies.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_messagesJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+    limit: i64,
+    offset: i64,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::messages::messages_json(
+                folder_id, limit, offset,
+            )?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.markReadMany(accountId, folderId, uids, read)`: local flag
+/// write + background push; how many rows changed, back as a string.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_markReadMany<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+    uids: JString<'caller>,
+    read: bool,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let n = crate::api::messages::mark_read_many(
+                account_id,
+                folder_id,
+                uids_json(&string(env, &uids)?)?,
+                read,
+            )?;
+            Ok(env.new_string(n.to_string())?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.setStarMany(accountId, folderId, uids, starred)`: same for
+/// the starred flag.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_setStarMany<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+    uids: JString<'caller>,
+    starred: bool,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let n = crate::api::messages::set_star_many(
+                account_id,
+                folder_id,
+                uids_json(&string(env, &uids)?)?,
+                starred,
+            )?;
+            Ok(env.new_string(n.to_string())?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.markReadHits(accountId, hits, read)`: the read flag over
+/// cross-folder search hits.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_markReadHits<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    hits: JString<'caller>,
+    read: bool,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let n = crate::api::messages::mark_read_hits(
+                account_id,
+                hits_json(&string(env, &hits)?)?,
+                read,
+            )?;
+            Ok(env.new_string(n.to_string())?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.setStarHits(accountId, hits, starred)`: the starred flag over
+/// cross-folder search hits.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_setStarHits<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    hits: JString<'caller>,
+    starred: bool,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let n = crate::api::messages::set_star_hits(
+                account_id,
+                hits_json(&string(env, &hits)?)?,
+                starred,
+            )?;
+            Ok(env.new_string(n.to_string())?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.deleteMessages(accountId, folderId, uids)`: Trash (undoable)
+/// or purge where Trash does not apply — `{"batch","label","purging"}`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_deleteMessages<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+    uids: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let r = crate::api::mutate::delete_messages(
+                account_id,
+                folder_id,
+                uids_json(&string(env, &uids)?)?,
+            )?;
+            move_result_json(env, r)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.archiveMessages(accountId, folderId, uids)`: one-click
+/// archive of a selection.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_archiveMessages<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+    uids: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let r = crate::api::mutate::archive_messages(
+                account_id,
+                folder_id,
+                uids_json(&string(env, &uids)?)?,
+            )?;
+            move_result_json(env, r)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.moveMessages(accountId, folderId, uids, destPath)`: a
+/// selection to any folder of the same account, addressed by path.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_moveMessages<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+    uids: JString<'caller>,
+    dest_path: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let r = crate::api::mutate::move_messages(
+                account_id,
+                folder_id,
+                uids_json(&string(env, &uids)?)?,
+                string(env, &dest_path)?,
+            )?;
+            move_result_json(env, r)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.purgeMessages(accountId, folderId, uids)`: destroy
+/// server-side. No undo — the UI confirms first.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_purgeMessages<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+    uids: JString<'caller>,
+) {
+    unowned
+        .with_env(|env| -> Result<()> {
+            crate::api::mutate::purge_messages(
+                account_id,
+                folder_id,
+                uids_json(&string(env, &uids)?)?,
+            )?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.deleteHits(accountId, hits)`: search hits across folders — one
+/// Undo for what goes to Trash, one purge job for the shares that destroy
+/// (the UI confirmed those first).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_deleteHits<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    hits: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let r = crate::api::mutate::delete_hits(account_id, hits_json(&string(env, &hits)?)?)?;
+            move_result_json(env, r)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.archiveHits(accountId, hits)`: hits across folders, one Undo.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_archiveHits<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    hits: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let r = crate::api::mutate::archive_hits(account_id, hits_json(&string(env, &hits)?)?)?;
+            move_result_json(env, r)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.moveHits(accountId, hits, destPath)`: hits across folders to
+/// `destPath`, one Undo.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_moveHits<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    hits: JString<'caller>,
+    dest_path: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let r = crate::api::mutate::move_hits(
+                account_id,
+                hits_json(&string(env, &hits)?)?,
+                string(env, &dest_path)?,
+            )?;
+            move_result_json(env, r)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.purgeHits(accountId, hits)`: destroy hits across folders in
+/// one job. No undo — the UI confirms first.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_purgeHits<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    hits: JString<'caller>,
+) {
+    unowned
+        .with_env(|env| -> Result<()> {
+            crate::api::mutate::purge_hits(account_id, hits_json(&string(env, &hits)?)?)?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.createFolder(accountId, path)`: queued IMAP folder creation;
+/// a `Folders` finished event says when. `/` separates levels, missing
+/// parents are created, an existing path is success.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_createFolder<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    path: JString<'caller>,
+) {
+    unowned
+        .with_env(|env| -> Result<()> {
+            crate::api::mutate::create_folder(account_id, string(env, &path)?)?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}

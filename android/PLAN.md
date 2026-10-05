@@ -44,7 +44,8 @@ fed from the same `mailclient-net` thread the FRB `job_events` stream uses.
   emulator): `syncAccount`, `syncFolder`, `loadOlderMessages`,
   `refreshFolders`, `refreshServerCapabilities`, `backgroundMarkSeen`,
   `backgroundRunHistory`, plus the job listener above.
-- **0c — list reads + bulk mutate**: `messagesJson` (paged), `markReadMany`,
+- **0c — list reads + bulk mutate** ✅ done (selections cross as JSON;
+  `ListBulkProbe` card with undo, verified on emulator): `messagesJson` (paged), `markReadMany`,
   `setStarMany`, `toggleStar` (exists), `delete/archive/move/purge` with
   `Vec<u32>` selections, `delete/archive/move/purgeHits` (cross-folder),
   `markReadHits`/`setStarHits`, `undoMove` (exists), `undoGraceSecs`
