@@ -5,7 +5,10 @@ with full feature parity to the QML desktop client and the Flutter app, over
 the same Rust `mailcore` through JNI (`MailNative`, package
 `de.renier.mailclient` stays JNI-bound). The Flutter app stays: it is a
 peer frontend next to Qt and the native app, not something this plan
-removes. When done, the native app no longer delegates any flow to Flutter.
+removes. When done, the native app has no placeholder flows left
+(`DelegateScreen`). Flutter's own native-reader experiment
+(`flutter/lib/src/ui/reader/native_reader.dart`) is Flutter's business and
+stays untouched by this plan.
 
 ## Ground rules (from AGENTS.md, non-negotiable)
 
@@ -22,6 +25,14 @@ removes. When done, the native app no longer delegates any flow to Flutter.
 - Each step ends with: `cargo fmt`, `cargo clippy`, `cargo test -p mailcore`
   (if Rust touched), `./scripts/android-dev.sh --run` on the emulator,
   manual pass of that step's checklist.
+- Job events: screens never call `MailNative.setJobListener`; they
+  subscribe to `JobEvents` (one process-lifetime JNI listener, Kotlin
+  fan-out) and close the subscription on dispose.
+- Dev probe cards in `HomeScreen` go when the real screen for their slice
+  lands (folders/sync probe with step 3, list/bulk with step 4, …).
+- Anything that contacts a real mailbox (the "real mailbox" verify items in
+  steps 4, 9, 11) needs the user's explicit per-run consent; the seeded DB
+  and the emulator cover everything else.
 
 ## Step 0 — Close the JNI gaps (several slices, each shippable)
 
@@ -30,8 +41,10 @@ steps below each need the listed functions; add them slice by slice, each a
 thin wrap of the named `mailffi::api` function. Blocking variants are fine
 where the UI already expects them (reader experiment precedent);
 list/sync paths need the queued-job + event model, so this step also adds a
-`jobEvents`-equivalent: a `JobCallback { onProgress/onFinished }` listener
-fed from the same `mailclient-net` thread the FRB `job_events` stream uses.
+`job_events`-equivalent: one JNI listener fed from the same `mailclient-net`
+thread the FRB stream uses, each event (`kind`, `phase` progress/finished,
+`status`, `ok`, ids) crossing as one JSON string; Kotlin fans it out via
+`JobEvents`.
 
 - **0a — shell reads** ✅ done (all 15 symbols in `android.rs` + `MailNative.kt`,
   `ShellReadsProbe` smoke card in `HomeScreen`, verified on emulator):
@@ -85,12 +98,10 @@ fed from the same `mailclient-net` thread the FRB `job_events` stream uses.
   probes moved to the Dev route, reader stays its activity. Verified with the
   seeded DB: folders → list → reader → back, account switcher, sync status,
   outbox pill, undo snackbar wiring, notification deep-link parsing.
-
-- `MailApp` root: Material3 theme (light/dark, follow system), ui-scale
-  plumbing, `MailViewModel` (StateFlow: accounts, active account, folders,
-  selection, sync status, outbox counts, undo offers) fed by 0a/0b.
-- 1-pane `NavHost`: folders → list → reader, system-back walks the stack;
-  2-pane list+reader variant on wide screens (foldables/tablets).
+  `MailState` is a plain snapshot-state holder and navigation a small route
+  stack in `MailShell` (no ViewModel, no navigation-compose — no new
+  dependencies). Still open from the original scope, picked up by later
+  steps: 2-pane wide layout (step 10), ui-scale plumbing (step 8).
 - Top bar mirrors the Qt toolbar: back/hamburger, Compose, width-capped
   search field, folder-scope toggle, Sync (with spinner), Manage folders,
   Contacts, Accounts, Settings overflow.
@@ -119,6 +130,12 @@ fed from the same `mailclient-net` thread the FRB `job_events` stream uses.
   and `qml/AccountSetup.qml`: every field and warning reachable.
 
 ## Step 3 — Folders: drawer + manager
+
+- Built (awaiting the device pass): `FoldersScreen` (account chip, subscribed
+  tree, role icons, selected highlight, empty states), `FolderManagerScreen`
+  (Manage folders entry; create with inline error, Refresh, subscribe
+  checkbox, jump), `MoveToDialog` (on list long-press until 4d), shell-reads
+  probe removed.
 
 - Folder list (indent by `depth`, role icons, unread pills, total counts,
   subscribed-only; tap paints cache instantly, then `syncFolder` in
@@ -162,8 +179,8 @@ fed from the same `mailclient-net` thread the FRB `job_events` stream uses.
   on-demand download with retry), ICS `EventCard` (open-in-calendar, save),
   inline-image banner, link examine dialog (else direct per setting),
   `markReadPlan` (now/after-delay/off, cancelled on close).
-- Delete the Flutter delegation (`ACTION_READER`, `DelegateScreen`,
-  `native_reader.dart` on the Dart side) when reply/forward/similar are
+- Replace the reader's placeholder hand-offs (`ACTION_READER` →
+  `DelegateScreen`) with the real screens once reply/forward/similar are
   native (step 6 for the first two, 4c for similar).
 - Verify: HTML + plain + ICS mails, remote-images gate, dark mode paint,
   undo bar after delete/archive/move, narrow-width action wrap.
@@ -220,6 +237,9 @@ fed from the same `mailclient-net` thread the FRB `job_events` stream uses.
   Settings.
 - Verify: offline send → outbox → airplane-off → flush; notification
   mark-read updates list without opening.
+- Sync timing: one timed steady-state sync (debug log per folder, with
+  consent) to confirm the unchanged-folder fast path holds on Android; a
+  slow stage found there is a `mailcore` fix, not an Android one.
 
 ## Step 10 — Responsive + tablet pass
 
@@ -234,13 +254,13 @@ fed from the same `mailclient-net` thread the FRB `job_events` stream uses.
 
 ## Step 11 — Parity audit + delegation removal (the finish line)
 
-- Walk the QML and Flutter inventories (attached in chat during planning:
-  shell, toolbar, folders, list, reader, composer, contacts, accounts,
-  outbox, settings, search, notifications) feature by feature; every gap
+- Walk the QML (`crates/mailapp/qml/`) and Flutter (`flutter/lib/src/ui/`)
+  sources area by area (shell, toolbar, folders, list, reader, composer,
+  contacts, accounts, outbox, settings, search, notifications); every gap
   becomes a step-4–9 sub-item or a `SHARED-CORE.md` deliberate exception.
 - `flutter test`, `cargo test --workspace` green; `./build.sh --android`
   produces the signed APK; live-mailbox pass with per-run consent.
-- Remove `DelegateScreen` + reader delegation. Keep the `.native`
+- Remove `DelegateScreen` + `ACTION_READER` if anything still uses them. Keep the `.native`
   `applicationId` suffix so both apps install side by side. Update
   `PROJECT.md` milestone 14 → done, `AGENTS.md`, `android/README.md`,
   `flutter/README.md` ("Shared code still to promote" + Android chapter).

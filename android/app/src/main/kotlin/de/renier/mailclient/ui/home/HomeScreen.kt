@@ -115,8 +115,6 @@ fun HomeScreen(openPayload: String?, onConsumeOpen: () -> Unit) {
 
         ReaderOpener()
 
-        ShellReadsProbe()
-
         SyncJobsProbe()
 
         ListBulkProbe()
@@ -235,89 +233,6 @@ private fun ReaderOpener() {
                 )
             }) {
                 Text("Open message")
-            }
-        }
-    }
-}
-
-// Step 0a smoke probe: exercises every new shell-read JNI function in one
-// tap. Read-only except selectAccount (persists the active account, like the
-// account switcher will). Delete when the folder shell lands.
-@Composable
-private fun ShellReadsProbe() {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var output by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
-
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Text("Shell reads (0a probe)", style = MaterialTheme.typography.titleSmall)
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                "accounts, selection, folders, counts, outbox pill, form helpers.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Button(
-                enabled = !busy,
-                onClick = {
-                    busy = true
-                    scope.launch(Dispatchers.IO) {
-                        val lines = mutableListOf<String>()
-                        try {
-                            MailNative.ensureInit(context)
-                            val accounts = MailNative.accountsJson()
-                            lines += "accounts: ${accounts.take(160)}"
-                            val selection = MailNative.initialSelection()
-                            lines += "initialSelection: $selection"
-                            val accountId = Regex(""""account_id":(-?\d+)""")
-                                .find(selection)?.groupValues?.get(1)?.toLongOrNull() ?: -1
-                            if (accountId >= 0) {
-                                lines += "folders: ${MailNative.foldersJson(accountId).take(160)}"
-                                lines += "outbox: ${MailNative.outboxStatusJson(accountId)}"
-                                val reselected = MailNative.selectAccount(accountId)
-                                lines += "selectAccount: $reselected"
-                                val folderId = Regex(""""folder_id":(-?\d+)""")
-                                    .find(reselected)?.groupValues?.get(1)?.toLongOrNull() ?: -1
-                                if (folderId >= 0) {
-                                    val path = MailNative.folderPath(folderId)
-                                    lines += "folderPath: $path"
-                                    lines += "folderIdForPath: ${
-                                        MailNative.folderIdForPath(accountId, path)
-                                    }"
-                                    lines += "folderCounts: ${MailNative.folderCounts(folderId)}"
-                                } else {
-                                    lines += "no folders for account $accountId"
-                                }
-                            } else {
-                                lines += "no accounts yet (fresh install)"
-                            }
-                            lines += "formDefaults: ${
-                                MailNative.accountFormDefaults().take(120)
-                            }"
-                            lines += "guess: ${MailNative.accountGuess("test@example.com")}"
-                            lines += "port: ${
-                                MailNative.accountPortForSecurity("imap", "tls", "starttls", "993")
-                            }"
-                            lines += "formCheck: ${
-                                MailNative.accountFormCheck("{}", false).take(160)
-                            }"
-                        } catch (e: Exception) {
-                            lines += "failed: ${e.message}"
-                        }
-                        withContext(Dispatchers.Main) {
-                            output = lines.joinToString("\n")
-                            busy = false
-                        }
-                    }
-                },
-            ) {
-                Text(if (busy) "Loading…" else "Load shell data")
-            }
-            output?.let {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(it, style = MaterialTheme.typography.bodySmall)
             }
         }
     }

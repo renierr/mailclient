@@ -42,6 +42,7 @@ import de.renier.mailclient.MainActivity
 import de.renier.mailclient.ReaderActivity
 import de.renier.mailclient.ui.accounts.AccountSetupScreen
 import de.renier.mailclient.ui.accounts.AccountsScreen
+import de.renier.mailclient.ui.folders.FolderManagerScreen
 import de.renier.mailclient.ui.folders.FoldersScreen
 import de.renier.mailclient.ui.home.HomeScreen
 import de.renier.mailclient.ui.list.ListScreen
@@ -54,6 +55,7 @@ import de.renier.mailclient.ui.state.MailState
 private sealed interface Route {
     data object Folders : Route
     data object List : Route
+    data object FolderManager : Route
     data object Accounts : Route
     // -1: add; else edit.
     data class Setup(val accountId: Long) : Route
@@ -153,6 +155,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                 title = when (route) {
                     Route.Folders -> state.activeAccount?.email ?: "mailclient"
                     Route.List -> state.openFolder?.leaf ?: "Messages"
+                    Route.FolderManager -> "Manage folders"
                     Route.Accounts -> "Accounts"
                     is Route.Setup -> if (route.accountId >= 0) "Edit account" else "Add account"
                     Route.Dev -> "Dev probes"
@@ -169,7 +172,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                     text = { Text("Manage folders") },
                     onClick = {
                         menu = false
-                        stack = listOf(Route.Folders)
+                        if (route != Route.FolderManager) go(Route.FolderManager)
                     },
                 )
                 DropdownMenuItem(
@@ -226,6 +229,13 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                                 ),
                             )
                         },
+                    )
+                // Jumping to a folder from the manager lands on its list, with
+                // the sidebar beneath it for back.
+                Route.FolderManager ->
+                    FolderManagerScreen(
+                        state = state,
+                        onOpenFolder = { stack = listOf(Route.Folders, Route.List) },
                     )
                 Route.Accounts ->
                     AccountsScreen(

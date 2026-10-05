@@ -34,6 +34,8 @@ data class Folder(
     val role: String,
     val unread: Int,
     val count: Int,
+    // Sidebar visibility only: hidden folders keep their cache and syncing.
+    val subscribed: Boolean = true,
 )
 
 data class MessageRow(
@@ -86,9 +88,19 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         private set
     var notice: String? by mutableStateOf(null)
         private set
+    // A "Folders" job (LIST refresh, create) is queued or running.
+    var foldersBusy by mutableStateOf(false)
+        private set
+
+    // One-shot callbacks for the next finished event of a job kind, keyed by
+    // kind. Main thread only (registered and drained there).
+    private val finishWaiters = mutableMapOf<String, MutableList<(Boolean, String) -> Unit>>()
 
     val activeAccount: Account? get() = accounts.firstOrNull { it.id == activeAccountId }
     val openFolder: Folder? get() = folders.firstOrNull { it.id == folderId }
+
+    /** The sidebar and move picker: subscribed folders only. */
+    val visibleFolders: List<Folder> get() = folders.filter { it.subscribed }
 
     fun info(msg: String) {
         notice = msg
@@ -157,7 +169,9 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         status = e.optString("status", kind)
         statusError = !ok
         if (e.optString("phase") != "finished") return
-        syncing = false
+        if (kind == "Sync") syncing = false
+        if (kind == "Folders") foldersBusy = false
+        finishWaiters.remove(kind)?.forEach { it(ok, e.optString("status")) }
         val accountId = e.optLong("account_id", -1)
         val eventFolder = e.optLong("folder_id", -1)
         // Re-read whatever is showing, like the Dart side does.
@@ -224,6 +238,9 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
 
     /** Cache-first open: paint cached rows at once, fill from the server after. */
     fun openFolder(id: Long) {
+        // Re-picking the shown folder just returns to its list, like Qt and
+        // Flutter: no second fill of what is already showing.
+        if (id == folderId && messages.isNotEmpty()) return
         folderId = id
         messages = emptyList()
         canLoadOlder = false
@@ -265,6 +282,61 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         withContext(Dispatchers.Main) { syncing = true }
         runCatching { MailNative.syncAccount(id) }
             .onFailure { fail(it.message ?: "sync failed") }
+    }
+
+    /** Re-read the folder list from the server (LIST); the event reloads. */
+    fun refreshFolderList() {
+        val id = activeAccountId
+        if (id < 0) return
+        foldersBusy = true
+        io {
+            runCatching { MailNative.refreshFolders(id) }
+                .onFailure {
+                    withContext(Dispatchers.Main) { foldersBusy = false }
+                    fail(it.message ?: "refresh failed")
+                }
+        }
+    }
+
+    /** Hide or show a folder in the sidebar. Display-only. */
+    fun setFolderSubscribed(id: Long, subscribed: Boolean) = io {
+        MailNative.ensureInit(appContext)
+        MailNative.setFolderSubscribed(id, subscribed)
+        loadFolders()
+    }
+
+    /**
+     * Create [path] on the server (`/` nests; the core maps it onto the
+     * account delimiter). [onDone] gets (ok, status) when the job finishes,
+     * or straight away when it could not be queued.
+     */
+    fun createFolder(path: String, onDone: (Boolean, String) -> Unit) {
+        val id = activeAccountId
+        if (id < 0) {
+            onDone(false, "No account")
+            return
+        }
+        foldersBusy = true
+        finishWaiters.getOrPut("Folders") { mutableListOf() }.add(onDone)
+        io {
+            runCatching { MailNative.createFolder(id, path) }
+                .onFailure { e ->
+                    withContext(Dispatchers.Main) {
+                        foldersBusy = false
+                        finishWaiters["Folders"]?.remove(onDone)
+                        onDone(false, e.message ?: "Could not create the folder")
+                    }
+                }
+        }
+    }
+
+    /** Move one message of [fromFolder] to [destPath]; offers undo. */
+    fun moveMessage(fromFolder: Long, uid: Int, destPath: String) = io {
+        MailNative.ensureInit(appContext)
+        val result = MailNative.moveMessages(activeAccountId, fromFolder, "[$uid]", destPath)
+        withContext(Dispatchers.Main) { offerUndo(result) }
+        reloadMessages()
+        loadFolders()
     }
 
     fun undo() = io {
@@ -343,11 +415,12 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
                 Folder(
                     id = o.optLong("id", -1),
                     path = path,
-                    leaf = o.optString("leaf").ifEmpty { path.substringAfterLast(o.optString("delimiter", "/")) },
+                    leaf = o.optString("leaf").ifEmpty { path },
                     depth = o.optInt("depth", 0),
                     role = o.optString("role"),
                     unread = o.optInt("unread", 0),
                     count = o.optInt("count", 0),
+                    subscribed = o.optBoolean("subscribed", true),
                 )
             }.filter { it.id >= 0 }
         }

@@ -1,7 +1,8 @@
 package de.renier.mailclient.ui.list
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +19,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -26,11 +31,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import de.renier.mailclient.ui.common.Avatar
+import de.renier.mailclient.ui.folders.MoveToDialog
 import de.renier.mailclient.ui.state.MailState
+import de.renier.mailclient.ui.state.MessageRow
 
 // Step 1 message list: avatar + unread dot, sender/date, subject, snippet,
 // star and attachment cues, "load older" tail. Sort, filter, search,
-// selection and bulk arrive in Step 4.
+// selection and bulk arrive in Step 4. Long-press opens the move picker for
+// that row until Step 4d makes long-press start a selection (the bulk bar's
+// Move then opens the same picker).
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ListScreen(state: MailState, onOpenReader: (Long, Long, Int) -> Unit) {
     val folder = state.openFolder
@@ -42,12 +52,30 @@ fun ListScreen(state: MailState, onOpenReader: (Long, Long, Int) -> Unit) {
         )
         return
     }
+    var moving by remember { mutableStateOf<MessageRow?>(null) }
+    moving?.let { m ->
+        MoveToDialog(
+            folders = state.visibleFolders,
+            currentFolderId = folder.id,
+            count = 1,
+            subject = m.subject,
+            onPick = { dest ->
+                moving = null
+                state.moveMessage(folder.id, m.uid, dest.path)
+            },
+            onDismiss = { moving = null },
+        )
+    }
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         items(state.messages, key = { it.uid }) { m ->
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onOpenReader(state.activeAccountId, folder.id, m.uid) }
+                    .combinedClickable(
+                        onClick = { onOpenReader(state.activeAccountId, folder.id, m.uid) },
+                        onLongClick = { moving = m },
+                        onLongClickLabel = "Move to folder",
+                    )
                     .padding(horizontal = 16.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
