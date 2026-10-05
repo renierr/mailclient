@@ -49,3 +49,7 @@ kotlin-desktop/
 flutter/build/
 flutter/.dart_tool/
 flutter/android/app/src/main/jniLibs/
+
+# Native Android frontend
+android/build/
+android/app/src/main/jniLibs/

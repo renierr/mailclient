@@ -1,0 +1,124 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <!-- Runtime-prompted on API 33+ when background mail checks are enabled;
+         install-time granted below that. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Push mail (Settings option): MailPushService holds the IMAP IDLE
+         connections in a foreground service, the only way Android lets a
+         closed app keep them. Type specialUse: dataSync is capped at a few
+         hours a day on recent Android, a mail monitor runs all day. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <!-- Lets Settings ask for the battery-optimisation exemption. Without
+         it, Doze and App Standby defer the periodic worker by hours while
+         the phone sleeps. Play restricts this permission; the APK is
+         sideloaded. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <!-- Exact-alarm scheduler (Settings option, WorkManager stays default):
+         the alarm fires on time in Doze via setExactAndAllowWhileIdle.
+         Since Android 14 this is denied by default; Settings sends the user
+         to the "Alarms & reminders" screen to allow it. Without the grant
+         the alarm still fires via AllowWhileIdle, just not exact. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <!-- Needed by the alarm scheduler and push: WorkManager and the push
+         service keep the CPU awake while a check runs, and alarms and the
+         push service come back after a reboot. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+
+    <!-- Cleartext is opt-in per account (plaintext IMAP/SMTP), not the
+         default: every account uses TLS unless explicitly configured
+         otherwise, which is why the global flag stays on. -->
+    <application
+        android:label="mailclient"
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@style/Theme.Mailclient"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:usesCleartextTraffic="true">
+        <!-- Compose launcher. Home today, the full shell screen by screen;
+             the reader already lives in ReaderActivity below. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <!-- Native reader (moved from the experiment/native-reader branch):
+             opened with ids plus a settings snapshot and re-reads everything
+             else over JNI. Shell flows it cannot do yet (composer,
+             find-similar) come back to MainActivity as ACTION_READER. -->
+        <activity
+            android:name=".ReaderActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.DeviceDefault.DayNight"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true" />
+        <!-- Experiment: viewer copies of attachments for ACTION_VIEW.
+             Cache-private; the URI grant hands one file to the viewer. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.readerfiles"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/reader_paths" />
+        </provider>
+        <!-- The mail reader's WebView must not phone home: Safe Browsing
+             sends URL lookups and list updates to Google, and metrics upload
+             usage. Mail content is already kept offline by the reader's CSP. -->
+        <meta-data
+            android:name="android.webkit.WebView.EnableSafeBrowsing"
+            android:value="false" />
+        <!-- On-time background mail check (MailAlarm.kt): exact alarm shots,
+             re-armed after a reboot or an app update. Only armed when
+             Settings picks the alarm scheduler; otherwise it stays idle.
+             Also restarts push mail after a reboot or update. -->
+        <receiver
+            android:name=".MailAlarmReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+            </intent-filter>
+        </receiver>
+        <!-- Push mail: the IMAP IDLE monitor (MailPushService.kt) and its
+             keep-alive alarm (MailPush.kt). Idle unless Settings picks push. -->
+        <service
+            android:name=".MailPushService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps IMAP IDLE connections to the user's mail servers open so new mail is announced by the server as it arrives, instead of polling." />
+        </service>
+        <receiver
+            android:name=".MailPushReceiver"
+            android:exported="false" />
+        <!-- Quiet hours: plan again when a window starts or ends, or the
+             clock moves under it (MailSchedule.kt). -->
+        <receiver
+            android:name=".MailScheduleReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.TIMEZONE_CHANGED"/>
+                <action android:name="android.intent.action.TIME_SET"/>
+            </intent-filter>
+        </receiver>
+        <!-- The new-mail notifications' "Mark read" buttons (MailActions.kt). -->
+        <receiver
+            android:name=".MailActionReceiver"
+            android:exported="false" />
+        <meta-data
+            android:name="android.webkit.WebView.MetricsOptOut"
+            android:value="true" />
+    </application>
+</manifest>

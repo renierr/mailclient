@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Auto Backup covers the app-private directory, including auth_vault.json
+     with the IMAP/SMTP secrets. Mail itself stays on the server and
+     re-syncs; secrets must never leave the device inside a cloud backup. -->
+<full-backup-content>
+    <exclude domain="file" path="auth_vault.json" />
+</full-backup-content>

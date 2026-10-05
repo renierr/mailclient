@@ -12,7 +12,7 @@ This file is normative for all coding agents (human or AI) working in this repo.
   - `mailffi`: `cdylib` exposing `mailcore` to the Flutter frontend via
     **flutter_rust_bridge 2** (`dart:ffi`, in process). No Qt, no mail logic —
     a translation layer only, same rule as `mailapp`.
-- Frontends: two, both over `mailcore`, neither authoritative over the other.
+- Frontends: all over `mailcore`, none authoritative over the other.
   A behaviour change belongs in `mailcore` so both get it; a change made in
   one frontend's adapter alone must be a deliberate, stated choice.
   - **Qt/QML** (`crates/mailapp/qml/`) — the desktop client: Linux
@@ -21,6 +21,12 @@ This file is normative for all coding agents (human or AI) working in this repo.
     `./build.sh --apk`). Its Linux and Windows desktop builds exist so the
     app is easy to run, develop and check on a desktop; they are not the
     shipped desktop client. See `flutter/README.md`.
+  - **Native Android** (`android/`) — Jetpack Compose app growing to replace
+    the Flutter embedding on Android, screen by screen (reader first, same
+    JNI). Until the flip, Flutter remains the shipped Android client.
+    `./build.sh --android`. See `android/README.md`. The Kotlin package
+    `de.renier.mailclient` is JNI-bound (Rust `Java_*` symbols) and must not
+    be renamed; only the `applicationId` is free.
   - **Features stay comparable; UI may differ.** Every user-facing feature
     exists in both. Layout, placement of elements and interaction patterns
     may drift where touch and small screens call for it (e.g. bottom
@@ -73,7 +79,7 @@ This file is normative for all coding agents (human or AI) working in this repo.
   SQLite only) — never add a test that dials out.
 - Do **not** add broad new external dependencies without justification. Prefer: std → small well-scoped crate → large framework. Large additions (new Qt modules, new async runtime, new DB) require user approval.
 - Do **not** put business logic in QML. QML is view-only; logic lives in Rust and is exposed via explicit bridge types.
-- Do **not** invent new top-level directories without updating this file and `PROJECT.md`. Current ones: `crates/`, `flutter/`, `qml` (inside `mailapp`), `resources/`, `scripts/`, `dist/` (gitignored). Root docs: `AGENTS.md`, `PROJECT.md`, `SHARED-CORE.md`.
+- Do **not** invent new top-level directories without updating this file and `PROJECT.md`. Current ones: `crates/`, `flutter/`, `android/`, `qml` (inside `mailapp`), `resources/`, `scripts/`, `dist/` (gitignored). Root docs: `AGENTS.md`, `PROJECT.md`, `SHARED-CORE.md`.
 - Do **not** let the two frontends drift in features or behaviour (UI
   layout may differ, see §1). Before copying anything out of
   `mailapp` into `mailffi` (or back), check whether it belongs in `mailcore`
@@ -188,11 +194,13 @@ it needs the same ask.
 
 - Build: `./build.sh --qt` (Qt release bundle into `dist/`), `./build.sh --flutter`
   (Flutter Linux bundle into `dist/mailclient-flutter/`), `./build.sh --apk`
-  (signed Android APK into `dist/mailclient-apk/`), `./build.sh --all` (both
+  (signed Android APK into `dist/mailclient-apk/`), `./build.sh --android`
+  (signed native Compose APK into `dist/mailclient-android/`), `./build.sh --all` (both
   desktop bundles). Dev loop: `./dev.sh`
   (Qt) or `./dev.sh --flutter`. Both dev loops use `./data/dev.sqlite`
   (`MAILCLIENT_DB` overrides). Install locally: `./scripts/install-local.sh` (`~/.local`). Never hand-roll `cargo build` output paths in docs; point to the scripts.
 - Flutter: `flutter run -d windows` / `-d linux` from `flutter/` (the Rust core builds as part of it). Regenerate FFI glue with `flutter_rust_bridge_codegen generate` from the repo root.
+- Native Android: open `android/` in Android Studio or run `android/gradlew installDebug` on a device/emulator (the Rust core builds as part of it via cargo-ndk). Compose BOM / WorkManager / core-ktx versions are pinned in `android/app/build.gradle.kts`; anything beyond them needs approval like any other dependency.
 - Versions: the product version lives once in the workspace root `Cargo.toml` (`[workspace.package]`); all crates use `version.workspace = true`. Qt About and Flutter About both read `CARGO_PKG_VERSION` from their adapter crate, so they follow automatically. The Flutter `pubspec.yaml` versionName mirrors the workspace version; the `+N` suffix is Android-only (`versionCode`) and increments on every shipped APK/AAB, independently of the versionName. Bump order: workspace version → pubspec versionName → +N. Never bump per-crate.
 - Android launcher icons are generated, never hand-drawn: SVG masters plus rendered PNGs live in `flutter/assets/icon-src/` (brand blue `#3B82F6`); the `flutter_launcher_icons` section of `flutter/pubspec.yaml` selects adaptive background/foreground/monochrome and the output goes to `android/app/src/main/res/`. Regenerate with `dart run flutter_launcher_icons` from `flutter/` after touching the sources. Never list `icon-src` under `flutter: assets:` — build-time sources must not ship inside the app bundle.
 - New feature for both frontends: build it **core-first**, in this order.
@@ -230,7 +238,7 @@ it needs the same ask.
    commit messages — nowhere that could be committed. Test fixtures use
    `@example.com` / `@example.org` (RFC 2606) only. Real values live solely in
    the local gitignored `.env`, the OS keyring (app-private vault file on
-   Android), and the gitignored `flutter/android/key.properties`.
+   Android), and the gitignored `flutter/android/key.properties` and `android/key.properties`.
 
 ## 7. Definition of Done (per step)
 
@@ -238,15 +246,17 @@ Verify only what the change can affect — check `git diff --stat` first.
 Changes that cannot alter compiled code or runtime behaviour need no test or
 build runs: docs (`*.md`), ignore files, comment-only edits, and local-only
 gitignored config (`.env`, `flutter/android/key.properties`,
-`local.properties`). State that verification was skipped and why instead of
-running suites "just in case". Anything else gets the matching check: Rust →
-item 1, QML → item 2, Dart → `flutter analyze` + `flutter test`, build
+`android/key.properties`, `local.properties`). State that verification was
+skipped and why instead of running suites "just in case". Anything else gets
+the matching check: Rust → item 1, QML → item 2, Dart → `flutter analyze` +
+`flutter test`, Kotlin/Compose → the affected `./build.sh --android` (or
+`installDebug` on a device), build
 scripts / manifests / Gradle / dependencies → the affected `./build.sh`
-target (`--qt` / `--flutter` / `--apk`).
+target (`--qt` / `--flutter` / `--apk` / `--android`).
 
 1. `cargo fmt --check`, `cargo clippy -p mailcore -- -D warnings`, `cargo test -p mailcore` green.
 2. `scripts/qml-check.sh` green on touched QML (lint gate + headless QML tests + format check; or noted as skipped headless with reason — the format check skips itself without the pinned qmlformat). Qt/WebEngine enum and API names verified against the installed headers or Qt docs — QML misspellings of them fail silently.
-3. The affected `./build.sh` target produces a runnable bundle in `dist/` (`--qt` → `dist/mailclient/bin/mailapp`, `--flutter` → `dist/mailclient-flutter/`, `--apk` → `dist/mailclient-apk/`).
+3. The affected `./build.sh` target produces a runnable bundle in `dist/` (`--qt` → `dist/mailclient/bin/mailapp`, `--flutter` → `dist/mailclient-flutter/`, `--apk` → `dist/mailclient-apk/`, `--android` → `dist/mailclient-android/`).
 4. `PROJECT.md` status table updated; no secrets/binaries/`dist/` staged.
 5. Cross-frontend features get a duplication check: read both adapters' new
    functions and both UIs' new code side by side. Do they show any logic

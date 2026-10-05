@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Window theme for the Compose launcher: the UI itself is drawn by
+         Compose (see ui/theme/Theme.kt), this only covers the window while
+         the process starts. No ActionBar — every screen draws its own bar. -->
+    <style name="Theme.Mailclient" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/splash_background</item>
+    </style>
+</resources>

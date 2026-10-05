@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Experiment (branch experiment/native-reader): viewer copies the native
+     reader stages for ACTION_VIEW. Cache-private by construction
+     (mailcore picks the safe name); the per-URI grant opens one file. -->
+<paths>
+    <cache-path name="shared" path="mailclient-attachments/" />
+</paths>

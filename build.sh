@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Release build + dist bundle assembly.
 #
-# Usage: ./build.sh --qt|--flutter|--apk|--aab|--all  (no default: bare
-# invocation prints usage and builds nothing)
+# Usage: ./build.sh --qt|--flutter|--apk|--aab|--android|--all  (no default:
+# bare invocation prints usage and builds nothing)
 #
 # --qt:      cargo build --release -p mailapp
 #            Output: dist/mailclient/{bin/mailapp,qml/,resources/,VERSION}
@@ -12,6 +12,8 @@
 #            Output: dist/mailclient-apk/mailclient-release.apk
 # --aab:     flutter build appbundle --release (signed; needs key.properties)
 #            Output: dist/mailclient-aab/mailclient-release.aab
+# --android: native Compose Android APK --release (signed; needs key.properties)
+#            Output: dist/mailclient-android/mailclient-release.apk
 # --all:     Qt + Flutter Linux desktop bundles
 # Works on Linux and in MSYS2/Git Bash on Windows (Qt path, see scripts/qt-env.sh).
 set -euo pipefail
@@ -31,7 +33,9 @@ Available targets:
   --apk, --flutter-apk         Build signed Flutter Android APK
                                Output: dist/mailclient-apk/mailclient-release.apk
   --aab, --bundle              Build signed Flutter Android App Bundle (AAB)
-                               Output: dist/mailclient-aab/mailclient-release.aab
+                                Output: dist/mailclient-aab/mailclient-release.aab
+  --android                    Build signed native Compose Android APK
+                                Output: dist/mailclient-android/mailclient-release.apk
   --all                        Build all desktop targets (Qt + Flutter Linux)
   -h, --help                   Show this help message
 
@@ -40,6 +44,7 @@ Examples:
   ./build.sh --flutter
   ./build.sh --apk
   ./build.sh --aab
+  ./build.sh --android
 EOF
 }
 
@@ -56,11 +61,11 @@ write_version() {
 }
 
 # A "signed" release build only carries the release signature when the
-# keystore from flutter/android/key.properties actually exists: Gradle
-# silently falls back to the public debug key otherwise, and Play Protect
-# flags the result as harmful. Fail loudly instead of shipping that.
+# keystore from key.properties actually exists: Gradle silently falls back
+# to the public debug key otherwise, and Play Protect flags the result as
+# harmful. Fail loudly instead of shipping that.
 require_keystore() {
-    local props="flutter/android/key.properties"
+    local props="${1:-flutter/android/key.properties}"
     [ -f "$props" ] || {
         echo "missing $props -- create a release keystore first:" >&2
         echo "  keytool -genkey -v -keystore ~/mailclient-release.jks -alias mailclient -keyalg RSA -keysize 2048 -validity 10000" >&2
@@ -204,11 +209,41 @@ Ready for upload to Google Play Console.
 EOF
 }
 
+build_android() {
+    require_keystore android/key.properties
+    echo "==> gradle assembleRelease (native Compose app)"
+    # The wrapper jar is gitignored (same as flutter/android/): Android
+    # Studio generates it on first open, otherwise fall back to system gradle.
+    if [ -f "android/gradle/wrapper/gradle-wrapper.jar" ] && [ -x "android/gradlew" ]; then
+        (cd android && ./gradlew assembleRelease)
+    else
+        (cd android && gradle assembleRelease)
+    fi
+
+    echo "==> assembling dist/mailclient-android"
+    apk="android/app/build/outputs/apk/release/app-release.apk"
+    [ -f "$apk" ] || { echo "expected apk at $apk -- build failed?" >&2; exit 1; }
+    if ! rm -rf dist/mailclient-android 2>/dev/null; then
+        echo "cannot clear dist/mailclient-android -- files are in use." >&2
+        exit 1
+    fi
+    mkdir -p dist/mailclient-android
+    cp "$apk" dist/mailclient-android/mailclient-release.apk
+    write_version dist/mailclient-android
+
+    cat <<'EOF'
+Done. APK available at:
+    ./dist/mailclient-android/mailclient-release.apk
+Signed with the release keystore from android/key.properties.
+EOF
+}
+
 case "$target" in
     --qt | --qml) build_qt ;;
     --flutter | --flutter-linux) build_flutter ;;
     --apk | --flutter-apk) build_apk ;;
     --aab | --flutter-aab | --bundle) build_aab ;;
+    --android | --native | --native-apk) build_android ;;
     --all) build_qt; build_flutter ;;
     *)
         echo "Error: Unknown option '$target'" >&2
