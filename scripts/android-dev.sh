@@ -3,18 +3,8 @@
 # Compose app, launch it. Works on Omarchy Linux and MSYS2/Git Bash on
 # Windows with the same invocation.
 #
-# Usage: ./scripts/android-dev.sh [--avd NAME] [--serial ID] [--no-build]
-#        [--no-emulator] [--no-launch] [--seed] [--log] [-h]
-#
-#   --avd NAME     emulator AVD to boot (default: see resolution below)
-#   --serial ID    adb device to use when several are attached
-#   --no-build     skip installDebug (just boot + launch)
-#   --no-emulator  never boot anything, fail if no device is online
-#   --no-launch    build/install only
-#   --seed         copy the Flutter app's database + vault into the native
-#                  app first (fresh installs have no accounts yet; the
-#                  account-setup screen does not exist)
-#   --log          tail logcat for the app after launching (blocking)
+# Bare invocation prints the help below and runs nothing (same convention
+# as build.sh: every run is explicit). Any flag starts the loop.
 #
 # Machine-specific config never lives in git. Resolution order, first hit wins:
 #   SDK dir : ANDROID_SDK_ROOT / ANDROID_HOME env, then sdk.dir in
@@ -39,7 +29,45 @@ ACTIVITY="$APP_ID/de.renier.mailclient.MainActivity"
 
 AVD="" SERIAL="" BUILD=1 BOOT=1 LAUNCH=1 SEED="" LOGS=""
 
-usage() { sed -n '2,24p' "$0"; }
+show_help() {
+    cat <<'EOF'
+mailclient native Android dev loop: emulator + installDebug + launch.
+
+Usage: ./scripts/android-dev.sh [TASK]... [SELECTION]...
+
+Tasks (combine freely; the plain loop is boot + build + launch):
+  --no-build      skip installDebug (boot the emulator and launch only)
+  --no-emulator   never boot anything; fail if no device is online
+  --no-launch     build and install only, do not start the activity
+  --seed          copy the Flutter app's mail database + vault into the
+                  native app first (fresh installs have no accounts yet;
+                  the account-setup screen does not exist)
+  --log           tail logcat for the app after launching (blocking)
+
+Selection:
+  --avd NAME      emulator AVD to boot (default: ANDROID_AVD, avd.name,
+                  or the only AVD when exactly one exists)
+  --serial ID     adb device to use when several are attached
+  -h, --help      show this help
+
+Machine config (never committed, first hit wins):
+  SDK dir : ANDROID_SDK_ROOT / ANDROID_HOME, then sdk.dir in
+            android/local.properties (forward slashes even on Windows),
+            then ~/Android/Sdk
+  AVD     : --avd, then ANDROID_AVD, then avd.name in
+            android/local.properties, then the only AVD if exactly one
+  JDK     : JAVA_HOME, then an Android Studio JBR if one is installed,
+            then whatever java is on PATH (needs 17+ for AGP 9)
+
+Examples:
+  ./scripts/android-dev.sh --seed --log   full loop with real mail + logs
+  ./scripts/android-dev.sh --no-build     reboot the emulator, relaunch the app
+  ./scripts/android-dev.sh --no-launch    build + install only
+  ./scripts/android-dev.sh --avd Pixel_4a --seed
+EOF
+}
+
+[ $# -eq 0 ] && { show_help; exit 0; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -50,8 +78,8 @@ while [ $# -gt 0 ]; do
         --no-launch) LAUNCH=0; shift ;;
         --seed) SEED=1; shift ;;
         --log) LOGS=1; shift ;;
-        -h | --help) usage; exit 0 ;;
-        *) echo "Unknown option '$1'" >&2; usage >&2; exit 1 ;;
+        -h | --help) show_help; exit 0 ;;
+        *) echo "Unknown option '$1'" >&2; show_help >&2; exit 1 ;;
     esac
 done
 

@@ -44,11 +44,13 @@ android/
 ## Build & run
 
 ```sh
-./scripts/android-dev.sh              # emulator + installDebug + launch
-./scripts/android-dev.sh --seed       # + copy the Flutter app's data over
-./scripts/android-dev.sh --log        # + tail logcat for the app
-./build.sh --android                  # signed release APK → dist/mailclient-android/
+./scripts/android-dev.sh --seed --log   # emulator + install + launch, real mail, logs
+./scripts/android-dev.sh --no-build     # boot the emulator, relaunch the installed app
+./scripts/android-dev.sh --no-launch    # build + install only
+./build.sh --android                    # signed release APK → dist/mailclient-android/
 ```
+
+Bare `./scripts/android-dev.sh` prints its help and runs nothing.
 
 `android-dev.sh` works on Linux and MSYS2/Windows alike. Machine config
 (`ANDROID_SDK_ROOT` / `ANDROID_AVD` / `JAVA_HOME` env, or gitignored
