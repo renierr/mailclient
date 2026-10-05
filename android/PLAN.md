@@ -102,6 +102,12 @@ thread the FRB stream uses, each event (`kind`, `phase` progress/finished,
   stack in `MailShell` (no ViewModel, no navigation-compose — no new
   dependencies). Still open from the original scope, picked up by later
   steps: 2-pane wide layout (step 10), ui-scale plumbing (step 8).
+- Layout pass (after step 3): the mail panes' bar is one rounded search
+  field (back, query, Sync, tools menu anchored to its button); Compose is
+  the FAB; other pages get back + title; status strip only when busy, on
+  error or with outbox mail; icons throughout, Material You colours on
+  Android 12+. Search runs the core plan (row filter / FTS, debounce,
+  folder-scope toggle); 4c adds server backfill, grouping and similar.
 - Top bar mirrors the Qt toolbar: back/hamburger, Compose, width-capped
   search field, folder-scope toggle, Sync (with spinner), Manage folders,
   Contacts, Accounts, Settings overflow.

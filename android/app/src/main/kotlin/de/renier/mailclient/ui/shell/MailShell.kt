@@ -1,27 +1,19 @@
 package de.renier.mailclient.ui.shell
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -31,14 +23,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import de.renier.mailclient.MainActivity
+import de.renier.mailclient.R
 import de.renier.mailclient.ReaderActivity
 import de.renier.mailclient.ui.accounts.AccountSetupScreen
 import de.renier.mailclient.ui.accounts.AccountsScreen
@@ -48,10 +38,11 @@ import de.renier.mailclient.ui.home.HomeScreen
 import de.renier.mailclient.ui.list.ListScreen
 import de.renier.mailclient.ui.state.MailState
 
-// Step 1 shell: one pane (folders → list, reader is its activity), manual
-// back stack (no navigation dependency), system-back support, top bar in the
-// Qt toolbar's order, status line with outbox pill, undo snackbar. The dev
-// probes live one overflow tap away until their screens land, then go.
+// The one-pane shell (folders → list, reader is its activity): manual back
+// stack (no navigation dependency), search bar on the mail panes and a plain
+// back + title bar on every other page, Compose as the FAB, a status strip
+// that only shows up with something to say, undo snackbar. The dev probes
+// live in the tools menu until their screens land, then go.
 private sealed interface Route {
     data object Folders : Route
     data object List : Route
@@ -70,7 +61,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
     var stack by remember { mutableStateOf(listOf<Route>(Route.Folders)) }
     val route = stack.last()
     val snack = remember { SnackbarHostState() }
-    var menu by remember { mutableStateOf(false) }
+    val mailPane = route == Route.Folders || route == Route.List
 
     fun go(r: Route) {
         stack = (stack + r).takeLast(8)
@@ -81,6 +72,8 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
     }
 
     BackHandler(enabled = stack.size > 1) { back() }
+    // Declared later, so it wins: back clears a running search first.
+    BackHandler(enabled = mailPane && state.searchQuery.isNotEmpty()) { state.clearSearch() }
 
     DisposableEffect(Unit) {
         state.ensureInit()
@@ -146,63 +139,83 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
         }
     }
 
+    // Tools menu: the search scope toggle, then the tools (AGENTS.md shell
+    // order). No second Compose or Accounts entry anywhere else.
+    val tools = listOf(
+        ShellMenuItem(
+            label = "Search this folder only",
+            icon = R.drawable.ic_search,
+            checked = state.searchFolderOnly,
+            onClick = { state.toggleSearchScope() },
+        ),
+        ShellMenuItem("Manage folders", R.drawable.ic_folder_manage) { go(Route.FolderManager) },
+        ShellMenuItem("Contacts", R.drawable.ic_contacts) { state.info("Contacts arrive in Step 7") },
+        ShellMenuItem("Accounts", R.drawable.ic_person) { go(Route.Accounts) },
+        ShellMenuItem("Settings", R.drawable.ic_settings) { state.info("Settings arrive in Step 8") },
+        ShellMenuItem("Dev probes", R.drawable.ic_code) { go(Route.Dev) },
+    )
+
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
             .safeDrawingPadding(),
         topBar = {
-            ShellTopBar(
-                title = when (route) {
-                    Route.Folders -> state.activeAccount?.email ?: "mailclient"
-                    Route.List -> state.openFolder?.leaf ?: "Messages"
-                    Route.FolderManager -> "Manage folders"
-                    Route.Accounts -> "Accounts"
-                    is Route.Setup -> if (route.accountId >= 0) "Edit account" else "Add account"
-                    Route.Dev -> "Dev probes"
-                },
-                canGoBack = stack.size > 1,
-                onBack = ::back,
-                syncing = state.syncing,
-                onSync = { state.syncNow() },
-                onCompose = { state.info("Composer arrives in Step 6") },
-                onMenu = { menu = true },
-            )
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(
-                    text = { Text("Manage folders") },
-                    onClick = {
-                        menu = false
-                        if (route != Route.FolderManager) go(Route.FolderManager)
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text("Accounts") },
-                    onClick = {
-                        menu = false
-                        go(Route.Accounts)
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text("Settings") },
-                    onClick = {
-                        menu = false
-                        state.info("Settings arrive in Step 8")
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text("Dev probes") },
-                    onClick = {
-                        menu = false
-                        go(Route.Dev)
-                    },
+            Column {
+                if (mailPane) {
+                    val folderName = state.openFolder?.leaf
+                    SearchTopBar(
+                        query = state.searchQuery,
+                        placeholder = if (state.searchFolderOnly && folderName != null) {
+                            "Search in $folderName"
+                        } else {
+                            "Search mail"
+                        },
+                        canGoBack = stack.size > 1,
+                        onBack = {
+                            state.clearSearch()
+                            back()
+                        },
+                        onQuery = {
+                            state.setSearch(it)
+                            // Results live in the list pane.
+                            if (it.isNotEmpty() && route == Route.Folders) go(Route.List)
+                        },
+                        onClear = { state.clearSearch() },
+                        syncing = state.syncing,
+                        onSync = { state.syncNow() },
+                        menu = tools,
+                    )
+                } else {
+                    PageTopBar(
+                        title = when (route) {
+                            Route.FolderManager -> "Manage folders"
+                            Route.Accounts -> "Accounts"
+                            is Route.Setup -> if (route.accountId >= 0) "Edit account" else "Add account"
+                            Route.Dev -> "Dev probes"
+                            Route.Folders, Route.List -> ""
+                        },
+                        onBack = ::back,
+                    )
+                }
+                if (state.syncing || state.foldersBusy) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+            }
+        },
+        floatingActionButton = {
+            if (mailPane && state.accounts.isNotEmpty()) {
+                ExtendedFloatingActionButton(
+                    onClick = { state.info("Composer arrives in Step 6") },
+                    icon = { ShellIcon(R.drawable.ic_edit, null) },
+                    text = { Text("Compose") },
                 )
             }
         },
         bottomBar = {
-            StatusLine(
+            StatusStrip(
                 text = state.status,
                 error = state.statusError,
-                syncing = state.syncing,
+                busy = state.syncing || state.foldersBusy,
                 outboxPending = state.outboxPending,
                 outboxFailed = state.outboxFailed,
                 onOutbox = { state.info("Outbox arrives in Step 9") },
@@ -251,73 +264,6 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                         onClose = ::back,
                     )
                 Route.Dev -> HomeScreen(openPayload = null, onConsumeOpen = {})
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ShellTopBar(
-    title: String,
-    canGoBack: Boolean,
-    onBack: () -> Unit,
-    syncing: Boolean,
-    onSync: () -> Unit,
-    onCompose: () -> Unit,
-    onMenu: () -> Unit,
-) {
-    TopAppBar(
-        title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-        navigationIcon = {
-            if (canGoBack) {
-                TextButton(onClick = onBack) { Text("Back") }
-            }
-        },
-        actions = {
-            // Text actions until the Step 4 icon set lands (no new
-            // dependency for placeholders — icons come from res/).
-            TextButton(onClick = onCompose) { Text("Compose") }
-            TextButton(onClick = onSync, enabled = !syncing) {
-                Text(if (syncing) "Syncing" else "Sync")
-            }
-            TextButton(onClick = onMenu) { Text("More") }
-        },
-    )
-}
-
-@Composable
-private fun StatusLine(
-    text: String,
-    error: Boolean,
-    syncing: Boolean,
-    outboxPending: Int,
-    outboxFailed: Boolean,
-    onOutbox: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text(
-            text = (if (syncing) "Syncing… " else "") + text,
-            color = if (error || outboxFailed) MaterialTheme.colorScheme.error
-            else MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.bodySmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        if (outboxPending > 0) {
-            TextButton(onClick = onOutbox) {
-                Text(
-                    "Outbox $outboxPending",
-                    color = if (outboxFailed) MaterialTheme.colorScheme.error
-                    else Color.Unspecified,
-                )
             }
         }
     }

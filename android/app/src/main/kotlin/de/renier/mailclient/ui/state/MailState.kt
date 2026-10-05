@@ -8,6 +8,8 @@ import de.renier.mailclient.JobEvents
 import de.renier.mailclient.MailNative
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -52,6 +54,8 @@ data class MessageRow(
     val initials: String = "?",
     val avatarLight: String = "",
     val avatarDark: String = "",
+    // Search hits span folders and carry their own; list rows leave -1.
+    val folderId: Long = -1,
 )
 
 data class UndoOffer(val batch: String, val label: String)
@@ -91,6 +95,19 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     // A "Folders" job (LIST refresh, create) is queued or running.
     var foldersBusy by mutableStateOf(false)
         private set
+
+    // Search: the typed text, whether it is scoped to the open folder, and
+    // the rows it found. How a query runs (off / row filter / FTS index,
+    // debounce) is the core's call via searchPlan.
+    var searchQuery by mutableStateOf("")
+        private set
+    var searchFolderOnly by mutableStateOf(false)
+        private set
+    var searchHits: List<MessageRow> by mutableStateOf(emptyList())
+        private set
+    var searchActive by mutableStateOf(false)
+        private set
+    private var searchJob: Job? = null
 
     // One-shot callbacks for the next finished event of a job kind, keyed by
     // kind. Main thread only (registered and drained there).
@@ -181,6 +198,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
             reloadMessages()
         }
         refreshOutbox()
+        if (searchActive) runSearch()
     }
 
     fun refreshAll() = io {
@@ -201,6 +219,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     }
 
     fun selectAccount(id: Long) = io {
+        withContext(Dispatchers.Main) { clearSearch() }
         MailNative.ensureInit(appContext)
         val parsed = JSONObject(MailNative.selectAccount(id))
         withContext(Dispatchers.Main) {
@@ -334,9 +353,62 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     fun moveMessage(fromFolder: Long, uid: Int, destPath: String) = io {
         MailNative.ensureInit(appContext)
         val result = MailNative.moveMessages(activeAccountId, fromFolder, "[$uid]", destPath)
-        withContext(Dispatchers.Main) { offerUndo(result) }
+        withContext(Dispatchers.Main) {
+            offerUndo(result)
+            if (searchActive) runSearch()
+        }
         reloadMessages()
         loadFolders()
+    }
+
+    fun setSearch(query: String) {
+        searchQuery = query
+        runSearch()
+    }
+
+    fun toggleSearchScope() {
+        searchFolderOnly = !searchFolderOnly
+        runSearch()
+    }
+
+    fun clearSearch() {
+        searchJob?.cancel()
+        searchQuery = ""
+        searchHits = emptyList()
+        searchActive = false
+    }
+
+    private fun runSearch() {
+        searchJob?.cancel()
+        val query = searchQuery
+        val accountId = activeAccountId
+        val folderScope = if (searchFolderOnly) openFolder?.path.orEmpty() else ""
+        val shown = messages
+        val shownFolder = folderId
+        searchJob = scope.launch(Dispatchers.IO) {
+            MailNative.ensureInit(appContext)
+            val plan = runCatching { JSONObject(MailNative.searchPlan(query)) }.getOrNull()
+            val rows = runCatching { when (plan?.optString("mode")) {
+                // Short input filters the shown folder's rows in place.
+                "filter" -> shown
+                    .filter {
+                        MailNative.searchFilterMatches(
+                            plan.optString("query"), it.subject, it.from, it.fromName, it.snippet,
+                        ) == "true"
+                    }
+                    .map { it.copy(folderId = shownFolder) }
+                "indexed" -> {
+                    delay(plan.optLong("debounce_ms", 0))
+                    parseMessages(MailNative.searchJson(accountId, plan.optString("query"), folderScope))
+                }
+                else -> null
+            } }.getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it else emptyList() }
+            withContext(Dispatchers.Main) {
+                if (searchQuery != query) return@withContext
+                searchActive = rows != null
+                searchHits = rows.orEmpty()
+            }
+        }
     }
 
     fun undo() = io {
@@ -442,6 +514,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
                     initials = o.optString("initials", "?"),
                     avatarLight = o.optString("avatar_light"),
                     avatarDark = o.optString("avatar_dark"),
+                    folderId = o.optLong("folder_id", -1),
                 )
             }.filter { it.uid >= 0 }
         }
