@@ -14,16 +14,20 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.DocumentsContract
+import android.text.TextUtils
+import android.util.AttributeSet
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowInsets
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
+import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.ProgressBar
@@ -133,22 +137,48 @@ class ReaderActivity : Activity() {
         confirmDeleteSetting = intent.getBooleanExtra(EXTRA_CONFIRM_DELETE, true)
         dark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
             Configuration.UI_MODE_NIGHT_YES
+        // The manifest theme (DeviceDefault.DayNight) brings a system
+        // ActionBar showing the app label ("mailclient"). The reader draws
+        // its own header with Back, like the Flutter reader — no bar.
+        actionBar?.hide()
+        title = ""
 
+        // Created before the insets listener below so it can lift the
+        // bar above the gesture navigation on small phones.
+        undoBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            setBackgroundColor(attrColor(android.R.attr.colorBackground, if (dark) 0xFF2B2B2B.toInt() else 0xFFFFFFFF.toInt()))
+            elevation = dp(6).toFloat()
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM,
+            )
+        }
         val root = FrameLayout(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT,
             )
             // Edge-to-edge (enforced since Android 15): keep the status bar
-            // off the header instead of drawing the mail under it.
+            // off the header instead of drawing the mail under it, and the
+            // undo bar above the gesture navigation.
             setOnApplyWindowInsetsListener { v, insets ->
-                val top = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    insets.getInsets(WindowInsets.Type.systemBars()).top
+                val bars = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    insets.getInsets(WindowInsets.Type.systemBars())
                 } else {
-                    @Suppress("DEPRECATION")
-                    insets.systemWindowInsetTop
+                    null
                 }
+                @Suppress("DEPRECATION")
+                val top = bars?.top ?: insets.systemWindowInsetTop
+                @Suppress("DEPRECATION")
+                val bottom = bars?.bottom ?: insets.systemWindowInsetBottom
                 v.setPadding(0, top, 0, 0)
+                (undoBar.layoutParams as? FrameLayout.LayoutParams)?.bottomMargin = bottom
+                undoBar.setPadding(dp(16), dp(10), dp(16), dp(10) + bottom / 2)
                 insets
             }
         }
@@ -188,20 +218,10 @@ class ReaderActivity : Activity() {
         column.addView(scroll)
         root.addView(column)
 
-        undoBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            visibility = View.GONE
-            setPadding(dp(16), dp(10), dp(16), dp(10))
-            setBackgroundColor(attrColor(android.R.attr.colorBackground, if (dark) 0xFF2B2B2B.toInt() else 0xFFFFFFFF.toInt()))
-            elevation = dp(6).toFloat()
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM,
-            )
-        }
         undoLabel = TextView(this).apply {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
         }
         val undoBtn = Button(this).apply {
             text = "Undo"
@@ -327,15 +347,19 @@ class ReaderActivity : Activity() {
         content.removeAllViews()
 
         // Back scrolls with the header, like the Flutter reader's onClose.
-        val topRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val back = Button(this, null, android.R.attr.borderlessButtonStyle).apply {
-            text = "‹ Back"
-            setOnClickListener { finish() }
+        val topRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val back = iconButton(R.drawable.ic_arrow_back, "Back", inkColor()) {
+            finish()
         }
         val subject = TextView(this).apply {
             text = m.optString("subject", "(no subject)")
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
             setTypeface(typeface, Typeface.BOLD)
+            maxLines = 3
+            ellipsize = TextUtils.TruncateAt.END
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
         topRow.addView(back)
@@ -344,7 +368,10 @@ class ReaderActivity : Activity() {
 
         content.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(12)) })
 
-        val senderRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val senderRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
         val initials = m.optString("initials", "?").ifEmpty { "?" }
         val avatarCss = if (dark) m.optString("avatar_dark") else m.optString("avatar_light")
         val avatar = TextView(this).apply {
@@ -356,24 +383,32 @@ class ReaderActivity : Activity() {
                 shape = GradientDrawable.OVAL
                 setColor(parseCss(avatarCss, if (dark) 0xFF5F6368.toInt() else 0xFF80868B.toInt()))
             }
-            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply {
+                gravity = Gravity.TOP
+            }
         }
         senderRow.addView(avatar)
         senderRow.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(dp(12), 1) })
         val who = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                gravity = Gravity.CENTER_VERTICAL
+            }
         }
         val fromName = m.optString("from_name")
         val fromAddr = m.optString("from")
         who.addView(TextView(this).apply {
             text = if (fromName.isNotEmpty()) fromName else fromAddr
             setTypeface(typeface, Typeface.BOLD)
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
         })
         if (fromName.isNotEmpty()) who.addView(TextView(this).apply {
             text = fromAddr
             setTextColor(mutedColor())
             textSize = 13f
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
         })
         val toLine = m.optString("to").ifEmpty { h.optString("to") }
         if (toLine.isNotEmpty() && !detailsExpanded) who.addView(TextView(this).apply {
@@ -381,27 +416,41 @@ class ReaderActivity : Activity() {
             setTextColor(mutedColor())
             textSize = 13f
             maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
         })
         val replyTo = m.optString("reply_to")
         if (m.optBoolean("reply_to_differs") && replyTo.isNotEmpty()) who.addView(TextView(this).apply {
             text = "Replies go to $replyTo, not to the sender"
             setTextColor(0xFFB3261E.toInt())
             textSize = 13f
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
         })
         senderRow.addView(who)
         val dateView = TextView(this).apply {
-            text = h.optString("date").ifEmpty { m.optString("date") }
+            // Short display date in the row (like the Flutter header);
+            // the full header date stays in the details below.
+            text = m.optString("date").ifEmpty { h.optString("date") }
             setTextColor(mutedColor())
             textSize = 13f
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                marginStart = dp(8)
+            }
         }
         senderRow.addView(dateView)
-        val detailsBtn = Button(this, null, android.R.attr.borderlessButtonStyle).apply {
-            text = if (detailsExpanded) "▾" else "▸"
-            contentDescription = if (detailsExpanded) "Hide details" else "Show details"
-            setOnClickListener {
-                detailsExpanded = !detailsExpanded
-                render()
-            }
+        val detailsBtn = iconButton(
+            if (detailsExpanded) R.drawable.ic_expand_more else R.drawable.ic_chevron_right,
+            if (detailsExpanded) "Hide details" else "Show details",
+            iconColor(),
+        ) {
+            detailsExpanded = !detailsExpanded
+            render()
         }
         senderRow.addView(detailsBtn)
         content.addView(senderRow)
@@ -447,29 +496,41 @@ class ReaderActivity : Activity() {
     }
 
     private fun actionRow(m: JSONObject): View {
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        fun add(label: String, tip: String, onTap: () -> Unit) {
+        // Icon-only, like the Flutter header's IconButtons: labels live in
+        // the content descriptions (and tooltips), not next to the glyphs.
+        // Wrap (like the Flutter header's right-aligned Wrap) so a 360px
+        // phone stacks the actions instead of clipping them.
+        val row = FlowRow(this).apply { alignEnd = true }
+        row.addView(iconButton(R.drawable.ic_reply, "Reply", iconColor()) {
+            delegateToFlutter("reply")
+        })
+        row.addView(iconButton(R.drawable.ic_forward, "Forward", iconColor()) {
+            delegateToFlutter("forward")
+        })
+        val starred = m.optBoolean("starred")
+        row.addView(
+            iconButton(
+                if (starred) R.drawable.ic_star else R.drawable.ic_star_border,
+                if (starred) "Unstar" else "Star",
+                if (starred) 0xFFFFA000.toInt() else iconColor(),
+            ) { doStar() },
+        )
+        row.addView(iconButton(R.drawable.ic_delete, "Delete", errorColor()) { doDelete(m) })
+        if (m.optBoolean("is_html") && m.optBoolean("html_colored") && dark) {
             row.addView(Button(this, null, android.R.attr.borderlessButtonStyle).apply {
-                text = label
-                contentDescription = tip
-                setOnClickListener { onTap() }
+                text = if (originalColors) "Darken" else "Original"
+                contentDescription = "Toggle original colours"
+                compact()
+                setOnClickListener {
+                    originalColors = !originalColors
+                    render()
+                }
             })
         }
-        add("Reply", "Reply") { delegateToFlutter("reply") }
-        add("Forward", "Forward") { delegateToFlutter("forward") }
-        val starred = m.optBoolean("starred")
-        add(if (starred) "★" else "☆", if (starred) "Unstar" else "Star") { doStar() }
-        add("Delete", "Delete") { doDelete(m) }
-        if (m.optBoolean("is_html") && m.optBoolean("html_colored") && dark) {
-            add(if (originalColors) "Darken" else "Original", "Toggle original colours") {
-                originalColors = !originalColors
-                render()
-            }
-        }
-        val more = Button(this, null, android.R.attr.borderlessButtonStyle).apply { text = "⋮" }
-        more.setOnClickListener { v -> overflowMenu(v, m) }
-        row.addView(more)
-        return HorizontalScrollView(this).apply { addView(row) }
+        row.addView(iconButton(R.drawable.ic_more_vert, "More actions", iconColor()) { v ->
+            overflowMenu(v, m)
+        })
+        return row
     }
 
     private fun overflowMenu(anchor: View, m: JSONObject) {
@@ -698,34 +759,42 @@ class ReaderActivity : Activity() {
             text = (if (cancelled) "Cancelled: " else "") + event.optString("summary", "(Event)")
             setTypeface(typeface, Typeface.BOLD)
             maxLines = 3
+            ellipsize = TextUtils.TruncateAt.END
         })
         card.addView(TextView(this).apply {
             text = event.optString("formatted_time")
             setTextColor(mutedColor())
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
         })
         val loc = event.optString("location")
         if (loc.isNotBlank()) card.addView(TextView(this).apply {
             text = "📍 $loc"
             setTextColor(mutedColor())
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
         })
         val org = event.optString("organizer")
         if (org.isNotBlank()) card.addView(TextView(this).apply {
             text = "Organizer: $org"
             setTextColor(mutedColor())
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
         })
         val attId = if (event.isNull("attachment_id")) null else event.optLong("attachment_id")
         if (attId != null) {
             val icsName = event.optString("save_name", "event.ics").ifEmpty { "event.ics" }
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.END
-            }
+            // Wrap so "Open in Calendar" + "Save .ics" stack on a 360px
+            // phone instead of pushing each other off screen.
+            val row = FlowRow(this).apply { alignEnd = true }
             row.addView(Button(this@ReaderActivity, null, android.R.attr.borderlessButtonStyle).apply {
                 text = "Open in Calendar"
+                compact()
                 setOnClickListener { openAttachmentById(attId, "text/calendar") }
             })
             row.addView(Button(this@ReaderActivity, null, android.R.attr.borderlessButtonStyle).apply {
                 text = "Save .ics"
+                compact()
                 setOnClickListener { saveAttachmentById(attId, icsName, "text/calendar") }
             })
             card.addView(row)
@@ -740,8 +809,17 @@ class ReaderActivity : Activity() {
         if (!m.optBoolean("is_html") || missing <= 0) return null
         val box = cardBox(false)
         var busy = false
+        val row = FlowRow(this).apply { alignEnd = false }
+        row.addView(TextView(box.context).apply {
+            text = "$missing inline image${if (missing == 1) "" else "s"} not downloaded"
+            layoutParams = ViewGroup.MarginLayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        })
         val btn = Button(box.context, null, android.R.attr.borderlessButtonStyle)
         btn.text = "Download"
+        btn.compact()
         btn.setOnClickListener {
             if (busy) return@setOnClickListener
             busy = true
@@ -751,10 +829,8 @@ class ReaderActivity : Activity() {
                 runOnUiThread { reload() }
             }
         }
-        box.addView(TextView(box.context).apply {
-            text = "$missing inline image${if (missing == 1) "" else "s"} not downloaded"
-        })
-        box.addView(btn)
+        row.addView(btn)
+        box.addView(row)
         return box
     }
 
@@ -774,30 +850,42 @@ class ReaderActivity : Activity() {
         val files = nonInlineAttachments(m, eventId)
         if (files.isEmpty()) return null
         val card = cardBox(false)
-        val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
         head.addView(TextView(this).apply {
             text = if (files.size == 1) "1 attachment" else "${files.size} attachments"
             setTypeface(typeface, Typeface.BOLD)
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         })
         if (files.size > 1) head.addView(Button(this, null, android.R.attr.borderlessButtonStyle).apply {
             text = "Save all"
+            compact()
             setOnClickListener { saveAll(files) }
         })
         card.addView(head)
         for (a in files) {
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
             row.addView(TextView(this).apply {
                 text = "${a.optString("display_name").ifEmpty { a.optString("filename") }}  ·  ${a.optString("size_text")}"
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
             })
             row.addView(Button(this, null, android.R.attr.borderlessButtonStyle).apply {
                 text = "Open"
+                compact()
                 setOnClickListener { openAttachment(a) }
             })
             row.addView(Button(this, null, android.R.attr.borderlessButtonStyle).apply {
                 text = "Save"
+                compact()
                 setOnClickListener { saveAttachment(a) }
             })
             card.addView(row)
@@ -961,7 +1049,11 @@ class ReaderActivity : Activity() {
         val web = WebView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
+                // WRAP_CONTENT never measures page content, so start at a
+                // visible estimate and grow to the real height in
+                // onPageFinished below. Until then the parent ScrollView
+                // owns the one fling.
+                dp(240),
             )
             // Fully expanded to its content so there is nothing to scroll
             // internally: the parent ScrollView owns the one fling. (If a
@@ -976,6 +1068,12 @@ class ReaderActivity : Activity() {
                 allowContentAccess = false
                 mediaPlaybackRequiresUserGesture = true
                 setGeolocationEnabled(false)
+                // Without these the viewport meta the core emits
+                // (`width=device-width`) is ignored and newsletters render
+                // at a ~980px overview: tiny text with sideways scrolling
+                // on a 360px phone.
+                useWideViewPort = true
+                loadWithOverviewMode = true
                 @Suppress("DEPRECATION")
                 textZoom = (100 * readerScale * resources.configuration.fontScale).toInt()
             }
@@ -987,6 +1085,24 @@ class ReaderActivity : Activity() {
                     if (url.startsWith("about:")) return false
                     onTapUrl(url)
                     return true
+                }
+
+                override fun onPageFinished(view: WebView, url: String?) {
+                    // Ask the page how tall it is (CSS px) and size the
+                    // view to it, so the parent ScrollView scrolls the
+                    // whole mail instead of a clipped window.
+                    view.evaluateJavascript(
+                        "(function(){var d=document.documentElement;return Math.max(d?d.scrollHeight:0,document.body?document.body.scrollHeight:0);})();",
+                    ) { h ->
+                        val css = h?.trim('"')?.toDoubleOrNull() ?: return@evaluateJavascript
+                        if (css <= 0) return@evaluateJavascript
+                        val px = (css * resources.displayMetrics.density).toInt()
+                            .coerceIn(dp(48), dp(8000))
+                        if (view.layoutParams.height != px) {
+                            view.layoutParams.height = px
+                            view.requestLayout()
+                        }
+                    }
                 }
             }
         }
@@ -1069,6 +1185,136 @@ class ReaderActivity : Activity() {
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    // Borderless buttons still carry the default 88dp minimum width, which
+    // eats a 360px row on its own. Zero it and tighten the padding so the
+    // actions fit the way the Flutter IconButtons do.
+    private fun Button.compact() {
+        minimumWidth = 0
+        minWidth = 0
+        setPadding(dp(8), dp(4), dp(8), dp(4))
+    }
+
+    // Icon-only button (the Flutter header's IconButton): the label lives
+    // in the content description for screen readers, never next to the
+    // glyph. 48dp touch target with the 24dp vector centred in it.
+    private fun iconButton(res: Int, desc: String, tint: Int, onTap: (View) -> Unit): ImageButton =
+        ImageButton(this).apply {
+            setImageResource(res)
+            contentDescription = desc
+            setColorFilter(tint)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            background = borderlessRipple()
+            layoutParams = ViewGroup.MarginLayoutParams(dp(48), dp(48))
+            setOnClickListener(onTap)
+        }
+
+    private fun borderlessRipple(): android.graphics.drawable.Drawable? {
+        val out = TypedValue()
+        return if (theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, out, true)) {
+            resources.getDrawable(out.resourceId, theme)
+        } else {
+            null
+        }
+    }
+
+    private fun inkColor(): Int = 0xFF000000.toInt() or themeColors()[1]
+
+    private fun iconColor(): Int = mutedColor()
+
+    private fun errorColor(): Int = if (dark) 0xFFF2B8B5.toInt() else 0xFFB3261E.toInt()
+
+    // Right-aligned wrapping row (the Flutter header's `Wrap`): children
+    // flow onto the next line instead of clipping or sideways-scrolling on
+    // narrow phones. No new dependency — a ~60 line ViewGroup.
+    private class FlowRow @JvmOverloads constructor(
+        context: Context,
+        end: Boolean = false,
+    ) : ViewGroup(context) {
+        var alignEnd: Boolean = end
+
+        override fun generateLayoutParams(attrs: AttributeSet?): LayoutParams =
+            MarginLayoutParams(context, attrs)
+
+        override fun generateLayoutParams(p: LayoutParams?): LayoutParams =
+            MarginLayoutParams(p)
+
+        override fun generateDefaultLayoutParams(): LayoutParams =
+            MarginLayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT)
+
+        override fun checkLayoutParams(p: LayoutParams?): Boolean = p is MarginLayoutParams
+
+        private fun marginsOf(c: View): MarginLayoutParams? =
+            c.layoutParams as? MarginLayoutParams
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val width = MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight
+            var x = 0
+            var y = 0
+            var lineHeight = 0
+            for (i in 0 until childCount) {
+                val c = getChildAt(i)
+                if (c.visibility == View.GONE) continue
+                measureChildWithMargins(c, widthMeasureSpec, 0, heightMeasureSpec, y)
+                val lp = marginsOf(c)
+                val w = c.measuredWidth + (lp?.leftMargin ?: 0) + (lp?.rightMargin ?: 0)
+                val h = c.measuredHeight + (lp?.topMargin ?: 0) + (lp?.bottomMargin ?: 0)
+                if (x > 0 && x + w > width) {
+                    y += lineHeight
+                    x = 0
+                    lineHeight = 0
+                }
+                x += w
+                lineHeight = maxOf(lineHeight, h)
+            }
+            y += lineHeight
+            setMeasuredDimension(
+                MeasureSpec.getSize(widthMeasureSpec),
+                resolveSize(y + paddingTop + paddingBottom, heightMeasureSpec),
+            )
+        }
+
+        override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+            val width = r - l - paddingLeft - paddingRight
+            var y = paddingTop
+            var lineHeight = 0
+            var lineStart = 0
+            fun layoutLine(start: Int, end: Int, lineWidth: Int, top: Int) {
+                var cx = if (alignEnd) paddingLeft + (width - lineWidth) else paddingLeft
+                for (i in start until end) {
+                    val c = getChildAt(i)
+                    if (c.visibility == View.GONE) continue
+                    val lp = marginsOf(c)
+                    cx += lp?.leftMargin ?: 0
+                    c.layout(
+                        cx, top + (lp?.topMargin ?: 0),
+                        cx + c.measuredWidth, top + (lp?.topMargin ?: 0) + c.measuredHeight,
+                    )
+                    cx += c.measuredWidth + (lp?.rightMargin ?: 0)
+                }
+            }
+            // Measure pass already computed breaks; recompute widths here.
+            var lineWidth = 0
+            for (i in 0 until childCount) {
+                val c = getChildAt(i)
+                if (c.visibility == View.GONE) continue
+                val lp = marginsOf(c)
+                val w = c.measuredWidth + (lp?.leftMargin ?: 0) + (lp?.rightMargin ?: 0)
+                val h = c.measuredHeight + (lp?.topMargin ?: 0) + (lp?.bottomMargin ?: 0)
+                if (lineWidth > 0 && lineWidth + w > width) {
+                    layoutLine(lineStart, i, lineWidth, y)
+                    y += lineHeight
+                    lineWidth = 0
+                    lineHeight = 0
+                    lineStart = i
+                }
+                lineWidth += w
+                lineHeight = maxOf(lineHeight, h)
+            }
+            layoutLine(lineStart, childCount, lineWidth, y)
+        }
+    }
 
     private fun mutedColor(): Int =
         attrColor(android.R.attr.textColorSecondary, if (dark) 0xFFCAC4D0.toInt() else 0xFF5F6368.toInt())
