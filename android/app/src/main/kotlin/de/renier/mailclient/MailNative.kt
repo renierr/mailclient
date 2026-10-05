@@ -158,6 +158,8 @@ object MailNative {
     // subscribe there.
     @JvmStatic external fun setJobListener(callbacks: JobCallbacks)
     @JvmStatic external fun clearJobListener()
+    // Keys of jobs currently on the network thread, for diagnostics.
+    @JvmStatic external fun netInflight(): String
     @JvmStatic external fun syncAccount(accountId: Long)
     @JvmStatic external fun syncFolder(accountId: Long, folderId: Long)
     @JvmStatic external fun loadOlderMessages(accountId: Long, folderId: Long)

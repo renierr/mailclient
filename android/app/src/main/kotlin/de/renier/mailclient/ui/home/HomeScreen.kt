@@ -21,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -135,19 +136,6 @@ fun HomeScreen(openPayload: String?, onConsumeOpen: () -> Unit) {
                 }
             }
         }
-
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Text("Roadmap", style = MaterialTheme.typography.titleSmall)
-                Spacer(modifier = Modifier.height(4.dp))
-                for (row in roadmap) {
-                    Text(
-                        (if (row.second) "✓ " else "○ ") + row.first,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-            }
-        }
     }
 }
 
@@ -162,16 +150,29 @@ private fun SyncJobsProbe() {
     var account by remember { mutableStateOf("") }
     var folder by remember { mutableStateOf("") }
     var lastEvent by remember { mutableStateOf<String?>(null) }
+    var inflight by remember { mutableStateOf<String?>(null) }
     var history by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
 
     // The listener fires on Rust's net thread; hop to Main for state.
-    DisposableEffect(Unit) {
-        val sub =
+    DisposableEffect(Unit) {        val sub =
             JobEvents.subscribe(context) { json ->
                 scope.launch(Dispatchers.Main) { lastEvent = json.take(300) }
             }
         onDispose { sub.close() }
+    }
+
+    // Prefill with the live selection so the buttons work with one tap —
+    // no hunting for ids.
+    LaunchedEffect(Unit) {
+        val sel = withContext(Dispatchers.IO) {
+            runCatching {
+                MailNative.ensureInit(context)
+                org.json.JSONObject(MailNative.initialSelection())
+            }.getOrNull()
+        } ?: return@LaunchedEffect
+        account = sel.optLong("account_id", -1).takeIf { it >= 0 }?.toString() ?: ""
+        folder = sel.optLong("folder_id", -1).takeIf { it >= 0 }?.toString() ?: ""
     }
 
     fun queue(name: String, call: () -> Unit) {
@@ -240,6 +241,17 @@ private fun SyncJobsProbe() {
                         withContext(Dispatchers.Main) { history = h }
                     }
                 }) { Text("Run history") }
+                TextButton(onClick = {
+                    scope.launch(Dispatchers.IO) {
+                        val keys = try {
+                            MailNative.ensureInit(context)
+                            MailNative.netInflight()
+                        } catch (e: Exception) {
+                            "failed: ${e.message}"
+                        }
+                        withContext(Dispatchers.Main) { inflight = keys }
+                    }
+                }) { Text("In-flight") }
             }
             error?.let {
                 Spacer(modifier = Modifier.height(4.dp))
@@ -248,6 +260,10 @@ private fun SyncJobsProbe() {
             lastEvent?.let {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text("last event: $it", style = MaterialTheme.typography.bodySmall)
+            }
+            inflight?.let {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("in-flight: $it", style = MaterialTheme.typography.bodySmall)
             }
             history?.let {
                 Spacer(modifier = Modifier.height(4.dp))
@@ -628,13 +644,3 @@ private fun MiscProbe() {
         }
     }
 }
-
-private val roadmap = listOf(
-    "Native reader (Views, from the experiment)" to true,
-    "Background checks, push, notifications (moved, unchanged)" to true,
-    "Message list (Compose)" to false,
-    "Folder shell + accounts (Compose)" to false,
-    "Composer (Compose)" to false,
-    "Settings (Compose)" to false,
-    "Drop the Flutter embedding" to false,
-)

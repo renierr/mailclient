@@ -1,6 +1,7 @@
 package de.renier.mailclient.ui.state
 
 import android.content.Context
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -257,12 +258,17 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
 
 
     private fun onJobEvent(json: String) {
-        val e = runCatching { JSONObject(json) }.getOrNull() ?: return
+        val e = runCatching { JSONObject(json) }.getOrNull()
+        if (e == null) {
+            Log.w(TAG, "dropping unparsable job event")
+            return
+        }
         val kind = e.optString("kind")
         val ok = e.optBoolean("ok", true)
         status = e.optString("status", kind)
         statusError = !ok
         if (e.optString("phase") != "finished") return
+        Log.d(TAG, "job finished: kind=$kind ok=$ok status=${e.optString("status")}")
         if (kind == "Sync") syncing = false
         if (kind == "Folders") foldersBusy = false
         // A finished server backfill lands via the re-run below.
@@ -673,9 +679,14 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
             .onFailure { e ->
                 if (!e.message.orEmpty().contains("already running", ignoreCase = true)) {
                     fail(e.message ?: "sync failed")
+                } else {
+                    Log.d(TAG, "syncAccount($id) refused: already running")
                 }
             }.isSuccess
-        if (queued) withContext(Dispatchers.Main) { syncing = true }
+        if (queued) {
+            Log.d(TAG, "syncAccount($id) queued")
+            withContext(Dispatchers.Main) { syncing = true }
+        }
     }
 
     /**
@@ -693,9 +704,14 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
             .onFailure { e ->
                 if (!e.message.orEmpty().contains("already running", ignoreCase = true)) {
                     fail(e.message ?: "sync failed")
+                } else {
+                    Log.d(TAG, "syncFolder($id) refused: already running")
                 }
             }.isSuccess
-        if (queued) withContext(Dispatchers.Main) { syncing = true }
+        if (queued) {
+            Log.d(TAG, "syncFolder($id) queued")
+            withContext(Dispatchers.Main) { syncing = true }
+        }
     }
 
     /** Re-read the folder list from the server (LIST); the event reloads. */
@@ -929,6 +945,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
 
     companion object {
         const val PAGE = 200L
+        const val TAG = "MailState"
 
         fun parseAccounts(json: String): List<Account> {
             val arr = runCatching { org.json.JSONArray(json) }.getOrElse { return emptyList() }

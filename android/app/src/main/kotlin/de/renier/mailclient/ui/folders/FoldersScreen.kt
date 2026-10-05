@@ -23,6 +23,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,8 +38,10 @@ import androidx.compose.ui.unit.dp
 import de.renier.mailclient.R
 import de.renier.mailclient.ui.common.Avatar
 import de.renier.mailclient.ui.common.PullToSync
+import de.renier.mailclient.ui.common.SyncStatusLine
 import de.renier.mailclient.ui.state.Folder
 import de.renier.mailclient.ui.state.MailState
+import kotlinx.coroutines.delay
 
 // The sidebar pane: account chip (switch only — adding and managing live
 // under Accounts), then this account's subscribed folders. A tap paints the
@@ -68,9 +71,26 @@ fun FoldersScreen(
 
         AccountChip(state)
         HorizontalDivider()
+        SyncStatusLine(state)
 
         val folders = state.visibleFolders
-        PullToSync(syncing = state.syncing, onSync = { state.syncNow() }) {
+        var gesture by remember { mutableStateOf(false) }
+        LaunchedEffect(gesture, state.syncing) {
+            if (state.syncing) {
+                gesture = false
+            } else if (gesture) {
+                delay(1500)
+                gesture = false
+            }
+        }
+        PullToSync(
+            syncing = gesture,
+            onSync = {
+                if (state.syncing) return@PullToSync
+                gesture = true
+                state.syncNow()
+            },
+        ) {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 if (folders.isEmpty()) {
                     item {

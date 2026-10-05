@@ -99,6 +99,19 @@ fn inflight() -> &'static Mutex<HashSet<String>> {
     SET.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
+/// Keys of jobs currently on the network thread, for diagnostics (the dev
+/// probe shows them): a job listed here started but never reported back.
+pub(crate) fn inflight_keys() -> Vec<String> {
+    let mut keys: Vec<String> = inflight()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .cloned()
+        .collect();
+    keys.sort();
+    keys
+}
+
 fn net_tx() -> &'static mpsc::Sender<JobFn> {
     static TX: OnceLock<mpsc::Sender<JobFn>> = OnceLock::new();
     TX.get_or_init(|| {

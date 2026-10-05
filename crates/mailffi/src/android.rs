@@ -1186,6 +1186,22 @@ pub(crate) fn forward_job_event(event: &crate::api::events::JobEvent) {
     }
 }
 
+/// `MailNative.netInflight()`: keys of jobs currently on the network
+/// thread as a JSON array, for diagnostics. A key listed here started but
+/// never reported back — the thread is stuck inside it.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_netInflight<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let json = serde_json::to_string(&crate::net::inflight_keys())?;
+            Ok(env.new_string(json)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `MailNative.syncAccount(accountId)`: queue a full account sync; returns
 /// at once, the result arrives as a `Sync` finished event. Throws when a
 /// sync for the account is already queued (`spawn` dedupe).
