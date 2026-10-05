@@ -616,8 +616,12 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         MailNative.ensureInit(appContext)
         val id = folderId
         if (id < 0) return@io
-        val rows = parseMessages(MailNative.messagesJson(id, PAGE, 0))
         val counts = JSONObject(MailNative.folderCounts(id))
+        // Every cached row, like Qt/Flutter: mail fetched with "Load older"
+        // stays on the list. A fixed page would hide each older batch behind
+        // the newest 200 forever.
+        val cached = counts.optInt("cached", PAGE.toInt()).coerceAtLeast(1).toLong()
+        val rows = parseMessages(MailNative.messagesJson(id, cached, 0))
         withContext(Dispatchers.Main) {
             if (folderId == id) {
                 messages = rows
