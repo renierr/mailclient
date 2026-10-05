@@ -21,34 +21,38 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 APP_ID="de.renier.mailclient.native"
-FLUTTER_ID="de.renier.mailclient"
 # Fully qualified: the class lives in namespace de.renier.mailclient while
 # the applicationId carries the .native suffix, so the .MainActivity
 # shorthand would resolve to a class that does not exist.
 ACTIVITY="$APP_ID/de.renier.mailclient.MainActivity"
 
-AVD="" SERIAL="" BUILD=1 BOOT=1 LAUNCH=1 SEED="" LOGS=""
+AVD="" SERIAL="" ASSUME_YES=0
+WANT_CLEAN="" WANT_BUILD="" WANT_DIST="" WANT_EMU="" WANT_RUN="" WANT_LOG="" WANT_UNINSTALL=""
 
 show_help() {
     cat <<'EOF'
-mailclient native Android dev loop: emulator + installDebug + launch.
+mailclient native Android tasks: build, install, run, and inspect.
 
-Usage: ./scripts/android-dev.sh [TASK]... [SELECTION]...
+Usage: ./scripts/android-dev.sh --build|--dist|--run [TASK]... [OPTION]...
 
-Tasks (combine freely; the plain loop is boot + build + launch):
-  --no-build      skip installDebug (boot the emulator and launch only)
-  --no-emulator   never boot anything; fail if no device is online
-  --no-launch     build and install only, do not start the activity
-  --seed          copy the Flutter app's mail database + vault into the
-                  native app first (fresh installs have no accounts yet;
-                  the account-setup screen does not exist)
-  --log           tail logcat for the app after launching (blocking)
+Tasks (several combine; they run in the order listed here):
+  --clean         gradlew clean
+  --build         debug build only (assembleDebug, no device needed)
+  --dist          signed release APK into dist/ (needs android/key.properties)
+  --emulator      boot the emulator and wait for it (asks first, see below)
+  --run           install the debug build on the device and launch the app
+  --uninstall     remove the app from the device (fresh reinstall: add --run)
+  --log           tail logcat for the app (it must be running; blocking)
 
-Selection:
-  --avd NAME      emulator AVD to boot (default: ANDROID_AVD, avd.name,
-                  or the only AVD when exactly one exists)
-  --serial ID     adb device to use when several are attached
+Options:
+  --avd NAME      which emulator AVD to boot
+  --serial ID     which adb device to use when several are attached
+  -y, --yes       answer "boot the emulator?" with yes (non-interactive use)
   -h, --help      show this help
+
+Devices: --emulator, --run, --uninstall and --log need a booted device.
+When none is online the script asks whether to boot the resolved AVD
+(--yes answers yes; without a terminal it fails instead of asking).
 
 Machine config (never committed, first hit wins):
   SDK dir : ANDROID_SDK_ROOT / ANDROID_HOME, then sdk.dir in
@@ -60,10 +64,11 @@ Machine config (never committed, first hit wins):
             then whatever java is on PATH (needs 17+ for AGP 9)
 
 Examples:
-  ./scripts/android-dev.sh --seed --log   full loop with real mail + logs
-  ./scripts/android-dev.sh --no-build     reboot the emulator, relaunch the app
-  ./scripts/android-dev.sh --no-launch    build + install only
-  ./scripts/android-dev.sh --avd Pixel_4a --seed
+  ./scripts/android-dev.sh --run
+  ./scripts/android-dev.sh --run --log
+  ./scripts/android-dev.sh --emulator --avd Pixel_4a
+  ./scripts/android-dev.sh --uninstall --run
+  ./scripts/android-dev.sh --dist
 EOF
 }
 
@@ -71,13 +76,16 @@ EOF
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        --clean) WANT_CLEAN=1; shift ;;
+        --build) WANT_BUILD=1; shift ;;
+        --dist) WANT_DIST=1; shift ;;
+        --emulator) WANT_EMU=1; shift ;;
+        --run) WANT_RUN=1; shift ;;
+        --uninstall) WANT_UNINSTALL=1; shift ;;
+        --log) WANT_LOG=1; shift ;;
         --avd) AVD="${2:-}"; shift 2 ;;
         --serial) SERIAL="${2:-}"; shift 2 ;;
-        --no-build) BUILD=0; shift ;;
-        --no-emulator) BOOT=0; shift ;;
-        --no-launch) LAUNCH=0; shift ;;
-        --seed) SEED=1; shift ;;
-        --log) LOGS=1; shift ;;
+        -y | --yes) ASSUME_YES=1; shift ;;
         -h | --help) show_help; exit 0 ;;
         *) echo "Unknown option '$1'" >&2; show_help >&2; exit 1 ;;
     esac
@@ -118,20 +126,21 @@ if [ -z "${JAVA_HOME:-}" ]; then
     done
 fi
 
-# -- AVD ---------------------------------------------------------------
-[ -n "$AVD" ] || AVD="${ANDROID_AVD:-$(prop avd.name)}"
-if [ -z "$AVD" ]; then
-    mapfile -t avds < <("$EMULATOR" -list-avds 2>/dev/null | tr -d '\r')
-    if [ "${#avds[@]}" -eq 1 ]; then
-        AVD="${avds[0]}"
-    else
-        echo "No AVD selected and ${#avds[@]} exist." >&2
-        printf '  %s\n' "${avds[@]}" >&2
-        echo "Pass --avd NAME, set ANDROID_AVD, or add avd.name to android/local.properties." >&2
-        exit 1
+# -- AVD (resolved lazily: --build/--dist/--clean need no device) -----
+resolve_avd() {
+    [ -n "$AVD" ] || AVD="${ANDROID_AVD:-$(prop avd.name)}"
+    if [ -z "$AVD" ]; then
+        mapfile -t avds < <("$EMULATOR" -list-avds 2>/dev/null | tr -d '\r')
+        if [ "${#avds[@]}" -eq 1 ]; then
+            AVD="${avds[0]}"
+        else
+            echo "No AVD selected and ${#avds[@]} exist." >&2
+            printf '  %s\n' "${avds[@]}" >&2
+            echo "Pass --avd NAME, set ANDROID_AVD, or add avd.name to android/local.properties." >&2
+            exit 1
+        fi
     fi
-fi
-echo "==> AVD: $AVD"
+}
 
 adb() {
     if [ -n "$SERIAL" ]; then
@@ -145,77 +154,109 @@ booted() {
     adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' | grep -q 1
 }
 
-# -- emulator ----------------------------------------------------------
-if [ "$BOOT" = 1 ] && ! booted; then
+boot_emulator() {
+    resolve_avd
     echo "==> starting emulator ($AVD)"
     log="${TMPDIR:-/tmp}/mailclient-emulator.log"
     nohup "$EMULATOR" -avd "$AVD" >"$log" 2>&1 & disown 2>/dev/null || true
     echo "    log: $log"
-fi
-if ! booted; then
-    if [ "$BOOT" = 0 ]; then
-        echo "No booted device and --no-emulator was given." >&2
-        exit 1
-    fi
+}
+
+wait_for_boot() {
     echo "==> waiting for boot (up to 5 min)"
     for _ in $(seq 1 60); do
         sleep 5
         booted && break
     done
     booted || { echo "Emulator did not boot in time." >&2; exit 1; }
-fi
-echo "==> device: $(adb shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
+    echo "==> device: $(adb shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
+}
 
-# -- seed (Flutter app data into the native app) ------------------------
-if [ -n "$SEED" ]; then
-    adb shell pm list packages 2>/dev/null | tr -d '\r' | grep -q "package:$FLUTTER_ID" || {
-        echo "Seed needs the Flutter app ($FLUTTER_ID) installed on this device." >&2
+# Every device-needing task comes through here. An explicitly selected
+# serial is never second-guessed: if that device is not booted, fail
+# instead of booting a different one.
+ensure_device() {
+    if booted; then
+        return 0
+    fi
+    if [ -n "$SERIAL" ]; then
+        echo "Device '$SERIAL' is not booted." >&2
         exit 1
-    }
-    echo "==> seeding from $FLUTTER_ID (both apps force-stopped)"
-    adb shell am force-stop "$FLUTTER_ID"
-    adb shell am force-stop "$APP_ID"
-    tmp="/data/local/tmp"
-    adb shell "run-as $FLUTTER_ID cp files/mailclient.sqlite files/auth_vault.json $tmp/ && chmod 644 $tmp/mailclient.sqlite $tmp/auth_vault.json"
-    host_tmp="${TMPDIR:-/tmp}/mailclient-seed"
-    mkdir -p "$host_tmp"
-    adb pull "$tmp/mailclient.sqlite" "$host_tmp/" >/dev/null
-    adb pull "$tmp/auth_vault.json" "$host_tmp/" >/dev/null
-    adb push "$host_tmp/mailclient.sqlite" "$tmp/" >/dev/null
-    adb push "$host_tmp/auth_vault.json" "$tmp/" >/dev/null
-    adb shell "run-as $APP_ID cp $tmp/mailclient.sqlite $tmp/auth_vault.json files/ && chmod 600 files/mailclient.sqlite files/auth_vault.json && rm -f $tmp/mailclient.sqlite $tmp/auth_vault.json"
-    rm -f "$host_tmp/mailclient.sqlite" "$host_tmp/auth_vault.json"
-    echo "    seeded: open Home, read the ids, use Open message."
-fi
+    fi
+    local answer="y"
+    if [ "$ASSUME_YES" = 0 ]; then
+        if [ -t 0 ]; then
+            resolve_avd
+            printf "No emulator or device is online. Boot AVD '%s'? [Y/n] " "$AVD"
+            IFS= read -r answer || answer=""
+            [ -n "$answer" ] || answer="y"
+        else
+            echo "No device online. Re-run with --yes to boot one, or start it first." >&2
+            exit 1
+        fi
+    fi
+    case "$answer" in
+        [Yy]*) boot_emulator; wait_for_boot ;;
+        *) echo "Aborted: no device." >&2; exit 1 ;;
+    esac
+}
 
-# -- build & install ----------------------------------------------------
-if [ "$BUILD" = 1 ]; then
-    echo "==> installDebug (Rust core builds as part of it)"
+run_gradle() {
     if [ -f "android/gradle/wrapper/gradle-wrapper.jar" ] && [ -x android/gradlew ]; then
-        (cd android && ./gradlew installDebug)
+        (cd android && ./gradlew "$@")
     elif [ -f "android/gradle/wrapper/gradle-wrapper.jar" ]; then
-        (cd android && bash gradlew installDebug)
+        (cd android && bash gradlew "$@")
     elif command -v gradle >/dev/null; then
-        (cd android && gradle installDebug)
+        (cd android && gradle "$@")
     else
         echo "No Gradle: open android/ in Android Studio once (writes the wrapper jar) or install Gradle." >&2
         exit 1
     fi
+}
+
+# -- tasks (fixed order: teardown, build, device, inspect) ---------------
+if [ -n "$WANT_UNINSTALL" ]; then
+    ensure_device
+    echo "==> uninstalling $APP_ID"
+    adb uninstall "$APP_ID"
 fi
 
-# -- launch --------------------------------------------------------------
-if [ "$LAUNCH" = 1 ]; then
+if [ -n "$WANT_CLEAN" ]; then
+    echo "==> gradle clean"
+    run_gradle clean
+fi
+
+if [ -n "$WANT_BUILD" ]; then
+    echo "==> assembleDebug (Rust core builds as part of it)"
+    run_gradle assembleDebug
+fi
+
+if [ -n "$WANT_DIST" ]; then
+    ./build.sh --android
+fi
+
+if [ -n "$WANT_EMU" ]; then
+    ensure_device
+    echo "==> device: $(adb shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
+fi
+
+if [ -n "$WANT_RUN" ]; then
+    ensure_device
+    echo "==> installDebug (Rust core builds as part of it)"
+    run_gradle installDebug
     echo "==> launching $APP_ID"
     adb shell am start -n "$ACTIVITY" >/dev/null
 fi
 
-if [ -n "$LOGS" ]; then
+if [ -n "$WANT_LOG" ]; then
+    ensure_device
     pid="$(adb shell pidof "$APP_ID" 2>/dev/null | tr -d '\r')"
     if [ -n "$pid" ]; then
         echo "==> logcat ($APP_ID, Ctrl-C to stop)"
         adb logcat --pid="$pid"
     else
-        echo "App is not running; skipping logcat." >&2
+        echo "App is not running on this device." >&2
+        exit 1
     fi
 fi
 

@@ -44,13 +44,18 @@ android/
 ## Build & run
 
 ```sh
-./scripts/android-dev.sh --seed --log   # emulator + install + launch, real mail, logs
-./scripts/android-dev.sh --no-build     # boot the emulator, relaunch the installed app
-./scripts/android-dev.sh --no-launch    # build + install only
-./build.sh --android                    # signed release APK → dist/mailclient-android/
+./scripts/android-dev.sh --run         # emulator + install + launch
+./scripts/android-dev.sh --run --log   # + tail logcat for the app
+./scripts/android-dev.sh --build       # debug build only, no device needed
+./scripts/android-dev.sh --dist        # signed release APK → dist/mailclient-android/
+./scripts/android-dev.sh --emulator    # just boot the emulator and wait
 ```
 
-Bare `./scripts/android-dev.sh` prints its help and runs nothing.
+Bare `./scripts/android-dev.sh` prints its help and runs nothing. When no
+device is online the device tasks ask whether to boot the resolved AVD
+(`--yes` answers yes). The native app is standalone: it shares nothing
+with the Flutter embedding at runtime, so there is no data import — a fresh
+install has no accounts until the account-setup screen lands.
 
 `android-dev.sh` works on Linux and MSYS2/Windows alike. Machine config
 (`ANDROID_SDK_ROOT` / `ANDROID_AVD` / `JAVA_HOME` env, or gitignored
