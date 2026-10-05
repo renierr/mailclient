@@ -17,7 +17,14 @@ import org.json.JSONObject
 // navigation-compose), owned by MailShell's composition. Reads take explicit
 // ids and jobs only say *that* something changed, so this re-reads whatever
 // is showing — the same contract the Dart MailState keeps.
-data class Account(val id: Long, val email: String, val name: String)
+data class Account(
+    val id: Long,
+    val email: String,
+    val name: String,
+    val initials: String = "?",
+    val avatarLight: String = "",
+    val avatarDark: String = "",
+)
 
 data class Folder(
     val id: Long,
@@ -39,6 +46,10 @@ data class MessageRow(
     val unread: Boolean,
     val starred: Boolean,
     val hasAttachments: Boolean,
+    // Core-decided avatar (mailcore::badge): initials + per-theme hex.
+    val initials: String = "?",
+    val avatarLight: String = "",
+    val avatarDark: String = "",
 )
 
 data class UndoOffer(val batch: String, val label: String)
@@ -307,6 +318,9 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
                     id = o.optLong("id", -1),
                     email = o.optString("email"),
                     name = o.optString("name").ifEmpty { o.optString("email") },
+                    initials = o.optString("initials", "?"),
+                    avatarLight = o.optString("avatar_light"),
+                    avatarDark = o.optString("avatar_dark"),
                 )
             }.filter { it.id >= 0 }
         }
@@ -342,6 +356,9 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
                     unread = o.optBoolean("unread", false),
                     starred = o.optBoolean("starred", false),
                     hasAttachments = o.optBoolean("has_attachments", false),
+                    initials = o.optString("initials", "?"),
+                    avatarLight = o.optString("avatar_light"),
+                    avatarDark = o.optString("avatar_dark"),
                 )
             }.filter { it.uid >= 0 }
         }

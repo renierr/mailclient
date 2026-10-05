@@ -1037,6 +1037,13 @@ class ReaderActivity : Activity() {
 
     // -- body --------------------------------------------------------------------------
 
+    // WebView subclass exposing the laid-out content height: View's
+    // computeVerticalScrollRange() is protected, and this is the only
+    // native read of it.
+    private class SizedWebView(context: android.content.Context) : WebView(context) {
+        fun contentHeightPx(): Int = computeVerticalScrollRange()
+    }
+
     private fun bodyView(m: JSONObject): View {
         if (!m.optBoolean("is_html")) {
             return TextView(this).apply {
@@ -1046,7 +1053,7 @@ class ReaderActivity : Activity() {
                 setPadding(0, dp(8), 0, 0)
             }
         }
-        val web = WebView(this).apply {
+        val web = SizedWebView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 // WRAP_CONTENT never measures page content, so start at a
@@ -1088,26 +1095,36 @@ class ReaderActivity : Activity() {
                 }
 
                 override fun onPageFinished(view: WebView, url: String?) {
-                    // Ask the page how tall it is (CSS px) and size the
-                    // view to it, so the parent ScrollView scrolls the
-                    // whole mail instead of a clipped window.
-                    view.evaluateJavascript(
-                        "(function(){var d=document.documentElement;return Math.max(d?d.scrollHeight:0,document.body?document.body.scrollHeight:0);})();",
-                    ) { h ->
-                        val css = h?.trim('"')?.toDoubleOrNull() ?: return@evaluateJavascript
-                        if (css <= 0) return@evaluateJavascript
-                        val px = (css * resources.displayMetrics.density).toInt()
-                            .coerceIn(dp(48), dp(8000))
-                        if (view.layoutParams.height != px) {
-                            view.layoutParams.height = px
-                            view.requestLayout()
-                        }
-                    }
+                    // Size the view to its content so the parent ScrollView
+                    // scrolls the whole mail — header with it — instead of a
+                    // clipped window with its own scroll. Read from the
+                    // layout, not via JavaScript: page scripts stay off.
+                    // (Both evaluateJavascript-with-scripts-off and
+                    // measure(UNSPECIFIED) under-report on this WebView and
+                    // leave the view stuck at its 240dp estimate.)
+                    sizeToContent(view as SizedWebView, 0)
                 }
             }
         }
         web.loadDataWithBaseURL(null, buildDoc(m.optString("body_html")), "text/html", "utf-8", null)
         return web
+    }
+
+    // Grow a body WebView to its laid-out content height (device px, via the
+    // scroll range) so it never scrolls internally. Retries a few frames:
+    // onPageFinished can fire before layout has measured the page.
+    private fun sizeToContent(view: SizedWebView, tries: Int) {
+        view.post {
+            if (isFinishing || isDestroyed) return@post
+            val range = view.contentHeightPx()
+            val px = range.coerceIn(dp(48), dp(12000))
+            if (range > view.height + 8) {
+                view.layoutParams.height = px
+                view.requestLayout()
+            } else if (tries < 6) {
+                view.postDelayed({ sizeToContent(view, tries + 1) }, 120)
+            }
+        }
     }
 
     private fun onTapUrl(url: String) {
