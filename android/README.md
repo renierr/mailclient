@@ -44,9 +44,17 @@ android/
 ## Build & run
 
 ```sh
-./build.sh --android        # signed release APK → dist/mailclient-android/
-cd android && ./gradlew installDebug   # dev loop on a device/emulator
+./scripts/android-dev.sh              # emulator + installDebug + launch
+./scripts/android-dev.sh --seed       # + copy the Flutter app's data over
+./scripts/android-dev.sh --log        # + tail logcat for the app
+./build.sh --android                  # signed release APK → dist/mailclient-android/
 ```
+
+`android-dev.sh` works on Linux and MSYS2/Windows alike. Machine config
+(`ANDROID_SDK_ROOT` / `ANDROID_AVD` / `JAVA_HOME` env, or gitignored
+`android/local.properties` with `sdk.dir=` / `avd.name=`) never touches git,
+so checkouts on different machines just differ locally. Raw form:
+`cd android && ./gradlew installDebug` on a device/emulator.
 
 The Rust core builds as part of the Gradle build (debug keeps arm64 +
 x86_64 only, so the loop stays fast).
