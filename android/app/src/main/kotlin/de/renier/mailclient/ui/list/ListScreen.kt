@@ -186,6 +186,7 @@ fun ListScreen(state: MailState, onOpenReader: (Long, Long, Int) -> Unit) {
                     folder?.leaf.orEmpty()
                 },
                 subtitle = when {
+                    searching && total == 0 && state.serverSearchPending -> "Searching server…"
                     searching && total == 0 -> "No matches"
                     searching -> "${rows.size} found" +
                         if (state.searchFolderOnly && folder != null) " in ${folder.leaf}" else ""

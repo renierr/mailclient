@@ -359,6 +359,7 @@ Update this section when a step lands (see AGENTS.md §7.4).
 | Selection + bulk bar (read/star/archive/move/trash/purge) | ✅ | ✅ | ✅ | Native bar docks at bottom; purge always confirms |
 | Row menu (read/star/archive/move/trash/similar/eml) | ✅ | ✅ | ❌ | Native: tap opens, long-press selects; no per-row menu |
 | Jump top/bottom buttons | ✅ | ✅ | ✅ | |
+| List scroll memory | ✅ (per-folder, UID-anchored) | ✅ (per-folder PageStorageKey) | ✅ (per-folder index) | Native drifts when new mail arrives mid-read; Qt's UID anchor does not |
 | Load-older footer (Cached N [of M] / All loaded) | ✅ | ✅ | ✅ | |
 | Find-similar mode + chip | ✅ | ✅ | ✅ | From native reader only (no row menu yet) |
 | Swipe actions, mark-all-read | ❌ | ❌ | ❌ | None anywhere; not planned |

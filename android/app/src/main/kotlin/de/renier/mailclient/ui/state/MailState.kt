@@ -133,6 +133,11 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     // "Similar to: …" when the hits are a find-similar result, not a query.
     var similarLabel: String? by mutableStateOf(null)
         private set
+    // A server backfill is in flight for the current query (thin index
+    // results, like Qt/Flutter); the Search job's finish re-runs the query.
+    var serverSearchPending by mutableStateOf(false)
+        private set
+    private var serverSearchFired = false
     // Step 4 list state: sort (persisted in core settings), AND-combined
     // quick filters, and multi-select. The core sorts the page itself; the
     // filters apply client-side to loaded rows and search hits alike, like
@@ -260,6 +265,8 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         if (e.optString("phase") != "finished") return
         if (kind == "Sync") syncing = false
         if (kind == "Folders") foldersBusy = false
+        // A finished server backfill lands via the re-run below.
+        if (kind == "Search") serverSearchPending = false
         finishWaiters.remove(kind)?.forEach { it(ok, e.optString("status")) }
         val accountId = e.optLong("account_id", -1)
         val eventFolder = e.optLong("folder_id", -1)
@@ -722,6 +729,8 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
 
     fun setSearch(query: String) {
         exitSelectionMode()
+        serverSearchFired = false
+        serverSearchPending = false
         searchQuery = query
         runSearch()
     }
@@ -734,6 +743,8 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     fun clearSearch() {
         searchJob?.cancel()
         exitSelectionMode()
+        serverSearchFired = false
+        serverSearchPending = false
         searchQuery = ""
         searchHits = emptyList()
         searchActive = false
@@ -803,7 +814,21 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
                     .map { it.copy(folderId = shownFolder) }
                 "indexed" -> {
                     delay(plan.optLong("debounce_ms", 0))
-                    parseMessages(MailNative.searchJson(accountId, plan.optString("query"), folderScope))
+                    val found = parseMessages(MailNative.searchJson(accountId, plan.optString("query"), folderScope))
+                    // Thin index results trigger one queued server backfill
+                    // per query; its finish event re-runs this search.
+                    if (!serverSearchFired && found.size < plan.optInt("hit_limit", 50)) {
+                        serverSearchFired = true
+                        delay(plan.optLong("debounce_ms", 0))
+                        if (searchQuery == query) {
+                            runCatching {
+                                MailNative.searchServer(accountId, plan.optString("query"), folderScope)
+                            }.onSuccess {
+                                scope.launch(Dispatchers.Main) { serverSearchPending = true }
+                            }
+                        }
+                    }
+                    found
                 }
                 else -> null
             } }.getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it else emptyList() }
