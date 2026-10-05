@@ -123,6 +123,8 @@ fun HomeScreen(openPayload: String?, onConsumeOpen: () -> Unit) {
 
         ComposerProbe()
 
+        MiscProbe()
+
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp)) {
                 Text("Background check", style = MaterialTheme.typography.titleSmall)
@@ -646,6 +648,148 @@ private fun ComposerProbe() {
                     if (text.isBlank()) { output = "Enter a file path first."; return@TextButton }
                     run("inline") { MailNative.isInlineImage(text) }
                 }) { Text("Inline?") }
+            }
+            if (busy) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Working…", style = MaterialTheme.typography.bodySmall)
+            }
+            output?.let {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+// Step 0e smoke probe: search, contacts, settings, outbox and maintenance
+// reads against the seeded DB. Writes here are read-only except the
+// queued search backfill (harmless without a server). Delete when the
+// settings screen lands.
+@Composable
+private fun MiscProbe() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var account by remember { mutableStateOf("") }
+    var folder by remember { mutableStateOf("") }
+    var uid by remember { mutableStateOf("") }
+    var query by remember { mutableStateOf("") }
+    var output by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+
+    fun run(name: String, call: () -> String) {
+        busy = true
+        scope.launch(Dispatchers.IO) {
+            val result = try {
+                MailNative.ensureInit(context)
+                call()
+            } catch (e: Exception) {
+                "$name failed: ${e.message}"
+            }
+            withContext(Dispatchers.Main) {
+                output = result.take(400)
+                busy = false
+            }
+        }
+    }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text("Search + settings (0e probe)", style = MaterialTheme.typography.titleSmall)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = account,
+                    onValueChange = { account = it },
+                    label = { Text("Account") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    value = folder,
+                    onValueChange = { folder = it },
+                    label = { Text("Folder") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    value = uid,
+                    onValueChange = { uid = it },
+                    label = { Text("UID") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                label = { Text("Query / prefix / segment") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val a = account.toLongOrNull()
+                val f = folder.toLongOrNull()
+                val u = uid.toIntOrNull()
+                TextButton(onClick = {
+                    if (a == null) { output = "Account must be a number."; return@TextButton }
+                    run("search") { MailNative.searchJson(a, query, "") }
+                }) { Text("Search") }
+                TextButton(onClick = {
+                    run("plan") { MailNative.searchPlan(query) }
+                }) { Text("Plan") }
+                TextButton(onClick = {
+                    if (a == null || f == null || u == null) { output = "Account, folder, UID must be numbers."; return@TextButton }
+                    run("similar") { MailNative.similarJson(a, f, u) }
+                }) { Text("Similar") }
+                TextButton(onClick = {
+                    run("syntax") { MailNative.searchSyntaxHelp() }
+                }) { Text("Syntax") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val a = account.toLongOrNull()
+                TextButton(onClick = {
+                    run("contacts") { MailNative.contactsJson(query) }
+                }) { Text("Contacts") }
+                TextButton(onClick = {
+                    run("cleanup") { MailNative.cleanupCandidatesJson() }
+                }) { Text("Cleanup") }
+                TextButton(onClick = {
+                    run("segment") { MailNative.recipientSegment(query) }
+                }) { Text("Segment") }
+                TextButton(onClick = {
+                    if (a == null) { output = "Account must be a number."; return@TextButton }
+                    run("outbox") { MailNative.outboxJson(a) }
+                }) { Text("Outbox") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val a = account.toLongOrNull()
+                TextButton(onClick = {
+                    run("settings") { MailNative.settingsJson() }
+                }) { Text("Settings") }
+                TextButton(onClick = {
+                    run("preset") { MailNative.datePresetRange("week") }
+                }) { Text("Preset") }
+                TextButton(onClick = {
+                    run("paint") { MailNative.readerPaint(false, false, false) }
+                }) { Text("Paint") }
+                TextButton(onClick = {
+                    if (a == null) { output = "Account must be a number."; return@TextButton }
+                    run("acct") { MailNative.accountSettingsJson(a) }
+                }) { Text("AcctSet") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = {
+                    run("storage") {
+                        MailNative.storageStatsJson(
+                            context.filesDir.path + "/mailclient.sqlite",
+                            context.cacheDir.path,
+                        )
+                    }
+                }) { Text("Storage") }
+                TextButton(onClick = {
+                    run("bgplan") { MailNative.backgroundPlanJson() }
+                }) { Text("BgPlan") }
             }
             if (busy) {
                 Spacer(modifier = Modifier.height(4.dp))

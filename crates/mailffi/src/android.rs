@@ -1793,3 +1793,914 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_effectiveFrom<'calle
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
+
+/// Step 0e search/contacts/settings/misc (`android/PLAN.md`): the last JNI
+/// slice — everything the list, composer, contacts, settings, outbox and
+/// reader screens need beyond 0a–0d. Same translation-only rule throughout.
+///
+/// `MailNative.searchJson(accountId, query, folder)`: FTS over
+/// subject/sender/recipients/body; `folder` is an IMAP-path scope or `""`
+/// for the account. Blank/operator-only queries answer `[]`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_searchJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    query: JString<'caller>,
+    folder: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::search::search_json(
+                account_id,
+                string(env, &query)?,
+                string(env, &folder)?,
+            )?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.searchServer(accountId, query, folder)`: queued IMAP SEARCH
+/// backfill into the cache; re-run `searchJson` when the `Search` job
+/// finishes.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_searchServer<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    query: JString<'caller>,
+    folder: JString<'caller>,
+) {
+    unowned
+        .with_env(|env| -> Result<()> {
+            crate::api::search::search_server(
+                account_id,
+                string(env, &query)?,
+                string(env, &folder)?,
+            )?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.searchPlan(query)`: what the field does with its text —
+/// `{"mode":"off"|"filter"|"indexed","query","hit_limit","debounce_ms"}`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_searchPlan<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    query: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let p = crate::api::search::search_plan(string(env, &query)?);
+            let mode = match p.mode {
+                crate::api::search::SearchMode::Off => "off",
+                crate::api::search::SearchMode::Filter => "filter",
+                crate::api::search::SearchMode::Indexed => "indexed",
+            };
+            let json = serde_json::json!({
+                "mode": mode,
+                "query": p.query,
+                "hit_limit": p.hit_limit,
+                "debounce_ms": p.debounce_ms,
+            });
+            Ok(env.new_string(serde_json::to_string(&json)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.searchFilterMatches(query, subject, from, fromName, snippet)`:
+/// the short-input row filter — `"true"`/`"false"`.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_searchFilterMatches<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    query: JString<'caller>,
+    subject: JString<'caller>,
+    from: JString<'caller>,
+    from_name: JString<'caller>,
+    snippet: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(
+                crate::api::search::search_filter_matches(
+                    string(env, &query)?,
+                    string(env, &subject)?,
+                    string(env, &from)?,
+                    string(env, &from_name)?,
+                    string(env, &snippet)?,
+                )
+                .to_string(),
+            )?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.dateFilterMatches(dateRaw, after, before)`: one row's raw date
+/// against an after-inclusive/before-exclusive `YYYY-MM-DD` pair.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_dateFilterMatches<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    date_raw: JString<'caller>,
+    after: JString<'caller>,
+    before: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(
+                crate::api::search::date_filter_matches(
+                    string(env, &date_raw)?,
+                    string(env, &after)?,
+                    string(env, &before)?,
+                )
+                .to_string(),
+            )?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.datePresetRange(preset)`: `today`/`week`/`month`/`older_month`
+/// as `{"after","before"}` (`""` = unset).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_datePresetRange<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    preset: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let r = crate::api::search::date_preset_range(string(env, &preset)?);
+            let json = serde_json::json!({
+                "after": r.after,
+                "before": r.before,
+            });
+            Ok(env.new_string(serde_json::to_string(&json)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.dateFilterLabel(after, before)`: the words for an active date
+/// quick-filter.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_dateFilterLabel<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    after: JString<'caller>,
+    before: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::search::date_filter_label(
+                string(env, &after)?,
+                string(env, &before)?,
+            ))?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.searchSyntaxHelp()`: the query-language tooltip text.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_searchSyntaxHelp<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::search::search_syntax_help())?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.similarJson(accountId, folderId, uid)`: similar messages,
+/// account-wide, best-first.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_similarJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+    uid: i32,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::search::similar_json(
+                account_id,
+                folder_id,
+                uid.max(0) as i64,
+            )?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.similarSubject(accountId, folderId, uid)`: the "Similar to"
+/// chip text.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_similarSubject<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+    uid: i32,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::search::similar_subject(
+                account_id,
+                folder_id,
+                uid.max(0) as i64,
+            )?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.contactsJson(prefix)`: contacts matching an alias, name or
+/// address prefix — `""` lists the manager's 200, a typed prefix the
+/// autocomplete's 10.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_contactsJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    prefix: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::contacts::contacts_json(string(env, &prefix)?)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.setContactAlias(address, alias)`: an empty alias clears it.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_setContactAlias<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    address: JString<'caller>,
+    alias: JString<'caller>,
+) {
+    unowned
+        .with_env(|env| -> Result<()> {
+            crate::api::contacts::set_contact_alias(string(env, &address)?, string(env, &alias)?)?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.deleteContact(address)`: remove one contact (it reappears on
+/// the next mail from them).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_deleteContact<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    address: JString<'caller>,
+) {
+    unowned
+        .with_env(|env| -> Result<()> {
+            crate::api::contacts::delete_contact(string(env, &address)?)?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+fn strings_json(raw: &str) -> Result<Vec<String>> {
+    let v: serde_json::Value = serde_json::from_str(raw)?;
+    v.as_array()
+        .ok_or_else(|| BridgeError("expected a JSON string array".to_string()))?
+        .iter()
+        .map(|s| {
+            s.as_str()
+                .map(str::to_string)
+                .ok_or_else(|| BridgeError(format!("bad string in {raw}")))
+        })
+        .collect()
+}
+
+/// `MailNative.deleteContacts(addresses)`: bulk remove from a JSON string
+/// array — how many went, back as a string.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_deleteContacts<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    addresses: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let n =
+                crate::api::contacts::delete_contacts(strings_json(&string(env, &addresses)?)?)?;
+            Ok(env.new_string(n.to_string())?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.cleanupCandidatesJson()`: automated senders and long-unseen
+/// one-offs with machine reasons, for the cleanup review.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_cleanupCandidatesJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::contacts::cleanup_candidates_json()?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.recipientSegment(text)`: the autocomplete's current segment —
+/// the last `,`/`;` piece outside quotes.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_recipientSegment<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    text: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::contacts::recipient_segment(string(env, &text)?))?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.replaceRecipientSegment(text, replacement)`: swap the current
+/// segment for the picked address.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_replaceRecipientSegment<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    text: JString<'caller>,
+    replacement: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(
+                env.new_string(crate::api::contacts::replace_recipient_segment(
+                    string(env, &text)?,
+                    string(env, &replacement)?,
+                ))?,
+            )
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.settingsJson()`: every preference, normalized.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_settingsJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::settings::settings_json()?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.settingChoicesJson()`: defaults and offered values per key —
+/// the settings screen labels these, in the shared words.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_settingChoicesJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::settings::setting_choices_json())?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.quietTime(text)`: a typed time in picker parts —
+/// `{"hour","minute"}`, `""` when it does not read as one.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_quietTime<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    text: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let out = match crate::api::settings::quiet_time(string(env, &text)?) {
+                Some(t) => serde_json::json!({"hour": t.hour, "minute": t.minute}).to_string(),
+                None => String::new(),
+            };
+            Ok(env.new_string(out)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.quietTimeAt(hour, minute)`: the stored `"HH:MM"` form of a
+/// picked time, `""` when out of range.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_quietTimeAt<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    hour: i32,
+    minute: i32,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let out = crate::api::settings::quiet_time_at(
+                u32::try_from(hour.max(0)).unwrap_or(u32::MAX),
+                u32::try_from(minute.max(0)).unwrap_or(u32::MAX),
+            )
+            .unwrap_or_default();
+            Ok(env.new_string(out)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.setSetting(key, value)`: one preference; unknown keys throw
+/// rather than persisting a typo.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_setSetting<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    key: JString<'caller>,
+    value: JString<'caller>,
+) {
+    unowned
+        .with_env(|env| -> Result<()> {
+            crate::api::settings::set_setting(string(env, &key)?, string(env, &value)?)?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+fn string_map_json(raw: &str) -> Result<Vec<(String, String)>> {
+    let v: serde_json::Value = serde_json::from_str(raw)?;
+    v.as_object()
+        .ok_or_else(|| BridgeError("expected a JSON string object".to_string()))?
+        .iter()
+        .map(|(k, val)| {
+            val.as_str()
+                .map(|s| (k.clone(), s.to_string()))
+                .ok_or_else(|| BridgeError(format!("bad value for {k}")))
+        })
+        .collect()
+}
+
+/// `MailNative.setSettings(values)`: several preferences from a JSON string
+/// object, in one transaction — all apply or none do.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_setSettings<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    values: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let pairs = string_map_json(&string(env, &values)?)?;
+            crate::api::settings::set_settings(pairs.into_iter().collect())?;
+            Ok(env.new_string("saved")?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.setSort(field, descending)`: the list ordering, normalized as
+/// a pair.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_setSort<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    field: JString<'caller>,
+    descending: bool,
+) {
+    unowned
+        .with_env(|env| -> Result<()> {
+            crate::api::settings::set_sort(string(env, &field)?, descending)?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.accountSettingsJson(accountId)`: one account's `overrides`
+/// plus the `effective` values for every overridable key.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_accountSettingsJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::settings::account_settings_json(account_id)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.setAccountSettings(accountId, values)`: one account's
+/// overrides from a JSON string object — an empty value inherits again.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_setAccountSettings<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    values: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let pairs = string_map_json(&string(env, &values)?)?;
+            crate::api::settings::set_account_settings(account_id, pairs.into_iter().collect())?;
+            Ok(env.new_string("saved")?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.backgroundPlanJson()`: what the host should run — same plan
+/// the scheduler parses, as JSON for the settings screen.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_backgroundPlanJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::settings::background_plan_json()?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.attachmentsJson(folderId, uid)`: attachment metadata for one
+/// message, standalone — no bytes.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_attachmentsJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+    uid: i32,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::messages::attachments_json(
+                folder_id,
+                uid.max(0) as u32,
+            )?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.downloadAttachments(accountId, folderId, uid)`: queued
+/// whole-message download; an `Attachments` finished event says when the
+/// bytes are cached (unlike the blocking `downloadMessageFiles`).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_downloadAttachments<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+    uid: i32,
+) {
+    unowned
+        .with_env(|_env| -> Result<()> {
+            crate::api::attachments::download_attachments(
+                account_id,
+                folder_id,
+                uid.max(0) as u32,
+            )?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.saveAttachmentTo(attachmentId, path)`: a cached attachment to
+/// a file or folder (which gets the safe name) — where it went. Fails
+/// rather than downloading: call `downloadAttachments` first.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_saveAttachmentTo<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    attachment_id: i64,
+    path: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::attachments::save_attachment_to(
+                attachment_id,
+                string(env, &path)?,
+            )?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.saveAllAttachmentsTo(folderId, uid, dir)`: every non-inline
+/// attachment into `dir` — how many were saved, back as a string.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_saveAllAttachmentsTo<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+    uid: i32,
+    dir: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let n = crate::api::attachments::save_all_attachments_to(
+                folder_id,
+                uid.max(0) as u32,
+                string(env, &dir)?,
+            )?;
+            Ok(env.new_string(n.to_string())?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+fn reader_paint_name(p: crate::api::reader::ReaderPaint) -> &'static str {
+    match p {
+        crate::api::reader::ReaderPaint::Theme => "theme",
+        crate::api::reader::ReaderPaint::Original => "original",
+        crate::api::reader::ReaderPaint::Darkened => "darkened",
+    }
+}
+
+fn parse_paint(raw: &str) -> Result<crate::api::reader::ReaderPaint> {
+    use crate::api::reader::ReaderPaint;
+    match raw {
+        "theme" => Ok(ReaderPaint::Theme),
+        "original" => Ok(ReaderPaint::Original),
+        "darkened" => Ok(ReaderPaint::Darkened),
+        _ => Err(BridgeError(format!("bad paint: {raw}"))),
+    }
+}
+
+/// `MailNative.readerPaint(colored, dark, keepOriginal)`: the paint for one
+/// mail — `"theme"`, `"original"` or `"darkened"`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_readerPaint<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    colored: bool,
+    dark: bool,
+    keep_original: bool,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(
+                reader_paint_name(crate::api::reader::reader_paint(
+                    colored,
+                    dark,
+                    keep_original,
+                ))
+                .to_string(),
+            )?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.readerPalette(paint, paper, ink, link, quote, rule)`: what
+/// `paint` writes the page in — `{"paper","ink","link","quote","rule"}` as
+/// `0xRRGGBB` ints.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_readerPalette<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    paint: JString<'caller>,
+    paper: i32,
+    ink: i32,
+    link: i32,
+    quote: i32,
+    rule: i32,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let rgb = |v: i32| (v as u32) & 0xFF_FFFF;
+            let pal = crate::api::reader::reader_palette(
+                parse_paint(&string(env, &paint)?)?,
+                crate::api::reader::ReaderPalette {
+                    paper: rgb(paper),
+                    ink: rgb(ink),
+                    link: rgb(link),
+                    quote: rgb(quote),
+                    rule: rgb(rule),
+                },
+            );
+            let json = serde_json::json!({
+                "paper": pal.paper,
+                "ink": pal.ink,
+                "link": pal.link,
+                "quote": pal.quote,
+                "rule": pal.rule,
+            });
+            Ok(env.new_string(serde_json::to_string(&json)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.readerFitBelow(body)`: pages narrower than this get fixed
+/// widths loosened — back as a string, `0` when the mail has none.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_readerFitBelow<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    body: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(
+                crate::api::reader::reader_fit_below(string(env, &body)?).to_string(),
+            )?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.readerBody(body, paint, fit)`: the body as `paint` shows it,
+/// for a renderer that takes a body rather than a document.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_readerBody<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    body: JString<'caller>,
+    paint: JString<'caller>,
+    fit: bool,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::reader::reader_body(
+                string(env, &body)?,
+                parse_paint(&string(env, &paint)?)?,
+                fit,
+            ))?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.readerDocumentFull(body, paint, paper, ink, link, quote,
+/// rule, allowRemote, topSpace, scale, fit)`: the full document with every
+/// option — unlike `readerDocument`, which fixes `top_space: 0` for the
+/// Views experiment layout.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_readerDocumentFull<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    body: JString<'caller>,
+    paint: JString<'caller>,
+    paper: i32,
+    ink: i32,
+    link: i32,
+    quote: i32,
+    rule: i32,
+    allow_remote: bool,
+    top_space: i32,
+    scale: f32,
+    fit: bool,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let rgb = |v: i32| (v as u32) & 0xFF_FFFF;
+            Ok(env.new_string(crate::api::reader::reader_document(
+                string(env, &body)?,
+                crate::api::reader::ReaderDocumentOptions {
+                    paint: parse_paint(&string(env, &paint)?)?,
+                    theme: crate::api::reader::ReaderPalette {
+                        paper: rgb(paper),
+                        ink: rgb(ink),
+                        link: rgb(link),
+                        quote: rgb(quote),
+                        rule: rgb(rule),
+                    },
+                    allow_remote,
+                    top_space: u32::try_from(top_space.max(0)).unwrap_or(u32::MAX),
+                    scale: f64::from(scale),
+                    fit,
+                },
+            ))?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.outboxJson(accountId)`: the account's unsent mail with states
+/// and errors, for the outbox screen.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_outboxJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::outbox::outbox_json(account_id)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.dismissOutbox(accountId, id)`: forget one queued send.
+/// Local-only, never resends.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_dismissOutbox<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    id: i64,
+) {
+    unowned
+        .with_env(|_env| -> Result<()> {
+            crate::api::outbox::dismiss_outbox(account_id, id)?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.storageStatsJson(dbPath, tempDir)`: database, message and
+/// temp sizes for the maintenance section.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_storageStatsJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    db_path: JString<'caller>,
+    temp_dir: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::maintenance::storage_stats_json(
+                string(env, &db_path)?,
+                string(env, &temp_dir)?,
+            )?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.cleanupTempFilesJson(tempDir)`: delete temp files now —
+/// `{files_removed, bytes_freed, ...}`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_cleanupTempFilesJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    temp_dir: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(
+                env.new_string(crate::api::maintenance::cleanup_temp_files_json(string(
+                    env, &temp_dir,
+                )?)?)?,
+            )
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.trimLocalCache()`: trim the local cache to the newest rows —
+/// how many went, back as a string.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_trimLocalCache<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::maintenance::trim_local_cache()?.to_string())?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.trimStatus(removed)`: the words for a trim result.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_trimStatus<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    removed: i64,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let n = u64::try_from(removed)
+                .map_err(|_| BridgeError(format!("bad trim count: {removed}")))?;
+            Ok(env.new_string(crate::api::maintenance::trim_status(n))?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.evictCachedAttachmentsJson()`: drop downloaded attachment
+/// bytes (they re-download on open) — `{files, bytes_freed, ...}`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_evictCachedAttachmentsJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::maintenance::evict_cached_attachments_json()?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.exportDatabaseTo(path)`: a `VACUUM INTO` snapshot of the
+/// database at `path` — where it went.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_exportDatabaseTo<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    path: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(
+                env.new_string(crate::api::maintenance::export_database_to(string(
+                    env, &path,
+                )?)?)?,
+            )
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}

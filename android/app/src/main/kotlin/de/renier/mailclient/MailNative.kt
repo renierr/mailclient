@@ -194,6 +194,52 @@ object MailNative {
     @JvmStatic external fun isInlineImage(path: String): String
     @JvmStatic external fun senderParts(address: String): String
     @JvmStatic external fun effectiveFrom(local: String, accountEmail: String): String
+
+    // Step 0e search/contacts/settings/misc: the last JNI slice.
+    @JvmStatic external fun searchJson(accountId: Long, query: String, folder: String): String
+    @JvmStatic external fun searchServer(accountId: Long, query: String, folder: String)
+    @JvmStatic external fun searchPlan(query: String): String
+    @JvmStatic external fun searchFilterMatches(query: String, subject: String, from: String, fromName: String, snippet: String): String
+    @JvmStatic external fun dateFilterMatches(dateRaw: String, after: String, before: String): String
+    @JvmStatic external fun datePresetRange(preset: String): String
+    @JvmStatic external fun dateFilterLabel(after: String, before: String): String
+    @JvmStatic external fun searchSyntaxHelp(): String
+    @JvmStatic external fun similarJson(accountId: Long, folderId: Long, uid: Int): String
+    @JvmStatic external fun similarSubject(accountId: Long, folderId: Long, uid: Int): String
+    @JvmStatic external fun contactsJson(prefix: String): String
+    @JvmStatic external fun setContactAlias(address: String, alias: String)
+    @JvmStatic external fun deleteContact(address: String)
+    @JvmStatic external fun deleteContacts(addresses: String): String
+    @JvmStatic external fun cleanupCandidatesJson(): String
+    @JvmStatic external fun recipientSegment(text: String): String
+    @JvmStatic external fun replaceRecipientSegment(text: String, replacement: String): String
+    @JvmStatic external fun settingsJson(): String
+    @JvmStatic external fun settingChoicesJson(): String
+    @JvmStatic external fun quietTime(text: String): String
+    @JvmStatic external fun quietTimeAt(hour: Int, minute: Int): String
+    @JvmStatic external fun setSetting(key: String, value: String)
+    @JvmStatic external fun setSettings(values: String)
+    @JvmStatic external fun setSort(field: String, descending: Boolean)
+    @JvmStatic external fun accountSettingsJson(accountId: Long): String
+    @JvmStatic external fun setAccountSettings(accountId: Long, values: String): String
+    @JvmStatic external fun backgroundPlanJson(): String
+    @JvmStatic external fun attachmentsJson(folderId: Long, uid: Int): String
+    @JvmStatic external fun downloadAttachments(accountId: Long, folderId: Long, uid: Int)
+    @JvmStatic external fun saveAttachmentTo(attachmentId: Long, path: String): String
+    @JvmStatic external fun saveAllAttachmentsTo(folderId: Long, uid: Int, dir: String): String
+    @JvmStatic external fun readerPaint(colored: Boolean, dark: Boolean, keepOriginal: Boolean): String
+    @JvmStatic external fun readerPalette(paint: String, paper: Int, ink: Int, link: Int, quote: Int, rule: Int): String
+    @JvmStatic external fun readerFitBelow(body: String): String
+    @JvmStatic external fun readerBody(body: String, paint: String, fit: Boolean): String
+    @JvmStatic external fun readerDocumentFull(body: String, paint: String, paper: Int, ink: Int, link: Int, quote: Int, rule: Int, allowRemote: Boolean, topSpace: Int, scale: Float, fit: Boolean): String
+    @JvmStatic external fun outboxJson(accountId: Long): String
+    @JvmStatic external fun dismissOutbox(accountId: Long, id: Long)
+    @JvmStatic external fun storageStatsJson(dbPath: String, tempDir: String): String
+    @JvmStatic external fun cleanupTempFilesJson(tempDir: String): String
+    @JvmStatic external fun trimLocalCache(): String
+    @JvmStatic external fun trimStatus(removed: Long): String
+    @JvmStatic external fun evictCachedAttachmentsJson(): String
+    @JvmStatic external fun exportDatabaseTo(path: String): String
 }
 
 // What the net thread calls back with per finished (or progress) job event:

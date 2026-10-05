@@ -54,7 +54,8 @@ fed from the same `mailclient-net` thread the FRB `job_events` stream uses.
   `ComposerProbe` card, verified on emulator): `sendMail`, `saveDraft`, `draftForm`,
   `deleteDraft`, `answerDraft`, `blankDraft`, `imageDataUrl`,
   `isInlineImage`, `senderParts`, `effectiveFrom`.
-- **0e — search/contacts/settings/misc**: `searchJson`, `searchServer`,
+- **0e — search/contacts/settings/misc** ✅ done (44 symbols; `MiscProbe`
+  card, verified on emulator against the seeded DB): `searchJson`, `searchServer`,
   `searchPlan`, `searchFilterMatches`, `dateFilterMatches`,
   `datePresetRange`, `dateFilterLabel`, `searchSyntaxHelp`, `similarJson`,
   `similarSubject`, `contactsJson`, `setContactAlias`, `deleteContact(s)`,
