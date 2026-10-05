@@ -122,14 +122,23 @@ impl SyncScope {
     }
 }
 
-/// Per-folder sync progress, called as `report(done, total, path)` before
-/// each folder sync so the GUI can show "3/15: …" instead of a bare
-/// spinner; the headless CLI passes `None`.
-pub type SyncProgress<'a> = &'a dyn Fn(usize, usize, &str);
+/// Per-step sync progress: ready status strings for the GUI status line.
+/// String-based (not counts) so phases without totals — connecting, the
+/// folder list — report too, instead of staying silent. Use
+/// [`sync_progress_status`] / [`sync_folder_progress_status`] to format the
+/// counted steps; the headless CLI passes `None`.
+pub type SyncProgress<'a> = &'a dyn Fn(String);
 
-/// The status line every frontend shows for one [`SyncProgress`] step.
+/// The status line every frontend shows for one [`SyncProgress`] folder
+/// milestone.
 pub fn sync_progress_status(done: usize, total: usize, path: &str) -> String {
     format!("Syncing {done}/{total}: {path}")
+}
+
+/// The status line for within-folder fetch progress, reported per chunk so
+/// a big first window is visibly moving instead of one long silence.
+pub fn sync_folder_progress_status(done: usize, total: usize, path: &str) -> String {
+    format!("Syncing {path} ({done}/{total})")
 }
 
 /// Sync one account over an already-connected session.
@@ -194,6 +203,9 @@ pub async fn sync_account(
     let remote = if cached_inbox {
         cached
     } else {
+        if let Some(report) = progress {
+            report("Updating folder list…".to_string());
+        }
         match imap.sync_folders_quick(db, account.id).await {
             Ok(quick) => {
                 let quick_paths: std::collections::HashSet<String> =
@@ -236,14 +248,27 @@ pub async fn sync_account(
         }
         folders_attempted += 1;
         if let Some(report) = progress {
-            report(folders_attempted, subscribed_total, &f.path);
+            report(sync_progress_status(
+                folders_attempted,
+                subscribed_total,
+                &f.path,
+            ));
         }
         let window = if f.role == FolderRole::Inbox {
             FULL_SYNC_WINDOW
         } else {
             QUICK_SYNC_WINDOW
         };
-        match imap.sync_folder_window(db, f.id, Some(window)).await {
+        // Chunk-level progress inside the folder (same status channel).
+        let folder_progress = |status: String| {
+            if let Some(report) = progress {
+                report(status);
+            }
+        };
+        match imap
+            .sync_folder_window(db, f.id, Some(window), Some(&folder_progress))
+            .await
+        {
             Ok(r) => {
                 out.fetched += r.fetched;
                 out.expunged += r.expunged;

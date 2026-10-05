@@ -6,6 +6,7 @@
 //! port as either a string or an int. The union of those lives here, so a fix
 //! lands once. Each bridge only translates the result into its own UI.
 
+use serde::Serialize;
 use serde_json::Value;
 
 mod fields;
@@ -20,7 +21,9 @@ use crate::db::Db;
 use crate::error::{Result, StoreError};
 use crate::models::{Account, NewAccount};
 use crate::store::{accounts, settings};
+use crate::sync::imap::ImapSync;
 use crate::sync::pool;
+use crate::sync::sender::SmtpSender;
 
 /// Where an account's passwords go. The real one is the OS keyring; tests
 /// pass an in-memory stand-in so this never dials out or touches a secret
@@ -166,6 +169,195 @@ pub fn load(db: &Db, id: i64) -> Result<String> {
 
 fn invalid(msg: &str) -> StoreError {
     StoreError::InvalidInput(msg.to_string())
+}
+
+/// One protocol's side of a [`ConnectionTest`].
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ProtocolTest {
+    pub ok: bool,
+    /// Empty when `ok`.
+    pub error: String,
+}
+
+/// A setup-form connection test: live IMAP login plus SMTP login.
+///
+/// Parsed with the same rules [`save`] uses, so a green test means the saved
+/// account will connect. Reads nothing and writes nothing — safe to run
+/// before saving, e.g. to catch a mistyped hostname.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ConnectionTest {
+    pub ok: bool,
+    /// Why the test could not run (bad form, unreadable vault). Empty when
+    /// both protocols were actually probed.
+    pub error: String,
+    pub imap: ProtocolTest,
+    pub smtp: ProtocolTest,
+}
+
+impl ConnectionTest {
+    /// A test that could not run at all (bad form, unreadable vault).
+    pub fn failed(error: &str) -> Self {
+        Self {
+            ok: false,
+            error: error.to_string(),
+            imap: ProtocolTest {
+                ok: false,
+                error: String::new(),
+            },
+            smtp: ProtocolTest {
+                ok: false,
+                error: String::new(),
+            },
+        }
+    }
+}
+
+/// Overall bound for the IMAP login attempt. Connect has its own shorter
+/// timeouts; this caps greeting + login stalls.
+const TEST_IMAP_TIMEOUT_SECS: u64 = 30;
+
+/// A parsed + password-resolved connection test: the transient account and
+/// the passwords to probe it with. Owns only `Send` data, so the network
+/// run can move across threads (the FRB pool) while preparation stays
+/// synchronous. Opaque to callers: build with [`prepare_connection_test`],
+/// run with [`run_connection_test`].
+#[derive(Debug, Clone)]
+pub struct ConnectionTestSetup {
+    account: Account,
+    imap_password: String,
+    smtp_password: String,
+}
+
+/// Probe the form's servers: IMAP login, then SMTP login.
+///
+/// Passwords come from the form; on an edit a blank field falls back to the
+/// vault, and a blank SMTP password means "same as IMAP" — exactly like
+/// [`save`]. Convenience over [`prepare_connection_test`] +
+/// [`run_connection_test`].
+///
+/// The blocking SMTP probe runs on the caller's thread (same as
+/// `push_flags_blocking`): call off the UI thread.
+pub async fn test_connection(db: &Db, form: &str) -> ConnectionTest {
+    match prepare_connection_test(db, form) {
+        Ok(setup) => run_connection_test(setup).await,
+        Err(e) => ConnectionTest::failed(&e),
+    }
+}
+
+/// Run a prepared [`ConnectionTestSetup`]: IMAP login, then SMTP login.
+/// Owns only `Send` data, so this future is `Send` (FRB pool-safe).
+pub async fn run_connection_test(setup: ConnectionTestSetup) -> ConnectionTest {
+    let mut imap = ProtocolTest::default();
+    let mut session = ImapSync::new(&setup.account);
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(TEST_IMAP_TIMEOUT_SECS),
+        session.connect(&setup.imap_password),
+    )
+    .await
+    {
+        Ok(Ok(())) => {
+            imap.ok = true;
+            session.logout().await;
+        }
+        Ok(Err(e)) => imap.error = format!("imap: {e}"),
+        Err(_) => imap.error = "imap: connection timed out".to_string(),
+    }
+    let mut smtp = ProtocolTest::default();
+    match SmtpSender::new(&setup.account).test_connection(&setup.smtp_password) {
+        Ok(()) => smtp.ok = true,
+        Err(e) => smtp.error = e.to_string(),
+    }
+    ConnectionTest {
+        ok: imap.ok && smtp.ok,
+        error: String::new(),
+        imap,
+        smtp,
+    }
+}
+
+/// Parse the form into a transient account plus resolved passwords, with the
+/// same defaults and validation [`save`] uses. Sync and fast (no network):
+/// the setup UIs prepare on the calling thread and only the run moves.
+pub fn prepare_connection_test(
+    db: &Db,
+    form: &str,
+) -> std::result::Result<ConnectionTestSetup, String> {
+    let v: Value = serde_json::from_str(form).map_err(|_| "invalid account form".to_string())?;
+    let edit_id = v.get("id").and_then(Value::as_i64).filter(|id| *id >= 0);
+    // The same check the forms show inline; the first problem is the error.
+    if let Some((_, msg)) = check(&v, edit_id.is_some()).errors.into_iter().next() {
+        return Err(msg);
+    }
+    let raw = |k: &str| {
+        v.get(k)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let text = |k: &str| raw(k).trim().to_string();
+    let email = text("email");
+    let imap_security = normalize_security(&raw("imap_sec"));
+    let smtp_security = normalize_security(&raw("smtp_sec"));
+    let port = |k: &str, protocol: Protocol, security: &str| -> std::result::Result<u16, String> {
+        fields::port_value(v.get(k))
+            .map(|p| p.unwrap_or_else(|| default_port(protocol, security)))
+            .map_err(|()| "a port must be a number from 1 to 65535".to_string())
+    };
+    // Passwords are taken verbatim, like in `save`.
+    let password = raw("password");
+    let smtp_password = raw("smtp_password");
+    let (imap_password, smtp_password) = if !password.is_empty() {
+        // A blank SMTP password means "same as IMAP".
+        let smtp = if smtp_password.is_empty() {
+            password.clone()
+        } else {
+            smtp_password
+        };
+        (password, smtp)
+    } else if let Some(id) = edit_id {
+        let existing =
+            accounts::get(db, id).map_err(|_| "this account no longer exists".to_string())?;
+        let stored = auth::load_account_secrets(&existing.auth_vault_key).map_err(|_| {
+            "enter the IMAP password too: the stored one cannot be read".to_string()
+        })?;
+        (stored.imap_password, stored.smtp_password)
+    } else {
+        return Err("a password is required for a new account".to_string());
+    };
+    let imap_user = match text("imap_user") {
+        ref s if s.is_empty() => email.clone(),
+        s => s,
+    };
+    let smtp_user = match text("smtp_user") {
+        ref s if s.is_empty() => imap_user.clone(),
+        s => s,
+    };
+    let name = match text("name") {
+        ref s if s.is_empty() => email.clone(),
+        s => s,
+    };
+    Ok(ConnectionTestSetup {
+        account: Account {
+            id: -1,
+            name,
+            email_address: email,
+            from_name: text("from_name"),
+            imap_host: text("imap_host"),
+            imap_port: port("imap_port", Protocol::Imap, imap_security)?,
+            imap_security: imap_security.to_string(),
+            imap_username: imap_user,
+            smtp_host: text("smtp_host"),
+            smtp_port: port("smtp_port", Protocol::Smtp, smtp_security)?,
+            smtp_security: smtp_security.to_string(),
+            smtp_username: smtp_user,
+            auth_vault_key: String::new(),
+            check_interval_secs: 300,
+            created_at: String::new(),
+            updated_at: String::new(),
+        },
+        imap_password,
+        smtp_password,
+    })
 }
 
 /// Text of a [`save`] error for the form, without the `invalid input:`
@@ -394,6 +586,40 @@ mod tests {
         let err = save(&db, &form(r#","password":"""#), &mut secrets).unwrap_err();
         assert!(matches!(err, StoreError::InvalidInput(_)));
         assert!(accounts::list(&db).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn connection_test_refuses_garbage_before_touching_the_network() {
+        let db = Db::open_in_memory().unwrap();
+        let r = test_connection(&db, "not json").await;
+        assert!(!r.ok);
+        assert_eq!(r.error, "invalid account form");
+    }
+
+    #[tokio::test]
+    async fn connection_test_reports_form_problems_without_dialing() {
+        let db = Db::open_in_memory().unwrap();
+        // The inline check's message, with no connection attempted.
+        let r = test_connection(&db, &form(r#","password":"""#)).await;
+        assert!(!r.ok);
+        assert_eq!(r.error, "Enter the password");
+        assert!(r.imap.error.is_empty() && r.smtp.error.is_empty());
+    }
+
+    #[test]
+    fn prepare_test_builds_a_transient_account_with_save_defaults() {
+        let db = Db::open_in_memory().unwrap();
+        let s = prepare_connection_test(&db, &form("")).unwrap();
+        assert_eq!(s.account.imap_host, "imap.example.com");
+        assert_eq!(s.account.imap_username, "user@example.com");
+        assert_eq!(s.account.smtp_username, "user@example.com");
+        assert_eq!(s.imap_password, "s3cret");
+        assert_eq!(
+            s.smtp_password, "s3cret",
+            "a blank SMTP password means same as IMAP"
+        );
+        let s = prepare_connection_test(&db, &form(r#","smtp_password":"smtp1""#)).unwrap();
+        assert_eq!(s.smtp_password, "smtp1");
     }
 
     #[test]

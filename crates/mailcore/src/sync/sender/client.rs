@@ -5,6 +5,8 @@
 //! path flips the row to `sending` before the SMTP round-trip so the same
 //! bytes are retried after a restart.
 
+use std::time::Duration;
+
 use lettre::address::{Address, Envelope};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::transport::smtp::client::{Tls, TlsParameters};
@@ -66,6 +68,27 @@ impl SmtpSender {
     }
 
     fn transport(&self, password: &str) -> Result<SmtpTransport> {
+        self.transport_with_timeout(password, None)
+    }
+
+    /// Login check without sending: connect, EHLO, TLS, AUTH, NOOP. Used by
+    /// the setup-form connection test with its own short timeout, so a dead
+    /// server fails the test instead of stalling it (sends keep the
+    /// transport default).
+    pub fn test_connection(&self, password: &str) -> Result<()> {
+        let transport = self.transport_with_timeout(password, Some(Duration::from_secs(15)))?;
+        match transport.test_connection() {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(StoreError::InvalidInput("smtp: not connected".to_string())),
+            Err(e) => Err(StoreError::InvalidInput(format!("smtp: {e}"))),
+        }
+    }
+
+    fn transport_with_timeout(
+        &self,
+        password: &str,
+        timeout: Option<Duration>,
+    ) -> Result<SmtpTransport> {
         let (host, port) = {
             let mut parts = self.endpoint.addr.rsplitn(2, ':');
             let port: u16 = parts.next().unwrap_or("465").parse().map_err(|_| {
@@ -88,6 +111,7 @@ impl SmtpSender {
                 self.username.clone(),
                 password.to_string(),
             ))
+            .timeout(timeout)
             .tls(if self.endpoint.plaintext {
                 Tls::None
             } else if self.endpoint.implicit_tls {

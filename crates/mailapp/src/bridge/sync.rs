@@ -31,9 +31,10 @@ impl qobject::Bridge {
             let acc = job_account(db, wanted)?;
             // Shared orchestration (outbox flush, flag push, folder sweep);
             // the GUI lends its pooled session, the CLI brings a fresh one.
+            progress.report("Connecting…");
             let mut imap = checkout_session(&acc).await?;
-            let report_progress = |done: usize, total: usize, path: &str| {
-                progress.report(&headless::sync_progress_status(done, total, path));
+            let report_progress = |status: String| {
+                progress.report(&status);
             };
             let r = headless::sync_account(
                 db,
@@ -92,15 +93,16 @@ impl qobject::Bridge {
     pub fn sync_folder_now(self: Pin<&mut Self>, path: &QString) -> QString {
         let wanted = *self.current_account_id();
         let path = path.to_string();
-        spawn_job(self, "Sync", move |db, _progress| async move {
+        spawn_job(self, "Sync", move |db, progress| async move {
             let started = std::time::Instant::now();
             let acc = job_account(db, wanted)?;
             let folder = folders::get_by_path(db, acc.id, &path).map_err(|e| e.to_string())?;
             let mut imap = checkout_session(&acc).await?;
             imap.push_dirty_flags(db, acc.id).await;
             imap.push_due_moves(db, acc.id).await;
+            let report_folder = |status: String| progress.report(&status);
             let r = imap
-                .sync_folder_window(db, folder.id, Some(FULL_SYNC_WINDOW))
+                .sync_folder_window(db, folder.id, Some(FULL_SYNC_WINDOW), Some(&report_folder))
                 .await
                 .map_err(|e| e.to_string())?;
             imap.checkin();

@@ -3,6 +3,8 @@ package de.renier.mailclient.ui.accounts
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -43,7 +45,7 @@ import org.json.JSONObject
 // Step 2 account setup (add + edit): identity, IMAP and SMTP with the core's
 // guesses, port-follow, per-field check and save. Blank password on edit
 // keeps the stored secret — passwords are write-only. Dirty-guarded close.
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun AccountSetupScreen(
     state: MailState,
@@ -75,6 +77,8 @@ fun AccountSetupScreen(
     var saveError by remember { mutableStateOf<String?>(null) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
+    var testing by remember { mutableStateOf(false) }
+    var testResult by remember { mutableStateOf<ConnTest?>(null) }
     var confirmDiscard by remember { mutableStateOf(false) }
     var baseline by remember { mutableStateOf("") }
 
@@ -134,7 +138,9 @@ fun AccountSetupScreen(
     }
 
     // Inline check on every change (fast sync core call, off the UI thread).
+    // A changed field also invalidates the last connection test.
     fun recheck() {
+        testResult = null
         val form = formJson()
         val ed = editing
         scope.launch(Dispatchers.IO) {
@@ -212,10 +218,34 @@ fun AccountSetupScreen(
                 saving = false
                 result
                     .onSuccess { id ->
-                        state.selectAccount(id.toLong())
+                        val accountId = id.toLong()
+                        state.selectAccount(accountId)
                         state.refreshAll()
+                        // A fresh account has nothing cached: sync at once so
+                        // the list fills with visible progress instead of an
+                        // empty "pull to sync" screen.
+                        state.syncAccount(accountId)
                         onSaved()
                     }
+                    .onFailure { saveError = it.message }
+            }
+        }
+    }
+
+    // Live IMAP + SMTP login check (slow network call, off the UI thread).
+    // Catches a mistyped hostname before saving; saving itself stays
+    // offline-safe (no network required).
+    fun testConnection() {
+        saveError = null
+        testing = true
+        testResult = null
+        val form = formJson()
+        scope.launch(Dispatchers.IO) {
+            val result = runCatching { parseConnTest(MailNative.testAccountConnection(form)) }
+            withContext(Dispatchers.Main) {
+                testing = false
+                result
+                    .onSuccess { testResult = it }
                     .onFailure { saveError = it.message }
             }
         }
@@ -308,14 +338,42 @@ fun AccountSetupScreen(
             recheck()
         }
 
+        testResult?.let { r ->
+            if (r.ok) {
+                Text(
+                    "Connection OK — IMAP and SMTP logins succeeded.",
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            } else {
+                if (r.error.isNotEmpty()) {
+                    Text(r.error, color = MaterialTheme.colorScheme.error)
+                }
+                if (r.imapError.isNotEmpty()) {
+                    Text("IMAP: ${r.imapError}", color = MaterialTheme.colorScheme.error)
+                } else if (r.error.isEmpty()) {
+                    Text("IMAP: OK")
+                }
+                if (r.smtpError.isNotEmpty()) {
+                    Text("SMTP: ${r.smtpError}", color = MaterialTheme.colorScheme.error)
+                } else if (r.error.isEmpty()) {
+                    Text("SMTP: OK")
+                }
+            }
+        }
         (loadError ?: saveError)?.let {
             Text(it, color = MaterialTheme.colorScheme.error)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             TextButton(onClick = {
                 if (dirty) confirmDiscard = true else onClose()
             }) { Text("Cancel") }
-            Button(onClick = ::save, enabled = loaded && !saving) {
+            Button(onClick = ::testConnection, enabled = loaded && !testing && !saving) {
+                Text(if (testing) "Testing…" else "Test connection")
+            }
+            Button(onClick = ::save, enabled = loaded && !saving && !testing) {
                 Text(if (saving) "Saving…" else "Save account")
             }
         }
@@ -339,9 +397,33 @@ fun AccountSetupScreen(
     }
 }
 
+// One setup-form connection test, parsed from the core's infallible JSON
+// report (see MailNative.testAccountConnection).
+private data class ConnTest(
+    val ok: Boolean,
+    val error: String,
+    val imapOk: Boolean,
+    val imapError: String,
+    val smtpOk: Boolean,
+    val smtpError: String,
+)
+
+private fun parseConnTest(json: String): ConnTest {
+    val o = JSONObject(json)
+    val imap = o.optJSONObject("imap") ?: JSONObject()
+    val smtp = o.optJSONObject("smtp") ?: JSONObject()
+    return ConnTest(
+        ok = o.optBoolean("ok", false),
+        error = o.optString("error", ""),
+        imapOk = imap.optBoolean("ok", false),
+        imapError = imap.optString("error", ""),
+        smtpOk = smtp.optBoolean("ok", false),
+        smtpError = smtp.optString("error", ""),
+    )
+}
+
 @Composable
-private fun Section(title: String) {
-    Text(
+private fun Section(title: String) {    Text(
         title,
         style = MaterialTheme.typography.titleSmall,
         color = MaterialTheme.colorScheme.primary,

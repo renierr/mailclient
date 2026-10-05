@@ -310,16 +310,30 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         // The finished event reloads the page; rows appear then.
     }
 
-    fun syncNow() = io {
-        MailNative.ensureInit(appContext)
+    fun syncNow() {
         val id = activeAccountId
         if (id < 0) {
-            putStatus("No accounts yet", true)
-            return@io
+            io { putStatus("No accounts yet", true) }
+            return
         }
+        syncAccount(id)
+    }
+
+    /**
+     * Full sync of one account by id. A second pull while one is in flight is
+     * ignored rather than failed: the running job's finished event still
+     * clears the spinner, so the UI never sticks on an error while mail
+     * keeps arriving underneath.
+     */
+    fun syncAccount(id: Long) = io {
+        MailNative.ensureInit(appContext)
         withContext(Dispatchers.Main) { syncing = true }
         runCatching { MailNative.syncAccount(id) }
-            .onFailure { fail(it.message ?: "sync failed") }
+            .onFailure { e ->
+                if (!e.message.orEmpty().contains("already running", ignoreCase = true)) {
+                    fail(e.message ?: "sync failed")
+                }
+            }
     }
 
     /** Re-read the folder list from the server (LIST); the event reloads. */

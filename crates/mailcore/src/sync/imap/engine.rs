@@ -91,7 +91,7 @@ impl SyncProvider for ImapSync {
     }
 
     async fn sync_folder(&mut self, db: &Db, folder_id: i64) -> Result<SyncReport> {
-        self.sync_folder_window(db, folder_id, Some(FULL_SYNC_WINDOW))
+        self.sync_folder_window(db, folder_id, Some(FULL_SYNC_WINDOW), None)
             .await
     }
 

@@ -94,7 +94,7 @@ async fn sync_window_fetches_refreshes_and_expunges() {
     let mut sync = ImapSync::new(&account);
     sync.connect("secret").await.unwrap();
     let report = sync
-        .sync_folder_window(&db, inbox_id, Some(FULL_SYNC_WINDOW))
+        .sync_folder_window(&db, inbox_id, Some(FULL_SYNC_WINDOW), None)
         .await
         .unwrap();
 
@@ -156,7 +156,7 @@ async fn a_synced_folder_refreshes_only_flags_changed_since_its_modseq() {
 
     let mut sync = ImapSync::new(&account);
     sync.connect("secret").await.unwrap();
-    sync.sync_folder_window(&db, inbox_id, Some(FULL_SYNC_WINDOW))
+    sync.sync_folder_window(&db, inbox_id, Some(FULL_SYNC_WINDOW), None)
         .await
         .unwrap();
 
@@ -198,7 +198,7 @@ async fn uidvalidity_change_drops_local_cache() {
 
     let mut sync = ImapSync::new(&account);
     sync.connect("secret").await.unwrap();
-    sync.sync_folder_window(&db, inbox_id, Some(FULL_SYNC_WINDOW))
+    sync.sync_folder_window(&db, inbox_id, Some(FULL_SYNC_WINDOW), None)
         .await
         .unwrap();
 
@@ -236,7 +236,7 @@ async fn uidvalidity_change_resets_the_modseq() {
 
     let mut sync = ImapSync::new(&account);
     sync.connect("secret").await.unwrap();
-    sync.sync_folder_window(&db, inbox_id, Some(FULL_SYNC_WINDOW))
+    sync.sync_folder_window(&db, inbox_id, Some(FULL_SYNC_WINDOW), None)
         .await
         .unwrap();
 
@@ -275,7 +275,7 @@ async fn an_unchanged_uidvalidity_keeps_the_modseq() {
 
     let mut sync = ImapSync::new(&account);
     sync.connect("secret").await.unwrap();
-    sync.sync_folder_window(&db, inbox_id, Some(FULL_SYNC_WINDOW))
+    sync.sync_folder_window(&db, inbox_id, Some(FULL_SYNC_WINDOW), None)
         .await
         .unwrap();
 
@@ -447,7 +447,12 @@ async fn sparse_window_sync_keeps_older_cached_mail() {
     let mut sync = ImapSync::new(&account);
     sync.connect("secret").await.unwrap();
     let report = sync
-        .sync_folder_window(&db, trash_id, Some(crate::sync::imap::QUICK_SYNC_WINDOW))
+        .sync_folder_window(
+            &db,
+            trash_id,
+            Some(crate::sync::imap::QUICK_SYNC_WINDOW),
+            None,
+        )
         .await
         .unwrap();
 
@@ -549,7 +554,7 @@ async fn trash_sweep_marks_unread_seen_on_server() {
 
     let mut sync = ImapSync::new(&account);
     sync.connect("secret").await.unwrap();
-    sync.sync_folder_window(&db, trash_id, Some(FULL_SYNC_WINDOW))
+    sync.sync_folder_window(&db, trash_id, Some(FULL_SYNC_WINDOW), None)
         .await
         .unwrap();
 

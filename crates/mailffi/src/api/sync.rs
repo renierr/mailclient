@@ -24,10 +24,12 @@ pub fn sync_account(account_id: i64) -> anyhow::Result<()> {
             let acc = resolve_account(db, account_id)?;
             // The shared orchestration `mailapp` and the CLI both use; we only
             // lend it a pooled session.
+            progress.report("Connecting…");
             let mut imap = checkout_session(&acc).await?;
-            // Per-folder milestones, so a long first sync is visibly moving.
-            let report_progress = |done: usize, total: usize, path: &str| {
-                progress.report(&headless::sync_progress_status(done, total, path));
+            // Folder milestones, chunk progress and phases, so a long first
+            // sync is visibly moving.
+            let report_progress = |status: String| {
+                progress.report(&status);
             };
             let r = headless::sync_account(
                 db,
@@ -76,7 +78,7 @@ pub fn sync_folder(account_id: i64, folder_id: i64) -> anyhow::Result<()> {
     spawn(
         "Sync",
         format!("sync-folder:{folder_id}"),
-        move |db, _progress| async move {
+        move |db, progress| async move {
             let acc = resolve_account(db, account_id)?;
             let folder = folders::get(db, folder_id).map_err(|e| e.to_string())?;
             if folder.account_id != acc.id {
@@ -85,8 +87,9 @@ pub fn sync_folder(account_id: i64, folder_id: i64) -> anyhow::Result<()> {
             let mut imap = checkout_session(&acc).await?;
             imap.push_dirty_flags(db, acc.id).await;
             imap.push_due_moves(db, acc.id).await;
+            let report_folder = |status: String| progress.report(&status);
             let r = imap
-                .sync_folder_window(db, folder.id, Some(FULL_SYNC_WINDOW))
+                .sync_folder_window(db, folder.id, Some(FULL_SYNC_WINDOW), Some(&report_folder))
                 .await
                 .map_err(|e| e.to_string())?;
             imap.checkin();

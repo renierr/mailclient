@@ -52,6 +52,21 @@ String accountFormCheck({required String form, required bool editing}) =>
       editing: editing,
     );
 
+/// Live IMAP + SMTP login check for the setup form, as infallible JSON.
+///
+/// `{"ok","error","imap":{"ok","error"},"smtp":{"ok","error"}}`: `error` is
+/// only set when the test could not run at all (bad form, no database); per
+/// protocol failures land in their own `error`. Reads nothing and writes
+/// nothing, so the setup form can probe before [`save_account`].
+///
+/// Split-phase so the future stays `Send` (the `Db` handle is not `Sync`):
+/// prepare synchronously, then run owning only `Send` data. The blocking
+/// SMTP probe runs on the caller's thread: async here means the Dart pool
+/// (the UI stays responsive), and the JNI side drives this from
+/// `Dispatchers.IO` with its own runtime.
+Future<String> testAccountConnection({required String form}) =>
+    MailCoreApi.instance.api.crateApiAccountsTestAccountConnection(form: form);
+
 /// Create or update an account from the setup dialog's JSON form.
 ///
 /// The decision — edit by id, update a known address, reject a duplicate,

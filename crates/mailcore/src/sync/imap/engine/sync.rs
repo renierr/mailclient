@@ -5,6 +5,7 @@
 //! flag changes the UI queued locally so a click never waited on IMAP.
 
 use super::*;
+use crate::sync::headless::{sync_folder_progress_status, SyncProgress};
 
 impl ImapSync {
     /// True when SELECT proves the mailbox is exactly what we cached: same
@@ -67,6 +68,7 @@ impl ImapSync {
         db: &Db,
         folder_id: i64,
         window: Option<usize>,
+        progress: Option<SyncProgress<'_>>,
     ) -> Result<SyncReport> {
         let folder = folders::get(db, folder_id)?;
         let account = accounts::get(db, folder.account_id)?;
@@ -251,6 +253,12 @@ impl ImapSync {
             .filter(in_window)
             .collect();
         missing.sort_unstable();
+        let total = missing.len();
+        if total > 0 {
+            if let Some(report) = progress {
+                report(sync_folder_progress_status(0, total, &folder.path));
+            }
+        }
 
         for chunk in missing.chunks(FETCH_CHUNK) {
             let messages_data = session.uid_fetch_messages(chunk).await?;
@@ -269,6 +277,13 @@ impl ImapSync {
                 );
                 store_attachment_meta(db, id, files);
                 fetched += 1;
+            }
+            if let Some(report) = progress {
+                report(sync_folder_progress_status(
+                    fetched as usize,
+                    total,
+                    &folder.path,
+                ));
             }
         }
 
@@ -340,7 +355,7 @@ impl ImapSync {
         if let Some(validity) = mb.uid_validity {
             if folder.uid_validity.is_some_and(|v| v != validity) {
                 return self
-                    .sync_folder_window(db, folder_id, Some(FULL_SYNC_WINDOW))
+                    .sync_folder_window(db, folder_id, Some(FULL_SYNC_WINDOW), None)
                     .await;
             }
         }
@@ -354,7 +369,7 @@ impl ImapSync {
             Some(u) => u,
             None => {
                 return self
-                    .sync_folder_window(db, folder_id, Some(FULL_SYNC_WINDOW))
+                    .sync_folder_window(db, folder_id, Some(FULL_SYNC_WINDOW), None)
                     .await;
             }
         };

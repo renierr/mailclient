@@ -118,7 +118,7 @@ pub async fn save_draft(
             .map(|e| e.to_string()),
         None => None,
     };
-    imap.sync_folder_window(db, drafts.id, Some(FULL_SYNC_WINDOW))
+    imap.sync_folder_window(db, drafts.id, Some(FULL_SYNC_WINDOW), None)
         .await
         .map_err(|e| e.to_string())?;
     imap.checkin();

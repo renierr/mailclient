@@ -939,6 +939,29 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_saveAccount<'caller>
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `MailNative.testAccountConnection(form)`: live IMAP + SMTP login check
+/// for the setup form; the infallible JSON report (see
+/// `api::accounts::test_account_connection`). Blocking (up to the probe
+/// timeouts): call off the UI thread (`Dispatchers.IO`).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_testAccountConnection<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    form: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let form = string(env, &form)?;
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| anyhow::anyhow!("cannot start network: {e}"))?;
+            let report = rt.block_on(crate::api::accounts::test_account_connection(form));
+            Ok(env.new_string(report)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `MailNative.deleteAccount(id)`: delete with folders, messages and secrets;
 /// the account to show instead back as a string (`-1`: none left).
 #[unsafe(no_mangle)]

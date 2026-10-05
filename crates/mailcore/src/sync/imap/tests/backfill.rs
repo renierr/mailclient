@@ -154,14 +154,14 @@ async fn folder_life(sloppy_vanished: bool) {
     sync.connect("secret").await.unwrap();
 
     // Account sync: non-Inbox folders only get the quick window.
-    sync.sync_folder_window(&db, sent, Some(QUICK_SYNC_WINDOW))
+    sync.sync_folder_window(&db, sent, Some(QUICK_SYNC_WINDOW), None)
         .await
         .unwrap();
     assert_eq!(cached(), 50);
 
     // Opening the folder asks for the full window. The server has not
     // changed, but the cache is short of it: no unchanged fast path.
-    sync.sync_folder_window(&db, sent, Some(FULL_SYNC_WINDOW))
+    sync.sync_folder_window(&db, sent, Some(FULL_SYNC_WINDOW), None)
         .await
         .unwrap();
     assert_eq!(cached(), 200);
@@ -175,7 +175,7 @@ async fn folder_life(sloppy_vanished: bool) {
     // Neither the quick nor the full window may drop backfilled mail.
     for window in [QUICK_SYNC_WINDOW, FULL_SYNC_WINDOW] {
         let r = sync
-            .sync_folder_window(&db, sent, Some(window))
+            .sync_folder_window(&db, sent, Some(window), None)
             .await
             .unwrap();
         assert_eq!(r.expunged, 0);

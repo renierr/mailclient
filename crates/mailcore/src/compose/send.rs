@@ -232,7 +232,7 @@ async fn refresh_after_send(db: &Db, acc: &Account, viewed: i64, notes: &mut Vec
     for (id, label) in targets {
         let res = async {
             let mut imap = checkout_session(acc).await?;
-            imap.sync_folder_window(db, id, Some(QUICK_SYNC_WINDOW))
+            imap.sync_folder_window(db, id, Some(QUICK_SYNC_WINDOW), None)
                 .await
                 .map_err(|e| e.to_string())?;
             imap.checkin();

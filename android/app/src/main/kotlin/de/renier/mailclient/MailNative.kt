@@ -140,6 +140,9 @@ object MailNative {
     @JvmStatic external fun accountPortForSecurity(protocol: String, oldSec: String, newSec: String, port: String): String
     @JvmStatic external fun accountFormCheck(form: String, editing: Boolean): String
     @JvmStatic external fun saveAccount(form: String): String
+    // Live IMAP + SMTP login check for the setup form; the infallible JSON
+    // report. Blocking: call off the UI thread (Dispatchers.IO).
+    @JvmStatic external fun testAccountConnection(form: String): String
     @JvmStatic external fun deleteAccount(id: Long): String
     @JvmStatic external fun initialSelection(): String
     @JvmStatic external fun selectAccount(id: Long): String
