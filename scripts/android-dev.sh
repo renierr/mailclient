@@ -14,11 +14,18 @@
 #             android/local.properties, then the only AVD if exactly one exists.
 #   JDK     : JAVA_HOME env, then an Android Studio JBR if one is installed,
 #             then whatever java is on PATH (needs 17+ for AGP 9).
+# A missing Gradle wrapper (gitignored) is regenerated from the cached
+# distribution matching gradle-wrapper.properties, and the resolved SDK is
+# exported for the Gradle child — a fresh clone builds with no manual setup
+# (see scripts/gradle-env.sh).
 # Examples (persist per machine, don't commit):
 #   export ANDROID_AVD="Pixel_4a"           # ~/.bashrc, both machines
 #   echo "sdk.dir=/opt/android-sdk" >> android/local.properties
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+# shellcheck source=scripts/gradle-env.sh
+. ./scripts/gradle-env.sh
 
 APP_ID="de.renier.mailclient.native"
 # Fully qualified: the class lives in namespace de.renier.mailclient while
@@ -127,19 +134,9 @@ ADB="$SDK/platform-tools/adb"
 EMULATOR="$SDK/emulator/emulator"
 [ -x "$EMULATOR" ] || EMULATOR="$EMULATOR.exe"
 
-# -- JDK ---------------------------------------------------------------
-if [ -z "${JAVA_HOME:-}" ]; then
-    for jbr in \
-        "/opt/android-studio/jbr" \
-        "$HOME/.local/share/JetBrains/Toolbox/apps/android-studio/jbr" \
-        "/c/Program Files/Android/Android Studio/jbr" \
-        "/d/Program Files/Android/Android Studio/jbr"; do
-        if [ -x "$jbr/bin/java" ] || [ -x "$jbr/bin/java.exe" ]; then
-            export JAVA_HOME="$jbr"
-            break
-        fi
-    done
-fi
+# -- JDK + SDK env + wrapper: owned by scripts/gradle-env.sh, applied lazily
+# in run_gradle (device-free tasks like --build need no device, but every
+# Gradle task needs all three).
 
 # -- AVD (resolved lazily: --build/--dist/--clean need no device) -----
 resolve_avd() {
@@ -217,6 +214,7 @@ ensure_device() {
 }
 
 run_gradle() {
+    gradle_env_setup android || exit 1
     if [ -f "android/gradle/wrapper/gradle-wrapper.jar" ] && [ -x android/gradlew ]; then
         (cd android && ./gradlew "$@")
     elif [ -f "android/gradle/wrapper/gradle-wrapper.jar" ]; then

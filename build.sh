@@ -212,12 +212,13 @@ EOF
 build_android() {
     require_keystore android/key.properties
     echo "==> gradle assembleRelease (native Compose app)"
-    # The wrapper jar is gitignored (same as flutter/android/): Android
-    # Studio generates it on first open, otherwise fall back to system gradle.
-    if [ -f "android/gradle/wrapper/gradle-wrapper.jar" ] && [ -x "android/gradlew" ]; then
+    # shellcheck source=scripts/gradle-env.sh
+    . ./scripts/gradle-env.sh
+    gradle_env_setup android || exit 1
+    if [ -x "android/gradlew" ]; then
         (cd android && ./gradlew assembleRelease)
     else
-        (cd android && gradle assembleRelease)
+        (cd android && bash gradlew assembleRelease)
     fi
 
     echo "==> assembling dist/mailclient-android"
