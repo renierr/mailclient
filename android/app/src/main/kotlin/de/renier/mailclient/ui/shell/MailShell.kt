@@ -151,6 +151,11 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
         val accountId = state.activeAccountId
         val folderId = state.folderId
         if (accountId < 0) return
+        // Qt: a send not yet accepted may still come back to the composer.
+        if (state.pendingSend != null) {
+            state.info("Still sending the last message…")
+            return
+        }
         scope.launch {
             val seed = withContext(Dispatchers.IO) {
                 runCatching {
@@ -261,6 +266,16 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
             PackageManager.PERMISSION_GRANTED
         ) {
             notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    // A send that failed after its composer closed comes back with the text
+    // (Qt). New compositions wait for the pending one, so none is open.
+    val reopen = state.reopenSend
+    LaunchedEffect(reopen) {
+        if (reopen != null) {
+            state.consumeReopenSend()
+            if (stack.last() !is Route.Composer) go(Route.Composer(reopen.seed, reopen.accountId, reopen.folderId))
         }
     }
 

@@ -34,6 +34,11 @@ data class ComposerSeed(
     val serverAttachments: List<String> = emptyList(),
     // Answering mail whose replies go somewhere unexpected.
     val replyNotice: String = "",
+    // A send that failed after the composer closed comes back with
+    // everything as it was sent: sender name, picked files, and why.
+    val fromName: String? = null,
+    val attachments: List<PickedFile> = emptyList(),
+    val failure: String = "",
 ) {
     companion object {
         // Blocking JNI reads (local SQLite only): call off the main thread.

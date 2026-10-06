@@ -402,7 +402,7 @@ Update this section when a step lands (see AGENTS.md §7.4).
 | Full composer (To/Cc/Bcc, editor, attach, drafts, send) | ✅ dialog | ✅ page | ✅ page | Touch composers are full pages on every width (keyboard). Locked From domain, contact autocomplete, Reply-To, reply-to-mismatch notice, server-draft notice, delete draft, dirty guard. Flutter carries the quote as a card beside its text box; Qt and native edit it inline in the body |
 | Editor | ✅ WYSIWYG HTML + source | ✅ Markdown + preview | ✅ WYSIWYG HTML + source | Qt and native edit HTML in a web view (`execCommand`: bold, italic, underline, list, quote, link, clear, inline image; toolbar lights up at the caret). Native's page is `mailcore::compose::editor::document`; Qt still builds its own (see SHARED-CORE.md). With send format "auto" every frontend sends plain text when nothing is formatted (the sender's `needs_html_formatting`), and the editor footer says which |
 | Inline images, attachments | ✅ | ✅ (+ desktop drop) | ✅ | Native copies picked `content://` files into app cache, the core reads paths at send time |
-| Send failure after the composer closed | ✅ reopens with the text | 🔄 status line | 🔄 status line | SMTP runs after close; touch frontends report a late failure on the status strip only |
+| Send failure after the composer closed | ✅ reopens with the text | 🔄 status line | ✅ reopens with the text | SMTP runs after close. Qt and native keep the composition until SMTP accepts it and reopen it with the reason; new compositions wait meanwhile. The core drops the MIME on failure, so the retry cannot send twice. Flutter reports a late failure on the status strip only |
 
 ### Folders
 

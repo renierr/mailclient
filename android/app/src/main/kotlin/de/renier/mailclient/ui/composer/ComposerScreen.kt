@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.R
 import de.renier.mailclient.ui.state.MailState
+import de.renier.mailclient.ui.state.PendingSend
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -100,7 +101,7 @@ fun ComposerScreen(
 
     fun tf(text: String) = TextFieldValue(text, TextRange(text.length))
     var fromLocal by remember { mutableStateOf(tf(parts?.first?.optString("local").orEmpty())) }
-    var senderName by remember { mutableStateOf(tf(account?.fromName.orEmpty())) }
+    var senderName by remember { mutableStateOf(tf(seed.fromName ?: account?.fromName.orEmpty())) }
     var to by remember { mutableStateOf(tf(seed.to)) }
     var cc by remember { mutableStateOf(tf(seed.cc)) }
     var bcc by remember { mutableStateOf(tf(seed.bcc)) }
@@ -109,11 +110,12 @@ fun ComposerScreen(
     var showCc by remember { mutableStateOf(seed.cc.isNotEmpty()) }
     var showBcc by remember { mutableStateOf(seed.bcc.isNotEmpty()) }
     var showReplyTo by remember { mutableStateOf(seed.replyTo.isNotEmpty()) }
-    val picked = remember { mutableStateListOf<PickedFile>() }
-    var dirty by remember { mutableStateOf(false) }
+    val picked = remember { mutableStateListOf<PickedFile>().apply { addAll(seed.attachments) } }
+    // A send that failed after closing is unsent work again: Discard asks.
+    var dirty by remember { mutableStateOf(seed.failure.isNotEmpty()) }
     var sending by remember { mutableStateOf(false) }
     var savingDraft by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf(seed.failure.ifEmpty { null }?.let { "Not sent: $it" }) }
     var confirmClose by remember { mutableStateOf(false) }
     var confirmDeleteDraft by remember { mutableStateOf(false) }
     var linkDialog by remember { mutableStateOf(false) }
@@ -188,9 +190,32 @@ fun ComposerScreen(
             .put("draft_uid", seed.draftUid)
             .toString()
 
+    // Everything as it is about to be sent, for reopening after a late
+    // failure (MailState.pendingSend).
+    fun snapshot(html: String) = seed.copy(
+        fromAddr = MailNative.effectiveFrom(fromLocal.text, accountEmail),
+        fromName = senderName.text,
+        to = to.text,
+        cc = cc.text,
+        bcc = bcc.text,
+        replyTo = if (replyToShown) replyTo.text else "",
+        subject = subject.text,
+        bodyHtml = html,
+        attachments = picked.toList(),
+        failure = "",
+    )
+
     // Reading the page back is asynchronous, so Send and Save draft finish
     // in a coroutine; the queue call itself runs off the main thread.
-    fun submit(failText: String, setBusy: (Boolean) -> Unit, call: (String) -> Unit) {
+    // [before] runs on the main thread just before it, [onFail] after a
+    // refusal.
+    fun submit(
+        failText: String,
+        setBusy: (Boolean) -> Unit,
+        before: (String) -> Unit = {},
+        onFail: () -> Unit = {},
+        call: (String) -> Unit,
+    ) {
         setBusy(true)
         error = null
         scope.launch {
@@ -201,10 +226,12 @@ fun ComposerScreen(
                 return@launch
             }
             val f = form(html)
+            before(html)
             val failure = withContext(Dispatchers.IO) { runCatching { call(f) }.exceptionOrNull() }
             if (failure == null) {
                 onClose()
             } else {
+                onFail()
                 setBusy(false)
                 error = failure.message ?: failText
             }
@@ -220,7 +247,12 @@ fun ComposerScreen(
             error = "Add at least one recipient (To, Cc or Bcc)"
             return
         }
-        submit("Could not send", { sending = it }) { MailNative.sendMail(accountId, folderId, it) }
+        submit(
+            "Could not send",
+            { sending = it },
+            before = { state.pendingSend = PendingSend(snapshot(it), accountId, folderId) },
+            onFail = { state.pendingSend = null },
+        ) { MailNative.sendMail(accountId, folderId, it) }
     }
 
     fun saveDraft() {

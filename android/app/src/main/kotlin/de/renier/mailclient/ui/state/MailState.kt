@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import de.renier.mailclient.JobEvents
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.MailSchedule
+import de.renier.mailclient.ui.composer.ComposerSeed
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -80,6 +81,9 @@ data class MessageRow(
 )
 
 data class UndoOffer(val batch: String, val label: String)
+
+/** A composition sent but not yet accepted by SMTP, as the composer held it. */
+data class PendingSend(val seed: ComposerSeed, val accountId: Long, val folderId: Long)
 
 class MailState(private val appContext: Context, private val scope: CoroutineScope) {
     // Every UI-read field is snapshot state: plain vars never recompose.
@@ -224,6 +228,34 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
 
     /** The sidebar and move picker: subscribed folders only. */
     val visibleFolders: List<Folder> get() = folders.filter { it.subscribed }
+
+    // Qt's sendPending: the composer closes as soon as the send is queued,
+    // and a failure before SMTP accepts reopens it with the text. The core
+    // has dropped the MIME by then, so the retry is the user's and cannot
+    // send twice. Set off the main thread just before the job starts.
+    @Volatile
+    var pendingSend: PendingSend? = null
+
+    /** A failed send for the shell to reopen. */
+    var reopenSend by mutableStateOf<PendingSend?>(null)
+
+    fun consumeReopenSend() {
+        reopenSend = null
+    }
+
+    private fun settleSend(phase: String, ok: Boolean, status: String) {
+        val p = pendingSend ?: return
+        // A Send job reports progress once, at SMTP acceptance, and fails only
+        // before it (later trouble is "sent, but…"). So an earlier send still
+        // filing its Sent copy can never settle this one by mistake.
+        when {
+            phase == "progress" -> pendingSend = null
+            phase == "finished" && !ok -> {
+                pendingSend = null
+                reopenSend = p.copy(seed = p.seed.copy(failure = status.ifEmpty { "Sending failed" }))
+            }
+        }
+    }
 
     fun info(msg: String) {
         notice = msg
@@ -400,6 +432,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         val wasBusy = busy
         applyBusy(e.optJSONObject("busy"))
         val phase = e.optString("phase")
+        if (kind == "Send") settleSend(phase, e.optBoolean("ok", true), e.optString("status"))
         if (phase == "queued") {
             // Something to read before the job's first progress arrives; a
             // job queued behind a running one leaves that one's status alone.
