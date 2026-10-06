@@ -106,7 +106,7 @@ class ReaderPaneState extends State<ReaderPane> {
             keepOriginal: _originalColors,
           )
         : MailPaint.theme;
-    final canToggleColors = message.isHtml && message.htmlColored && dark;
+    final canToggleColors = message.isHtml && message.htmlColored;
     // Header, image notice and attachments scroll away with the body: on a
     // phone the mail gets the whole pane as soon as the reader scrolls.
     // Over a WebView (Android) their display text passes touches through
@@ -123,6 +123,10 @@ class ReaderPaneState extends State<ReaderPane> {
           onToggleDetails: () => setState(() => _details = !_details),
           onClose: widget.onClose,
           originalColors: _originalColors,
+          // In a dark theme this restores the sender's palette; in a
+          // light one the paint is already original, and the toggle
+          // switches between the fitted and the original fixed widths.
+          darkMode: dark,
           onToggleColors: canToggleColors
               ? () => setState(() => _originalColors = !_originalColors)
               : null,

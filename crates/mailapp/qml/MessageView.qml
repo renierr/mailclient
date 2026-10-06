@@ -674,11 +674,13 @@ Rectangle {
                                 onClicked: root.deleteRequested()
                             }
                             IconButton {
-                                visible: root.isHtml && root.htmlColored && Theme.dark
+                                visible: root.isHtml && root.htmlColored
                                 text: root.originalColors ? Icons.darkMode : Icons.invertColors
                                 iconFont: true
-                                tooltip: root.originalColors ? qsTr("Darken to match the theme") : qsTr(
-                                                                   "Show original colours")
+                                tooltip: root.originalColors ? (Theme.dark ? qsTr("Darken to match the theme") : qsTr(
+                                                                                 "Fit to screen")) : (Theme.dark ? qsTr(
+                                                                                                                       "Show original colours") :
+                                                                                                                   qsTr("Original layout"))
                                 onClicked: root.originalColors = !root.originalColors
                             }
                             IconButton {

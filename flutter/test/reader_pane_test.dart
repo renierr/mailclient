@@ -165,6 +165,49 @@ void main() {
     expect(view().fitWidths, isTrue);
   });
 
+  // In a light theme the paint is already the sender's, so the same
+  // toggle only switches the layout: fitted widths by default, the
+  // original fixed-width layout once tapped.
+  testWidgets('light theme offers the original layout toggle too', (
+    tester,
+  ) async {
+    final core = _OneMessageCore({
+      'uid': 9,
+      'subject': 'Newsletter',
+      'from': 'news@example.com',
+      'body_text': 'fallback',
+      'is_html': true,
+      'html_colored': true,
+      'body_html': '<table width="600"><tr><td>hi</td></tr></table>',
+    });
+    MailCore.debugInstance = core;
+    final state = MailState(core);
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: state,
+        child: MaterialApp(
+          theme: ThemeData.light(),
+          home: const Scaffold(body: ReaderPane()),
+        ),
+      ),
+    );
+    await state.openMessage(9);
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    MailHtmlView view() =>
+        tester.widget<MailHtmlView>(find.byType(MailHtmlView));
+    expect(view().fitWidths, isTrue);
+
+    await tester.tap(find.byTooltip('Original layout'));
+    await tester.pump();
+    expect(view().fitWidths, isFalse);
+
+    await tester.tap(find.byTooltip('Fit to screen'));
+    await tester.pump();
+    expect(view().fitWidths, isTrue);
+  });
+
   // Over a WebView (Android) the header passes touches through to the page:
   // display text sits under IgnorePointer so drags and flings starting on
   // it are the WebView's own, while the buttons stay tappable. Elsewhere
