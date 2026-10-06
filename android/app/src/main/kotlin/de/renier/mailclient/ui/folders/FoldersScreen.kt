@@ -98,7 +98,7 @@ fun FoldersScreen(
                         selected = row.folder.id == state.folderId,
                         unread = row.unread,
                         total = row.total,
-                        hasChildren = row.hasChildren,
+                        collapsible = row.collapsible,
                         expanded = row.expanded,
                         onToggle = { state.toggleFolderExpanded(row.folder.id) },
                         onClick = {
@@ -186,7 +186,7 @@ private fun FolderRow(
     selected: Boolean,
     unread: Int,
     total: Int,
-    hasChildren: Boolean,
+    collapsible: Boolean,
     expanded: Boolean,
     onToggle: () -> Unit,
     onClick: () -> Unit,
@@ -221,9 +221,9 @@ private fun FolderRow(
             )
         }
         // Collapse chevron last, so the label edge never moves whether a
-        // row has children or not. Rows without children hold the same
+        // row collapses or not. Rows with nothing to fold hold the same
         // slot, keeping badges aligned.
-        if (hasChildren) {
+        if (collapsible) {
             IconButton(
                 onClick = onToggle,
                 modifier = Modifier.size(28.dp),
@@ -247,7 +247,7 @@ private fun FolderRow(
 // no unread badge disappears with them).
 private data class FolderRowState(
     val folder: Folder,
-    val hasChildren: Boolean,
+    val collapsible: Boolean,
     val expanded: Boolean,
     val unread: Int,
     val total: Int,
@@ -288,11 +288,14 @@ private fun collapseFolders(folders: List<Folder>, expanded: Set<Long>): List<Fo
 
     return folders.mapNotNull { folder ->
         if (!isShown(folder)) return@mapNotNull null
-        val kids = folders.any { parentOf(it)?.id == folder.id }
+        // Collapsible only when the toggle hides something: a direct child
+        // that folds away (custom role). INBOX, whose children all stay
+        // visible, gets no chevron and stays inbox-only in counts.
+        val collapsible = folders.any { parentOf(it)?.id == folder.id && !it.alwaysVisible }
         val open = expanded.contains(folder.id)
         var unread = folder.unread
         var total = folder.count
-        if (kids && !open) {
+        if (collapsible && !open) {
             folders.forEach { d ->
                 if (d.id != folder.id && !isShown(d) && isUnder(folder, d)) {
                     unread += d.unread
@@ -300,6 +303,6 @@ private fun collapseFolders(folders: List<Folder>, expanded: Set<Long>): List<Fo
                 }
             }
         }
-        FolderRowState(folder, kids, open, unread, total)
+        FolderRowState(folder, collapsible, open, unread, total)
     }
 }

@@ -81,9 +81,12 @@ Rectangle {
                 return true;
             return root.expandedById[p.id] === true && isShown(p);
         };
-        var hasChildren = function (row) {
+        // A row is collapsible only when its toggle hides something: a
+        // direct child that folds away (custom role). INBOX, whose children
+        // all stay visible, gets no chevron and stays inbox-only in counts.
+        var canCollapse = function (row) {
             for (var i = 0; i < all.length; i++) {
-                if (parentOf(all[i]) === row)
+                if (parentOf(all[i]) === row && all[i].alwaysVisible !== true)
                     return true;
             }
             return false;
@@ -96,7 +99,8 @@ Rectangle {
             // A collapsed parent carries its hidden children's counts, so
             // the unread pill stays honest while they are folded away.
             var aggUnread = r.unread, aggTotal = r.count;
-            if (hasChildren(r) && root.expandedById[r.id] !== true) {
+            var collapsible = canCollapse(r);
+            if (collapsible && root.expandedById[r.id] !== true) {
                 for (var m = 0; m < all.length; m++) {
                     var d = all[m];
                     if (d === r || isShown(d))
@@ -124,7 +128,7 @@ Rectangle {
                           count: r.count,
                           depth: r.depth,
                           leaf: r.leaf,
-                          hasChildren: hasChildren(r),
+                          collapsible: collapsible,
                           expanded: root.expandedById[r.id] === true,
                           aggUnread: aggUnread,
                           aggTotal: aggTotal
@@ -364,12 +368,12 @@ Rectangle {
                     // whether a row has children or not. Rows without
                     // children hold the same slot, keeping pills aligned.
                     Item {
-                        visible: folderRow.model.hasChildren !== true
+                        visible: folderRow.model.collapsible !== true
                         Layout.preferredWidth: 24
                         Layout.preferredHeight: 1
                     }
                     IconButton {
-                        visible: folderRow.model.hasChildren === true
+                        visible: folderRow.model.collapsible === true
                         Layout.preferredWidth: 24
                         Layout.preferredHeight: 24
                         text: folderRow.model.expanded === true ? Icons.expandLess : Icons.expandMore

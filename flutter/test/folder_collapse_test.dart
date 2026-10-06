@@ -70,9 +70,11 @@ void main() {
         rows.map((r) => r.folder.path),
         ['INBOX', 'INBOX/Archive', 'INBOX/Work', 'Work'],
       );
-      expect(rows[0].hasChildren, isTrue);
+      // INBOX hides nothing (every child stays visible): no chevron, own
+      // counts only. Work folds its custom child away.
+      expect(rows[0].collapsible, isFalse);
       expect(rows[0].expanded, isFalse);
-      expect(rows[3].hasChildren, isTrue);
+      expect(rows[3].collapsible, isTrue);
     });
 
     test('the inbox direct children show; deeper customs fold away', () {
@@ -101,7 +103,7 @@ void main() {
         ['INBOX', 'INBOX/Mine'],
       );
       final mine = rows.firstWhere((r) => r.folder.path == 'INBOX/Mine');
-      expect(mine.hasChildren, isTrue);
+      expect(mine.collapsible, isTrue);
     });
 
     test('a collapsed parent aggregates its hidden children counts', () {

@@ -60,7 +60,7 @@ class FolderSidebar extends StatelessWidget {
                       selected: f.id == folderId,
                       unread: row.unread,
                       total: row.total,
-                      hasChildren: row.hasChildren,
+                      collapsible: row.collapsible,
                       expanded: row.expanded,
                       onToggle: () => context
                           .read<MailState>()
@@ -84,14 +84,18 @@ class FolderSidebar extends StatelessWidget {
 class FolderRow {
   const FolderRow({
     required this.folder,
-    required this.hasChildren,
+    required this.collapsible,
     required this.expanded,
     required this.unread,
     required this.total,
   });
 
   final Folder folder;
-  final bool hasChildren;
+
+  /// Whether the toggle hides something: a direct child that folds away
+  /// (custom role). INBOX, whose children all stay visible, gets no chevron
+  /// and stays inbox-only in counts.
+  final bool collapsible;
   final bool expanded;
   final int unread;
   final int total;
@@ -122,7 +126,9 @@ List<FolderRow> collapseFolders(List<Folder> folders, Set<int> expanded) {
     return expanded.contains(p.id) && shown(p);
   }
 
-  bool hasKids(Folder f) => folders.any((o) => parentOf(o)?.id == f.id);
+  bool canCollapse(Folder f) => folders.any(
+    (o) => parentOf(o)?.id == f.id && !o.alwaysVisible,
+  );
 
   bool under(Folder row, Folder d) {
     Folder? q = d;
@@ -136,11 +142,11 @@ List<FolderRow> collapseFolders(List<Folder> folders, Set<int> expanded) {
   final rows = <FolderRow>[];
   for (final f in folders) {
     if (!shown(f)) continue;
-    final kids = hasKids(f);
+    final collapsible = canCollapse(f);
     final open = expanded.contains(f.id);
     var unread = f.unread;
     var total = f.total;
-    if (kids && !open) {
+    if (collapsible && !open) {
       for (final d in folders) {
         if (d.id == f.id || shown(d) || !under(f, d)) continue;
         unread += d.unread;
@@ -150,7 +156,7 @@ List<FolderRow> collapseFolders(List<Folder> folders, Set<int> expanded) {
     rows.add(
       FolderRow(
         folder: f,
-        hasChildren: kids,
+        collapsible: collapsible,
         expanded: open,
         unread: unread,
         total: total,
@@ -247,7 +253,7 @@ class FolderTile extends StatelessWidget {
     required this.onTap,
     this.unread,
     this.total,
-    this.hasChildren = false,
+    this.collapsible = false,
     this.expanded = false,
     this.onToggle,
   });
@@ -260,7 +266,7 @@ class FolderTile extends StatelessWidget {
   final int? unread;
   final int? total;
 
-  final bool hasChildren;
+  final bool collapsible;
   final bool expanded;
   final VoidCallback? onToggle;
 
@@ -296,7 +302,7 @@ class FolderTile extends StatelessWidget {
               '$totalCount',
               style: TextStyle(color: scheme.outline, fontSize: 11),
             ),
-          if (hasChildren)
+          if (collapsible)
             IconButton(
               tooltip: expanded ? 'Collapse subfolders' : 'Expand subfolders',
               constraints: const BoxConstraints.tightFor(width: 28, height: 28),
