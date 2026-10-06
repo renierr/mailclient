@@ -54,10 +54,12 @@ fun attachmentsOf(m: JSONObject): List<Attachment> {
         }
 }
 
-// The reader header (Flutter ReaderHeader): subject, sender with avatar and
-// date, To line, reply-to warning, expandable details, then the cards —
-// calendar invite, missing inline images, attachments. It scrolls away with
-// the body; nothing here is pinned.
+// The reader header (Flutter ReaderHeader): back in front of the subject
+// where the layout shows no back of its own, sender with avatar and date,
+// To line, reply-to warning, expandable details, then the message actions
+// right-aligned on their own row — and then the cards (calendar invite,
+// missing inline images, attachments). It all scrolls away with the body;
+// nothing here is pinned.
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ReaderHeader(
@@ -72,17 +74,36 @@ fun ReaderHeader(
     onSaveAll: (List<Attachment>) -> Unit,
     onOpenEvent: (Long) -> Unit,
     onSaveEvent: (Long, String) -> Unit,
+    // Back in front of the subject, like Flutter: the one-pane reader and
+    // the two-pane reader show the arrow, three panes the close icon.
+    // Null hides it.
+    onClose: (() -> Unit)? = null,
+    closeIcon: Boolean = false,
+    // Archive, delete, star, colours, fullscreen and the ⋮ menu: part of
+    // the scrolling header, never pinned above it. Null hides the row.
+    actions: (@Composable () -> Unit)? = null,
 ) {
     val scheme = MaterialTheme.colorScheme
     Column(
         modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(
-            m.optString("subject", "(no subject)"),
-            style = MaterialTheme.typography.headlineSmall,
-            modifier = Modifier.padding(end = 8.dp),
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (onClose != null) {
+                IconButton(onClick = onClose) {
+                    if (closeIcon) {
+                        Icon(painterResource(R.drawable.ic_close), "Close")
+                    } else {
+                        Icon(painterResource(R.drawable.ic_arrow_back), "Back")
+                    }
+                }
+            }
+            Text(
+                m.optString("subject", "(no subject)"),
+                style = MaterialTheme.typography.headlineSmall,
+                modifier = Modifier.weight(1f).padding(end = 8.dp),
+            )
+        }
         Row(verticalAlignment = Alignment.Top) {
             Avatar(
                 initials = m.optString("initials", "?").ifEmpty { "?" },
@@ -130,6 +151,16 @@ fun ReaderHeader(
             }
         }
         if (detailsExpanded) Details(m, headers)
+
+        if (actions != null) {
+            // Right-aligned like the Qt action row; FlowRow so a narrow
+            // pane stacks them instead of overflowing.
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalArrangement = Arrangement.Center,
+            ) { actions() }
+        }
 
         m.optJSONObject("event")?.let { EventCard(it, onOpenEvent, onSaveEvent) }
 

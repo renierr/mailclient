@@ -306,8 +306,9 @@ fun ListScreen(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    // Room for the floating jump buttons over the last row.
-                    contentPadding = PaddingValues(bottom = 96.dp),
+                    // A little room so the last row scrolls clear of the
+                    // floating jump buttons (Flutter keeps none at all).
+                    contentPadding = PaddingValues(bottom = 16.dp),
                 ) {
                     items(entries, key = { if (it is ListEntry.Header) "h:${it.folderId}" else state.selectionKey((it as ListEntry.Row).row) }) { entry ->
                         if (entry is ListEntry.Header) {

@@ -343,8 +343,9 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                 }
                 .focusable(),
             topBar = {
-                // The one-pane reader draws its own bars (actions need its
-                // message); beside other panes it sits under the search bar.
+                // The one-pane reader carries its back and actions in the
+                // scrolling header and draws its own reply strip (no shell
+                // bars there); beside other panes it sits under the search bar.
                 if (route is Route.Reader && !wide) return@Scaffold
                 if (fullscreen) return@Scaffold
                 // The composer and Settings draw their own bars.

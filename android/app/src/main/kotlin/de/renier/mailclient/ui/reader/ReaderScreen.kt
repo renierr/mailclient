@@ -28,14 +28,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -74,12 +72,13 @@ private sealed interface ReaderDialog {
 }
 
 // The reader as a shell pane (Step 5; replaces the Views ReaderActivity of
-// the Flutter experiment). Ids in, everything re-read over JNI. Top bar:
-// back, archive, delete, star, the rarely used rest under ⋮. Bottom bar:
-// reply / reply all / forward. Header, cards and body scroll as one page.
-// Moving the mail away (delete, archive, move) returns to the list with the
-// shell's undo snackbar, like the other frontends.
-@OptIn(ExperimentalMaterial3Api::class)
+// the Flutter experiment). Ids in, everything re-read over JNI. Back and the
+// message actions (archive, delete, star, colours, fullscreen, ⋮) are part
+// of the scrolling header like Flutter's ReaderHeader, never pinned above
+// it; the slim reply strip stays docked at the bottom. Header, cards and
+// body scroll as one page. Moving the mail away (delete, archive, move)
+// returns to the list with the shell's undo snackbar, like the other
+// frontends.
 @Composable
 fun ReaderScreen(
     state: MailState,
@@ -232,90 +231,6 @@ fun ReaderScreen(
     val m = msg
     Scaffold(
         contentWindowInsets = WindowInsets(0),
-        topBar = {
-            TopAppBar(
-                windowInsets = WindowInsets(0),
-                title = {},
-                navigationIcon = {
-                    IconButton(onClick = onClose) {
-                        if (closeIcon) {
-                            Icon(painterResource(R.drawable.ic_close), "Close")
-                        } else {
-                            Icon(painterResource(R.drawable.ic_arrow_back), "Back")
-                        }
-                    }
-                },
-                actions = {
-                    if (m != null) {
-                        IconButton(onClick = {
-                            bg {
-                                val r = MailNative.archiveMessage(accountId, folderId, uid)
-                                withContext(Dispatchers.Main) { leaveWith(r) }
-                            }
-                        }) { Icon(painterResource(R.drawable.ic_archive), "Archive") }
-                        IconButton(onClick = {
-                            if (deletePermanent || prefs.confirmDelete) dialog = ReaderDialog.Delete else runDelete()
-                        }) { Icon(painterResource(R.drawable.ic_delete), if (deletePermanent) "Delete permanently" else "Delete") }
-                        val starred = m.optBoolean("starred")
-                        IconButton(onClick = {
-                            bg {
-                                MailNative.toggleStar(accountId, folderId, uid)
-                                withContext(Dispatchers.Main) {
-                                    reloadTick++
-                                    state.afterReaderChange()
-                                }
-                            }
-                        }) {
-                            Icon(
-                                painterResource(if (starred) R.drawable.ic_star else R.drawable.ic_star_border),
-                                if (starred) "Unstar" else "Star",
-                                tint = starColor(starred),
-                            )
-                        }
-                        IconButton(onClick = onToggleFullscreen) {
-                            Icon(
-                                painterResource(if (fullscreen) R.drawable.ic_fullscreen_exit else R.drawable.ic_fullscreen),
-                                if (fullscreen) "Exit full screen" else "Full screen",
-                            )
-                        }
-                        Box {
-                            IconButton(onClick = { menu = true }) { Icon(painterResource(R.drawable.ic_more_vert), "More actions") }
-                            ReaderMenu(
-                                expanded = menu,
-                                onDismiss = { menu = false },
-                                showRemote = m.optBoolean("has_remote_images") && !allowRemote,
-                                showColors = m.optBoolean("is_html") && m.optBoolean("html_colored") && dark,
-                                originalColors = originalColors,
-                                onMove = { dialog = ReaderDialog.Move },
-                                onSimilar = {
-                                    state.findSimilar(folderId, uid)
-                                    onShowSimilar()
-                                },
-                                onRemote = { remoteOnce = true },
-                                onColors = { originalColors = !originalColors },
-                                onSaveEml = {
-                                    bg {
-                                        val bytes = MailNative.exportEmlBytes(folderId, uid)
-                                        val name = MailNative.suggestedEmlName(folderId, uid)
-                                        withContext(Dispatchers.Main) {
-                                            pendingSave = bytes
-                                            saveOne.launch(name to "message/rfc822")
-                                        }
-                                    }
-                                },
-                                onHeaders = {
-                                    bg {
-                                        val text = headersText(JSONObject(MailNative.readerHeaders(folderId, uid)))
-                                        withContext(Dispatchers.Main) { dialog = ReaderDialog.Headers(text) }
-                                    }
-                                },
-                                onPurge = { dialog = ReaderDialog.Purge },
-                            )
-                        }
-                    }
-                },
-            )
-        },
         bottomBar = {
             // A slim strip, not Material's 80dp BottomAppBar: three actions
             // need one 48dp touch row. Docked rather than floating, so it
@@ -338,9 +253,18 @@ fun ReaderScreen(
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (m == null) {
+                // Loading: only the way back; the actions need the message.
+                IconButton(onClick = onClose, modifier = Modifier.align(Alignment.TopStart)) {
+                    if (closeIcon) {
+                        Icon(painterResource(R.drawable.ic_close), "Close")
+                    } else {
+                        Icon(painterResource(R.drawable.ic_arrow_back), "Back")
+                    }
+                }
                 CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 return@Box
             }
+            val canToggleColors = m.optBoolean("is_html") && m.optBoolean("html_colored") && dark
             val header: @Composable () -> Unit = {
                 ReaderHeader(
                     m = m,
@@ -373,6 +297,82 @@ fun ReaderScreen(
                     },
                     onOpenEvent = { openAttachment(it, "text/calendar") },
                     onSaveEvent = { id, name -> saveAttachment(id, name, "text/calendar") },
+                    onClose = onClose,
+                    closeIcon = closeIcon,
+                    actions = {
+                        IconButton(onClick = {
+                            bg {
+                                val r = MailNative.archiveMessage(accountId, folderId, uid)
+                                withContext(Dispatchers.Main) { leaveWith(r) }
+                            }
+                        }) { Icon(painterResource(R.drawable.ic_archive), "Archive") }
+                        IconButton(onClick = {
+                            if (deletePermanent || prefs.confirmDelete) dialog = ReaderDialog.Delete else runDelete()
+                        }) { Icon(painterResource(R.drawable.ic_delete), if (deletePermanent) "Delete permanently" else "Delete") }
+                        val starred = m.optBoolean("starred")
+                        IconButton(onClick = {
+                            bg {
+                                MailNative.toggleStar(accountId, folderId, uid)
+                                withContext(Dispatchers.Main) {
+                                    reloadTick++
+                                    state.afterReaderChange()
+                                }
+                            }
+                        }) {
+                            Icon(
+                                painterResource(if (starred) R.drawable.ic_star else R.drawable.ic_star_border),
+                                if (starred) "Unstar" else "Star",
+                                tint = starColor(starred),
+                            )
+                        }
+                        // Designed mail in a dark theme: the sender's
+                        // colours, beside the actions — not under ⋮.
+                        if (canToggleColors) {
+                            IconButton(onClick = { originalColors = !originalColors }) {
+                                Icon(
+                                    painterResource(R.drawable.ic_palette),
+                                    if (originalColors) "Darken colours" else "Original colours",
+                                )
+                            }
+                        }
+                        IconButton(onClick = onToggleFullscreen) {
+                            Icon(
+                                painterResource(if (fullscreen) R.drawable.ic_fullscreen_exit else R.drawable.ic_fullscreen),
+                                if (fullscreen) "Exit full screen" else "Full screen",
+                            )
+                        }
+                        Box {
+                            IconButton(onClick = { menu = true }) { Icon(painterResource(R.drawable.ic_more_vert), "More actions") }
+                            ReaderMenu(
+                                expanded = menu,
+                                onDismiss = { menu = false },
+                                showRemote = m.optBoolean("has_remote_images") && !allowRemote,
+                                onMove = { dialog = ReaderDialog.Move },
+                                onSimilar = {
+                                    state.findSimilar(folderId, uid)
+                                    onShowSimilar()
+                                },
+                                onRemote = { remoteOnce = true },
+                                onSaveEml = {
+                                    bg {
+                                        val bytes = MailNative.exportEmlBytes(folderId, uid)
+                                        val name = MailNative.suggestedEmlName(folderId, uid)
+                                        withContext(Dispatchers.Main) {
+                                            pendingSave = bytes
+                                            saveOne.launch(name to "message/rfc822")
+                                        }
+                                    }
+                                },
+                                onHeaders = {
+                                    bg {
+                                        val text = headersText(JSONObject(MailNative.readerHeaders(folderId, uid)))
+                                        withContext(Dispatchers.Main) { dialog = ReaderDialog.Headers(text) }
+                                    }
+                                },
+                                onPurge = { dialog = ReaderDialog.Purge },
+                            )
+                        }
+                    },
                 )
             }
             if (m.optBoolean("is_html")) {
@@ -504,12 +504,9 @@ private fun ReaderMenu(
     expanded: Boolean,
     onDismiss: () -> Unit,
     showRemote: Boolean,
-    showColors: Boolean,
-    originalColors: Boolean,
     onMove: () -> Unit,
     onSimilar: () -> Unit,
     onRemote: () -> Unit,
-    onColors: () -> Unit,
     onSaveEml: () -> Unit,
     onHeaders: () -> Unit,
     onPurge: () -> Unit,
@@ -527,7 +524,6 @@ private fun ReaderMenu(
         item("Move to…", R.drawable.ic_folder, onMove)
         item("Find similar", R.drawable.ic_search, onSimilar)
         if (showRemote) item("Show remote images", R.drawable.ic_image, onRemote)
-        if (showColors) item(if (originalColors) "Darken colours" else "Original colours", R.drawable.ic_palette, onColors)
         item("Save as .eml…", R.drawable.ic_save, onSaveEml)
         item("Show headers", R.drawable.ic_info, onHeaders)
         item("Delete permanently…", R.drawable.ic_delete_forever, onPurge)

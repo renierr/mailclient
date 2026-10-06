@@ -5,6 +5,13 @@
     void onBusy(boolean);
     void onReport(java.lang.String);
 }
+# Same for the job-event listener: without this R8 drops onJobEvent and
+# every queued/finished event dies in deliver_job_json, leaving the busy
+# indicator and the status strip permanently silent on release builds.
+-keep interface de.renier.mailclient.JobCallbacks { *; }
+-keepclassmembers class * implements de.renier.mailclient.JobCallbacks {
+    void onJobEvent(java.lang.String);
+}
 -keepclasseswithmembernames class de.renier.mailclient.MailNative {
     native <methods>;
 }
