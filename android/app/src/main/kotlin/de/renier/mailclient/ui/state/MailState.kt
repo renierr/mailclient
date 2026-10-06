@@ -233,8 +233,9 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         notice = null
     }
 
-    fun dismissUndo() {
-        undoOffer = null
+    /** [offer]'s bar is gone; a newer offer stays. */
+    fun dismissUndo(offer: UndoOffer) {
+        if (undoOffer === offer) undoOffer = null
     }
 
     private fun io(work: suspend () -> Unit) {
@@ -1126,10 +1127,17 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         }
     }
 
-    fun undo() = io {
+    /** Seconds an offer stays undoable (the core's grace period). */
+    val undoGraceSecs: Long by lazy { runCatching { MailNative.undoGraceSecs().toLong() }.getOrDefault(10L) }
+
+    /** Take back the current offer (the snackbar's Undo, Ctrl+Z). Main thread. */
+    fun undo() {
         val batch = undoOffer?.batch
-        withContext(Dispatchers.Main) { undoOffer = null }
-        if (batch.isNullOrEmpty()) return@io
+        undoOffer = null
+        if (!batch.isNullOrEmpty()) undoBatch(batch)
+    }
+
+    private fun undoBatch(batch: String) = io {
         MailNative.ensureInit(appContext)
         val text = runCatching { MailNative.undoMove(batch) }
             .getOrElse { it.message ?: "undo failed" }

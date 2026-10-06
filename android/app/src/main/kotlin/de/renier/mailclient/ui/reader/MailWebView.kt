@@ -106,6 +106,11 @@ fun MailWebView(
                         // ~980px overview.
                         useWideViewPort = true
                         loadWithOverviewMode = true
+                        // Pinch zoom (Flutter's WebView has it), without
+                        // the old on-screen +/- buttons.
+                        setSupportZoom(true)
+                        builtInZoomControls = true
+                        displayZoomControls = false
                     }
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {

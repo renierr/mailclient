@@ -1,5 +1,6 @@
 package de.renier.mailclient.ui.shell
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -38,6 +39,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import de.renier.mailclient.MailNative
 import de.renier.mailclient.R
 import kotlinx.coroutines.delay
 
@@ -76,6 +78,16 @@ fun SearchTopBar(
     onToggleSidebar: (() -> Unit)? = null,
 ) {
     val focus = LocalFocusManager.current
+    var help by remember { mutableStateOf(false) }
+    if (help) {
+        TextDialog(
+            title = "Search syntax",
+            text = remember { runCatching { MailNative.searchSyntaxHelp() }.getOrDefault("") },
+            icon = R.drawable.ic_help,
+            mono = true,
+            onDismiss = { help = false },
+        )
+    }
     Surface(
         shape = RoundedCornerShape(28.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -127,6 +139,10 @@ fun SearchTopBar(
             }
             if (query.isNotEmpty()) {
                 IconButton(onClick = onClear) { ShellIcon(R.drawable.ic_close, "Clear search") }
+            } else {
+                // The empty field's clear slot holds the search syntax
+                // (Flutter); the text is the core's, as in Qt's tooltip.
+                IconButton(onClick = { help = true }) { ShellIcon(R.drawable.ic_help, "Search syntax") }
             }
             OverflowMenu(menu)
         }
@@ -187,8 +203,24 @@ fun StatusStrip(
     outboxFailed: Boolean,
     outboxLabel: String,
     onOutbox: () -> Unit,
+    // The details dialog's "Copied" notice.
+    onCopied: (String) -> Unit,
 ) {
     var linger by remember { mutableStateOf(false) }
+    // Tapping the line shows it in full with Copy (Qt/Flutter). A snapshot:
+    // the dialog outlives the strip folding and the next job's status.
+    var details by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
+    details?.let { (full, isError) ->
+        TextDialog(
+            title = if (isError) "Error details" else "Status details",
+            text = full,
+            icon = if (isError) R.drawable.ic_error else R.drawable.ic_info,
+            error = isError,
+            mono = isError,
+            onCopied = onCopied,
+            onDismiss = { details = null },
+        )
+    }
     LaunchedEffect(busy) {
         if (busy) {
             linger = true
@@ -218,7 +250,11 @@ fun StatusStrip(
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable(enabled = showText && text.isNotEmpty(), onClickLabel = "Show details") {
+                        details = text to error
+                    },
             )
             if (outboxPending > 0) {
                 AssistChip(

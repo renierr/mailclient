@@ -344,9 +344,9 @@ Update this section when a step lands (see AGENTS.md §7.4).
 | Compose, Sync, search field, tools | ✅ | ✅ | ✅ | Narrow Flutter and native collapse the tools into an overflow menu |
 | Folder-scoped search toggle | ✅ | ✅ | ✅ | Native: tools-menu checkbox |
 | Busy indicator (a job is queued or running) | ✅ | ✅ | ✅ | Qt: core `busy` flag; Flutter: `_busyKinds`; native: header progress line fed by the core's in-flight job table (`mailffi::net`, sent with every job event) — never a Kotlin-side flag |
-| Status line + details + copy | ✅ | ✅ | 🔄 | Native StatusStrip shows while a job runs (live progress), on error, with outbox mail, and keeps a job's result readable briefly after it ends; no details dialog or copy |
+| Status line + details + copy | ✅ | ✅ | ✅ | Native StatusStrip shows while a job runs (live progress), on error, with outbox mail, and keeps a job's result readable briefly after it ends; tapping the line opens it in full with Copy |
 | Outbox pill + dialog | ✅ | ✅ | ✅ page | Pill words from `outbox::status_json` (`label`); native opens a full page from the status-strip chip: rows with the core's state line and error, Sync now (only while something is retryable), forget a dead row after a confirm |
-| Undo offer (snackbar/toast; Ctrl+Z where a keyboard exists) | ✅ | ✅ | 🔄 | Qt/Flutter honour `UNDO_GRACE_SECS`; native uses a long snackbar instead of `undoGraceSecs`, and has no Ctrl+Z for hardware keyboards |
+| Undo offer (snackbar/toast; Ctrl+Z where a keyboard exists) | ✅ | ✅ | ✅ | The bar lasts the core's `UNDO_GRACE_SECS` everywhere; native takes Ctrl+Z from a hardware keyboard outside the composer |
 | Keyboard shortcuts | ✅ | ✅ | — | Touch: no shortcuts by design |
 | Sync on start, account switch, resume | ✅ (start + switch; no resume on desktop) | ✅ | ✅ | Resume syncs only with auto-sync on and no sync asked for in the last minute |
 | Auto-sync timer, quiet hours | ✅ | ✅ | ✅ | Native timer runs only while the app is in the foreground, so quiet hours (which gate unattended ticks) never apply there |
@@ -358,7 +358,7 @@ Update this section when a step lands (see AGENTS.md §7.4).
 | Rows (avatar, unread, star, attach, snippet) | ✅ | ✅ | ✅ | Same arrangement everywhere: small avatar top left with the unread dot on its corner and the paperclip under it; sender + star, date on the right; subject with the ⋮ under the date; snippet (not in compact) |
 | Sort (date/from/subject ±) | ✅ | ✅ | ✅ | Hidden during search everywhere |
 | Quick filters (unread/starred/attach + dates + custom range) | ✅ | ✅ | ✅ | AND-combined; client-side over loaded rows + hits |
-| Full query syntax (`is:`, `has:`, `after:`…) | ✅ | ✅ | 🔄 | Core parses everywhere; native has no syntax-help UI |
+| Full query syntax (`is:`, `has:`, `after:`…) | ✅ | ✅ | ✅ | Core parses everywhere; the help text is the core's (Qt tooltip; Flutter and native a help button in the empty search field) |
 | Selection + bulk bar (read/star/archive/move/trash/purge) | ✅ | ✅ | ✅ | Native bar docks at bottom; purge always confirms |
 | Row menu (read/star/archive/move/trash/similar/eml) | ✅ | ✅ | ✅ | Touch: ⋮ on the subject line under the date (tap opens, long-press selects); Qt and Flutter desktop add right-click. A search hit acts in its own folder; trash follows the confirm preference, purge always asks |
 | Jump top/bottom buttons | ✅ | ✅ | ✅ | |
@@ -389,7 +389,7 @@ Update this section when a step lands (see AGENTS.md §7.4).
 | Attachments (open/save/save-all) | ✅ | ✅ | ✅ | Native via SAF + FileProvider |
 | Event card (ICS) | ✅ | ✅ | ✅ | |
 | Remote-image block + show-once | ✅ | ✅ | ✅ | |
-| Original/darkened colours, zoom | ✅ | ✅ | 🔄 | Native: paint + prefs scale, no in-UI zoom |
+| Original/darkened colours, zoom | ✅ | ✅ | ✅ | Android readers: pinch zoom in the WebView; mail text follows the reader text size and the interface scale |
 | Fullscreen reader | ✅ | ✅ | ✅ | Toggle in the reader bar; hides the shell bars and the other panes, back leaves it first. Native also hides the Android system bars (swipe shows them briefly), so it gains room on a phone too |
 | Reply / Reply-all / Forward | ✅ | ✅ | ✅ | Recipients, subject, quote and signature from `mailcore::compose::answer` everywhere |
 | Archive / Move / Delete / Star | ✅ | ✅ | ✅ | |

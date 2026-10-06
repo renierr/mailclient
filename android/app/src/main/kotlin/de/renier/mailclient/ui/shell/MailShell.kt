@@ -9,6 +9,7 @@ import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -33,6 +34,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -51,8 +60,8 @@ import de.renier.mailclient.R
 import de.renier.mailclient.ui.accounts.AccountSetupScreen
 import de.renier.mailclient.ui.accounts.AccountsScreen
 import de.renier.mailclient.ui.composer.ComposerScreen
-import de.renier.mailclient.ui.contacts.ContactsScreen
 import de.renier.mailclient.ui.composer.ComposerSeed
+import de.renier.mailclient.ui.contacts.ContactsScreen
 import de.renier.mailclient.ui.folders.FolderManagerScreen
 import de.renier.mailclient.ui.folders.FoldersScreen
 import de.renier.mailclient.ui.home.HomeScreen
@@ -64,6 +73,7 @@ import de.renier.mailclient.ui.state.MailState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 // The shell: manual back stack (no navigation dependency), search bar on
 // the mail panes and a plain back + title bar on every other page, Compose
@@ -254,17 +264,21 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
         }
     }
 
-    // Undo offers and transient notices surface as snackbars.
+    // Undo offers and transient notices surface as snackbars. The undo bar
+    // lasts exactly the core's grace period (the action is gone after it);
+    // a newer offer or Ctrl+Z restarts this effect, which takes the bar down.
     val offer = state.undoOffer
     LaunchedEffect(offer) {
         if (offer != null) {
-            val r = snack.showSnackbar(
-                message = offer.label.ifEmpty { "Done" },
-                actionLabel = "Undo",
-                duration = SnackbarDuration.Long,
-            )
-            if (r == SnackbarResult.ActionPerformed) state.undo()
-            state.dismissUndo()
+            val r = withTimeoutOrNull(state.undoGraceSecs * 1000) {
+                snack.showSnackbar(
+                    message = offer.label.ifEmpty { "Done" },
+                    actionLabel = "Undo",
+                    duration = SnackbarDuration.Indefinite,
+                )
+            }
+            if (r == SnackbarResult.ActionPerformed && state.undoOffer === offer) state.undo()
+            state.dismissUndo(offer)
         }
     }
     val notice = state.notice
@@ -296,13 +310,27 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
     // Interface scale (Settings): every dp and sp grows with it, like
     // Flutter's and Qt's uiScale.
     val baseDensity = LocalDensity.current
+    // Something has to hold focus for hardware keys to arrive here.
+    val shellFocus = remember { FocusRequester() }
+    LaunchedEffect(route) { runCatching { shellFocus.requestFocus() } }
     CompositionLocalProvider(
         LocalDensity provides Density(baseDensity.density * state.uiScale, baseDensity.fontScale),
     ) {
         Scaffold(
             modifier = Modifier
                 .fillMaxSize()
-                .safeDrawingPadding(),
+                .safeDrawingPadding()
+                // Ctrl+Z on a hardware keyboard takes the undo offer back
+                // (Qt/Flutter). A focused text field handles its own first;
+                // the composer's editor keeps its own undo.
+                .focusRequester(shellFocus)
+                .onKeyEvent { e ->
+                    val undo = e.type == KeyEventType.KeyDown && e.isCtrlPressed && e.key == Key.Z &&
+                        route !is Route.Composer && state.undoOffer != null
+                    if (undo) state.undo()
+                    undo
+                }
+                .focusable(),
             topBar = {
                 // The one-pane reader draws its own bars (actions need its
                 // message); beside other panes it sits under the search bar.
@@ -374,6 +402,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                     outboxFailed = state.outboxFailed,
                     outboxLabel = state.outboxLabel,
                     onOutbox = { if (route != Route.Outbox) go(Route.Outbox) },
+                    onCopied = state::info,
                 )
             },
             snackbarHost = { SnackbarHost(snack) },

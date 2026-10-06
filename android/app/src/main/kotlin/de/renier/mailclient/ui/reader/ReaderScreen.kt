@@ -395,7 +395,9 @@ fun ReaderScreen(
                     html = m.optString("body_html"),
                     page = page,
                     allowRemote = allowRemote,
-                    textZoom = (100 * prefs.scale * fontScale).toInt(),
+                    // Reader text size x interface scale x system font
+                    // size; the shell's density does not reach the page.
+                    textZoom = (100 * prefs.scale * state.uiScale * fontScale).toInt(),
                     // "As sent" shows the original fixed widths too.
                     fitWidths = !originalColors,
                     onTapUrl = ::onTapUrl,
