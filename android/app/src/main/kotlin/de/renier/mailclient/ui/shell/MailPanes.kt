@@ -62,7 +62,9 @@ private fun Dp.clampTo(min: Dp, max: Dp): Dp = coerceIn(min, maxOf(min, max))
 
 /**
  * The tablet and wide-window layouts. [reader] is null while no message is
- * open: three panes show a placeholder, two panes show the list.
+ * open: three panes show a placeholder, two panes show the list. In
+ * [fullscreen] the reader takes the whole width; its pane stays where it
+ * is in the composition, so the open message keeps its state and scroll.
  */
 @Composable
 fun MailPanes(
@@ -71,6 +73,7 @@ fun MailPanes(
     folders: @Composable () -> Unit,
     list: @Composable () -> Unit,
     reader: (@Composable () -> Unit)?,
+    fullscreen: Boolean = false,
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val total = maxWidth
@@ -80,8 +83,10 @@ fun MailPanes(
             val cap = (total - 300.dp).clampTo(200.dp, 480.dp)
             val side = widths.twoPaneSidebar.clampTo(160.dp, cap)
             Row(modifier = Modifier.fillMaxSize()) {
-                Box(modifier = Modifier.width(side).fillMaxHeight()) { folders() }
-                PaneDivider(onDelta = { widths.twoPaneSidebar = (side + it).clampTo(160.dp, cap) })
+                if (!fullscreen) {
+                    Box(modifier = Modifier.width(side).fillMaxHeight()) { folders() }
+                    PaneDivider(onDelta = { widths.twoPaneSidebar = (side + it).clampTo(160.dp, cap) })
+                }
                 Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
                     if (reader != null) reader() else list()
                 }
@@ -94,12 +99,14 @@ fun MailPanes(
         val listCap = (total - side - 320.dp - 48.dp).clampTo(240.dp, 700.dp)
         val listWidth = widths.list.clampTo(240.dp, listCap)
         Row(modifier = Modifier.fillMaxSize()) {
-            if (sideShown) {
-                Box(modifier = Modifier.width(side).fillMaxHeight()) { folders() }
-                PaneDivider(onDelta = { widths.sidebar = (side + it).clampTo(160.dp, 480.dp) })
+            if (!fullscreen) {
+                if (sideShown) {
+                    Box(modifier = Modifier.width(side).fillMaxHeight()) { folders() }
+                    PaneDivider(onDelta = { widths.sidebar = (side + it).clampTo(160.dp, 480.dp) })
+                }
+                Box(modifier = Modifier.width(listWidth).fillMaxHeight()) { list() }
+                PaneDivider(onDelta = { widths.list = (listWidth + it).clampTo(240.dp, listCap) })
             }
-            Box(modifier = Modifier.width(listWidth).fillMaxHeight()) { list() }
-            PaneDivider(onDelta = { widths.list = (listWidth + it).clampTo(240.dp, listCap) })
             Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
                 if (reader != null) {
                     reader()

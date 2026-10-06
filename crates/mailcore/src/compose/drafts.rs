@@ -49,6 +49,24 @@ pub fn draft_html(db: &Db, message: &Message) -> String {
     crate::html::inline_cid_images(&clean, &images).0
 }
 
+/// A draft's body for a WYSIWYG editor: its HTML ([`draft_html`]), or the
+/// plain text turned into paragraphs when it has no HTML part — set as HTML
+/// as is, the text would lose its line breaks.
+pub fn draft_editor_html(db: &Db, message: &Message) -> String {
+    let html = draft_html(db, message);
+    if !html.is_empty() {
+        return html;
+    }
+    match message
+        .body_text
+        .as_deref()
+        .filter(|t| !t.trim().is_empty())
+    {
+        Some(text) => crate::html::text_to_html(text),
+        None => String::new(),
+    }
+}
+
 /// Result of [`save_draft`]. `previous_not_removed` is set when the new
 /// version landed but the one it replaces could not be expunged — untidy
 /// (two copies), not destructive.
@@ -199,5 +217,35 @@ mod tests {
         assert!(open_draft(&db, drafts, 2).is_err());
         assert!(open_draft(&db, inbox, 3).is_err());
         assert!(open_draft(&db, drafts, 99).is_err());
+    }
+
+    #[test]
+    fn editor_body_is_the_html_part_or_the_text_as_paragraphs() {
+        let (db, acc) = setup();
+        let drafts = folders::upsert(&db, acc, "Drafts", "/", FolderRole::Drafts).unwrap();
+        let mut d = messages::sample_new(acc, drafts, 1);
+        d.is_draft = true;
+        d.body_text = Some(
+            "one
+
+two"
+            .to_string(),
+        );
+        d.body_html = None;
+        messages::upsert(&db, &d).unwrap();
+        let m = open_draft(&db, drafts, 1).unwrap();
+        assert_eq!(
+            draft_editor_html(&db, &m),
+            crate::html::text_to_html(
+                "one
+
+two"
+            )
+        );
+
+        d.body_html = Some("<p><b>bold</b></p>".to_string());
+        messages::upsert(&db, &d).unwrap();
+        let m = open_draft(&db, drafts, 1).unwrap();
+        assert_eq!(draft_editor_html(&db, &m), "<p><b>bold</b></p>");
     }
 }

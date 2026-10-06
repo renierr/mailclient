@@ -9,9 +9,9 @@
 
 mod answer;
 mod drafts;
+pub mod editor;
 mod form;
 mod from;
-pub mod markdown;
 mod reply;
 mod segments;
 mod send;
@@ -20,7 +20,9 @@ pub use answer::{
     answer_draft, answer_draft_json, blank_draft, blank_draft_json, AnswerDraft, AnswerMode,
     AnswerOptions, AnswerSource,
 };
-pub use drafts::{delete_draft, draft_html, drafts_folder, open_draft, save_draft, DraftSaved};
+pub use drafts::{
+    delete_draft, draft_editor_html, draft_html, drafts_folder, open_draft, save_draft, DraftSaved,
+};
 pub use form::ComposeForm;
 pub use from::{effective_from, sender_parts, SenderParts};
 pub use reply::{reply_address, ReplyAddress};

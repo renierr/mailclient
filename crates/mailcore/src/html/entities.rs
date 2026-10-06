@@ -91,7 +91,7 @@ pub fn escape_text(s: &str) -> String {
     out
 }
 
-pub(super) fn escape_attr(s: &str) -> String {
+pub(crate) fn escape_attr(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {

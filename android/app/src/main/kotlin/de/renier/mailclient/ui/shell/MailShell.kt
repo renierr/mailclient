@@ -1,6 +1,9 @@
 package de.renier.mailclient.ui.shell
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.BackHandler
@@ -31,8 +34,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import de.renier.mailclient.MailNative
@@ -88,6 +95,13 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
     val layout = paneLayout()
     val wide = layout != PaneLayout.One
     val widths = rememberPaneWidths()
+    // Reader full screen (Flutter/Qt): no shell bars, no other panes, no
+    // system bars. Only meaningful over an open message; leaving it ends it.
+    var readerFullscreen by remember { mutableStateOf(false) }
+    val onReader = route is Route.Reader
+    val fullscreen = readerFullscreen && onReader
+    LaunchedEffect(onReader) { if (!onReader) readerFullscreen = false }
+    ImmersiveMode(fullscreen)
 
     fun go(r: Route) {
         stack = (stack + r).takeLast(8)
@@ -164,6 +178,8 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
     BackHandler(enabled = mailPane && !readerCoversList && state.searchQuery.isNotEmpty()) {
         state.clearSearch()
     }
+    // Last, so it wins: back leaves full screen before anything else.
+    BackHandler(enabled = fullscreen) { readerFullscreen = false }
 
     DisposableEffect(Unit) {
         state.ensureInit()
@@ -275,6 +291,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
             // The one-pane reader draws its own bars (actions need its
             // message); beside other panes it sits under the search bar.
             if (route is Route.Reader && !wide) return@Scaffold
+            if (fullscreen) return@Scaffold
             // The composer draws its own bars (title, close, actions).
             if (route is Route.Composer) return@Scaffold
             Column {
@@ -330,7 +347,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
         },
         bottomBar = {
             if (route is Route.Reader && !wide) return@Scaffold
-            if (route is Route.Composer) return@Scaffold
+            if (route is Route.Composer || fullscreen) return@Scaffold
             StatusStrip(
                 text = state.status,
                 error = state.statusError,
@@ -380,6 +397,8 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                         onShowSimilar = ::back,
                         onCompose = { mode -> startCompose { ComposerSeed.answer(r.folderId, r.uid, mode) } },
                         closeIcon = layout == PaneLayout.Three,
+                        fullscreen = fullscreen,
+                        onToggleFullscreen = { readerFullscreen = !readerFullscreen },
                     )
                 }
             }
@@ -390,6 +409,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                     folders = folders,
                     list = list,
                     reader = (route as? Route.Reader)?.let { r -> { reader(r) } },
+                    fullscreen = fullscreen,
                 )
                 return@Column
             }
@@ -429,4 +449,26 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
             }
         }
     }
+}
+
+// Hides the status and navigation bars while [on]; a swipe from the edge
+// shows them for a moment, as in any full-screen viewer.
+@Composable
+private fun ImmersiveMode(on: Boolean) {
+    val view = LocalView.current
+    DisposableEffect(on) {
+        val window = view.context.findActivity()?.window
+        val bars = window?.let { WindowCompat.getInsetsController(it, view) }
+        if (on && bars != null) {
+            bars.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            bars.hide(WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose { if (on) bars?.show(WindowInsetsCompat.Type.systemBars()) }
+    }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }

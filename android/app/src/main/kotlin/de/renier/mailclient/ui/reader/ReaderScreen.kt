@@ -92,6 +92,9 @@ fun ReaderScreen(
     onCompose: (ComposeMode) -> Unit,
     // Beside the list (three panes) the way out closes, not goes back.
     closeIcon: Boolean = false,
+    // The reader alone on screen, system bars hidden; the shell owns it.
+    fullscreen: Boolean = false,
+    onToggleFullscreen: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -267,6 +270,12 @@ fun ReaderScreen(
                                 painterResource(if (starred) R.drawable.ic_star else R.drawable.ic_star_border),
                                 if (starred) "Unstar" else "Star",
                                 tint = starColor(starred),
+                            )
+                        }
+                        IconButton(onClick = onToggleFullscreen) {
+                            Icon(
+                                painterResource(if (fullscreen) R.drawable.ic_fullscreen_exit else R.drawable.ic_fullscreen),
+                                if (fullscreen) "Exit full screen" else "Full screen",
                             )
                         }
                         Box {

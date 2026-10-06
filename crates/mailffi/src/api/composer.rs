@@ -84,6 +84,7 @@ pub fn draft_form(account_id: i64, uid: u32) -> anyhow::Result<String> {
         serde_json::from_str(&mailcore::feed::attachments_json(db, drafts.id, uid)?)
             .unwrap_or_else(|_| serde_json::Value::Array(Vec::new()));
     let body_html = compose::draft_html(db, &m);
+    let editor_html = compose::draft_editor_html(db, &m);
     Ok(serde_json::json!({
         "draft_uid": uid,
         "from": m.from_addr.unwrap_or_default(),
@@ -94,6 +95,7 @@ pub fn draft_form(account_id: i64, uid: u32) -> anyhow::Result<String> {
         "subject": m.subject.unwrap_or_default(),
         "body": m.body_text.unwrap_or_default(),
         "body_html": body_html,
+        "editor_html": editor_html,
         "attachments": attachments,
     })
     .to_string())

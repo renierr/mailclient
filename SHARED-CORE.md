@@ -81,16 +81,17 @@ twice: Dart `shouldSyncOnResume` and Kotlin `MailState.RESUME_SYNC_GAP_MS`.
 Drift: none yet. Fix: a `mailcore` predicate taking the seconds since the
 last request.
 
-### 3. Markdown composer body and toolbar edits
+### 3. WYSIWYG editor document
 
-`mailcore::compose::markdown` (`body_html`, `to_html`, `has_formatting`,
-`apply_edit`, `send_format_note`, `inline_image_token`) is what native
-Android uses; it is a port of Flutter's `markdown.dart`, the toolbar
-helpers in `composer_dialog.dart` (`_wrapBody`, `_quoteBody`,
-`_bulletBody`), `ComposerEditor.formatNote` and `InlineImages.token`, which
-Flutter still runs. Drift: none yet (the Dart tests are ported to the core).
-Fix: expose the module through `mailffi::api` (codegen) and delete the Dart
-copies with their tests.
+`mailcore::compose::editor::document` builds the HTML editor page (CSS,
+nonce CSP, the `window.mc` script) that native Android loads. Qt's
+`EditorFrame.qml` still assembles its own page in QML and polls
+`queryCommandState` itself. Drift: small — native's page has a CSP and a
+header spacer, and quote toggling and links go through `mc.quote` /
+`mc.link`. Fix: give the Qt bridge the core document (its colours and
+scale as `EditorStyle`) and keep only the WebEngine wiring in QML; Qt polls
+`mc.state()` since it has no `MCHost`. Flutter's Markdown editor is
+Flutter's own and not a copy of anything.
 
 ### 4. "Does anything check in the background"
 

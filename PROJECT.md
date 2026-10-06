@@ -390,7 +390,7 @@ Update this section when a step lands (see AGENTS.md §7.4).
 | Event card (ICS) | ✅ | ✅ | ✅ | |
 | Remote-image block + show-once | ✅ | ✅ | ✅ | |
 | Original/darkened colours, zoom | ✅ | ✅ | 🔄 | Native: paint + prefs scale, no in-UI zoom |
-| Fullscreen reader | ✅ | ✅ | ❌ | Native Step 10 |
+| Fullscreen reader | ✅ | ✅ | ✅ | Toggle in the reader bar; hides the shell bars and the other panes, back leaves it first. Native also hides the Android system bars (swipe shows them briefly), so it gains room on a phone too |
 | Reply / Reply-all / Forward | ✅ | ✅ | ✅ | Recipients, subject, quote and signature from `mailcore::compose::answer` everywhere |
 | Archive / Move / Delete / Star | ✅ | ✅ | ✅ | |
 | Prev/next message | ❌ | ❌ | ❌ | None anywhere |
@@ -399,8 +399,8 @@ Update this section when a step lands (see AGENTS.md §7.4).
 
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
-| Full composer (To/Cc/Bcc, editor, attach, drafts, send) | ✅ dialog | ✅ page | ✅ page | Touch composers are full pages on every width (keyboard). Locked From domain, contact autocomplete, Reply-To, reply-to-mismatch notice, quote card, server-draft notice, delete draft, dirty guard |
-| Editor | ✅ WYSIWYG HTML | ✅ Markdown + preview | ✅ Markdown + preview | Touch: `mailcore::compose::markdown` renders the body and the toolbar edits (Flutter still runs its Dart copy, see SHARED-CORE.md) |
+| Full composer (To/Cc/Bcc, editor, attach, drafts, send) | ✅ dialog | ✅ page | ✅ page | Touch composers are full pages on every width (keyboard). Locked From domain, contact autocomplete, Reply-To, reply-to-mismatch notice, server-draft notice, delete draft, dirty guard. Flutter carries the quote as a card beside its text box; Qt and native edit it inline in the body |
+| Editor | ✅ WYSIWYG HTML + source | ✅ Markdown + preview | ✅ WYSIWYG HTML + source | Qt and native edit HTML in a web view (`execCommand`: bold, italic, underline, list, quote, link, clear, inline image; toolbar lights up at the caret). Native's page is `mailcore::compose::editor::document`; Qt still builds its own (see SHARED-CORE.md). With send format "auto" every frontend sends plain text when nothing is formatted (the sender's `needs_html_formatting`), and the editor footer says which |
 | Inline images, attachments | ✅ | ✅ (+ desktop drop) | ✅ | Native copies picked `content://` files into app cache, the core reads paths at send time |
 | Send failure after the composer closed | ✅ reopens with the text | 🔄 status line | 🔄 status line | SMTP runs after close; touch frontends report a late failure on the status strip only |
 

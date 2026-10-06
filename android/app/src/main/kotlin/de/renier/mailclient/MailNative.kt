@@ -200,13 +200,11 @@ object MailNative {
     @JvmStatic external fun isInlineImage(path: String): String
     @JvmStatic external fun senderParts(address: String): String
     @JvmStatic external fun effectiveFrom(local: String, accountEmail: String): String
-    // Markdown body (mailcore::compose::markdown). images = {"id": "data:…"}.
-    @JvmStatic external fun composeBodyHtml(text: String, images: String, quoteHtml: String, quoteFirst: Boolean): String
-    @JvmStatic external fun composePreviewHtml(text: String, images: String): String
-    @JvmStatic external fun composeFormatNote(sendFormat: String, text: String): String
-    @JvmStatic external fun inlineImageToken(id: Int, name: String): String
-    // Toolbar action on the body: {text,start,end}, UTF-16 offsets.
-    @JvmStatic external fun composeEdit(action: String, text: String, start: Int, end: Int): String
+    // WYSIWYG editor page (mailcore::compose::editor); colours 0xRRGGBB.
+    @JvmStatic external fun editorDocument(
+        paper: Int, ink: Int, muted: Int, accent: Int, rule: Int, fontPx: Int, placeholder: String, bodyHtml: String,
+    ): String
+    @JvmStatic external fun composeFormatNote(sendFormat: String, html: String): String
 
     // Step 0e search/contacts/settings/misc: the last JNI slice.
     @JvmStatic external fun searchJson(accountId: Long, query: String, folder: String): String

@@ -1,7 +1,6 @@
 package de.renier.mailclient.ui.composer
 
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,21 +8,24 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.InputChip
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -38,6 +40,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupProperties
@@ -92,12 +95,15 @@ fun ComposerTextField(
     placeholder: String = "",
     keyboard: KeyboardType = KeyboardType.Text,
     suffix: String? = null,
+    // The From address sits right against its locked domain.
+    alignEnd: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         singleLine = true,
+        textStyle = if (alignEnd) LocalTextStyle.current.copy(textAlign = TextAlign.End) else LocalTextStyle.current,
         placeholder = if (placeholder.isEmpty()) null else ({ Text(placeholder) }),
         suffix = suffix?.let { { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) } },
         keyboardOptions = KeyboardOptions(keyboardType = keyboard, imeAction = ImeAction.Next),
@@ -190,66 +196,55 @@ fun ComposerNotice(text: String, danger: Boolean = false) {
     }
 }
 
-/** Picked files as removable chips; empty, it takes no room. */
+/**
+ * Picked files as chips; empty, it takes no room. Only the chip's X
+ * removes a file, and only after a confirm: a stray tap on the name must
+ * not drop an attachment unnoticed.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AttachmentTray(files: List<PickedFile>, onRemove: (PickedFile) -> Unit) {
     if (files.isEmpty()) return
+    var confirm by remember { mutableStateOf<PickedFile?>(null) }
+    val scheme = MaterialTheme.colorScheme
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
     ) {
         for (f in files) {
-            InputChip(
-                selected = false,
-                onClick = { onRemove(f) },
-                label = { Text(f.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                leadingIcon = { Icon(painterResource(R.drawable.ic_attach), null, Modifier.size(16.dp)) },
-                trailingIcon = { Icon(painterResource(R.drawable.ic_close), "Remove", Modifier.size(16.dp)) },
-            )
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(1.dp, scheme.outlineVariant),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 10.dp)) {
+                    Icon(painterResource(R.drawable.ic_attach), null, Modifier.size(16.dp))
+                    Text(
+                        f.name,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(start = 6.dp).widthIn(max = 220.dp),
+                    )
+                    IconButton(onClick = { confirm = f }) {
+                        Icon(painterResource(R.drawable.ic_close), "Remove ${f.name}", Modifier.size(18.dp))
+                    }
+                }
+            }
         }
     }
-}
-
-/**
- * The quoted original of a reply or forward, beside the text box: the core
- * quotes an HTML mail as HTML, which plain text cannot hold. Collapsed by
- * default; it can be previewed or left out, not edited.
- */
-@Composable
-fun ComposerQuote(html: String, forward: Boolean, onRemove: () -> Unit) {
-    var open by remember { mutableStateOf(false) }
-    val scheme = MaterialTheme.colorScheme
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 8.dp)
-            .border(1.dp, scheme.outlineVariant, RoundedCornerShape(8.dp)),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .weight(1f)
-                    .clickable { open = !open }
-                    .padding(horizontal = 8.dp, vertical = 12.dp),
-            ) {
-                Icon(
-                    painterResource(if (open) R.drawable.ic_expand_more else R.drawable.ic_chevron_right),
-                    null,
-                    Modifier.size(20.dp),
-                )
-                Text(
-                    if (forward) "Forwarded message" else "Quoted original",
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = 4.dp),
-                )
-            }
-            IconButton(onClick = onRemove) { Icon(painterResource(R.drawable.ic_close), "Leave out") }
-        }
-        if (open) {
-            HtmlPreview(html, Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 320.dp).padding(8.dp))
-        }
+    confirm?.let { f ->
+        AlertDialog(
+            onDismissRequest = { confirm = null },
+            title = { Text("Remove attachment?") },
+            text = { Text(f.name) },
+            confirmButton = {
+                Button(onClick = {
+                    confirm = null
+                    onRemove(f)
+                }) { Text("Remove") }
+            },
+            dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel") } },
+        )
     }
 }

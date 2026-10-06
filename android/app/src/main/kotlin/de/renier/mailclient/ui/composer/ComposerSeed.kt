@@ -14,8 +14,9 @@ enum class ComposeMode(val title: String) {
 
 /**
  * The composer's starting point, built from the core's drafts
- * (`mailcore::compose::answer`, `open_draft`) so the screen only edits text.
- * Flutter's ComposerInitial, field for field.
+ * (`mailcore::compose::answer`, `draft_editor_html`) so the screen only
+ * edits. [bodyHtml] is HTML for the WYSIWYG editor, the way Qt seeds its
+ * EditorFrame: text slot, signature and quote already in place.
  */
 data class ComposerSeed(
     val mode: ComposeMode,
@@ -26,23 +27,20 @@ data class ComposerSeed(
     val bcc: String = "",
     val replyTo: String = "",
     val subject: String = "",
-    val body: String = "",
+    val bodyHtml: String = "",
     val draftUid: Int = -1,
     // Filenames the server copy of a draft holds: saving replaces that copy,
     // so they are called out rather than silently dropped.
     val serverAttachments: List<String> = emptyList(),
     // Answering mail whose replies go somewhere unexpected.
     val replyNotice: String = "",
-    // The quoted original as HTML, carried beside the text box.
-    val quoteHtml: String = "",
-    val quoteFirst: Boolean = false,
 ) {
     companion object {
         // Blocking JNI reads (local SQLite only): call off the main thread.
 
         /** New mail, with the signature below room to type. */
         fun blank(): ComposerSeed =
-            ComposerSeed(ComposeMode.Blank, body = bodyFor(JSONObject(MailNative.blankDraft())))
+            ComposerSeed(ComposeMode.Blank, bodyHtml = JSONObject(MailNative.blankDraft()).optString("body_html"))
 
         /** Reply, reply-all or forward: recipients, subject, quote prepared by the core. */
         fun answer(folderId: Long, uid: Int, mode: ComposeMode): ComposerSeed {
@@ -58,14 +56,12 @@ data class ComposerSeed(
                 to = d.optString("to"),
                 cc = d.optString("cc"),
                 subject = d.optString("subject"),
-                body = bodyFor(d),
+                bodyHtml = d.optString("body_html"),
                 replyNotice = if (noticeAddr.isEmpty()) {
                     ""
                 } else {
                     "Replies to this mail go to $noticeAddr — not to the sender (${d.optString("notice_sender")})."
                 },
-                quoteHtml = d.optString("quote_html"),
-                quoteFirst = d.optBoolean("quote_first"),
             )
         }
 
@@ -79,7 +75,6 @@ data class ComposerSeed(
                     if (!a.optBoolean("is_inline")) add(a.optString("filename"))
                 }
             }
-            val text = f.optString("body")
             return ComposerSeed(
                 mode = ComposeMode.Draft,
                 fromAddr = f.optString("from"),
@@ -88,15 +83,10 @@ data class ComposerSeed(
                 bcc = f.optString("bcc"),
                 replyTo = f.optString("reply_to"),
                 subject = f.optString("subject"),
-                body = text.ifEmpty { f.optString("body_html") },
+                bodyHtml = f.optString("editor_html"),
                 draftUid = f.optInt("draft_uid", uid),
                 serverAttachments = names,
             )
-        }
-
-        private fun bodyFor(d: JSONObject): String {
-            val sig = d.optString("signature_text")
-            return if (sig.isEmpty()) "" else "\n\n$sig"
         }
     }
 }

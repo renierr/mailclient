@@ -4,15 +4,20 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -24,7 +29,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -33,17 +38,20 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
@@ -52,17 +60,19 @@ import de.renier.mailclient.MailNative
 import de.renier.mailclient.R
 import de.renier.mailclient.ui.state.MailState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Compose, reply, forward and draft editing: Flutter's composer page, full
- * screen on every width (AGENTS.md: never a dialog on touch). Plain text
- * with Markdown marks, rendered by the core on send; the quoted original
- * rides beside the text box. The account and folder are pinned at open, so
- * switching accounts behind an open composer cannot send as the other one.
+ * Compose, reply, forward and draft editing, full screen on every width
+ * (AGENTS.md: never a dialog on touch). The body is a WYSIWYG HTML editor
+ * like Qt's (ComposerEditor) with an HTML source view; with the send format
+ * on auto the core still sends plain text when nothing is formatted. The
+ * account and folder are pinned at open, so switching accounts behind an
+ * open composer cannot send as the other one.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -96,30 +106,57 @@ fun ComposerScreen(
     var bcc by remember { mutableStateOf(tf(seed.bcc)) }
     var replyTo by remember { mutableStateOf(tf(seed.replyTo)) }
     var subject by remember { mutableStateOf(tf(seed.subject)) }
-    // New mail starts at the top, above the signature.
-    var body by remember { mutableStateOf(TextFieldValue(seed.body, TextRange(0))) }
     var showCc by remember { mutableStateOf(seed.cc.isNotEmpty()) }
     var showBcc by remember { mutableStateOf(seed.bcc.isNotEmpty()) }
     var showReplyTo by remember { mutableStateOf(seed.replyTo.isNotEmpty()) }
-    var keepQuote by remember { mutableStateOf(true) }
     val picked = remember { mutableStateListOf<PickedFile>() }
-    val images = remember { mutableStateMapOf<Int, String>() }
-    var nextImage by remember { mutableStateOf(1) }
     var dirty by remember { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
     var savingDraft by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var confirmClose by remember { mutableStateOf(false) }
     var confirmDeleteDraft by remember { mutableStateOf(false) }
+    var linkDialog by remember { mutableStateOf(false) }
     var sendFormat by remember { mutableStateOf("auto") }
     var suggestContacts by remember { mutableStateOf(true) }
     val working = sending || savingDraft
+
+    // The body. The page loads [editorBody] once; leaving the source view
+    // starts it again from the edited source. [edits] counts changes for
+    // the format note.
+    val editor = remember { EditorController() }
+    var editorBody by remember { mutableStateOf(seed.bodyHtml) }
+    var sourceMode by remember { mutableStateOf(false) }
+    var source by remember { mutableStateOf("") }
+    var edits by remember { mutableIntStateOf(0) }
+    var formatNote by remember { mutableStateOf("") }
+
+    val scheme = MaterialTheme.colorScheme
+    // Theme colours are read once per body: a recoloured page would mean a
+    // reload, and a reload loses what was typed.
+    val document = remember(editorBody) {
+        val c = listOf(scheme.surface, scheme.onSurface, scheme.onSurfaceVariant, scheme.primary, scheme.outlineVariant)
+            .map { it.toArgb() and 0xFFFFFF }
+        MailNative.editorDocument(c[0], c[1], c[2], c[3], c[4], 16, "Write your message", editorBody)
+    }
+    val textZoom = (100 * LocalConfiguration.current.fontScale).toInt()
 
     LaunchedEffect(Unit) {
         val o = withContext(Dispatchers.IO) { runCatching { JSONObject(MailNative.settingsJson()) }.getOrNull() }
         if (o != null) {
             sendFormat = o.optString("compose_send_format", "auto").ifEmpty { "auto" }
             suggestContacts = o.optBoolean("collect_sent_contacts", true)
+        }
+    }
+
+    suspend fun currentHtml(): String? = if (sourceMode) source else editor.html()
+
+    // What Send will produce, from the core's rule, a moment after typing.
+    LaunchedEffect(edits, sourceMode, sendFormat, editor.ready) {
+        delay(400)
+        val html = currentHtml() ?: return@LaunchedEffect
+        formatNote = withContext(Dispatchers.IO) {
+            runCatching { MailNative.composeFormatNote(sendFormat, html) }.getOrDefault("")
         }
     }
 
@@ -133,13 +170,11 @@ fun ComposerScreen(
     val ccShown = showCc || cc.text.isNotEmpty()
     val bccShown = showBcc || bcc.text.isNotEmpty()
     val replyToShown = showReplyTo || replyTo.text.isNotEmpty()
-    val quoteShown = keepQuote && seed.quoteHtml.isNotEmpty()
-    val imagesJson = JSONObject(images.mapKeys { it.key.toString() }.toMap()).toString()
 
-    fun form(): String {
-        val quote = if (quoteShown) seed.quoteHtml else ""
-        val html = MailNative.composeBodyHtml(body.text, imagesJson, quote, seed.quoteFirst)
-        return JSONObject()
+    // Qt's payload: the HTML goes as both body and body_html; the core
+    // derives the plain text and picks the wire format.
+    fun form(html: String): String =
+        JSONObject()
             .put("to", to.text)
             .put("cc", cc.text)
             .put("bcc", bcc.text)
@@ -147,56 +182,50 @@ fun ComposerScreen(
             .put("from_name", senderName.text)
             .put("reply_to", if (replyToShown) replyTo.text else "")
             .put("subject", subject.text)
-            .put("body", body.text)
+            .put("body", html)
             .put("body_html", html)
             .put("attachments", JSONArray(picked.map { it.path }))
             .put("draft_uid", seed.draftUid)
             .toString()
+
+    // Reading the page back is asynchronous, so Send and Save draft finish
+    // in a coroutine; the queue call itself runs off the main thread.
+    fun submit(failText: String, setBusy: (Boolean) -> Unit, call: (String) -> Unit) {
+        setBusy(true)
+        error = null
+        scope.launch {
+            val html = currentHtml()
+            if (html == null) {
+                setBusy(false)
+                error = "The editor is still loading"
+                return@launch
+            }
+            val f = form(html)
+            val failure = withContext(Dispatchers.IO) { runCatching { call(f) }.exceptionOrNull() }
+            if (failure == null) {
+                onClose()
+            } else {
+                setBusy(false)
+                error = failure.message ?: failText
+            }
+        }
     }
 
+    // Validation and queueing run inline in the core: a mistake comes back
+    // here with the text intact. Only the SMTP submit is queued; the status
+    // strip reports it.
     fun send() {
         if (working) return
         if (to.text.isBlank() && cc.text.isBlank() && bcc.text.isBlank()) {
             error = "Add at least one recipient (To, Cc or Bcc)"
             return
         }
-        sending = true
-        error = null
-        // Built here, from the fields as shown; only the queue call goes off
-        // the main thread.
-        val f = form()
-        scope.launch {
-            // Validation and queueing run inline in the core: a mistake comes
-            // back here with the text intact. Only the SMTP submit is queued;
-            // the status strip reports it.
-            val failure = withContext(Dispatchers.IO) {
-                runCatching { MailNative.sendMail(accountId, folderId, f) }.exceptionOrNull()
-            }
-            if (failure == null) {
-                onClose()
-            } else {
-                sending = false
-                error = failure.message ?: "Could not send"
-            }
-        }
+        submit("Could not send", { sending = it }) { MailNative.sendMail(accountId, folderId, it) }
     }
 
     fun saveDraft() {
         if (working) return
-        savingDraft = true
-        error = null
-        val f = form()
-        scope.launch {
-            val failure = withContext(Dispatchers.IO) {
-                runCatching { MailNative.saveDraft(accountId, f) }.exceptionOrNull()
-            }
-            if (failure == null) {
-                onClose()
-            } else {
-                savingDraft = false
-                error = failure.message ?: "Could not save the draft"
-            }
-        }
+        submit("Could not save the draft", { savingDraft = it }) { MailNative.saveDraft(accountId, it) }
     }
 
     fun deleteDraft() {
@@ -216,21 +245,17 @@ fun ComposerScreen(
     }
     BackHandler { maybeClose() }
 
-    fun insertAtCursor(insert: String) {
-        val text = body.text
-        val at = body.selection.start.coerceIn(0, text.length)
-        val next = text.substring(0, at) + insert + text.substring(at)
-        body = TextFieldValue(next, TextRange(at + insert.length))
-        dirty = true
-    }
-
-    fun applyAction(action: String) {
-        val sel = body.selection
-        val json = runCatching { MailNative.composeEdit(action, body.text, sel.min, sel.max) }.getOrDefault("")
-        if (json.isEmpty()) return
-        val e = JSONObject(json)
-        body = TextFieldValue(e.optString("text"), TextRange(e.optInt("start"), e.optInt("end")))
-        dirty = true
+    // Source view shows exactly what will be sent, and edits round-trip.
+    fun toggleSource() {
+        if (sourceMode) {
+            editorBody = source
+            sourceMode = false
+        } else {
+            scope.launch {
+                source = editor.html() ?: editorBody
+                sourceMode = true
+            }
+        }
     }
 
     val attachPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -245,170 +270,257 @@ fun ComposerScreen(
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
         scope.launch {
-            val tokens = mutableListOf<String>()
             for (uri in uris) {
                 val result = withContext(Dispatchers.IO) {
                     runCatching {
                         val f = ComposerFiles.copyIn(context, uri) ?: error("The image could not be read")
-                        f to MailNative.imageDataUrl(f.path)
+                        MailNative.imageDataUrl(f.path)
                     }
                 }
-                result.onSuccess { (f, url) ->
-                    val id = nextImage++
-                    images[id] = url
-                    tokens += MailNative.inlineImageToken(id, f.name)
-                }.onFailure {
-                    // Too large or not an image: say so; attaching still works.
-                    state.info(it.message ?: "The image cannot go inline")
-                }
+                // Too large or not an image: say so; attaching still works.
+                result.onSuccess { editor.insertImage(it) }
+                    .onFailure { state.info(it.message ?: "The image cannot go inline") }
             }
-            if (tokens.isNotEmpty()) insertAtCursor(tokens.joinToString("\n"))
         }
     }
+
+    // Every action in one place that the keyboard never covers; Discard is
+    // the X (it asks when there is unsaved work).
+    val actions: @Composable RowScope.() -> Unit = {
+        if (seed.draftUid >= 0) {
+            IconButton(onClick = { confirmDeleteDraft = true }, enabled = !working) {
+                Icon(painterResource(R.drawable.ic_delete), "Delete draft")
+            }
+        }
+        IconButton(onClick = ::saveDraft, enabled = !working) {
+            if (savingDraft) {
+                CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
+            } else {
+                Icon(painterResource(R.drawable.ic_save), "Save draft")
+            }
+        }
+        IconButton(onClick = ::send, enabled = !working) {
+            if (sending) {
+                CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
+            } else {
+                Icon(painterResource(R.drawable.ic_send), "Send", tint = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+    val closeButton: @Composable () -> Unit = {
+        IconButton(onClick = ::maybeClose, enabled = !working) {
+            Icon(painterResource(R.drawable.ic_close), "Close")
+        }
+    }
+    val toolbar: @Composable () -> Unit = {
+        ComposerToolbar(
+            format = editor.format,
+            sourceMode = sourceMode,
+            onExec = { editor.exec(it) },
+            onQuote = { editor.quote() },
+            onLink = {
+                editor.saveSelection()
+                linkDialog = true
+            },
+            onImage = {
+                editor.saveSelection()
+                imagePicker.launch(arrayOf("image/*"))
+            },
+            onAttach = { attachPicker.launch(arrayOf("*/*")) },
+            onToggleSource = ::toggleSource,
+        )
+    }
+    // A short screen (phone in landscape) cannot spare a title bar and a
+    // formatting bar above the keyboard: one 48dp row holds close, the
+    // formatting buttons (scrolling sideways) and the actions.
+    val short = LocalConfiguration.current.screenHeightDp < SHORT_SCREEN_DP
 
     Scaffold(
         contentWindowInsets = WindowInsets(0),
         topBar = {
-            TopAppBar(
-                windowInsets = WindowInsets(0),
-                title = { Text(seed.mode.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                navigationIcon = {
-                    IconButton(onClick = ::maybeClose, enabled = !working) {
-                        Icon(painterResource(R.drawable.ic_close), "Close")
+            if (short) {
+                Surface(color = MaterialTheme.colorScheme.surface) {
+                    Column {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                        ) {
+                            closeButton()
+                            Box(modifier = Modifier.weight(1f)) { toolbar() }
+                            actions()
+                        }
+                        HorizontalDivider()
                     }
-                },
-            )
+                }
+            } else {
+                TopAppBar(
+                    windowInsets = WindowInsets(0),
+                    title = { Text(seed.mode.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    navigationIcon = closeButton,
+                    actions = actions,
+                )
+            }
         },
         bottomBar = {
-            Surface(color = MaterialTheme.colorScheme.surface) {
-                Column {
-                    HorizontalDivider()
-                    // Qt order, where the thumb is: Delete draft, Discard,
-                    // Save draft, Send. A FlowRow, so a narrow phone stacks
-                    // the buttons instead of overflowing.
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                    ) {
-                        if (seed.draftUid >= 0) {
-                            TextButton(onClick = { confirmDeleteDraft = true }, enabled = !working) {
-                                Text("Delete draft")
-                            }
-                        }
-                        TextButton(onClick = ::maybeClose, enabled = !working) { Text("Discard") }
-                        OutlinedButton(onClick = ::saveDraft, enabled = !working) {
-                            if (savingDraft) CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
-                            else Text("Save draft")
-                        }
-                        Button(onClick = ::send, enabled = !working) {
-                            if (sending) CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
-                            else Text("Send")
-                        }
+            if (!short) {
+                Surface(color = MaterialTheme.colorScheme.surface) {
+                    Column {
+                        HorizontalDivider()
+                        toolbar()
                     }
                 }
             }
         },
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .padding(padding)
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-        ) {
-            // Failures at the top, never scrolled away below a long body.
-            error?.let {
-                Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(bottom = 8.dp))
-            }
-            if (seed.replyNotice.isNotEmpty()) ComposerNotice(seed.replyNotice, danger = true)
-
-            ComposerHeaderRow(
-                label = "From",
-                trailing = { ComposerToggle("Reply-To", replyToShown) { showReplyTo = !replyToShown } },
-            ) {
-                ComposerTextField(
-                    value = senderName,
-                    onValueChange = { edit(senderName, it) { v -> senderName = v } },
-                    placeholder = account?.name ?: "Your name",
-                )
-                ComposerTextField(
-                    value = fromLocal,
-                    // The domain is the account's: an `@` here would show an
-                    // address that is not the one sent.
-                    onValueChange = { edit(fromLocal, it.copy(text = it.text.replace("@", ""))) { v -> fromLocal = v } },
-                    placeholder = "address",
-                    keyboard = KeyboardType.Email,
-                    suffix = domain.ifEmpty { null },
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-            }
-            ComposerHeaderRow(
-                label = "To",
-                trailing = {
-                    ComposerToggle("Cc", ccShown) { showCc = !ccShown }
-                    ComposerToggle("Bcc", bccShown) { showBcc = !bccShown }
-                },
-            ) {
-                RecipientField(to, { edit(to, it) { v -> to = v } }, suggestContacts)
-            }
-            if (ccShown) {
-                ComposerHeaderRow("Cc") { RecipientField(cc, { edit(cc, it) { v -> cc = v } }, suggestContacts) }
-            }
-            if (bccShown) {
-                ComposerHeaderRow("Bcc") {
-                    RecipientField(bcc, { edit(bcc, it) { v -> bcc = v } }, suggestContacts, "Hidden from the other recipients")
+        val header: @Composable () -> Unit = {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                // Failures at the top, never scrolled away below a long body.
+                error?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(bottom = 8.dp))
                 }
-            }
-            if (replyToShown) {
-                ComposerHeaderRow("Reply-To") {
+                if (seed.replyNotice.isNotEmpty()) ComposerNotice(seed.replyNotice, danger = true)
+
+                ComposerHeaderRow(
+                    label = "From",
+                    trailing = { ComposerToggle("Reply-To", replyToShown) { showReplyTo = !replyToShown } },
+                ) {
                     ComposerTextField(
-                        value = replyTo,
-                        onValueChange = { edit(replyTo, it) { v -> replyTo = v } },
-                        placeholder = "Replies go here instead of From",
+                        value = senderName,
+                        onValueChange = { edit(senderName, it) { v -> senderName = v } },
+                        placeholder = account?.name ?: "Your name",
+                    )
+                    ComposerTextField(
+                        value = fromLocal,
+                        // The domain is the account's: an `@` here would show an
+                        // address that is not the one sent.
+                        onValueChange = { edit(fromLocal, it.copy(text = it.text.replace("@", ""))) { v -> fromLocal = v } },
+                        placeholder = "address",
                         keyboard = KeyboardType.Email,
+                        suffix = domain.ifEmpty { null },
+                        alignEnd = true,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+                ComposerHeaderRow(
+                    label = "To",
+                    trailing = {
+                        ComposerToggle("Cc", ccShown) { showCc = !ccShown }
+                        ComposerToggle("Bcc", bccShown) { showBcc = !bccShown }
+                    },
+                ) {
+                    RecipientField(to, { edit(to, it) { v -> to = v } }, suggestContacts)
+                }
+                if (ccShown) {
+                    ComposerHeaderRow("Cc") { RecipientField(cc, { edit(cc, it) { v -> cc = v } }, suggestContacts) }
+                }
+                if (bccShown) {
+                    ComposerHeaderRow("Bcc") {
+                        RecipientField(bcc, { edit(bcc, it) { v -> bcc = v } }, suggestContacts, "Hidden from the other recipients")
+                    }
+                }
+                if (replyToShown) {
+                    ComposerHeaderRow("Reply-To") {
+                        ComposerTextField(
+                            value = replyTo,
+                            onValueChange = { edit(replyTo, it) { v -> replyTo = v } },
+                            placeholder = "Replies go here instead of From",
+                            keyboard = KeyboardType.Email,
+                        )
+                    }
+                }
+                ComposerHeaderRow("Subject") {
+                    ComposerTextField(subject, { edit(subject, it) { v -> subject = v } })
+                }
+
+                if (seed.serverAttachments.isNotEmpty()) {
+                    ComposerNotice(
+                        "${seed.serverAttachments.size} file(s) live on the server copy of this draft. " +
+                            "Saving replaces it — re-attach them afterwards.",
+                    )
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        for (name in seed.serverAttachments) {
+                            AssistChip(onClick = {}, label = { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) })
+                        }
+                    }
+                }
+                AttachmentTray(picked) {
+                    picked.remove(it)
+                    dirty = true
+                }
+                if (formatNote.isNotEmpty()) {
+                    Text(
+                        formatNote,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp),
                     )
                 }
             }
-            ComposerHeaderRow("Subject") {
-                ComposerTextField(subject, { edit(subject, it) { v -> subject = v } })
-            }
+            HorizontalDivider()
+        }
 
-            val quoteCard = @Composable {
-                ComposerQuote(seed.quoteHtml, forward = seed.mode == ComposeMode.Forward) {
-                    keepQuote = false
-                    dirty = true
+        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+            if (sourceMode) {
+                Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                    header()
+                    OutlinedTextField(
+                        value = source,
+                        onValueChange = {
+                            if (it != source) {
+                                source = it
+                                dirty = true
+                                edits++
+                            }
+                        },
+                        placeholder = { Text("HTML source…") },
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                        keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
+                        minLines = 10,
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    )
                 }
-            }
-            if (quoteShown && seed.quoteFirst) quoteCard()
-            ComposerEditor(
-                value = body,
-                onValueChange = { edit(body, it) { v -> body = v } },
-                imagesJson = imagesJson,
-                sendFormat = sendFormat,
-                onAction = ::applyAction,
-                onImage = { imagePicker.launch(arrayOf("image/*")) },
-                onAttach = { attachPicker.launch(arrayOf("*/*")) },
-            )
-            if (quoteShown && !seed.quoteFirst) quoteCard()
-
-            if (seed.serverAttachments.isNotEmpty()) {
-                ComposerNotice(
-                    "${seed.serverAttachments.size} file(s) live on the server copy of this draft. " +
-                        "Saving replaces it — re-attach them afterwards.",
+            } else {
+                ComposerEditor(
+                    controller = editor,
+                    document = document,
+                    textZoom = textZoom,
+                    onChanged = {
+                        dirty = true
+                        edits++
+                    },
+                    header = header,
                 )
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (name in seed.serverAttachments) {
-                        AssistChip(onClick = {}, label = { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) })
-                    }
-                }
-            }
-            AttachmentTray(picked) {
-                picked.remove(it)
-                dirty = true
             }
         }
     }
 
+    if (linkDialog) {
+        var url by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { linkDialog = false },
+            title = { Text("Insert link") },
+            text = {
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("Address") },
+                    supportingText = { Text("Select text first to turn it into a link.") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        linkDialog = false
+                        if (url.isNotBlank()) editor.link(url.trim())
+                    },
+                ) { Text("Insert") }
+            },
+            dismissButton = { TextButton(onClick = { linkDialog = false }) { Text("Cancel") } },
+        )
+    }
     if (confirmClose) {
         AlertDialog(
             onDismissRequest = { confirmClose = false },
@@ -452,3 +564,6 @@ fun ComposerScreen(
         )
     }
 }
+
+// Below this window height the composer folds its two bars into one row.
+private const val SHORT_SCREEN_DP = 480

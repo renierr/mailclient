@@ -184,7 +184,8 @@ thread the FRB stream uses, each event (`kind`, `phase` progress/finished,
   back to the list with the shell's undo snackbar. Find similar shows hits
   in the list. Attachment open type is the core's (`open_mime`, Dart moved
   onto it too). `ReaderActivity`, `DelegateScreen`, `ACTION_READER` and
-  `readerDirty` are gone. Open: fullscreen toggle (step 10).
+  `readerDirty` are gone. Fullscreen toggle landed with the tablet panes
+  (see step 10).
 
 - Migrate the Views experiment into Compose: header (avatar, sender, date,
   To/Cc, reply-to-differs banner, expandable technical headers), action row
@@ -206,9 +207,15 @@ thread the FRB stream uses, each event (`kind`, `phase` progress/finished,
 
 Built to Flutter's behaviour where this plan differs: Send closes once the
 core has queued the mail (a later SMTP failure shows on the status strip,
-no reopen), Save draft closes too, and there is no link button (Flutter has
-none). The Markdown renderer and toolbar edits moved into
-`mailcore::compose::markdown` instead of a Kotlin copy.
+no reopen) and Save draft closes too. The body is not the Markdown editor
+planned below but a WYSIWYG HTML editor like Qt's: a web view page from
+`mailcore::compose::editor` with the address fields overlaying its top
+(the reader's layout — the page is the one scroller), a formatting bar
+pinned above the keyboard, an HTML source view, and the quote and
+signature inline in the body as the core's `body_html` places them.
+Delete draft, Save draft and Send are top-bar icons (Discard is the X), so
+the keyboard never hides them; on a short (landscape) screen the title bar
+and the formatting bar fold into one row.
 
 - Entries: blank, reply / reply-all / forward (`answerDraft` quote +
   signature placement), draft (`draftForm`, pinned account, server-draft
@@ -267,7 +274,8 @@ none). The Markdown renderer and toolbar edits moved into
 ## Step 10 — Responsive + tablet pass
 
 - 2-pane list+reader (and 3-pane on large tablets if it earns its keep),
-  pane-width memory, fullscreen reader, multi-window/split-screen sanity,
+  pane-width memory, fullscreen reader (done: reader bar toggle, system
+  bars hidden), multi-window/split-screen sanity,
   foldable posture change without losing selection.
 - Full sweep at 360dp, short heights, 150% text scale, dark/light,
   TalkBack labels on icon buttons.

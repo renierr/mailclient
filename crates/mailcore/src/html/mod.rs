@@ -39,6 +39,7 @@ mod urls;
 mod tests;
 
 pub use css::has_own_colors;
+pub(crate) use entities::escape_attr;
 pub use entities::{decode_entities, escape_text};
 pub(crate) use inline::{base64_decode, base64_encode};
 pub use inline::{

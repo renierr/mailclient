@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -20,6 +21,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -130,10 +132,12 @@ fun MailWebView(
         )
 
         // Once the header is off the top it stays there: nothing moves while
-        // the rest of the mail scrolls.
+        // the rest of the mail scrolls. Measured at its full height, never
+        // squeezed into a short (landscape) view.
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .wrapContentHeight(Alignment.Top, unbounded = true)
                 .offset { IntOffset(0, -min(scrollPx, headerPx + 1)) }
                 .background(MaterialTheme.colorScheme.surface)
                 .onSizeChanged { headerPx = it.height },
