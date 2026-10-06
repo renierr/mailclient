@@ -11,17 +11,20 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.BottomAppBar
+import androidx.compose.material3.Surface
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -305,9 +308,17 @@ fun ReaderScreen(
             )
         },
         bottomBar = {
+            // A slim strip, not Material's 80dp BottomAppBar: three actions
+            // need one 48dp touch row. Docked rather than floating, so it
+            // never covers the end of the mail (the HTML body scrolls in
+            // its own WebView and cannot scroll out from under an overlay).
             if (m != null) {
-                BottomAppBar(windowInsets = WindowInsets(0)) {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         ReplyAction(R.drawable.ic_reply, "Reply") { onCompose(ComposeMode.Reply) }
                         ReplyAction(R.drawable.ic_reply_all, "Reply all") { onCompose(ComposeMode.ReplyAll) }
                         ReplyAction(R.drawable.ic_forward, "Forward") { onCompose(ComposeMode.Forward) }
@@ -471,9 +482,9 @@ fun ReaderScreen(
 
 @Composable
 private fun ReplyAction(icon: Int, label: String, onClick: () -> Unit) {
-    TextButton(onClick = onClick) {
-        Icon(painterResource(icon), null, modifier = Modifier.padding(end = 6.dp))
-        Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    TextButton(onClick = onClick, contentPadding = PaddingValues(horizontal = 12.dp)) {
+        Icon(painterResource(icon), null, modifier = Modifier.size(18.dp))
+        Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 6.dp))
     }
 }
 
