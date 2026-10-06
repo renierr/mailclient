@@ -66,22 +66,6 @@ object MailNative {
     // `{from, to, cc, date, subject, message_id, reply_to}` headers view.
     @JvmStatic external fun readerHeaders(folderId: Long, uid: Int): String
 
-    // Full WebView document for a sanitized body. `paint` is
-    // `theme`/`original`/`darkened`; colours are `0xRRGGBB`; `top_space` is
-    // ignored here (readerDocumentFull takes the header overlay's spacer).
-    @JvmStatic external fun readerDocument(
-        body: String,
-        paint: String,
-        paper: Int,
-        ink: Int,
-        link: Int,
-        quote: Int,
-        rule: Int,
-        allowRemote: Boolean,
-        scale: Float,
-        fit: Boolean,
-    ): String
-
     // Re-sanitized HTML with remote images kept — the "show once" path.
     @JvmStatic external fun readerMessageHtml(folderId: Long, uid: Int, allowRemote: Boolean): String
 
@@ -146,8 +130,6 @@ object MailNative {
     @JvmStatic external fun deleteAccount(id: Long): String
     @JvmStatic external fun initialSelection(): String
     @JvmStatic external fun selectAccount(id: Long): String
-    @JvmStatic external fun folderIdForPath(accountId: Long, path: String): String
-    @JvmStatic external fun folderPath(folderId: Long): String
     @JvmStatic external fun setFolderSubscribed(folderId: Long, subscribed: Boolean)
     @JvmStatic external fun folderCounts(folderId: Long): String
     @JvmStatic external fun outboxStatusJson(accountId: Long): String
@@ -157,7 +139,6 @@ object MailNative {
     // the previous listener, so only JobEvents calls these; screens
     // subscribe there.
     @JvmStatic external fun setJobListener(callbacks: JobCallbacks)
-    @JvmStatic external fun clearJobListener()
     // The core's in-flight job table, {generation, kinds, keys}: what the
     // busy indicator shows. Every job event carries the same snapshot as
     // "busy"; this is for a screen that starts while jobs already run.
@@ -168,7 +149,6 @@ object MailNative {
     @JvmStatic external fun refreshFolders(accountId: Long)
     @JvmStatic external fun refreshServerCapabilities(accountId: Long)
     @JvmStatic external fun backgroundMarkSeen()
-    @JvmStatic external fun backgroundRunHistory(): String
     // Settings: run history in words {last, history}, standby bucket and
     // heartbeat wording, About's {version, license, db_path}.
     @JvmStatic external fun backgroundRunLines(): String
@@ -203,7 +183,6 @@ object MailNative {
     @JvmStatic external fun answerDraft(folderId: Long, uid: Int, mode: String): String
     @JvmStatic external fun blankDraft(): String
     @JvmStatic external fun imageDataUrl(path: String): String
-    @JvmStatic external fun isInlineImage(path: String): String
     @JvmStatic external fun senderParts(address: String): String
     @JvmStatic external fun effectiveFrom(local: String, accountEmail: String): String
     // WYSIWYG editor page (mailcore::compose::editor); colours 0xRRGGBB.
@@ -234,20 +213,14 @@ object MailNative {
     @JvmStatic external fun settingChoicesJson(): String
     @JvmStatic external fun quietTime(text: String): String
     @JvmStatic external fun quietTimeAt(hour: Int, minute: Int): String
-    @JvmStatic external fun setSetting(key: String, value: String)
     @JvmStatic external fun setSettings(values: String)
     @JvmStatic external fun setSort(field: String, descending: Boolean)
     @JvmStatic external fun accountSettingsJson(accountId: Long): String
     @JvmStatic external fun setAccountSettings(accountId: Long, values: String): String
     @JvmStatic external fun backgroundPlanJson(): String
-    @JvmStatic external fun attachmentsJson(folderId: Long, uid: Int): String
-    @JvmStatic external fun downloadAttachments(accountId: Long, folderId: Long, uid: Int)
-    @JvmStatic external fun saveAttachmentTo(attachmentId: Long, path: String): String
-    @JvmStatic external fun saveAllAttachmentsTo(folderId: Long, uid: Int, dir: String): String
     @JvmStatic external fun readerPaint(colored: Boolean, dark: Boolean, keepOriginal: Boolean): String
     @JvmStatic external fun readerPalette(paint: String, paper: Int, ink: Int, link: Int, quote: Int, rule: Int): String
     @JvmStatic external fun readerFitBelow(body: String): String
-    @JvmStatic external fun readerBody(body: String, paint: String, fit: Boolean): String
     @JvmStatic external fun readerDocumentFull(body: String, paint: String, paper: Int, ink: Int, link: Int, quote: Int, rule: Int, allowRemote: Boolean, topSpace: Int, scale: Float, fit: Boolean): String
     @JvmStatic external fun outboxJson(accountId: Long): String
     @JvmStatic external fun dismissOutbox(accountId: Long, id: Long)

@@ -64,7 +64,6 @@ import de.renier.mailclient.ui.composer.ComposerSeed
 import de.renier.mailclient.ui.contacts.ContactsScreen
 import de.renier.mailclient.ui.folders.FolderManagerScreen
 import de.renier.mailclient.ui.folders.FoldersScreen
-import de.renier.mailclient.ui.home.HomeScreen
 import de.renier.mailclient.ui.list.ListScreen
 import de.renier.mailclient.ui.outbox.OutboxScreen
 import de.renier.mailclient.ui.reader.ReaderScreen
@@ -78,8 +77,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 // The shell: manual back stack (no navigation dependency), search bar on
 // the mail panes and a plain back + title bar on every other page, Compose
 // as a bar icon, a status strip that only shows up with something to say,
-// undo snackbar. The dev probes live in the tools menu until their screens
-// land, then go.
+// undo snackbar.
 //
 // The mail routes (Folders, List, Reader) lay out by width (paneLayout):
 // one pane at a time on a phone, folders + list (the reader taking the
@@ -94,7 +92,6 @@ private sealed interface Route {
     data object Accounts : Route
     // -1: add; else edit.
     data class Setup(val accountId: Long) : Route
-    data object Dev : Route
     // Full page on every width; account and folder pinned at open.
     data class Composer(val seed: ComposerSeed, val accountId: Long, val folderId: Long) : Route
     // Draws its own bar (Save); a full page on every width.
@@ -319,7 +316,6 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
         ShellMenuItem("Contacts", R.drawable.ic_contacts) { go(Route.Contacts) },
         ShellMenuItem("Accounts", R.drawable.ic_person) { go(Route.Accounts) },
         ShellMenuItem("Settings", R.drawable.ic_settings) { go(Route.Settings) },
-        ShellMenuItem("Dev probes", R.drawable.ic_code) { go(Route.Dev) },
     )
 
     // Interface scale (Settings): every dp and sp grows with it, like
@@ -396,7 +392,6 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                                 Route.FolderManager -> "Manage folders"
                                 Route.Accounts -> "Accounts"
                                 is Route.Setup -> if (route.accountId >= 0) "Edit account" else "Add account"
-                                Route.Dev -> "Dev probes"
                             Route.Outbox -> "Outbox"
                             Route.Contacts -> "Contacts"
                                 Route.Folders, Route.List, is Route.Reader, is Route.Composer, Route.Settings -> ""
@@ -500,7 +495,6 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                             onClose = ::back,
                         )
                     is Route.Reader -> reader(route)
-                    Route.Dev -> HomeScreen(openPayload = null, onConsumeOpen = {})
                     Route.Settings -> SettingsScreen(state = state, onClose = ::back)
                 Route.Outbox -> OutboxScreen(state = state)
                 Route.Contacts -> ContactsScreen()

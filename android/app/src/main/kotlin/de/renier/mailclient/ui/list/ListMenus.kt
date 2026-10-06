@@ -1,6 +1,5 @@
 package de.renier.mailclient.ui.list
 
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
@@ -17,6 +16,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import de.renier.mailclient.ui.common.FormDialog
 import de.renier.mailclient.ui.state.MailState
 
 // Sort menu (Qt sortMenu, Flutter sort PopupMenuButton): newest/oldest,
@@ -136,49 +136,38 @@ fun DateRangeDialog(state: MailState, onDismiss: () -> Unit) {
     var before by remember { mutableStateOf(state.filterBefore) }
     var error by remember { mutableStateOf<String?>(null) }
     val day = Regex("""\d{4}-\d{2}-\d{2}""")
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Custom date range") },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = after,
-                    onValueChange = { after = it.trim(); error = null },
-                    label = { Text("After (YYYY-MM-DD)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = before,
-                    onValueChange = { before = it.trim(); error = null },
-                    label = { Text("Before (YYYY-MM-DD)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                )
-                error?.let { Text(it, modifier = Modifier.padding(top = 8.dp)) }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    val bad = (after.isNotEmpty() && !day.matches(after)) ||
-                        (before.isNotEmpty() && !day.matches(before))
-                    if (after.isEmpty() && before.isEmpty() || bad) {
-                        error = "Enter at least one date as YYYY-MM-DD."
-                        return@TextButton
-                    }
-                    if (after.isNotEmpty() && before.isNotEmpty() && after > before) {
-                        error = "After must not be later than Before."
-                        return@TextButton
-                    }
-                    state.setAfterDay(after)
-                    state.setBeforeDay(before)
-                    onDismiss()
-                },
-            ) { Text("Apply") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
+    fun apply() {
+        val bad = (after.isNotEmpty() && !day.matches(after)) ||
+            (before.isNotEmpty() && !day.matches(before))
+        if (after.isEmpty() && before.isEmpty() || bad) {
+            error = "Enter at least one date as YYYY-MM-DD."
+            return
+        }
+        if (after.isNotEmpty() && before.isNotEmpty() && after > before) {
+            error = "After must not be later than Before."
+            return
+        }
+        state.setAfterDay(after)
+        state.setBeforeDay(before)
+        onDismiss()
+    }
+    FormDialog(title = "Custom date range", confirmLabel = "Apply", onConfirm = ::apply, onDismiss = onDismiss) {
+        OutlinedTextField(
+            value = after,
+            onValueChange = { after = it.trim(); error = null },
+            label = { Text("After (YYYY-MM-DD)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = before,
+            onValueChange = { before = it.trim(); error = null },
+            label = { Text("Before (YYYY-MM-DD)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        )
+        error?.let { Text(it, modifier = Modifier.padding(top = 8.dp)) }
+    }
 }
 
 // Destructive-action confirm (trash per the delete preference, purge

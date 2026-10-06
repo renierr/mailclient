@@ -28,8 +28,8 @@ stays untouched by this plan.
 - Job events: screens never call `MailNative.setJobListener`; they
   subscribe to `JobEvents` (one process-lifetime JNI listener, Kotlin
   fan-out) and close the subscription on dispose.
-- Dev probe cards in `HomeScreen` go when the real screen for their slice
-  lands (folders/sync probe with step 3, list/bulk with step 4, …).
+- Dev probe cards in `HomeScreen` went once every slice had its real
+  screen; the page is gone (step 11).
 - Anything that contacts a real mailbox (the "real mailbox" verify items in
   steps 4, 9, 11) needs the user's explicit per-run consent; the seeded DB
   and the emulator cover everything else.
@@ -301,6 +301,12 @@ run on a device, each with explicit consent.
 - Verify: no `RenderFlex`-class overflows (Compose: no clipped text or
   pushed-off-screen actions), dialogs become fullscreen pages on small
   screens.
+
+Progress: icon-only buttons all carry labels (the composer's toggles via
+semantics); the small text forms (insert link, contact alias, custom date
+range) go through `FormDialog`, a full page below 480dp of height; every
+other text input already lives on a page. The on-device sweep at 360dp,
+short heights and 150% text is the user's pass on phone and tablet.
 
 ## Step 11 — Parity audit + delegation removal (the finish line)
 

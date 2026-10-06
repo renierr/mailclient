@@ -27,9 +27,11 @@ android/
           shell/                     (route stack, search bar, status strip)
           state/MailState.kt         (what the shell shows, over JNI)
           folders/ list/ reader/     (panes: tree + manager, list, reader)
-          accounts/                  (manager + setup form)
+          composer/                  (WYSIWYG editor page, fields, attachments)
+          accounts/ contacts/        (account manager + setup form, contacts)
+          settings/ outbox/          (settings pages, outbox list)
+          common/                    (avatar and other shared pieces)
           theme/Theme.kt             (Material You, brand blue #3B82F6 below Android 12)
-          home/HomeScreen.kt         (dev probes page)
       res/                           (launcher icons, vector icons, FileProvider paths)
 ```
 

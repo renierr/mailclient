@@ -58,6 +58,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.R
+import de.renier.mailclient.ui.common.FormDialog
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.state.PendingSend
 import kotlinx.coroutines.Dispatchers
@@ -528,30 +529,25 @@ fun ComposerScreen(
 
     if (linkDialog) {
         var url by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { linkDialog = false },
-            title = { Text("Insert link") },
-            text = {
-                OutlinedTextField(
-                    value = url,
-                    onValueChange = { url = it },
-                    label = { Text("Address") },
-                    supportingText = { Text("Select text first to turn it into a link.") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                    modifier = Modifier.fillMaxWidth(),
-                )
+        FormDialog(
+            title = "Insert link",
+            confirmLabel = "Insert",
+            onConfirm = {
+                linkDialog = false
+                if (url.isNotBlank()) editor.link(url.trim())
             },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        linkDialog = false
-                        if (url.isNotBlank()) editor.link(url.trim())
-                    },
-                ) { Text("Insert") }
-            },
-            dismissButton = { TextButton(onClick = { linkDialog = false }) { Text("Cancel") } },
-        )
+            onDismiss = { linkDialog = false },
+        ) {
+            OutlinedTextField(
+                value = url,
+                onValueChange = { url = it },
+                label = { Text("Address") },
+                supportingText = { Text("Select text first to turn it into a link.") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
     }
     if (confirmClose) {
         AlertDialog(

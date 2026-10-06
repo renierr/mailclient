@@ -43,6 +43,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.R
+import de.renier.mailclient.ui.common.FormDialog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -360,25 +361,17 @@ private fun Name(c: Contact) {
 @Composable
 private fun AliasDialog(contact: Contact, onSave: (String) -> Unit, onDismiss: () -> Unit) {
     var alias by remember { mutableStateOf(contact.alias) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Alias") },
-        text = {
-            Column {
-                Text(contact.address, style = MaterialTheme.typography.bodyMedium)
-                OutlinedTextField(
-                    value = alias,
-                    onValueChange = { alias = it },
-                    singleLine = true,
-                    placeholder = { Text(contact.name.ifEmpty { "Alias name" }) },
-                    supportingText = { Text("Leave empty to use the name the mail carries.") },
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                )
-            }
-        },
-        confirmButton = { Button(onClick = { onSave(alias.trim()) }) { Text("Save") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
+    FormDialog(title = "Alias", confirmLabel = "Save", onConfirm = { onSave(alias.trim()) }, onDismiss = onDismiss) {
+        Text(contact.address, style = MaterialTheme.typography.bodyMedium)
+        OutlinedTextField(
+            value = alias,
+            onValueChange = { alias = it },
+            singleLine = true,
+            placeholder = { Text(contact.name.ifEmpty { "Alias name" }) },
+            supportingText = { Text("Leave empty to use the name the mail carries.") },
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        )
+    }
 }
 
 @Composable
