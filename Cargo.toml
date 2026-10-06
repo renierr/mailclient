@@ -10,7 +10,7 @@ members = [
 # `version.workspace = true`; the Flutter pubspec mirrors it as versionName
 # (see AGENT.md §5). Bump here, never per-crate.
 [workspace.package]
-version = "0.9.0"
+version = "0.10.0"
 
 # Whole-program optimisation for release builds: the Android `libmailffi.so`
 # comes out about a quarter smaller and the Qt binary shrinks alike. Costs a
