@@ -30,6 +30,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -268,7 +269,11 @@ fun ReaderScreen(
                 CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 return@Box
             }
-            val canToggleColors = m.optBoolean("is_html") && m.optBoolean("html_colored")
+            val canToggleColors = m.optBoolean("is_html") && m.optBoolean("html_colored") &&
+                // In a dark theme the paint itself switches; in a light one
+                // only the layout does, so without fixed widths the toggle
+                // would visibly do nothing.
+                (dark || remember(m) { mailFitBelow(m) } > 0)
             val header: @Composable () -> Unit = {
                 ReaderHeader(
                     m = m,
@@ -338,7 +343,8 @@ fun ReaderScreen(
                         // "As sent" per message, beside the actions: in a dark
                         // theme the sender's colours instead of the darkened
                         // ones, everywhere the original fixed widths instead
-                        // of the fitted ones.
+                        // of the fitted ones. Tinted while on, so the state
+                        // reads without tapping.
                         if (canToggleColors) {
                             IconButton(onClick = { originalColors = !originalColors }) {
                                 Icon(
@@ -347,6 +353,11 @@ fun ReaderScreen(
                                         if (dark) "Darken colours" else "Fit to screen"
                                     } else {
                                         if (dark) "Original colours" else "Original layout"
+                                    },
+                                    tint = if (originalColors) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        LocalContentColor.current
                                     },
                                 )
                             }
@@ -617,3 +628,9 @@ private fun pagePaint(colored: Boolean, dark: Boolean, keepOriginal: Boolean, th
     fun c(key: String, i: Int) = p?.optInt(key, theme[i]) ?: theme[i]
     return PagePaint(paint, c("paper", 0), c("ink", 1), c("link", 2), c("quote", 3), c("rule", 4))
 }
+
+// Page width below which the mail's fixed widths are loosened (`0`: the
+// mail has none). Same value the WebView computes, so the toggle only
+// shows where flipping it visibly changes the layout.
+private fun mailFitBelow(m: JSONObject): Int =
+    runCatching { MailNative.readerFitBelow(m.optString("body_html")).toInt() }.getOrDefault(0)
