@@ -132,6 +132,14 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     // the shell then asks for the notification permission.
     var backgroundChecks by mutableStateOf(false)
         private set
+    // Interface scale (ui_scale) and list density, applied by the shell.
+    var uiScale by mutableStateOf(1f)
+        private set
+    var compactList by mutableStateOf(false)
+        private set
+    // Server capabilities per account, from the "Capabilities" job (About).
+    var capabilities by mutableStateOf<Map<Long, JSONObject>>(emptyMap())
+        private set
     // A "Folders" job (LIST refresh, create) is queued or running.
     val foldersBusy: Boolean get() = "Folders" in busyKinds
 
@@ -402,7 +410,14 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         }
         val ok = e.optBoolean("ok", true)
         val text = e.optString("status")
-        if (text.isNotEmpty()) {
+        if (kind == "Capabilities" && ok && phase == "finished") {
+            val caps = runCatching { JSONObject(text) }.getOrNull()
+            if (caps != null) {
+                capabilities = capabilities + (caps.optLong("account_id", -1) to caps)
+                status = "Server capabilities loaded"
+                statusError = false
+            }
+        } else if (text.isNotEmpty()) {
             status = text
             statusError = !ok
         }
@@ -942,6 +957,8 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     fun loadReaderPrefs() = io {
         MailNative.ensureInit(appContext)
         val o = JSONObject(MailNative.settingsJson())
+        val scale = o.optDouble("ui_scale", 1.0).toFloat().takeIf { it in 0.5f..3f } ?: 1f
+        val compact = o.optString("list_density") == "compact"
         val prefs = ReaderPrefs(
             autoMarkRead = o.optBoolean("auto_mark_read", true),
             markReadDelaySecs = o.optLong("mark_read_delay_secs", 0),
@@ -954,7 +971,40 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
                 else -> 1f
             },
         )
-        withContext(Dispatchers.Main) { readerPrefs = prefs }
+        withContext(Dispatchers.Main) {
+            readerPrefs = prefs
+            uiScale = scale
+            compactList = compact
+        }
+    }
+
+    /**
+     * Settings were saved: re-read everything that acts on them — reader
+     * and list preferences, sort, the open account's auto-sync interval —
+     * and re-plan the background checks.
+     */
+    fun settingsSaved() {
+        loadReaderPrefs()
+        loadSort()
+        reloadMessages()
+        rescheduleBackground()
+        val id = activeAccountId
+        if (id >= 0) {
+            io {
+                loadAutoSyncMinutes(id)
+                withContext(Dispatchers.Main) { restartAutoSync() }
+            }
+        }
+    }
+
+    /** Ask the server for its capability list; arrives in [capabilities]. */
+    fun refreshCapabilities(accountId: Long) = io {
+        MailNative.ensureInit(appContext)
+        try {
+            MailNative.refreshServerCapabilities(accountId)
+        } catch (e: Exception) {
+            if (!e.isAlreadyRunning()) fail(e.message ?: "Could not ask the server")
+        }
     }
 
     /** After the reader changed a message: re-read list, tree and search. */

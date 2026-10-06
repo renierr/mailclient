@@ -34,9 +34,11 @@ private const val COMPACT_DP = 700f
 private const val MEDIUM_DP = 1100f
 
 @Composable
-fun paneLayout(): PaneLayout {
+fun paneLayout(uiScale: Float = 1f): PaneLayout {
     val config = LocalConfiguration.current
-    val effective = config.screenWidthDp / config.fontScale.coerceAtLeast(1f)
+    // Scale-aware like Flutter and Qt: a larger interface scale or text
+    // size behaves like a narrower window.
+    val effective = config.screenWidthDp / config.fontScale.coerceAtLeast(1f) / uiScale.coerceAtLeast(1f)
     return when {
         effective >= MEDIUM_DP -> PaneLayout.Three
         effective >= COMPACT_DP -> PaneLayout.Two

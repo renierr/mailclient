@@ -23,6 +23,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -33,8 +34,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
@@ -54,6 +57,7 @@ import de.renier.mailclient.ui.folders.FoldersScreen
 import de.renier.mailclient.ui.home.HomeScreen
 import de.renier.mailclient.ui.list.ListScreen
 import de.renier.mailclient.ui.reader.ReaderScreen
+import de.renier.mailclient.ui.settings.SettingsScreen
 import de.renier.mailclient.ui.state.MailState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -81,6 +85,8 @@ private sealed interface Route {
     data object Dev : Route
     // Full page on every width; account and folder pinned at open.
     data class Composer(val seed: ComposerSeed, val accountId: Long, val folderId: Long) : Route
+    // Draws its own bar (Save); a full page on every width.
+    data object Settings : Route
 }
 
 @Composable
@@ -92,7 +98,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
     val route = stack.last()
     val snack = remember { SnackbarHostState() }
     val mailPane = route == Route.Folders || route == Route.List || route is Route.Reader
-    val layout = paneLayout()
+    val layout = paneLayout(state.uiScale)
     val wide = layout != PaneLayout.One
     val widths = rememberPaneWidths()
     // Reader full screen (Flutter/Qt): no shell bars, no other panes, no
@@ -279,173 +285,181 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
         ShellMenuItem("Manage folders", R.drawable.ic_folder_manage) { go(Route.FolderManager) },
         ShellMenuItem("Contacts", R.drawable.ic_contacts) { state.info("Contacts arrive in Step 7") },
         ShellMenuItem("Accounts", R.drawable.ic_person) { go(Route.Accounts) },
-        ShellMenuItem("Settings", R.drawable.ic_settings) { state.info("Settings arrive in Step 8") },
+        ShellMenuItem("Settings", R.drawable.ic_settings) { go(Route.Settings) },
         ShellMenuItem("Dev probes", R.drawable.ic_code) { go(Route.Dev) },
     )
 
-    Scaffold(
-        modifier = Modifier
-            .fillMaxSize()
-            .safeDrawingPadding(),
-        topBar = {
-            // The one-pane reader draws its own bars (actions need its
-            // message); beside other panes it sits under the search bar.
-            if (route is Route.Reader && !wide) return@Scaffold
-            if (fullscreen) return@Scaffold
-            // The composer draws its own bars (title, close, actions).
-            if (route is Route.Composer) return@Scaffold
-            Column {
-                if (mailPane) {
-                    val folderName = state.openFolder?.leaf
-                    SearchTopBar(
-                        query = state.searchQuery,
-                        placeholder = if (state.searchFolderOnly && folderName != null) {
-                            "Search in $folderName"
-                        } else {
-                            "Search mail"
-                        },
-                        canGoBack = !wide && stack.size > 1,
-                        onBack = {
-                            state.clearSearch()
-                            back()
-                        },
-                        onCompose = if (state.accounts.isNotEmpty()) {
-                            { startCompose { ComposerSeed.blank() } }
-                        } else {
-                            null
-                        },
-                        onQuery = {
-                            state.setSearch(it)
-                            // Results live in the list pane: bring it forward
-                            // where it shares its place.
-                            if (it.isNotEmpty()) {
-                                if (!wide && route == Route.Folders) go(Route.List)
-                                if (layout == PaneLayout.Two && route is Route.Reader) stack = mailStack()
-                            }
-                        },
-                        onClear = { state.clearSearch() },
-                        menu = tools,
-                        onToggleSidebar = if (layout == PaneLayout.Three) {
-                            { widths.sidebarVisible = !widths.sidebarVisible }
-                        } else {
-                            null
-                        },
-                    )
-                } else {
-                    PageTopBar(
-                        title = when (route) {
-                            Route.FolderManager -> "Manage folders"
-                            Route.Accounts -> "Accounts"
-                            is Route.Setup -> if (route.accountId >= 0) "Edit account" else "Add account"
-                            Route.Dev -> "Dev probes"
-                            Route.Folders, Route.List, is Route.Reader, is Route.Composer -> ""
-                        },
-                        onBack = ::back,
-                    )
+    // Interface scale (Settings): every dp and sp grows with it, like
+    // Flutter's and Qt's uiScale.
+    val baseDensity = LocalDensity.current
+    CompositionLocalProvider(
+        LocalDensity provides Density(baseDensity.density * state.uiScale, baseDensity.fontScale),
+    ) {
+        Scaffold(
+            modifier = Modifier
+                .fillMaxSize()
+                .safeDrawingPadding(),
+            topBar = {
+                // The one-pane reader draws its own bars (actions need its
+                // message); beside other panes it sits under the search bar.
+                if (route is Route.Reader && !wide) return@Scaffold
+                if (fullscreen) return@Scaffold
+                // The composer and Settings draw their own bars.
+                if (route is Route.Composer || route == Route.Settings) return@Scaffold
+                Column {
+                    if (mailPane) {
+                        val folderName = state.openFolder?.leaf
+                        SearchTopBar(
+                            query = state.searchQuery,
+                            placeholder = if (state.searchFolderOnly && folderName != null) {
+                                "Search in $folderName"
+                            } else {
+                                "Search mail"
+                            },
+                            canGoBack = !wide && stack.size > 1,
+                            onBack = {
+                                state.clearSearch()
+                                back()
+                            },
+                            onCompose = if (state.accounts.isNotEmpty()) {
+                                { startCompose { ComposerSeed.blank() } }
+                            } else {
+                                null
+                            },
+                            onQuery = {
+                                state.setSearch(it)
+                                // Results live in the list pane: bring it forward
+                                // where it shares its place.
+                                if (it.isNotEmpty()) {
+                                    if (!wide && route == Route.Folders) go(Route.List)
+                                    if (layout == PaneLayout.Two && route is Route.Reader) stack = mailStack()
+                                }
+                            },
+                            onClear = { state.clearSearch() },
+                            menu = tools,
+                            onToggleSidebar = if (layout == PaneLayout.Three) {
+                                { widths.sidebarVisible = !widths.sidebarVisible }
+                            } else {
+                                null
+                            },
+                        )
+                    } else {
+                        PageTopBar(
+                            title = when (route) {
+                                Route.FolderManager -> "Manage folders"
+                                Route.Accounts -> "Accounts"
+                                is Route.Setup -> if (route.accountId >= 0) "Edit account" else "Add account"
+                                Route.Dev -> "Dev probes"
+                                Route.Folders, Route.List, is Route.Reader, is Route.Composer, Route.Settings -> ""
+                            },
+                            onBack = ::back,
+                        )
+                    }
                 }
-            }
-        },
-        bottomBar = {
-            if (route is Route.Reader && !wide) return@Scaffold
-            if (route is Route.Composer || fullscreen) return@Scaffold
-            StatusStrip(
-                text = state.status,
-                error = state.statusError,
-                busy = state.busy,
-                outboxPending = state.outboxPending,
-                outboxFailed = state.outboxFailed,
-                onOutbox = { state.info("Outbox arrives in Step 9") },
-            )
-        },
-        snackbarHost = { SnackbarHost(snack) },
-    ) { padding ->
-        Column(modifier = Modifier.padding(padding)) {
-            // The header line: any job in the core's in-flight table, on
-            // every page (the reader included), like the desktop's busy
-            // indicator. The words go to the status strip below. The slot is
-            // always there, so starting a sync never shifts the list.
-            Box(modifier = Modifier.fillMaxWidth().height(3.dp)) {
-                if (state.busy) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxSize())
+            },
+            bottomBar = {
+                if (route is Route.Reader && !wide) return@Scaffold
+                if (route is Route.Composer || route == Route.Settings || fullscreen) return@Scaffold
+                StatusStrip(
+                    text = state.status,
+                    error = state.statusError,
+                    busy = state.busy,
+                    outboxPending = state.outboxPending,
+                    outboxFailed = state.outboxFailed,
+                    onOutbox = { state.info("Outbox arrives in Step 9") },
+                )
+            },
+            snackbarHost = { SnackbarHost(snack) },
+        ) { padding ->
+            Column(modifier = Modifier.padding(padding)) {
+                // The header line: any job in the core's in-flight table, on
+                // every page (the reader included), like the desktop's busy
+                // indicator. The words go to the status strip below. The slot is
+                // always there, so starting a sync never shifts the list.
+                Box(modifier = Modifier.fillMaxWidth().height(3.dp)) {
+                    if (state.busy) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxSize())
+                    }
                 }
-            }
-            val folders: @Composable () -> Unit = {
-                FoldersScreen(
-                    state = state,
-                    onOpenFolder = ::openFolderPane,
-                    onAddAccount = { go(Route.Setup(-1)) },
-                )
-            }
-            val list: @Composable () -> Unit = {
-                ListScreen(
-                    state = state,
-                    onOpenReader = ::openRow,
-                    openMessage = (route as? Route.Reader)?.let { it.folderId to it.uid },
-                )
-            }
-            val reader: @Composable (Route.Reader) -> Unit = { r ->
-                // Keyed: opening another message beside the list must not
-                // keep the previous one's loaded state.
-                key(r) {
-                    ReaderScreen(
+                val folders: @Composable () -> Unit = {
+                    FoldersScreen(
                         state = state,
-                        accountId = r.accountId,
-                        folderId = r.folderId,
-                        uid = r.uid,
-                        onClose = ::back,
-                        // Similar hits show in the list pane under the reader.
-                        onShowSimilar = ::back,
-                        onCompose = { mode -> startCompose { ComposerSeed.answer(r.folderId, r.uid, mode) } },
-                        closeIcon = layout == PaneLayout.Three,
+                        onOpenFolder = ::openFolderPane,
+                        onAddAccount = { go(Route.Setup(-1)) },
+                    )
+                }
+                val list: @Composable () -> Unit = {
+                    ListScreen(
+                        state = state,
+                        onOpenReader = ::openRow,
+                        openMessage = (route as? Route.Reader)?.let { it.folderId to it.uid },
+                    )
+                }
+                val reader: @Composable (Route.Reader) -> Unit = { r ->
+                    // Keyed: opening another message beside the list must not
+                    // keep the previous one's loaded state.
+                    key(r) {
+                        ReaderScreen(
+                            state = state,
+                            accountId = r.accountId,
+                            folderId = r.folderId,
+                            uid = r.uid,
+                            onClose = ::back,
+                            // Similar hits show in the list pane under the reader.
+                            onShowSimilar = ::back,
+                            onCompose = { mode -> startCompose { ComposerSeed.answer(r.folderId, r.uid, mode) } },
+                            closeIcon = layout == PaneLayout.Three,
+                            fullscreen = fullscreen,
+                            onToggleFullscreen = { readerFullscreen = !readerFullscreen },
+                        )
+                    }
+                }
+                if (wide && mailPane) {
+                    MailPanes(
+                        layout = layout,
+                        widths = widths,
+                        folders = folders,
+                        list = list,
+                        reader = (route as? Route.Reader)?.let { r -> { reader(r) } },
                         fullscreen = fullscreen,
-                        onToggleFullscreen = { readerFullscreen = !readerFullscreen },
                     )
+                    return@Column
                 }
-            }
-            if (wide && mailPane) {
-                MailPanes(
-                    layout = layout,
-                    widths = widths,
-                    folders = folders,
-                    list = list,
-                    reader = (route as? Route.Reader)?.let { r -> { reader(r) } },
-                    fullscreen = fullscreen,
-                )
-                return@Column
-            }
-            when (route) {
-                Route.Folders -> folders()
-                Route.List -> list()
-                // Jumping to a folder from the manager lands on its list, with
-                // the sidebar beneath it for back.
-                Route.FolderManager ->
-                    FolderManagerScreen(
-                        state = state,
-                        onOpenFolder = { stack = mailStack() },
-                    )
-                Route.Accounts ->
-                    AccountsScreen(
-                        state = state,
-                        onAdd = { go(Route.Setup(-1)) },
-                        onEdit = { go(Route.Setup(it)) },
-                    )
-                is Route.Setup ->
-                    AccountSetupScreen(
-                        state = state,
-                        accountId = route.accountId,
-                        onSaved = { stack = listOf(Route.Folders) },
-                        onClose = ::back,
-                    )
-                is Route.Reader -> reader(route)
-                Route.Dev -> HomeScreen(openPayload = null, onConsumeOpen = {})
-                is Route.Composer ->
-                    ComposerScreen(
-                        state = state,
-                        seed = route.seed,
-                        accountId = route.accountId,
-                        folderId = route.folderId,
-                        onClose = ::back,
-                    )
+                when (route) {
+                    Route.Folders -> folders()
+                    Route.List -> list()
+                    // Jumping to a folder from the manager lands on its list, with
+                    // the sidebar beneath it for back.
+                    Route.FolderManager ->
+                        FolderManagerScreen(
+                            state = state,
+                            onOpenFolder = { stack = mailStack() },
+                        )
+                    Route.Accounts ->
+                        AccountsScreen(
+                            state = state,
+                            onAdd = { go(Route.Setup(-1)) },
+                            onEdit = { go(Route.Setup(it)) },
+                        )
+                    is Route.Setup ->
+                        AccountSetupScreen(
+                            state = state,
+                            accountId = route.accountId,
+                            onSaved = { stack = listOf(Route.Folders) },
+                            onClose = ::back,
+                        )
+                    is Route.Reader -> reader(route)
+                    Route.Dev -> HomeScreen(openPayload = null, onConsumeOpen = {})
+                    Route.Settings -> SettingsScreen(state = state, onClose = ::back)
+                    is Route.Composer ->
+                        ComposerScreen(
+                            state = state,
+                            seed = route.seed,
+                            accountId = route.accountId,
+                            folderId = route.folderId,
+                            onClose = ::back,
+                        )
+                }
             }
         }
     }

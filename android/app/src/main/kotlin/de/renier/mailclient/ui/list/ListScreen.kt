@@ -238,6 +238,7 @@ fun ListScreen(
                             m = m,
                             folderLabel = if (showFolder) folderNames[m.folderId] else null,
                             selected = if (state.selectionMode) key in state.selectedKeys else null,
+                            compact = state.compactList,
                             modifier = Modifier
                                 .then(
                                     if (openMessage == rowFolder to m.uid) {
@@ -484,6 +485,8 @@ private fun MessageItem(
     selected: Boolean?,
     modifier: Modifier,
     onToggle: () -> Unit,
+    // List density "compact": no snippet line, tighter rows.
+    compact: Boolean = false,
 ) {
     val scheme = MaterialTheme.colorScheme
     val unreadDot = scheme.primary
@@ -491,7 +494,7 @@ private fun MessageItem(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = 16.dp, vertical = if (compact) 5.dp else 10.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (selected != null) {
@@ -556,7 +559,7 @@ private fun MessageItem(
                     )
                 }
             }
-            if (m.snippet.isNotEmpty()) {
+            if (!compact && m.snippet.isNotEmpty()) {
                 Text(
                     m.snippet,
                     style = MaterialTheme.typography.bodyMedium,

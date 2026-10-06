@@ -100,6 +100,17 @@ The core now serialises `any` with the background plan
 `BackgroundPlan.any` getter recomputes it. Drift: none. Fix: read the
 `any` field in `BackgroundPlan.fromJson`.
 
+### 5. Background run history in words
+
+`mailcore::sync::background::describe` (`last_run_line`, `run_line`,
+`run_lines`, `limiting_bucket`, `heartbeat_gap`) words the Settings status
+block for native Android. Flutter still runs its Dart originals:
+`describeLastRun`, `describeRun`, `limitingBucketLabel` in
+`sync/background_power.dart` and `AccountSettings.describeGap`. Drift: none
+yet (same wording, ported with the stale-run threshold). Fix: an FRB
+function returning `RunLines` plus the two small helpers (codegen), then
+delete the Dart copies.
+
 ## Deliberate frontend-only logic
 
 None listed yet. Add an entry with the reason when something shared stays

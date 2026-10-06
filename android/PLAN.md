@@ -241,7 +241,15 @@ and the formatting bar fold into one row.
 - Verify: alias flows into composer suggestions; cleanup only removes
   what it lists.
 
-## Step 8 — Settings (all sections + per-account overrides)
+## Step 8 — Settings (all sections + per-account overrides) ✅ done
+
+Built as planned, with a scrollable tab row instead of a dropdown on a
+phone, and Close asking before it discards unsaved changes. The status
+block's wording (last run, recent runs, standby bucket, heartbeat gap)
+moved into `mailcore::sync::background::describe` instead of a Kotlin
+copy of Flutter's Dart. Saving re-reads reader/list preferences, sort and
+the auto-sync interval, re-plans the background checks, and asks for the
+battery exemption and exact alarms when the new plan needs them.
 
 - Sections: Interface (UI scale, reader text size), Mailbox (sort, density,
   confirm-delete), Reading (mark-read + delay, remote images, link action),

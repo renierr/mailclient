@@ -11,6 +11,7 @@
 //! IDLE monitor (`sync::push`) already holds; [`notify`] turns a report into
 //! what the notification should do.
 
+pub mod describe;
 pub mod notify;
 pub mod schedule;
 

@@ -169,6 +169,12 @@ object MailNative {
     @JvmStatic external fun refreshServerCapabilities(accountId: Long)
     @JvmStatic external fun backgroundMarkSeen()
     @JvmStatic external fun backgroundRunHistory(): String
+    // Settings: run history in words {last, history}, standby bucket and
+    // heartbeat wording, About's {version, license, db_path}.
+    @JvmStatic external fun backgroundRunLines(): String
+    @JvmStatic external fun limitingBucket(bucket: Int): String
+    @JvmStatic external fun heartbeatGap(secs: Long): String
+    @JvmStatic external fun appInfoJson(): String
 
     // Step 0c list reads + bulk mutate. Selections cross as JSON
     // ([1,2,3], [{"folder":"INBOX","uid":1}]); undoable moves answer

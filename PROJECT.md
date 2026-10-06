@@ -341,7 +341,7 @@ Update this section when a step lands (see AGENTS.md §7.4).
 |---|---|---|---|---|
 | 3-pane / responsive / 1-pane | ✅ | ✅ | ✅ | Flutter and native: <700 one pane, <1100 folders + list (reader takes the list's place), else three, divided by text/UI scale; Qt switches at 720/1100 window px. Three panes add the sidebar toggle |
 | Resizable panes (drag dividers) | ✅ SplitView | ✅ `PaneDivider` | ✅ `PaneDivider` | Touch dividers keep a 24dp hit area; widths are not remembered across launches anywhere |
-| Compose, Sync, search field, tools | ✅ | ✅ | 🔄 | Narrow Flutter collapses tools into overflow; native has overflow menu, but Contacts and Settings are placeholder entries until Steps 7–8 |
+| Compose, Sync, search field, tools | ✅ | ✅ | 🔄 | Narrow Flutter collapses tools into overflow; native has overflow menu, but Contacts is a placeholder entry until Step 7 |
 | Folder-scoped search toggle | ✅ | ✅ | ✅ | Native: tools-menu checkbox |
 | Busy indicator (a job is queued or running) | ✅ | ✅ | ✅ | Qt: core `busy` flag; Flutter: `_busyKinds`; native: header progress line fed by the core's in-flight job table (`mailffi::net`, sent with every job event) — never a Kotlin-side flag |
 | Status line + details + copy | ✅ | ✅ | 🔄 | Native StatusStrip shows while a job runs (live progress), on error, with outbox mail, and keeps a job's result readable briefly after it ends; no details dialog or copy |
@@ -367,7 +367,7 @@ Update this section when a step lands (see AGENTS.md §7.4).
 | Load-older footer (Cached N [of M] / All loaded) | ✅ | ✅ | ✅ | |
 | Find-similar mode + chip | ✅ | ✅ | ✅ | From native reader only (no row menu yet) |
 | Drafts rows open the composer | ✅ | ✅ | ✅ | Native: any row whose folder has the `drafts` role, search hits included |
-| List density (comfortable/compact) | ✅ | ✅ | ❌ | |
+| List density (comfortable/compact) | ✅ | ✅ | ✅ | Compact drops the snippet line and tightens the rows |
 | Swipe actions, mark-all-read | ❌ | ❌ | ❌ | None anywhere; not planned |
 | Save as .eml | ✅ | ✅ | ✅ | Native via reader menu |
 
@@ -432,16 +432,16 @@ Update this section when a step lands (see AGENTS.md §7.4).
 
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
-| Full settings (interface/mailbox/reading/composing/sync/maintenance/about) | ✅ dialog | ✅ page | ❌ | Native is Step 8; reader prefs + outbox state read from core read-only. JNI for all of it exists (probes only) |
-| Per-account overrides, About + server capabilities | ✅ | ✅ | ❌ | Part of native Step 8 |
+| Full settings (interface/mailbox/reading/composing/sync/maintenance/about) | ✅ dialog | ✅ page | ✅ page | Touch: full page, section rail where there is room, tabs (native) or a dropdown (Flutter) on a phone; draft + Save writes only changed keys. Native asks before discarding unsaved changes and applies the interface scale to every dp |
+| Per-account overrides, About + server capabilities | ✅ | ✅ | ✅ | |
 
 ### Background & notifications (Android)
 
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
-| Poll / push / alarm schedulers, quiet hours | — | ✅ | ✅ | Shared `mailcore::sync::background`; desktop uses poll timer. Both re-plan on start and after account changes (plus boot/update/clock); settings changes re-plan once the native Settings screen exists |
+| Poll / push / alarm schedulers, quiet hours | — | ✅ | ✅ | Shared `mailcore::sync::background`; desktop uses poll timer. Both re-plan on start, after account changes and after a settings save (plus boot/update/clock) |
 | Notification permission prompt (Android 13+) | — | ✅ | ✅ | Asked when the core's plan says something checks in the background (`any`, from `BackgroundPlan::view`) |
 | Clear notifications on resume; no alert while open | — | ✅ | ✅ | Open app: a background check refreshes the list instead of alerting |
-| Background status (permissions, battery, run history, heartbeat warning, test notification) | — | ✅ | ❌ | Native: run history in dev probes only; belongs to Step 8 |
+| Background status (permissions, battery, run history, heartbeat warning, test notification) | — | ✅ | ✅ | Run lines, standby-bucket name and heartbeat wording from `mailcore::sync::background::describe` on native; Flutter still words them in Dart (SHARED-CORE.md) |
 | Grouped notifications + Mark read buttons | — | ✅ | ✅ | Same native path (`MailAlarm`, `MailPushService`) |
 

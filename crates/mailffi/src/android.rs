@@ -1344,6 +1344,71 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_backgroundRunHistory
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `MailNative.backgroundRunLines()`: the last run and the recent runs in
+/// words, local time (`background::describe::run_lines`), as
+/// `{last, history}`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_backgroundRunLines<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let runs = background::run_history(crate::db::shared_db()?);
+            let lines = background::describe::run_lines(&runs);
+            Ok(env.new_string(serde_json::to_string(&lines)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.limitingBucket(bucket)`: the name of a standby bucket that
+/// limits background checks, `""` for one that does not.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_limitingBucket<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    bucket: i32,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let name = background::describe::limiting_bucket(bucket).unwrap_or("");
+            Ok(env.new_string(name)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.heartbeatGap(secs)`: "every 45 seconds", "every 4 minutes".
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_heartbeatGap<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    secs: i64,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(background::describe::heartbeat_gap(secs))?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.appInfoJson()`: `{version, license, db_path}` for About.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_appInfoJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let info = serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "license": env!("CARGO_PKG_LICENSE"),
+                "db_path": crate::db::db_path().to_string_lossy(),
+            });
+            Ok(env.new_string(info.to_string())?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// Step 0c list reads + bulk mutate (`android/PLAN.md`): one page of rows
 /// plus the selection-shaped flag writes, moves and purges — single-folder
 /// (`Vec<u32>`) and cross-folder search-hit flavours, like `mailffi::api`.
