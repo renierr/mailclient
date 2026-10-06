@@ -53,23 +53,64 @@ pub fn upsert(
     Ok(id)
 }
 
-/// List folders of one account: inbox first, then special roles in a fixed
-/// order, then custom folders alphabetically.
+/// List folders of one account: special roles first at the top level, with
+/// each folder's subfolders directly beneath it (a flat list with `depth`
+/// indentation only reads as a tree when a parent is immediately followed
+/// by its children). Sorting purely by role sent e.g. `Archive/2024`
+/// (custom) after `Trash`, so it rendered as Trash's child.
 pub fn list_by_account(db: &Db, account_id: i64) -> Result<Vec<Folder>> {
+    use std::collections::HashMap;
     let mut stmt = db.conn().prepare(&format!(
         "select {COLS} from folders where account_id = ?1 order by path"
     ))?;
     let mut rows = stmt
         .query_map([account_id], row_to_folder)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    // Top-level segment (lowercased) -> role weight of the folder owning it,
+    // so children group with their parent even when their own role differs
+    // (Archive/2024 is custom, but belongs with Archive).
+    let mut top_weight: HashMap<String, u8> = HashMap::new();
+    for f in &rows {
+        let (top, rest) = split_top(&f.path, &f.delimiter);
+        if rest.is_none() && !top.is_empty() {
+            top_weight
+                .entry(top.to_ascii_lowercase())
+                .or_insert_with(|| role_weight(f.role));
+        }
+    }
     rows.sort_by(|a, b| {
-        role_weight(a.role).cmp(&role_weight(b.role)).then_with(|| {
+        let (a_top, b_top) = (
+            split_top(&a.path, &a.delimiter).0.to_ascii_lowercase(),
+            split_top(&b.path, &b.delimiter).0.to_ascii_lowercase(),
+        );
+        let (a_w, b_w) = (
+            top_weight
+                .get(&a_top)
+                .copied()
+                .unwrap_or_else(|| role_weight(a.role)),
+            top_weight
+                .get(&b_top)
+                .copied()
+                .unwrap_or_else(|| role_weight(b.role)),
+        );
+        a_w.cmp(&b_w).then_with(|| a_top.cmp(&b_top)).then_with(|| {
             a.path
                 .to_ascii_lowercase()
                 .cmp(&b.path.to_ascii_lowercase())
         })
     });
     Ok(rows)
+}
+
+/// First path segment plus the remainder (`None` remainder = top-level).
+/// An empty delimiter means no hierarchy: the whole path is top-level.
+fn split_top<'a>(path: &'a str, delimiter: &str) -> (&'a str, Option<&'a str>) {
+    if delimiter.is_empty() {
+        return (path, None);
+    }
+    let mut parts = path.splitn(2, delimiter);
+    let top = parts.next().unwrap_or(path);
+    (top, parts.next())
 }
 
 fn role_weight(role: FolderRole) -> u8 {
@@ -276,5 +317,64 @@ mod tests {
                 "Zebra"
             ]
         );
+    }
+
+    #[test]
+    fn subfolders_stay_with_their_parent() {
+        let db = Db::open_in_memory().unwrap();
+        let acc = mk_account(&db);
+        for (path, role) in [
+            ("Trash", FolderRole::Trash),
+            ("Archive/2024", FolderRole::Custom),
+            ("INBOX", FolderRole::Inbox),
+            ("Archive", FolderRole::Archive),
+            ("Archive/2023", FolderRole::Custom),
+            ("Drafts", FolderRole::Drafts),
+            ("Sent", FolderRole::Sent),
+            ("Junk", FolderRole::Junk),
+            ("Work", FolderRole::Custom),
+            ("Work/Client", FolderRole::Custom),
+        ] {
+            upsert(&db, acc, path, "/", role).unwrap();
+        }
+        let names: Vec<String> = list_by_account(&db, acc)
+            .unwrap()
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "INBOX",
+                "Drafts",
+                "Sent",
+                "Archive",
+                "Archive/2023",
+                "Archive/2024",
+                "Junk",
+                "Trash",
+                "Work",
+                "Work/Client",
+            ]
+        );
+    }
+
+    #[test]
+    fn dotted_children_stay_with_inbox_parent() {
+        let db = Db::open_in_memory().unwrap();
+        let acc = mk_account(&db);
+        for (path, role) in [
+            ("Trash", FolderRole::Trash),
+            ("INBOX.Archive", FolderRole::Custom),
+            ("INBOX", FolderRole::Inbox),
+        ] {
+            upsert(&db, acc, path, ".", role).unwrap();
+        }
+        let names: Vec<String> = list_by_account(&db, acc)
+            .unwrap()
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
+        assert_eq!(names, vec!["INBOX", "INBOX.Archive", "Trash"]);
     }
 }
