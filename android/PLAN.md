@@ -233,7 +233,11 @@ and the formatting bar fold into one row.
 - Verify: all 5 entries, dirty-guard paths, double-send lock, attachment +
   inline round-trip, Drafts-folder reopen.
 
-## Step 7 — Contacts
+## Step 7 — Contacts ✅ done
+
+A shell page from the tools menu. The alias is edited in a small dialog
+rather than inline; "Was: …" only shows when the alias differs from the
+name mail carried (the core seeds the alias from it).
 
 - Manager: prefix search, alias edit, remove (confirm), auto-collected
   explainer; cleanup-review mode (automated/stale candidates, multi-select,

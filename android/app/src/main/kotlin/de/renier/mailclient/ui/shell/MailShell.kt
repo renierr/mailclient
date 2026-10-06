@@ -51,6 +51,7 @@ import de.renier.mailclient.R
 import de.renier.mailclient.ui.accounts.AccountSetupScreen
 import de.renier.mailclient.ui.accounts.AccountsScreen
 import de.renier.mailclient.ui.composer.ComposerScreen
+import de.renier.mailclient.ui.contacts.ContactsScreen
 import de.renier.mailclient.ui.composer.ComposerSeed
 import de.renier.mailclient.ui.folders.FolderManagerScreen
 import de.renier.mailclient.ui.folders.FoldersScreen
@@ -89,6 +90,7 @@ private sealed interface Route {
     // Draws its own bar (Save); a full page on every width.
     data object Settings : Route
     data object Outbox : Route
+    data object Contacts : Route
 }
 
 @Composable
@@ -285,7 +287,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
         // Fallback for pull-to-refresh (keyboard, accessibility services).
         ShellMenuItem("Sync now", R.drawable.ic_sync) { state.syncNow() },
         ShellMenuItem("Manage folders", R.drawable.ic_folder_manage) { go(Route.FolderManager) },
-        ShellMenuItem("Contacts", R.drawable.ic_contacts) { state.info("Contacts arrive in Step 7") },
+        ShellMenuItem("Contacts", R.drawable.ic_contacts) { go(Route.Contacts) },
         ShellMenuItem("Accounts", R.drawable.ic_person) { go(Route.Accounts) },
         ShellMenuItem("Settings", R.drawable.ic_settings) { go(Route.Settings) },
         ShellMenuItem("Dev probes", R.drawable.ic_code) { go(Route.Dev) },
@@ -353,6 +355,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                                 is Route.Setup -> if (route.accountId >= 0) "Edit account" else "Add account"
                                 Route.Dev -> "Dev probes"
                             Route.Outbox -> "Outbox"
+                            Route.Contacts -> "Contacts"
                                 Route.Folders, Route.List, is Route.Reader, is Route.Composer, Route.Settings -> ""
                             },
                             onBack = ::back,
@@ -456,6 +459,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                     Route.Dev -> HomeScreen(openPayload = null, onConsumeOpen = {})
                     Route.Settings -> SettingsScreen(state = state, onClose = ::back)
                 Route.Outbox -> OutboxScreen(state = state)
+                Route.Contacts -> ContactsScreen()
                     is Route.Composer ->
                         ComposerScreen(
                             state = state,

@@ -341,7 +341,7 @@ Update this section when a step lands (see AGENTS.md §7.4).
 |---|---|---|---|---|
 | 3-pane / responsive / 1-pane | ✅ | ✅ | ✅ | Flutter and native: <700 one pane, <1100 folders + list (reader takes the list's place), else three, divided by text/UI scale; Qt switches at 720/1100 window px. Three panes add the sidebar toggle |
 | Resizable panes (drag dividers) | ✅ SplitView | ✅ `PaneDivider` | ✅ `PaneDivider` | Touch dividers keep a 24dp hit area; widths are not remembered across launches anywhere |
-| Compose, Sync, search field, tools | ✅ | ✅ | 🔄 | Narrow Flutter collapses tools into overflow; native has overflow menu, but Contacts is a placeholder entry until Step 7 |
+| Compose, Sync, search field, tools | ✅ | ✅ | ✅ | Narrow Flutter and native collapse the tools into an overflow menu |
 | Folder-scoped search toggle | ✅ | ✅ | ✅ | Native: tools-menu checkbox |
 | Busy indicator (a job is queued or running) | ✅ | ✅ | ✅ | Qt: core `busy` flag; Flutter: `_busyKinds`; native: header progress line fed by the core's in-flight job table (`mailffi::net`, sent with every job event) — never a Kotlin-side flag |
 | Status line + details + copy | ✅ | ✅ | 🔄 | Native StatusStrip shows while a job runs (live progress), on error, with outbox mail, and keeps a job's result readable briefly after it ends; no details dialog or copy |
@@ -426,7 +426,7 @@ Update this section when a step lands (see AGENTS.md §7.4).
 
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
-| Manager (alias, search, remove, cleanup review) | ✅ | ✅ | ❌ | Native is Step 7 |
+| Manager (alias, search, remove, cleanup review) | ✅ | ✅ | ✅ page | Native: shell page; alias edit in a small dialog, remove and bulk cleanup removal confirmed |
 
 ### Settings
 
