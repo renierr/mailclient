@@ -264,7 +264,7 @@ fun ReaderScreen(
                 CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 return@Box
             }
-            val canToggleColors = m.optBoolean("is_html") && m.optBoolean("html_colored") && dark
+            val canToggleColors = m.optBoolean("is_html") && m.optBoolean("html_colored")
             val header: @Composable () -> Unit = {
                 ReaderHeader(
                     m = m,
@@ -325,13 +325,19 @@ fun ReaderScreen(
                                 tint = starColor(starred),
                             )
                         }
-                        // Designed mail in a dark theme: the sender's
-                        // colours, beside the actions — not under ⋮.
+                        // "As sent" per message, beside the actions: in a dark
+                        // theme the sender's colours instead of the darkened
+                        // ones, everywhere the original fixed widths instead
+                        // of the fitted ones.
                         if (canToggleColors) {
                             IconButton(onClick = { originalColors = !originalColors }) {
                                 Icon(
                                     painterResource(R.drawable.ic_palette),
-                                    if (originalColors) "Darken colours" else "Original colours",
+                                    if (originalColors) {
+                                        if (dark) "Darken colours" else "Fit to screen"
+                                    } else {
+                                        if (dark) "Original colours" else "Original layout"
+                                    },
                                 )
                             }
                         }
