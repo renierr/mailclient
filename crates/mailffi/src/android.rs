@@ -707,8 +707,9 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_linkInfo<'caller>(
 }
 
 /// `MailNative.cachedAttachmentBytes(attachmentId)`: cached bytes, or an
-/// error when they are not downloaded yet — then `downloadMessageFiles`
-/// first. Bytes cross as a `byte[]`, like the FRB `Vec<u8>`.
+/// error when they are not downloaded yet — then queue `downloadAttachments`
+/// and await its `Attachments` finished event. Bytes cross as a `byte[]`,
+/// like the FRB `Vec<u8>`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_de_renier_mailclient_MailNative_cachedAttachmentBytes<'caller>(
     mut unowned: EnvUnowned<'caller>,
@@ -752,6 +753,32 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_downloadMessageFiles
                     .map_err(anyhow::Error::msg)
             })?;
             Ok(env.new_string(files.to_string())?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.downloadAttachments(accountId, folderId, uid)`: queue fetching
+/// every attachment into the cache; the bytes land with the `Attachments`
+/// finished event. Same job as the FRB `download_attachments` (same
+/// `attach:…` dedupe key), so a tap while a download runs waits instead of
+/// stacking. Prefer this over `downloadMessageFiles`: the job runs on the
+/// net thread, while the blocking form drives a second IMAP session off it.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_downloadAttachments<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+    uid: i32,
+) {
+    unowned
+        .with_env(|_env| -> Result<()> {
+            crate::api::attachments::download_attachments(
+                account_id,
+                folder_id,
+                uid.max(0) as u32,
+            )?;
+            Ok(())
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }

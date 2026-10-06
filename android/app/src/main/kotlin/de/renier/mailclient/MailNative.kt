@@ -103,8 +103,11 @@ object MailNative {
     // One cached attachment's bytes; throws when not downloaded yet.
     @JvmStatic external fun cachedAttachmentBytes(attachmentId: Long): ByteArray
 
-    // Fetch every attachment of one message (blocking); how many landed.
-    @JvmStatic external fun downloadMessageFiles(accountId: Long, folderId: Long, uid: Int): String
+    // Queue fetching every attachment of one message into the cache; the
+    // bytes land with the `Attachments` finished event. Throws when a
+    // download is already queued (`spawn` dedupe) — then wait for its
+    // event instead of queueing again.
+    @JvmStatic external fun downloadAttachments(accountId: Long, folderId: Long, uid: Int)
 
     // The viewer copy of a cached attachment, under a safe name in `dir`.
     @JvmStatic external fun writeAttachmentCopy(attachmentId: Long, dir: String): String

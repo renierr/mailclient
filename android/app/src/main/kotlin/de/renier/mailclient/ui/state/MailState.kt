@@ -10,12 +10,14 @@ import de.renier.mailclient.JobEvents
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.MailSchedule
 import de.renier.mailclient.ui.composer.ComposerSeed
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
 // Step 1 shell state: what the app shows and what it does, over the 0a–0e
@@ -286,10 +288,6 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
             statusError = true
         }
     }
-
-    /** A queue call refused because the same job is in flight: not an error. */
-    private fun Throwable.isAlreadyRunning(): Boolean =
-        message.orEmpty().contains("already running", ignoreCase = true)
 
     /** Main thread. Drops snapshots older than one already applied. */
     private fun applyBusy(o: JSONObject?) {
@@ -998,6 +996,30 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         }
     }
 
+    /**
+     * Suspend until the next finished event of [kind], queuing via [queue]
+     * first. The waiter is registered on the main thread *before* [queue]
+     * runs, so a fast job cannot finish unseen — the same ordering
+     * Flutter's attachment download relies on. [queue] throwing skips the
+     * wait (a refused queue has no finish event coming); a timeout answers
+     * null and the caller re-reads the cache. Cancellation drops the waiter.
+     */
+    suspend fun awaitFinished(
+        kind: String,
+        timeoutMs: Long = 120_000,
+        queue: () -> Unit,
+    ): Pair<Boolean, String>? = withContext(Dispatchers.Main) {
+        val waiter = CompletableDeferred<Pair<Boolean, String>>()
+        val cb: (Boolean, String) -> Unit = { ok, status -> waiter.complete(ok to status) }
+        finishWaiters.getOrPut(kind) { mutableListOf() }.add(cb)
+        try {
+            queue()
+            withTimeoutOrNull(timeoutMs) { waiter.await() }
+        } finally {
+            finishWaiters[kind]?.remove(cb)
+        }
+    }
+
     /** Move one message of [fromFolder] to [destPath]; offers undo. */
     fun moveMessage(fromFolder: Long, uid: Int, destPath: String) = io {
         MailNative.ensureInit(appContext)
@@ -1290,3 +1312,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         }
     }
 }
+
+/** A queue call refused because the same job is in flight: not an error. */
+internal fun Throwable.isAlreadyRunning(): Boolean =
+    message.orEmpty().contains("already running", ignoreCase = true)

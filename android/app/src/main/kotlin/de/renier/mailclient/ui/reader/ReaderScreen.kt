@@ -201,15 +201,19 @@ fun ReaderScreen(
     }
 
     fun openAttachment(id: Long, mime: String) = bg {
-        val intent = ReaderFiles.openIntent(context, accountId, folderId, uid, id, mime)
+        val intent = ReaderFiles.openIntent(state, context, accountId, folderId, uid, id, mime)
         withContext(Dispatchers.Main) {
             runCatching { context.startActivity(intent) }.onFailure { state.info("No app can open this file") }
         }
     }
 
     fun saveAttachment(id: Long, name: String, mime: String) = bg {
-        val bytes = ReaderFiles.ensureBytes(accountId, folderId, uid, id)
+        val bytes = ReaderFiles.ensureBytes(state, accountId, folderId, uid, id)
         withContext(Dispatchers.Main) {
+            if (bytes == null) {
+                state.info("$name is not downloaded yet")
+                return@withContext
+            }
             pendingSave = bytes
             saveOne.launch(name to mime)
         }
@@ -275,7 +279,7 @@ fun ReaderScreen(
                     onDownloadInline = {
                         downloadingInline = true
                         bg {
-                            MailNative.downloadMessageFiles(accountId, folderId, uid)
+                            ReaderFiles.downloadAll(state, accountId, folderId, uid)
                             withContext(Dispatchers.Main) {
                                 downloadingInline = false
                                 reloadTick++
@@ -286,10 +290,16 @@ fun ReaderScreen(
                     onSaveAttachment = { saveAttachment(it.id, it.fileName, it.mime) },
                     onSaveAll = { files ->
                         bg {
-                            val pending = files.map {
-                                SaveFile(it.fileName, it.mime, ReaderFiles.ensureBytes(accountId, folderId, uid, it.id))
+                            val pending = files.mapNotNull { a ->
+                                ReaderFiles.ensureBytes(state, accountId, folderId, uid, a.id)?.let {
+                                    SaveFile(a.fileName, a.mime, it)
+                                }
                             }
                             withContext(Dispatchers.Main) {
+                                if (pending.size < files.size) {
+                                    state.info("Some files are not downloaded yet")
+                                    return@withContext
+                                }
                                 pendingSaveAll = pending
                                 saveAll.launch(null)
                             }

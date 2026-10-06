@@ -7,24 +7,85 @@ import android.provider.DocumentsContract
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.core.content.FileProvider
 import de.renier.mailclient.MailNative
+import de.renier.mailclient.ui.state.MailState
+import de.renier.mailclient.ui.state.isAlreadyRunning
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 // Attachment and export file plumbing for the reader: the core caches and
 // names the bytes; this side only hands them to Android (FileProvider for
-// viewers, the Storage Access Framework for saving). Blocking — callers run
-// it off the main thread.
+// viewers, the Storage Access Framework for saving).
 object ReaderFiles {
-    /** Cached bytes, fetched from the account's server first when missing. */
-    fun ensureBytes(accountId: Long, folderId: Long, uid: Int, attachmentId: Long): ByteArray =
-        try {
-            MailNative.cachedAttachmentBytes(attachmentId)
-        } catch (_: Exception) {
-            MailNative.downloadMessageFiles(accountId, folderId, uid)
-            MailNative.cachedAttachmentBytes(attachmentId)
+    private const val DOWNLOAD_WAIT_MS = 120_000L
+
+    /** A download the server or network refused; [message] is the job's error. */
+    class DownloadFailed(message: String) : Exception(message)
+
+    /**
+     * Cached bytes, downloading first when the message arrived without them.
+     *
+     * The download is the queued `Attachments` job — awaited like Flutter's
+     * attachmentBytes: the waiter is registered before queueing so a fast
+     * download cannot slip through, and a tap while one runs ("already
+     * running") waits for its event instead of stacking. Null when the bytes
+     * never landed. Suspends on the caller's thread; the job itself runs on
+     * the core's net thread, never a second IMAP session off it.
+     */
+    suspend fun ensureBytes(
+        state: MailState,
+        accountId: Long,
+        folderId: Long,
+        uid: Int,
+        attachmentId: Long,
+    ): ByteArray? {
+        runCatching { MailNative.cachedAttachmentBytes(attachmentId) }.getOrNull()?.let { return it }
+        withContext(Dispatchers.Main) { state.info("Downloading attachment…") }
+        // Parallel downloads share the `Attachments` kind, so a finish event
+        // may belong to another message's job: keep waiting while nothing
+        // arrived.
+        repeat(5) {
+            val done = try {
+                state.awaitFinished("Attachments", DOWNLOAD_WAIT_MS) {
+                    MailNative.downloadAttachments(accountId, folderId, uid)
+                }
+            } catch (e: Exception) {
+                if (!e.isAlreadyRunning()) {
+                    // The job never started; there is no finish event coming.
+                    return runCatching { MailNative.cachedAttachmentBytes(attachmentId) }.getOrNull()
+                }
+                // Otherwise the bytes are on their way already — wait below.
+                state.awaitFinished("Attachments", DOWNLOAD_WAIT_MS) {}
+            }
+            val bytes = runCatching { MailNative.cachedAttachmentBytes(attachmentId) }.getOrNull()
+            if (bytes != null) return bytes
+            if (done != null && !done.first) throw DownloadFailed(done.second.ifEmpty { "Download failed" })
         }
+        return null
+    }
+
+    /**
+     * Queue a whole-message download and wait for its `Attachments` finish
+     * event (the inline-images banner: no single attachment id to re-read).
+     * True unless the wait timed out; the caller re-reads either way.
+     */
+    suspend fun downloadAll(state: MailState, accountId: Long, folderId: Long, uid: Int): Boolean {
+        withContext(Dispatchers.Main) { state.info("Downloading…") }
+        return try {
+            state.awaitFinished("Attachments", DOWNLOAD_WAIT_MS) {
+                MailNative.downloadAttachments(accountId, folderId, uid)
+            }
+            true
+        } catch (e: Exception) {
+            if (!e.isAlreadyRunning()) return false
+            state.awaitFinished("Attachments", DOWNLOAD_WAIT_MS) {}
+            true
+        }
+    }
 
     /** A viewer intent for one attachment, via a cache-private copy. */
-    fun openIntent(
+    suspend fun openIntent(
+        state: MailState,
         context: Context,
         accountId: Long,
         folderId: Long,
@@ -32,7 +93,8 @@ object ReaderFiles {
         attachmentId: Long,
         mime: String,
     ): Intent {
-        ensureBytes(accountId, folderId, uid, attachmentId)
+        ensureBytes(state, accountId, folderId, uid, attachmentId)
+            ?: throw IllegalStateException("attachment is not downloaded yet")
         val dir = File(context.cacheDir, "mailclient-attachments").apply { mkdirs() }
         val path = MailNative.writeAttachmentCopy(attachmentId, dir.path)
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.readerfiles", File(path))
