@@ -29,6 +29,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // On screen: new mail found by a background check shows in the list
+    // instead of alerting, and the notifications have done their job.
+    override fun onResume() {
+        super.onResume()
+        MailNotifier.foreground = true
+        MailNotifier.clear(this)
+    }
+
+    override fun onPause() {
+        MailNotifier.foreground = false
+        super.onPause()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)

@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.R
+import de.renier.mailclient.ui.composer.ComposeMode
 import de.renier.mailclient.ui.folders.MoveToDialog
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.theme.starColor
@@ -84,6 +85,10 @@ fun ReaderScreen(
     uid: Int,
     onClose: () -> Unit,
     onShowSimilar: () -> Unit,
+    // Reply / Reply all / Forward: the shell loads the core's draft.
+    onCompose: (ComposeMode) -> Unit,
+    // Beside the list (three panes) the way out closes, not goes back.
+    closeIcon: Boolean = false,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -226,7 +231,13 @@ fun ReaderScreen(
                 windowInsets = WindowInsets(0),
                 title = {},
                 navigationIcon = {
-                    IconButton(onClick = onClose) { Icon(painterResource(R.drawable.ic_arrow_back), "Back") }
+                    IconButton(onClick = onClose) {
+                        if (closeIcon) {
+                            Icon(painterResource(R.drawable.ic_close), "Close")
+                        } else {
+                            Icon(painterResource(R.drawable.ic_arrow_back), "Back")
+                        }
+                    }
                 },
                 actions = {
                     if (m != null) {
@@ -297,9 +308,9 @@ fun ReaderScreen(
             if (m != null) {
                 BottomAppBar(windowInsets = WindowInsets(0)) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                        ReplyAction(R.drawable.ic_reply, "Reply") { state.info("Composer arrives in Step 6") }
-                        ReplyAction(R.drawable.ic_reply_all, "Reply all") { state.info("Composer arrives in Step 6") }
-                        ReplyAction(R.drawable.ic_forward, "Forward") { state.info("Composer arrives in Step 6") }
+                        ReplyAction(R.drawable.ic_reply, "Reply") { onCompose(ComposeMode.Reply) }
+                        ReplyAction(R.drawable.ic_reply_all, "Reply all") { onCompose(ComposeMode.ReplyAll) }
+                        ReplyAction(R.drawable.ic_forward, "Forward") { onCompose(ComposeMode.Forward) }
                     }
                 }
             }

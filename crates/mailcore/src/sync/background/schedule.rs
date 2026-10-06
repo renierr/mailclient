@@ -49,6 +49,24 @@ impl BackgroundPlan {
     pub fn any(&self) -> bool {
         self.push || self.poll_minutes > 0 || self.quiet_accounts > 0
     }
+
+    /// The plan as the hosts read it: every field plus [`Self::any`], so no
+    /// frontend re-derives "does anything check in the background".
+    #[must_use]
+    pub fn view(&self) -> PlanView<'_> {
+        PlanView {
+            plan: self,
+            any: self.any(),
+        }
+    }
+}
+
+/// [`BackgroundPlan::view`]: serialises flat, `any` beside the plan fields.
+#[derive(Debug, Serialize)]
+pub struct PlanView<'a> {
+    #[serde(flatten)]
+    pub plan: &'a BackgroundPlan,
+    pub any: bool,
 }
 
 /// An account that checks in the background, and how.
@@ -213,6 +231,22 @@ mod tests {
                 replan_at: None,
             }
         );
+    }
+
+    #[test]
+    fn plan_json_carries_any_beside_the_fields() {
+        let mut p = BackgroundPlan {
+            push: false,
+            poll_minutes: 0,
+            poll_scheduler: "workmanager".into(),
+            quiet_accounts: 0,
+            replan_at: None,
+        };
+        let idle = serde_json::to_value(p.view()).unwrap();
+        assert_eq!(idle["any"], false);
+        assert_eq!(idle["poll_scheduler"], "workmanager");
+        p.quiet_accounts = 1;
+        assert_eq!(serde_json::to_value(p.view()).unwrap()["any"], true);
     }
 
     #[test]

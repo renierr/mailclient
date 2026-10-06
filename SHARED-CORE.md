@@ -81,6 +81,24 @@ twice: Dart `shouldSyncOnResume` and Kotlin `MailState.RESUME_SYNC_GAP_MS`.
 Drift: none yet. Fix: a `mailcore` predicate taking the seconds since the
 last request.
 
+### 3. Markdown composer body and toolbar edits
+
+`mailcore::compose::markdown` (`body_html`, `to_html`, `has_formatting`,
+`apply_edit`, `send_format_note`, `inline_image_token`) is what native
+Android uses; it is a port of Flutter's `markdown.dart`, the toolbar
+helpers in `composer_dialog.dart` (`_wrapBody`, `_quoteBody`,
+`_bulletBody`), `ComposerEditor.formatNote` and `InlineImages.token`, which
+Flutter still runs. Drift: none yet (the Dart tests are ported to the core).
+Fix: expose the module through `mailffi::api` (codegen) and delete the Dart
+copies with their tests.
+
+### 4. "Does anything check in the background"
+
+The core now serialises `any` with the background plan
+(`BackgroundPlan::view`); native reads it. Flutter's
+`BackgroundPlan.any` getter recomputes it. Drift: none. Fix: read the
+`any` field in `BackgroundPlan.fromJson`.
+
 ## Deliberate frontend-only logic
 
 None listed yet. Add an entry with the reason when something shared stays

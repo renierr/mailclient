@@ -202,7 +202,13 @@ thread the FRB stream uses, each event (`kind`, `phase` progress/finished,
 - Verify: HTML + plain + ICS mails, remote-images gate, dark mode paint,
   undo bar after delete/archive/move, narrow-width action wrap.
 
-## Step 6 — Composer (fullscreen, all entry modes)
+## Step 6 — Composer (fullscreen, all entry modes) ✅ done
+
+Built to Flutter's behaviour where this plan differs: Send closes once the
+core has queued the mail (a later SMTP failure shows on the status strip,
+no reopen), Save draft closes too, and there is no link button (Flutter has
+none). The Markdown renderer and toolbar edits moved into
+`mailcore::compose::markdown` instead of a Kotlin copy.
 
 - Entries: blank, reply / reply-all / forward (`answerDraft` quote +
   signature placement), draft (`draftForm`, pinned account, server-draft

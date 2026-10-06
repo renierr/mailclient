@@ -1,6 +1,11 @@
 package de.renier.mailclient.ui.shell
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -26,23 +32,37 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import de.renier.mailclient.MailNative
+import de.renier.mailclient.MailNotifier
 import de.renier.mailclient.R
 import de.renier.mailclient.ui.accounts.AccountSetupScreen
 import de.renier.mailclient.ui.accounts.AccountsScreen
+import de.renier.mailclient.ui.composer.ComposerScreen
+import de.renier.mailclient.ui.composer.ComposerSeed
 import de.renier.mailclient.ui.folders.FolderManagerScreen
 import de.renier.mailclient.ui.folders.FoldersScreen
 import de.renier.mailclient.ui.home.HomeScreen
 import de.renier.mailclient.ui.list.ListScreen
 import de.renier.mailclient.ui.reader.ReaderScreen
 import de.renier.mailclient.ui.state.MailState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-// The one-pane shell (folders → list → reader): manual back
-// stack (no navigation dependency), search bar on the mail panes and a plain
-// back + title bar on every other page, Compose as a bar icon, a status strip
-// that only shows up with something to say, undo snackbar. The dev probes
-// live in the tools menu until their screens land, then go.
+// The shell: manual back stack (no navigation dependency), search bar on
+// the mail panes and a plain back + title bar on every other page, Compose
+// as a bar icon, a status strip that only shows up with something to say,
+// undo snackbar. The dev probes live in the tools menu until their screens
+// land, then go.
+//
+// The mail routes (Folders, List, Reader) lay out by width (paneLayout):
+// one pane at a time on a phone, folders + list (the reader taking the
+// list's place) or all three side by side on a tablet, with draggable
+// dividers like Flutter and Qt. Wide layouts keep no List entry on the
+// stack (the list is always showing there), so back walks reader → root.
 private sealed interface Route {
     data object Folders : Route
     data object List : Route
@@ -52,6 +72,8 @@ private sealed interface Route {
     // -1: add; else edit.
     data class Setup(val accountId: Long) : Route
     data object Dev : Route
+    // Full page on every width; account and folder pinned at open.
+    data class Composer(val seed: ComposerSeed, val accountId: Long, val folderId: Long) : Route
 }
 
 @Composable
@@ -62,7 +84,10 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
     var stack by remember { mutableStateOf(listOf<Route>(Route.Folders)) }
     val route = stack.last()
     val snack = remember { SnackbarHostState() }
-    val mailPane = route == Route.Folders || route == Route.List
+    val mailPane = route == Route.Folders || route == Route.List || route is Route.Reader
+    val layout = paneLayout()
+    val wide = layout != PaneLayout.One
+    val widths = rememberPaneWidths()
 
     fun go(r: Route) {
         stack = (stack + r).takeLast(8)
@@ -72,9 +97,73 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
         if (stack.size > 1) stack = stack.dropLast(1)
     }
 
+    // The mail stack for this layout, optionally with a message open.
+    fun mailStack(reader: Route.Reader? = null): List<Route> =
+        (if (wide) listOf(Route.Folders) else listOf(Route.Folders, Route.List)) + listOfNotNull(reader)
+
+    fun openFolderPane() {
+        // Wide: the list is beside the folders already; picking a folder
+        // (the current one included) closes the reader, like Flutter.
+        stack = if (wide) mailStack() else stack + Route.List
+    }
+
+    fun openReader(r: Route.Reader) {
+        stack = stack.dropLastWhile { it is Route.Reader } + r
+    }
+
+    // Seeds read the local database only, but a long thread with inline
+    // images is still work: off the main thread, then push the page.
+    fun startCompose(load: () -> ComposerSeed) {
+        val accountId = state.activeAccountId
+        val folderId = state.folderId
+        if (accountId < 0) return
+        scope.launch {
+            val seed = withContext(Dispatchers.IO) {
+                runCatching {
+                    MailNative.ensureInit(context)
+                    load()
+                }.getOrNull()
+            }
+            if (seed == null) {
+                state.info("This message is no longer available")
+            } else {
+                go(Route.Composer(seed, accountId, folderId))
+            }
+        }
+    }
+
+    // A row of the Drafts folder continues the draft instead of reading it.
+    fun openRow(accountId: Long, folderId: Long, uid: Int) {
+        if (state.folders.firstOrNull { it.id == folderId }?.role == "drafts") {
+            startCompose { ComposerSeed.draft(accountId, uid) }
+        } else {
+            openReader(Route.Reader(accountId, folderId, uid))
+        }
+    }
+
+    // Rotating or resizing across a breakpoint: drop or restore the List
+    // entry so back still walks what is on screen.
+    LaunchedEffect(wide) {
+        stack = if (wide) {
+            stack.filter { it != Route.List }
+        } else {
+            val i = stack.indexOfFirst { it is Route.Reader }
+            if (i > 0 && stack[i - 1] != Route.List) {
+                stack.take(i) + Route.List + stack.drop(i)
+            } else {
+                stack
+            }
+        }
+    }
+
     BackHandler(enabled = stack.size > 1) { back() }
-    // Declared later, so it wins: back clears a running search first.
-    BackHandler(enabled = mailPane && state.searchQuery.isNotEmpty()) { state.clearSearch() }
+    // Declared later, so it wins: back clears a running search first —
+    // except where the reader covers the list (one/two panes), which back
+    // leaves first so a hit opened from search returns to the results.
+    val readerCoversList = route is Route.Reader && layout != PaneLayout.Three
+    BackHandler(enabled = mailPane && !readerCoversList && state.searchQuery.isNotEmpty()) {
+        state.clearSearch()
+    }
 
     DisposableEffect(Unit) {
         state.ensureInit()
@@ -91,7 +180,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
             if (account != null && folder != null && uid != null) {
                 state.selectAccount(account)
                 state.openFolder(folder)
-                stack = listOf(Route.Folders, Route.List, Route.Reader(account, folder, uid))
+                stack = mailStack(Route.Reader(account, folder, uid))
             }
         }
         onConsumeOpen()
@@ -111,6 +200,32 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
         }
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer) }
+    }
+
+    // A background check (push, poller, notification button) changed the
+    // cache while the app is open: re-read what is showing. The hook fires
+    // on whatever thread the check ran on.
+    DisposableEffect(Unit) {
+        MailNotifier.onMailChanged = {
+            scope.launch(Dispatchers.Main) { state.refreshFolders(andMessages = true) }
+        }
+        onDispose { MailNotifier.onMailChanged = null }
+    }
+
+    // Android 13+: ask for the notification permission once something
+    // checks in the background, like Flutter at startup. Without it every
+    // new-mail notification is dropped silently.
+    val notifyPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> if (!granted) state.info("Notifications are off: new mail will not alert") }
+    LaunchedEffect(state.backgroundChecks) {
+        if (state.backgroundChecks &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     // Undo offers and transient notices surface as snackbars.
@@ -157,8 +272,11 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
             .fillMaxSize()
             .safeDrawingPadding(),
         topBar = {
-            // The reader draws its own bars (actions need its message).
-            if (route is Route.Reader) return@Scaffold
+            // The one-pane reader draws its own bars (actions need its
+            // message); beside other panes it sits under the search bar.
+            if (route is Route.Reader && !wide) return@Scaffold
+            // The composer draws its own bars (title, close, actions).
+            if (route is Route.Composer) return@Scaffold
             Column {
                 if (mailPane) {
                     val folderName = state.openFolder?.leaf
@@ -169,23 +287,32 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                         } else {
                             "Search mail"
                         },
-                        canGoBack = stack.size > 1,
+                        canGoBack = !wide && stack.size > 1,
                         onBack = {
                             state.clearSearch()
                             back()
                         },
                         onCompose = if (state.accounts.isNotEmpty()) {
-                            { state.info("Composer arrives in Step 6") }
+                            { startCompose { ComposerSeed.blank() } }
                         } else {
                             null
                         },
                         onQuery = {
                             state.setSearch(it)
-                            // Results live in the list pane.
-                            if (it.isNotEmpty() && route == Route.Folders) go(Route.List)
+                            // Results live in the list pane: bring it forward
+                            // where it shares its place.
+                            if (it.isNotEmpty()) {
+                                if (!wide && route == Route.Folders) go(Route.List)
+                                if (layout == PaneLayout.Two && route is Route.Reader) stack = mailStack()
+                            }
                         },
                         onClear = { state.clearSearch() },
                         menu = tools,
+                        onToggleSidebar = if (layout == PaneLayout.Three) {
+                            { widths.sidebarVisible = !widths.sidebarVisible }
+                        } else {
+                            null
+                        },
                     )
                 } else {
                     PageTopBar(
@@ -194,7 +321,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                             Route.Accounts -> "Accounts"
                             is Route.Setup -> if (route.accountId >= 0) "Edit account" else "Add account"
                             Route.Dev -> "Dev probes"
-                            Route.Folders, Route.List, is Route.Reader -> ""
+                            Route.Folders, Route.List, is Route.Reader, is Route.Composer -> ""
                         },
                         onBack = ::back,
                     )
@@ -202,7 +329,8 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
             }
         },
         bottomBar = {
-            if (route is Route.Reader) return@Scaffold
+            if (route is Route.Reader && !wide) return@Scaffold
+            if (route is Route.Composer) return@Scaffold
             StatusStrip(
                 text = state.status,
                 error = state.statusError,
@@ -224,24 +352,56 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxSize())
                 }
             }
+            val folders: @Composable () -> Unit = {
+                FoldersScreen(
+                    state = state,
+                    onOpenFolder = ::openFolderPane,
+                    onAddAccount = { go(Route.Setup(-1)) },
+                )
+            }
+            val list: @Composable () -> Unit = {
+                ListScreen(
+                    state = state,
+                    onOpenReader = ::openRow,
+                    openMessage = (route as? Route.Reader)?.let { it.folderId to it.uid },
+                )
+            }
+            val reader: @Composable (Route.Reader) -> Unit = { r ->
+                // Keyed: opening another message beside the list must not
+                // keep the previous one's loaded state.
+                key(r) {
+                    ReaderScreen(
+                        state = state,
+                        accountId = r.accountId,
+                        folderId = r.folderId,
+                        uid = r.uid,
+                        onClose = ::back,
+                        // Similar hits show in the list pane under the reader.
+                        onShowSimilar = ::back,
+                        onCompose = { mode -> startCompose { ComposerSeed.answer(r.folderId, r.uid, mode) } },
+                        closeIcon = layout == PaneLayout.Three,
+                    )
+                }
+            }
+            if (wide && mailPane) {
+                MailPanes(
+                    layout = layout,
+                    widths = widths,
+                    folders = folders,
+                    list = list,
+                    reader = (route as? Route.Reader)?.let { r -> { reader(r) } },
+                )
+                return@Column
+            }
             when (route) {
-                Route.Folders ->
-                    FoldersScreen(
-                        state = state,
-                        onOpenFolder = { go(Route.List) },
-                        onAddAccount = { go(Route.Setup(-1)) },
-                    )
-                Route.List ->
-                    ListScreen(
-                        state = state,
-                        onOpenReader = { accountId, folderId, uid -> go(Route.Reader(accountId, folderId, uid)) },
-                    )
+                Route.Folders -> folders()
+                Route.List -> list()
                 // Jumping to a folder from the manager lands on its list, with
                 // the sidebar beneath it for back.
                 Route.FolderManager ->
                     FolderManagerScreen(
                         state = state,
-                        onOpenFolder = { stack = listOf(Route.Folders, Route.List) },
+                        onOpenFolder = { stack = mailStack() },
                     )
                 Route.Accounts ->
                     AccountsScreen(
@@ -256,17 +416,16 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                         onSaved = { stack = listOf(Route.Folders) },
                         onClose = ::back,
                     )
-                is Route.Reader ->
-                    ReaderScreen(
+                is Route.Reader -> reader(route)
+                Route.Dev -> HomeScreen(openPayload = null, onConsumeOpen = {})
+                is Route.Composer ->
+                    ComposerScreen(
                         state = state,
+                        seed = route.seed,
                         accountId = route.accountId,
                         folderId = route.folderId,
-                        uid = route.uid,
                         onClose = ::back,
-                        // Similar hits show in the list pane under the reader.
-                        onShowSimilar = ::back,
                     )
-                Route.Dev -> HomeScreen(openPayload = null, onConsumeOpen = {})
             }
         }
     }

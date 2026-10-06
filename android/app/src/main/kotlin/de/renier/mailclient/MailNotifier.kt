@@ -42,7 +42,7 @@ object MailNotifier {
 
     // Told when mail changed while the app is open (a check saw new mail, a
     // notification button marked some read), so the list re-reads the
-    // cache. Set by MainActivity while its engine lives.
+    // cache. Set by the Compose shell (MailShell) while it is composed.
     @Volatile var onMailChanged: (() -> Unit)? = null
 
     // Carry out the plan for a BackgroundReport, then commit. A failed post

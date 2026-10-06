@@ -72,6 +72,8 @@ fun SearchTopBar(
     onQuery: (String) -> Unit,
     onClear: () -> Unit,
     menu: List<ShellMenuItem>,
+    // Three panes: the Qt hamburger, showing or hiding the folders.
+    onToggleSidebar: (() -> Unit)? = null,
 ) {
     val focus = LocalFocusManager.current
     Surface(
@@ -86,10 +88,13 @@ fun SearchTopBar(
             if (canGoBack) {
                 IconButton(onClick = onBack) { ShellIcon(R.drawable.ic_arrow_back, "Back") }
             }
+            if (onToggleSidebar != null) {
+                IconButton(onClick = onToggleSidebar) { ShellIcon(R.drawable.ic_menu, "Show or hide folders") }
+            }
             if (onCompose != null) {
                 IconButton(onClick = onCompose) { ShellIcon(R.drawable.ic_edit, "Compose") }
             }
-            if (!canGoBack && onCompose == null) {
+            if (!canGoBack && onCompose == null && onToggleSidebar == null) {
                 Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
                     ShellIcon(R.drawable.ic_search, null, Modifier.size(22.dp))
                 }

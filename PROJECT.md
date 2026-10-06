@@ -339,8 +339,9 @@ Update this section when a step lands (see AGENTS.md §7.4).
 
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
-| 3-pane / responsive / 1-pane | ✅ | ✅ | 🔄 | Native is a 1-pane stack (Folders→List→Reader); no tablet layout |
-| Compose, Sync, search field, tools | ✅ | ✅ | 🔄 | Narrow Flutter collapses tools into overflow; native has overflow menu, but Compose, Contacts and Settings are placeholder entries until Steps 6–8 |
+| 3-pane / responsive / 1-pane | ✅ | ✅ | ✅ | Flutter and native: <700 one pane, <1100 folders + list (reader takes the list's place), else three, divided by text/UI scale; Qt switches at 720/1100 window px. Three panes add the sidebar toggle |
+| Resizable panes (drag dividers) | ✅ SplitView | ✅ `PaneDivider` | ✅ `PaneDivider` | Touch dividers keep a 24dp hit area; widths are not remembered across launches anywhere |
+| Compose, Sync, search field, tools | ✅ | ✅ | 🔄 | Narrow Flutter collapses tools into overflow; native has overflow menu, but Contacts and Settings are placeholder entries until Steps 7–8 |
 | Folder-scoped search toggle | ✅ | ✅ | ✅ | Native: tools-menu checkbox |
 | Busy indicator (a job is queued or running) | ✅ | ✅ | ✅ | Qt: core `busy` flag; Flutter: `_busyKinds`; native: header progress line fed by the core's in-flight job table (`mailffi::net`, sent with every job event) — never a Kotlin-side flag |
 | Status line + details + copy | ✅ | ✅ | 🔄 | Native StatusStrip shows while a job runs (live progress), on error, with outbox mail, and keeps a job's result readable briefly after it ends; no details dialog or copy |
@@ -365,7 +366,7 @@ Update this section when a step lands (see AGENTS.md §7.4).
 | List scroll memory | ✅ (per-folder, UID-anchored) | ✅ (per-folder PageStorageKey) | ✅ (per-folder index) | Native drifts when new mail arrives mid-read; Qt's UID anchor does not |
 | Load-older footer (Cached N [of M] / All loaded) | ✅ | ✅ | ✅ | |
 | Find-similar mode + chip | ✅ | ✅ | ✅ | From native reader only (no row menu yet) |
-| Drafts rows open the composer | ✅ | ✅ | ❌ | Native always opens the reader (needs the composer) |
+| Drafts rows open the composer | ✅ | ✅ | ✅ | Native: any row whose folder has the `drafts` role, search hits included |
 | List density (comfortable/compact) | ✅ | ✅ | ❌ | |
 | Swipe actions, mark-all-read | ❌ | ❌ | ❌ | None anywhere; not planned |
 | Save as .eml | ✅ | ✅ | ✅ | Native via reader menu |
@@ -390,7 +391,7 @@ Update this section when a step lands (see AGENTS.md §7.4).
 | Remote-image block + show-once | ✅ | ✅ | ✅ | |
 | Original/darkened colours, zoom | ✅ | ✅ | 🔄 | Native: paint + prefs scale, no in-UI zoom |
 | Fullscreen reader | ✅ | ✅ | ❌ | Native Step 10 |
-| Reply / Reply-all / Forward | ✅ | ✅ | ❌ | Native stubs with toast (composer is Step 6) |
+| Reply / Reply-all / Forward | ✅ | ✅ | ✅ | Recipients, subject, quote and signature from `mailcore::compose::answer` everywhere |
 | Archive / Move / Delete / Star | ✅ | ✅ | ✅ | |
 | Prev/next message | ❌ | ❌ | ❌ | None anywhere |
 
@@ -398,7 +399,10 @@ Update this section when a step lands (see AGENTS.md §7.4).
 
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
-| Full composer (To/Cc/Bcc, editor, attach, drafts, send) | ✅ dialog | ✅ page | ❌ | Flutter fullscreen page is deliberate (keyboard); native is Step 6 |
+| Full composer (To/Cc/Bcc, editor, attach, drafts, send) | ✅ dialog | ✅ page | ✅ page | Touch composers are full pages on every width (keyboard). Locked From domain, contact autocomplete, Reply-To, reply-to-mismatch notice, quote card, server-draft notice, delete draft, dirty guard |
+| Editor | ✅ WYSIWYG HTML | ✅ Markdown + preview | ✅ Markdown + preview | Touch: `mailcore::compose::markdown` renders the body and the toolbar edits (Flutter still runs its Dart copy, see SHARED-CORE.md) |
+| Inline images, attachments | ✅ | ✅ (+ desktop drop) | ✅ | Native copies picked `content://` files into app cache, the core reads paths at send time |
+| Send failure after the composer closed | ✅ reopens with the text | 🔄 status line | 🔄 status line | SMTP runs after close; touch frontends report a late failure on the status strip only |
 
 ### Folders
 
@@ -435,9 +439,9 @@ Update this section when a step lands (see AGENTS.md §7.4).
 
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
-| Poll / push / alarm schedulers, quiet hours | — | ✅ | 🔄 | Shared `mailcore::sync::background`; desktop uses poll timer. Native has the machinery, but the app never arms it (`MailSchedule.refresh` runs only on boot/update/time-zone change) |
-| Notification permission prompt (Android 13+) | — | ✅ | ❌ | Native never requests `POST_NOTIFICATIONS`, so notifications are dropped on a fresh install |
-| Clear notifications on resume | — | ✅ | ❌ | `MailNotifier.clear` has no caller in native |
+| Poll / push / alarm schedulers, quiet hours | — | ✅ | ✅ | Shared `mailcore::sync::background`; desktop uses poll timer. Both re-plan on start and after account changes (plus boot/update/clock); settings changes re-plan once the native Settings screen exists |
+| Notification permission prompt (Android 13+) | — | ✅ | ✅ | Asked when the core's plan says something checks in the background (`any`, from `BackgroundPlan::view`) |
+| Clear notifications on resume; no alert while open | — | ✅ | ✅ | Open app: a background check refreshes the list instead of alerting |
 | Background status (permissions, battery, run history, heartbeat warning, test notification) | — | ✅ | ❌ | Native: run history in dev probes only; belongs to Step 8 |
 | Grouped notifications + Mark read buttons | — | ✅ | ✅ | Same native path (`MailAlarm`, `MailPushService`) |
 

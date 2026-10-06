@@ -123,7 +123,7 @@ pub fn set_account_settings(
 }
 
 /// What the Android host should run in the background, as JSON
-/// (`push`, `poll_minutes`, `poll_scheduler`).
+/// (`push`, `poll_minutes`, `poll_scheduler`, …, `any`).
 pub fn background_plan_json() -> anyhow::Result<String> {
-    Ok(serde_json::to_string(&schedule::plan(shared_db()?))?)
+    Ok(serde_json::to_string(&schedule::plan(shared_db()?).view())?)
 }

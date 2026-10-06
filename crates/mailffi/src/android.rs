@@ -103,7 +103,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_check<'caller>(
 }
 
 /// `MailNative.backgroundPlan()`: what the host should run now, as the
-/// `BackgroundPlan` JSON. Database only, no network; called again at the
+/// `BackgroundPlan` JSON plus `any`. Database only, no network; called again at the
 /// plan's `replan_at`, when some account's quiet hours start or end.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_de_renier_mailclient_MailNative_backgroundPlan<'caller>(
@@ -113,7 +113,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_backgroundPlan<'call
     unowned
         .with_env(|env| -> Result<JString<'caller>> {
             let plan = background::schedule::plan(crate::db::shared_db()?);
-            Ok(env.new_string(serde_json::to_string(&plan)?)?)
+            Ok(env.new_string(serde_json::to_string(&plan.view())?)?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
@@ -1859,6 +1859,132 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_effectiveFrom<'calle
                 string(env, &local)?,
                 string(env, &account_email)?,
             ))?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// Inline-image token id → `data:` URL, as the composer keeps them:
+/// `{"1": "data:…"}`. Junk entries are skipped; an unknown token then
+/// renders as its name, which is what a deleted image should do anyway.
+fn image_map(json: &str) -> std::collections::BTreeMap<u32, String> {
+    serde_json::from_str::<std::collections::HashMap<String, String>>(json)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(k, v)| Some((k.parse().ok()?, v)))
+        .collect()
+}
+
+/// `MailNative.composeBodyHtml(text, imagesJson, quoteHtml, quoteFirst)`:
+/// the form's `body_html` (`mailcore::compose::markdown::body_html`); empty
+/// sends plain text only.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_composeBodyHtml<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    text: JString<'caller>,
+    images: JString<'caller>,
+    quote_html: JString<'caller>,
+    quote_first: bool,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let html = mailcore::compose::markdown::body_html(
+                &string(env, &text)?,
+                &image_map(&string(env, &images)?),
+                &string(env, &quote_html)?,
+                quote_first,
+            );
+            Ok(env.new_string(html)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.composePreviewHtml(text, imagesJson)`: the text as the
+/// recipient will see it, for the composer's preview.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_composePreviewHtml<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    text: JString<'caller>,
+    images: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let html = mailcore::compose::markdown::to_html(
+                &string(env, &text)?,
+                &image_map(&string(env, &images)?),
+            );
+            Ok(env.new_string(html)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.composeFormatNote(sendFormat, text)`: "Sends as plain text",
+/// "Sends formatted (HTML)", … for the editor's footer.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_composeFormatNote<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    send_format: JString<'caller>,
+    text: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            use mailcore::compose::markdown::{has_formatting, send_format_note};
+            let note = send_format_note(
+                &string(env, &send_format)?,
+                has_formatting(&string(env, &text)?),
+            );
+            Ok(env.new_string(note)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.composeEdit(action, text, start, end)`: one toolbar action
+/// (`bold`/`italic`/`quote`/`bullet`) as `{text, start, end}` (UTF-16
+/// offsets, `start < 0` = no selection); `""` for an unknown action.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_composeEdit<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    action: JString<'caller>,
+    text: JString<'caller>,
+    start: i32,
+    end: i32,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let edit = mailcore::compose::markdown::apply_edit(
+                &string(env, &action)?,
+                &string(env, &text)?,
+                i64::from(start),
+                i64::from(end),
+            );
+            let json = match edit {
+                Some(e) => serde_json::to_string(&e)?,
+                None => String::new(),
+            };
+            Ok(env.new_string(json)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.inlineImageToken(id, name)`: the `![name](inline:id)` text
+/// an inserted image stands as in the body.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_inlineImageToken<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    id: i32,
+    name: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let token = mailcore::compose::markdown::inline_image_token(
+                id.max(0) as u32,
+                &string(env, &name)?,
+            );
+            Ok(env.new_string(token)?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }

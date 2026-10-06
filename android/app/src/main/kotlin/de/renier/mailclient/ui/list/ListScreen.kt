@@ -2,6 +2,7 @@ package de.renier.mailclient.ui.list
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -55,7 +56,12 @@ import kotlinx.coroutines.launch
 // over long lists; the bulk bar docks at the bottom while selected.
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ListScreen(state: MailState, onOpenReader: (Long, Long, Int) -> Unit) {
+fun ListScreen(
+    state: MailState,
+    onOpenReader: (Long, Long, Int) -> Unit,
+    // (folderId, uid) of the message open beside the list, highlighted.
+    openMessage: Pair<Long, Int>? = null,
+) {
     val folder = state.openFolder
     val searching = state.searchActive
     if (folder == null && !searching) {
@@ -232,7 +238,15 @@ fun ListScreen(state: MailState, onOpenReader: (Long, Long, Int) -> Unit) {
                             m = m,
                             folderLabel = if (showFolder) folderNames[m.folderId] else null,
                             selected = if (state.selectionMode) key in state.selectedKeys else null,
-                            modifier = Modifier.combinedClickable(
+                            modifier = Modifier
+                                .then(
+                                    if (openMessage == rowFolder to m.uid) {
+                                        Modifier.background(MaterialTheme.colorScheme.secondaryContainer)
+                                    } else {
+                                        Modifier
+                                    },
+                                )
+                                .combinedClickable(
                                 onClick = {
                                     if (state.selectionMode) {
                                         state.toggleSelected(key)

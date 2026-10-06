@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import de.renier.mailclient.JobEvents
 import de.renier.mailclient.MailNative
+import de.renier.mailclient.MailSchedule
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -25,6 +26,8 @@ data class Account(
     val id: Long,
     val email: String,
     val name: String,
+    // The display name sent in From (the composer prefills it).
+    val fromName: String = "",
     val initials: String = "?",
     val avatarLight: String = "",
     val avatarDark: String = "",
@@ -124,6 +127,10 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     var undoOffer: UndoOffer? by mutableStateOf(null)
         private set
     var notice: String? by mutableStateOf(null)
+        private set
+    // Some account checks in the background (push or poll, quiet or not):
+    // the shell then asks for the notification permission.
+    var backgroundChecks by mutableStateOf(false)
         private set
     // A "Folders" job (LIST refresh, create) is queued or running.
     val foldersBusy: Boolean get() = "Folders" in busyKinds
@@ -320,8 +327,22 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         }
     }
 
+    /**
+     * Re-plan the background checks from every account's settings and run
+     * the plan (push service, poller, quiet-hours replan). Database only.
+     * Called on start and after account changes; boot, app updates and the
+     * clock re-plan on their own (MailSchedule).
+     */
+    fun rescheduleBackground() = io {
+        val plan = MailSchedule.refresh(appContext)
+        withContext(Dispatchers.Main) { backgroundChecks = plan?.optBoolean("any") == true }
+    }
+
     /** Left the foreground: no timer ticks while nobody is looking. */
     fun paused() {
+        // Mail synced while the app was open was on screen: the background
+        // check must not alert for it later.
+        markSeen()
         foreground = false
         autoSyncJob?.cancel()
         autoSyncJob = null
@@ -424,6 +445,9 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
                 statusError = false
             }
         }
+        // Accounts may have been added or removed: what runs in the
+        // background follows.
+        rescheduleBackground()
         if (accountId >= 0) {
             loadAutoSyncMinutes(accountId)
             withContext(Dispatchers.Main) { restartAutoSync() }
@@ -1058,6 +1082,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
                     id = o.optLong("id", -1),
                     email = o.optString("email"),
                     name = o.optString("name").ifEmpty { o.optString("email") },
+                    fromName = o.optString("from_name").takeIf { it != "null" }.orEmpty(),
                     initials = o.optString("initials", "?"),
                     avatarLight = o.optString("avatar_light"),
                     avatarDark = o.optString("avatar_dark"),

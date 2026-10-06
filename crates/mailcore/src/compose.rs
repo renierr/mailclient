@@ -11,6 +11,7 @@ mod answer;
 mod drafts;
 mod form;
 mod from;
+pub mod markdown;
 mod reply;
 mod segments;
 mod send;
