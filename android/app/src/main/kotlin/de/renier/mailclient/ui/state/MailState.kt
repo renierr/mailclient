@@ -466,11 +466,15 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         finishWaiters.remove(kind)?.forEach { it(ok, e.optString("status")) }
         val accountId = e.optLong("account_id", -1)
         val eventFolder = e.optLong("folder_id", -1)
-        // Re-read whatever is showing, like the Dart side does.
-        if (kind == "Folders" || (accountId == activeAccountId && eventFolder == -1L)) {
-            refreshFolders(andMessages = true)
-        } else if (accountId == activeAccountId && (eventFolder == folderId || eventFolder == -1L)) {
-            reloadMessages()
+        // Re-read whatever is showing, like the Dart side does: the folder
+        // tree (counts and unread pills) on every finished job for the
+        // account — a folder sync or load-older moves them too — plus the
+        // messages when the job touched the open folder or every folder.
+        if (kind == "Folders" || accountId == activeAccountId) {
+            loadFolders()
+            if (kind == "Folders" || eventFolder == -1L || eventFolder == folderId) {
+                reloadMessages()
+            }
         }
         refreshOutbox()
         if (searchActive && similarLabel == null) runSearch()
