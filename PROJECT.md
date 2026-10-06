@@ -250,7 +250,7 @@ cache-only so they render immediately.
 ./dev.sh --flutter      # Flutter dev: flutter run -d linux (debug Dart, release Rust core)
 ./build.sh --qt         # Qt release build → dist/mailclient/{bin/mailapp,qml/,resources/}
 ./build.sh --flutter    # Flutter release build → dist/mailclient-flutter/{mailclient,lib/,data/}
-./build.sh --apk        # signed Android APK → dist/mailclient-apk/mailclient-release.apk
+./build.sh --apk        # signed Android APK → dist/mailclient-apk/mailclient-<version>-release.apk
 ./build.sh --all        # both desktop release bundles (Qt + Flutter Linux)
 ./scripts/install-local.sh  # copy Qt bundle to ~/.local/{bin,share/mailclient} + install .desktop
 cargo test -p mailcore      # backend unit tests (SQLite in-memory)

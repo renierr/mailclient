@@ -9,11 +9,11 @@
 # --flutter: flutter build linux --release (the Rust core builds as part of it)
 #            Output: dist/mailclient-flutter/{mailclient,lib/,data/,VERSION}
 # --apk:     flutter build apk --release (signed; needs key.properties)
-#            Output: dist/mailclient-apk/mailclient-release.apk
+#            Output: dist/mailclient-apk/mailclient-<version>-release.apk
 # --aab:     flutter build appbundle --release (signed; needs key.properties)
-#            Output: dist/mailclient-aab/mailclient-release.aab
+#            Output: dist/mailclient-aab/mailclient-<version>-release.aab
 # --android: native Compose Android APK --release (signed; needs key.properties)
-#            Output: dist/mailclient-android/mailclient-native-release.apk
+#            Output: dist/mailclient-android/mailclient-native-<version>-release.apk
 # --all:     Qt + Flutter Linux desktop bundles
 # Works on Linux and in MSYS2/Git Bash on Windows (Qt path, see scripts/qt-env.sh).
 set -euo pipefail
@@ -31,11 +31,11 @@ Available targets:
   --flutter, --flutter-linux   Build Flutter Linux desktop release bundle
                                Output: dist/mailclient-flutter/
   --apk, --flutter-apk         Build signed Flutter Android APK
-                               Output: dist/mailclient-apk/mailclient-release.apk
+                               Output: dist/mailclient-apk/mailclient-<version>-release.apk
   --aab, --bundle              Build signed Flutter Android App Bundle (AAB)
-                                Output: dist/mailclient-aab/mailclient-release.aab
+                                Output: dist/mailclient-aab/mailclient-<version>-release.aab
   --android                    Build signed native Compose Android APK
-                                Output: dist/mailclient-android/mailclient-native-release.apk
+                                Output: dist/mailclient-android/mailclient-native-<version>-release.apk
   --all                        Build all desktop targets (Qt + Flutter Linux)
   -h, --help                   Show this help message
 
@@ -58,6 +58,21 @@ target="$1"
 write_version() {
     git rev-parse --short HEAD 2>/dev/null > "$1/VERSION" \
         || echo "unversioned" > "$1/VERSION"
+}
+
+# Versioned dist filenames, e.g. mailclient-0.10.0+5-release.apk. Each reads
+# its own source of truth (AGENTS.md §5 bump order keeps them in step):
+# the Flutter pubspec carries versionName+versionCode as "X.Y.Z+N", the
+# native build.gradle.kts carries them as two fields.
+flutter_version() {
+    grep '^version:' flutter/pubspec.yaml | sed 's/^version: *//;s/[[:space:]]*$//'
+}
+
+native_version() {
+    local name code
+    name="$(grep -E '^\s*versionName' android/app/build.gradle.kts | sed 's/.*"\(.*\)".*/\1/')"
+    code="$(grep -E '^\s*versionCode' android/app/build.gradle.kts | sed 's/[^0-9]*//g')"
+    echo "${name}+${code}"
 }
 
 # A "signed" release build only carries the release signature when the
@@ -175,12 +190,12 @@ build_apk() {
         exit 1
     fi
     mkdir -p dist/mailclient-apk
-    cp "$apk" dist/mailclient-apk/mailclient-release.apk
+    cp "$apk" "dist/mailclient-apk/mailclient-$(flutter_version)-release.apk"
     write_version dist/mailclient-apk
 
-    cat <<'EOF'
+    cat <<EOF
 Done. APK available at:
-    ./dist/mailclient-apk/mailclient-release.apk
+    ./dist/mailclient-apk/mailclient-$(flutter_version)-release.apk
 Signed with the release keystore from flutter/android/key.properties.
 EOF
 }
@@ -198,12 +213,12 @@ build_aab() {
         exit 1
     fi
     mkdir -p dist/mailclient-aab
-    cp "$aab" dist/mailclient-aab/mailclient-release.aab
+    cp "$aab" "dist/mailclient-aab/mailclient-$(flutter_version)-release.aab"
     write_version dist/mailclient-aab
 
-    cat <<'EOF'
+    cat <<EOF
 Done. AAB bundle available at:
-    ./dist/mailclient-aab/mailclient-release.aab
+    ./dist/mailclient-aab/mailclient-$(flutter_version)-release.aab
 Signed with the release keystore from flutter/android/key.properties.
 Ready for upload to Google Play Console.
 EOF
@@ -229,12 +244,12 @@ build_android() {
         exit 1
     fi
     mkdir -p dist/mailclient-android
-    cp "$apk" dist/mailclient-android/mailclient-native-release.apk
+    cp "$apk" "dist/mailclient-android/mailclient-native-$(native_version)-release.apk"
     write_version dist/mailclient-android
 
-    cat <<'EOF'
+    cat <<EOF
 Done. APK available at:
-    ./dist/mailclient-android/mailclient-native-release.apk
+    ./dist/mailclient-android/mailclient-native-$(native_version)-release.apk
 Signed with the release keystore from android/key.properties.
 EOF
 }

@@ -256,7 +256,7 @@ colours for that message.
 ## Android
 
 `./build.sh --apk` produces a signed release APK in
-`dist/mailclient-apk/mailclient-release.apk`. The Gradle build compiles the
+`dist/mailclient-apk/mailclient-<version>-release.apk`. The Gradle build compiles the
 Rust core for `arm64-v8a`, `armeabi-v7a` and `x86_64` via cargo-ndk
 (`android/app/mailffi.gradle.kts`) before packaging.
 
