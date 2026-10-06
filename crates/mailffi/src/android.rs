@@ -783,6 +783,35 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_downloadAttachments<
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `MailNative.attachmentOpenMime(attachmentId)`: the opener MIME for the
+/// stored row, same derivation as the feed's `open_mime`. Re-read this
+/// after a download rather than reusing the reader payload's copy: the
+/// download-time magic check may have corrected the stored header since
+/// the message was read, and the old MIME would send the file to the
+/// wrong app.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_attachmentOpenMime<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    attachment_id: i64,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let a =
+                mailcore::store::messages::get_attachment(crate::db::shared_db()?, attachment_id)?;
+            let file_name = mailcore::paths::safe_attachment_name_for_mime(
+                a.filename.as_deref(),
+                a.mime_type.as_deref(),
+                a.id,
+            );
+            Ok(env.new_string(mailcore::mime::open_mime(
+                a.mime_type.as_deref(),
+                Some(&file_name),
+            ))?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `MailNative.writeAttachmentCopy(attachmentId, dir)`: the copy a system
 /// viewer opens, under a name that cannot clash or escape `dir`.
 #[unsafe(no_mangle)]

@@ -95,11 +95,16 @@ object ReaderFiles {
     ): Intent {
         ensureBytes(state, accountId, folderId, uid, attachmentId)
             ?: throw IllegalStateException("attachment is not downloaded yet")
+        // Fresh from the stored row, not the reader payload's copy: the
+        // download-time magic check may have corrected the header since
+        // the message was read, and the old MIME would pick the wrong app.
+        val opener = runCatching { MailNative.attachmentOpenMime(attachmentId) }
+            .getOrDefault(mime)
         val dir = File(context.cacheDir, "mailclient-attachments").apply { mkdirs() }
         val path = MailNative.writeAttachmentCopy(attachmentId, dir.path)
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.readerfiles", File(path))
         val view = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, mime)
+            setDataAndType(uri, opener)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         return Intent.createChooser(view, "Open with")

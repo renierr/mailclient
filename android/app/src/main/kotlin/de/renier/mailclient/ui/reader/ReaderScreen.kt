@@ -210,13 +210,16 @@ fun ReaderScreen(
 
     fun saveAttachment(id: Long, name: String, mime: String) = bg {
         val bytes = ReaderFiles.ensureBytes(state, accountId, folderId, uid, id)
+        // Same staleness as the opener: the stored header may have been
+        // corrected by the download that just landed.
+        val opener = runCatching { MailNative.attachmentOpenMime(id) }.getOrDefault(mime)
         withContext(Dispatchers.Main) {
             if (bytes == null) {
                 state.info("$name is not downloaded yet")
                 return@withContext
             }
             pendingSave = bytes
-            saveOne.launch(name to mime)
+            saveOne.launch(name to opener)
         }
     }
 

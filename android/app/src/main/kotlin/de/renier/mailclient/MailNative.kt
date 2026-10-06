@@ -109,6 +109,11 @@ object MailNative {
     // event instead of queueing again.
     @JvmStatic external fun downloadAttachments(accountId: Long, folderId: Long, uid: Int)
 
+    // The opener MIME for the stored row, same derivation as the feed's
+    // `open_mime`. Read after a download: the magic check may have fixed
+    // the stored header since the message was read.
+    @JvmStatic external fun attachmentOpenMime(attachmentId: Long): String
+
     // The viewer copy of a cached attachment, under a safe name in `dir`.
     @JvmStatic external fun writeAttachmentCopy(attachmentId: Long, dir: String): String
 
