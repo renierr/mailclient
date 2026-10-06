@@ -13,7 +13,7 @@
 //! currently showing — which is why there is no stale-selection reconciliation
 //! here.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::{mpsc, Mutex, OnceLock};
 
 use crate::api::events::{emit_event, JobEvent, JobPhase};
@@ -89,27 +89,63 @@ impl JobProgress {
     }
 }
 
-/// Jobs currently on the thread, keyed by [`spawn`]'s `key`.
+/// Jobs queued or running on the thread: [`spawn`]'s `key` → job kind.
 ///
 /// Deliberately not `mailapp`'s single `busy` flag: there, one latch guards a
 /// GUI that shows one spinner. Here a sync in flight must not refuse an
-/// attachment download, so only a *second job of the same kind* is refused.
-fn inflight() -> &'static Mutex<HashSet<String>> {
-    static SET: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    SET.get_or_init(|| Mutex::new(HashSet::new()))
+/// attachment download, so only a *second job of the same key* is refused.
+///
+/// `generation` counts every insert and removal, so a frontend that hears
+/// about the table from two threads (the caller's queue thread and the net
+/// thread) can drop a snapshot older than one it already applied.
+#[derive(Default)]
+struct Inflight {
+    jobs: HashMap<String, String>,
+    generation: u64,
 }
 
-/// Keys of jobs currently on the network thread, for diagnostics (the dev
-/// probe shows them): a job listed here started but never reported back.
-pub(crate) fn inflight_keys() -> Vec<String> {
-    let mut keys: Vec<String> = inflight()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .iter()
-        .cloned()
-        .collect();
+fn inflight() -> &'static Mutex<Inflight> {
+    static SET: OnceLock<Mutex<Inflight>> = OnceLock::new();
+    SET.get_or_init(|| Mutex::new(Inflight::default()))
+}
+
+/// What is queued or running right now, as the frontend's busy indicator
+/// should show it. Read from the core's own dedupe table, so it cannot
+/// drift from what the net thread actually does.
+#[derive(serde::Serialize)]
+pub(crate) struct BusySnapshot {
+    pub generation: u64,
+    /// Distinct job kinds in flight (`"Sync"`, `"Folders"`, …), sorted.
+    pub kinds: Vec<String>,
+    /// Dedupe keys in flight, sorted — diagnostics only.
+    pub keys: Vec<String>,
+}
+
+// Only the JNI side reads it; Dart keeps its own `_busyKinds`.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn busy_snapshot() -> BusySnapshot {
+    let set = inflight().lock().unwrap_or_else(|e| e.into_inner());
+    snapshot_of(&set)
+}
+
+fn snapshot_of(set: &Inflight) -> BusySnapshot {
+    let mut keys: Vec<String> = set.jobs.keys().cloned().collect();
     keys.sort();
-    keys
+    let mut kinds: Vec<String> = set.jobs.values().cloned().collect();
+    kinds.sort();
+    kinds.dedup();
+    BusySnapshot {
+        generation: set.generation,
+        kinds,
+        keys,
+    }
+}
+
+fn remove_inflight(key: &str) {
+    let mut set = inflight().lock().unwrap_or_else(|e| e.into_inner());
+    if set.jobs.remove(key).is_some() {
+        set.generation += 1;
+    }
 }
 
 fn net_tx() -> &'static mpsc::Sender<JobFn> {
@@ -152,13 +188,19 @@ where
     Fut: std::future::Future<Output = Result<D, String>> + 'static,
     D: Into<JobDone>,
 {
-    {
+    #[cfg_attr(not(target_os = "android"), allow(unused_variables))]
+    let queued = {
         let mut set = inflight().lock().unwrap_or_else(|e| e.into_inner());
-        if !set.insert(key.clone()) {
+        if set.jobs.contains_key(&key) {
             anyhow::bail!("{kind} is already running");
         }
-    }
+        set.jobs.insert(key.clone(), kind.to_string());
+        set.generation += 1;
+        snapshot_of(&set)
+    };
     let kind = kind.to_string();
+    #[cfg(target_os = "android")]
+    let queued_kind = kind.clone();
     let progress = JobProgress { kind: kind.clone() };
     // The closure owns the key (it clears the entry when the job ends); the
     // failure path below needs it too, so it keeps its own copy.
@@ -170,10 +212,7 @@ where
                 op(db, progress).await.map(|d| -> JobDone { d.into() })
             })
         });
-        inflight()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&key);
+        remove_inflight(&key);
         let (status, refresh, job_outcome, ok) = match outcome {
             Ok(done) => (done.status, done.refresh, done.outcome, true),
             Err(e) => (e, None, String::new(), false),
@@ -194,12 +233,15 @@ where
     }));
     if sent.is_err() {
         // Only reachable if the net thread died despite the guards above.
-        inflight()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&key_if_undelivered);
+        remove_inflight(&key_if_undelivered);
         anyhow::bail!("the network thread is not running");
     }
+    // Kotlin keeps no busy bookkeeping of its own: it hears that the job is
+    // in flight from here, the same way it hears that it ended. A finish
+    // that overtakes this carries a newer generation, so the stale snapshot
+    // is dropped on arrival.
+    #[cfg(target_os = "android")]
+    crate::android::forward_busy(&queued_kind, &queued);
     Ok(())
 }
 
@@ -233,4 +275,22 @@ pub(crate) fn spawn_push_after_grace(account_id: i64) {
         std::thread::sleep(std::time::Duration::from_secs(secs));
         spawn_flag_push(account_id);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_lists_each_kind_once_sorted() {
+        let mut set = Inflight::default();
+        set.jobs.insert("sync:1".into(), "Sync".into());
+        set.jobs.insert("sync-folder:7".into(), "Sync".into());
+        set.jobs.insert("folders:1".into(), "Folders".into());
+        set.generation = 3;
+        let snap = snapshot_of(&set);
+        assert_eq!(snap.generation, 3);
+        assert_eq!(snap.kinds, vec!["Folders", "Sync"]);
+        assert_eq!(snap.keys, vec!["folders:1", "sync-folder:7", "sync:1"]);
+    }
 }

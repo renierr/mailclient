@@ -63,8 +63,23 @@ still to promote") points here instead of keeping its own list.
 Ordered by priority; numbers stay as first assigned, so a done item leaves
 a gap. "Drift" says whether the two versions already behave differently.
 
-No open items. Add a new numbered section when the next duplicated logic is
-found.
+### 1. Busy state: which jobs are in flight
+
+Native reads the core's in-flight job table (`mailffi::net::busy_snapshot`,
+carried as `busy` on every JNI job event, plus a `queued` event per job).
+Flutter still keeps its own `_busyKinds` set, filled on a successful queue
+call and cleared by kind on the first finished event. Drift: yes — when two
+jobs of one kind overlap (an account sync plus a folder sync or "Load
+older"), Flutter's spinner goes off at the first finish while the second
+still runs. Fix: add the snapshot to the FRB `JobEvent` (codegen) and drop
+`_busyKinds`.
+
+### 2. Sync-on-resume gap
+
+"Resume syncs unless a sync was asked for within the last minute" exists
+twice: Dart `shouldSyncOnResume` and Kotlin `MailState.RESUME_SYNC_GAP_MS`.
+Drift: none yet. Fix: a `mailcore` predicate taking the seconds since the
+last request.
 
 ## Deliberate frontend-only logic
 

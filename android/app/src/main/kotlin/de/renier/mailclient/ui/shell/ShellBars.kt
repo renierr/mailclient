@@ -13,6 +13,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -24,6 +25,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +39,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.R
+import kotlinx.coroutines.delay
+
+private const val RESULT_LINGER_MS = 4_000L
 
 /** One entry of the shell's overflow menu. */
 data class ShellMenuItem(
@@ -166,7 +171,8 @@ private fun OverflowMenu(items: List<ShellMenuItem>) {
 
 // Bottom strip: only there when it has something to say — a running job's
 // progress, the last error, or mail waiting in the outbox. A phone has no
-// room for a permanent "Ready".
+// room for a permanent "Ready". When the last job ends, its result ("Synced
+// INBOX: +3 new") stays readable for a few seconds before the strip folds.
 @Composable
 fun StatusStrip(
     text: String,
@@ -176,7 +182,16 @@ fun StatusStrip(
     outboxFailed: Boolean,
     onOutbox: () -> Unit,
 ) {
-    val showText = busy || error
+    var linger by remember { mutableStateOf(false) }
+    LaunchedEffect(busy) {
+        if (busy) {
+            linger = true
+        } else if (linger) {
+            delay(RESULT_LINGER_MS)
+            linger = false
+        }
+    }
+    val showText = busy || error || linger
     if (!showText && outboxPending == 0) return
     Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
         Row(
@@ -187,6 +202,9 @@ fun StatusStrip(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (busy) {
+                CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
+            }
             Text(
                 if (showText) text else "",
                 color = if (error) MaterialTheme.colorScheme.error

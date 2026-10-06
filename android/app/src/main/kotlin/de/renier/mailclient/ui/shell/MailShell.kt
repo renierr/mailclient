@@ -1,9 +1,11 @@
 package de.renier.mailclient.ui.shell
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.LinearProgressIndicator
@@ -23,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import de.renier.mailclient.R
@@ -94,14 +97,16 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
         onConsumeOpen()
     }
 
-    // Back in the foreground: tell the background checks what was seen, and
-    // re-read what is showing (a notification action may have changed it).
+    // Back in the foreground: tell the background checks what was seen,
+    // re-read what is showing (a notification action may have changed it)
+    // and sync if it is due. The auto-sync timer only runs while resumed.
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                state.refreshFolders(andMessages = true)
-                state.markSeen()
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> state.resumed()
+                Lifecycle.Event.ON_PAUSE -> state.paused()
+                else -> Unit
             }
         }
         lifecycle.addObserver(observer)
@@ -194,11 +199,6 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                         onBack = ::back,
                     )
                 }
-                // Sync shows as the pull-to-refresh spinner on the mail panes;
-                // the bar covers folder jobs and syncs seen from other pages.
-                if (state.foldersBusy || (state.syncing && !mailPane)) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                }
             }
         },
         bottomBar = {
@@ -206,7 +206,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
             StatusStrip(
                 text = state.status,
                 error = state.statusError,
-                busy = state.syncing || state.foldersBusy,
+                busy = state.busy,
                 outboxPending = state.outboxPending,
                 outboxFailed = state.outboxFailed,
                 onOutbox = { state.info("Outbox arrives in Step 9") },
@@ -215,6 +215,15 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
         snackbarHost = { SnackbarHost(snack) },
     ) { padding ->
         Column(modifier = Modifier.padding(padding)) {
+            // The header line: any job in the core's in-flight table, on
+            // every page (the reader included), like the desktop's busy
+            // indicator. The words go to the status strip below. The slot is
+            // always there, so starting a sync never shifts the list.
+            Box(modifier = Modifier.fillMaxWidth().height(3.dp)) {
+                if (state.busy) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxSize())
+                }
+            }
             when (route) {
                 Route.Folders ->
                     FoldersScreen(

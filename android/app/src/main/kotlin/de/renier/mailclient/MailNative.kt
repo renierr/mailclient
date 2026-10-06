@@ -158,8 +158,10 @@ object MailNative {
     // subscribe there.
     @JvmStatic external fun setJobListener(callbacks: JobCallbacks)
     @JvmStatic external fun clearJobListener()
-    // Keys of jobs currently on the network thread, for diagnostics.
-    @JvmStatic external fun netInflight(): String
+    // The core's in-flight job table, {generation, kinds, keys}: what the
+    // busy indicator shows. Every job event carries the same snapshot as
+    // "busy"; this is for a screen that starts while jobs already run.
+    @JvmStatic external fun netBusy(): String
     @JvmStatic external fun syncAccount(accountId: Long)
     @JvmStatic external fun syncFolder(accountId: Long, folderId: Long)
     @JvmStatic external fun loadOlderMessages(accountId: Long, folderId: Long)

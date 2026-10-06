@@ -155,7 +155,8 @@ private fun SyncJobsProbe() {
     var error by remember { mutableStateOf<String?>(null) }
 
     // The listener fires on Rust's net thread; hop to Main for state.
-    DisposableEffect(Unit) {        val sub =
+    DisposableEffect(Unit) {
+        val sub =
             JobEvents.subscribe(context) { json ->
                 scope.launch(Dispatchers.Main) { lastEvent = json.take(300) }
             }
@@ -245,7 +246,7 @@ private fun SyncJobsProbe() {
                     scope.launch(Dispatchers.IO) {
                         val keys = try {
                             MailNative.ensureInit(context)
-                            MailNative.netInflight()
+                            MailNative.netBusy()
                         } catch (e: Exception) {
                             "failed: ${e.message}"
                         }

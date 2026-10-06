@@ -1,6 +1,7 @@
 package de.renier.mailclient.ui.state
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -106,8 +107,16 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         private set
     var statusError by mutableStateOf(false)
         private set
-    var syncing by mutableStateOf(false)
+    // Job kinds queued or running on the net thread ("Sync", "Folders",
+    // "Search", …), mirrored from the core's own in-flight table: every job
+    // event carries it, newest generation wins. Never set by hand — a
+    // Kotlin-side flag drifts the moment a job is refused, deduped, queued
+    // from another screen or outlives the composition that started it.
+    var busyKinds: Set<String> by mutableStateOf(emptySet())
         private set
+    private var busyGeneration = -1L
+    val busy: Boolean get() = busyKinds.isNotEmpty()
+    val syncing: Boolean get() = "Sync" in busyKinds
     var outboxPending by mutableStateOf(0)
         private set
     var outboxFailed by mutableStateOf(false)
@@ -117,8 +126,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     var notice: String? by mutableStateOf(null)
         private set
     // A "Folders" job (LIST refresh, create) is queued or running.
-    var foldersBusy by mutableStateOf(false)
-        private set
+    val foldersBusy: Boolean get() = "Folders" in busyKinds
 
     // Search: the typed text, whether it is scoped to the open folder, and
     // the rows it found. How a query runs (off / row filter / FTS index,
@@ -222,8 +230,27 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         withContext(Dispatchers.Main) {
             status = msg
             statusError = true
-            syncing = false
         }
+    }
+
+    /** A queue call refused because the same job is in flight: not an error. */
+    private fun Throwable.isAlreadyRunning(): Boolean =
+        message.orEmpty().contains("already running", ignoreCase = true)
+
+    /** Main thread. Drops snapshots older than one already applied. */
+    private fun applyBusy(o: JSONObject?) {
+        if (o == null) return
+        val generation = o.optLong("generation", -1)
+        if (generation < busyGeneration) return
+        busyGeneration = generation
+        val arr = o.optJSONArray("kinds")
+        busyKinds = if (arr == null) emptySet() else List(arr.length()) { arr.optString(it) }.toSet()
+    }
+
+    private fun loadBusy() = io {
+        MailNative.ensureInit(appContext)
+        val o = runCatching { JSONObject(MailNative.netBusy()) }.getOrNull()
+        withContext(Dispatchers.Main) { applyBusy(o) }
     }
 
     private suspend fun putStatus(text: String, error: Boolean) {
@@ -247,13 +274,83 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         }
         initialized = true
         MailNative.ensureInit(appContext)
-        refreshAll()
+        // Jobs may already run (started before this composition): pick up
+        // the core's table instead of assuming idle.
+        loadBusy()
+        // Cold start: the cache paints first, then the account syncs, like
+        // Flutter's start() — a slow server never holds the first paint.
+        refreshAll(syncAfter = true)
         loadReaderPrefs()
     }
 
     fun release() {
         jobEvents?.close()
         jobEvents = null
+        autoSyncJob?.cancel()
+    }
+
+    // ---- Foreground auto-sync (Flutter's start/resumed/_autoSyncTick) ----
+
+    // elapsedRealtime of the last account sync asked for; 0 = never.
+    @Volatile private var lastSyncRequest = 0L
+    private var autoSyncMinutes = 0
+    private var autoSyncJob: Job? = null
+    private var foreground = true
+
+    /**
+     * Back in the foreground. Android froze the timer meanwhile, while the
+     * background check may have filled the cache: show the cache at once,
+     * then sync unless auto-sync is off or a sync was asked for within the
+     * last minute (a quick app switch, the startup sync).
+     */
+    fun resumed() {
+        foreground = true
+        refreshFolders(andMessages = true)
+        markSeen()
+        io {
+            val id = activeAccountId
+            if (id < 0) return@io
+            loadAutoSyncMinutes(id)
+            val gapOk = lastSyncRequest == 0L ||
+                SystemClock.elapsedRealtime() - lastSyncRequest >= RESUME_SYNC_GAP_MS
+            withContext(Dispatchers.Main) {
+                restartAutoSync()
+                if (autoSyncMinutes > 0 && !syncing && gapOk) syncAccount(id)
+            }
+        }
+    }
+
+    /** Left the foreground: no timer ticks while nobody is looking. */
+    fun paused() {
+        foreground = false
+        autoSyncJob?.cancel()
+        autoSyncJob = null
+    }
+
+    /** The open account's effective interval (its override or the app's). */
+    private suspend fun loadAutoSyncMinutes(accountId: Long) {
+        val minutes = runCatching {
+            JSONObject(MailNative.accountSettingsJson(accountId))
+                .optJSONObject("effective")
+                ?.optString("sync_interval_minutes")
+                ?.toIntOrNull()
+        }.getOrNull() ?: 0
+        withContext(Dispatchers.Main) { autoSyncMinutes = minutes }
+    }
+
+    /** Main thread. One timer per state, only while in the foreground. */
+    private fun restartAutoSync() {
+        autoSyncJob?.cancel()
+        autoSyncJob = null
+        val minutes = autoSyncMinutes
+        if (minutes <= 0 || !foreground) return
+        autoSyncJob = scope.launch(Dispatchers.Main) {
+            while (true) {
+                delay(minutes * 60_000L)
+                val id = activeAccountId
+                if (id >= 0 && !syncing) syncAccount(id)
+            }
+        }
     }
 
 
@@ -264,13 +361,32 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
             return
         }
         val kind = e.optString("kind")
+        val wasBusy = busy
+        applyBusy(e.optJSONObject("busy"))
+        val phase = e.optString("phase")
+        if (phase == "queued") {
+            // Something to read before the job's first progress arrives; a
+            // job queued behind a running one leaves that one's status alone.
+            if (!wasBusy) {
+                status = when (kind) {
+                    "Sync" -> "Syncing…"
+                    "Folders" -> "Updating folders…"
+                    "Search" -> "Searching the server…"
+                    "Send" -> "Sending…"
+                    else -> "$kind…"
+                }
+                statusError = false
+            }
+            return
+        }
         val ok = e.optBoolean("ok", true)
-        status = e.optString("status", kind)
-        statusError = !ok
-        if (e.optString("phase") != "finished") return
-        Log.d(TAG, "job finished: kind=$kind ok=$ok status=${e.optString("status")}")
-        if (kind == "Sync") syncing = false
-        if (kind == "Folders") foldersBusy = false
+        val text = e.optString("status")
+        if (text.isNotEmpty()) {
+            status = text
+            statusError = !ok
+        }
+        if (phase != "finished") return
+        Log.d(TAG, "job finished: kind=$kind ok=$ok busy=$busyKinds")
         // A finished server backfill lands via the re-run below.
         if (kind == "Search") serverSearchPending = false
         finishWaiters.remove(kind)?.forEach { it(ok, e.optString("status")) }
@@ -286,7 +402,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         if (searchActive && similarLabel == null) runSearch()
     }
 
-    fun refreshAll() = io {
+    fun refreshAll(syncAfter: Boolean = false) = io {
         MailNative.ensureInit(appContext)
         val parsed = JSONObject(MailNative.initialSelection())
         val accountId = parsed.optLong("account_id", -1)
@@ -301,7 +417,18 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         refreshOutbox()
         loadSort()
         if (folderId >= 0) reloadMessages()
-        putStatus(if (accountId < 0) "No accounts yet" else "Ready", false)
+        withContext(Dispatchers.Main) {
+            // A running job's progress outranks the idle line.
+            if (!busy) {
+                status = if (accountId < 0) "No accounts yet" else "Ready"
+                statusError = false
+            }
+        }
+        if (accountId >= 0) {
+            loadAutoSyncMinutes(accountId)
+            withContext(Dispatchers.Main) { restartAutoSync() }
+            if (syncAfter) syncAccount(accountId)
+        }
     }
 
     // ---- Step 4: sort, filters, selection, bulk actions ----
@@ -574,6 +701,14 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         loadFolders()
         refreshOutbox()
         if (folderId >= 0) reloadMessages()
+        // A switch syncs the account it lands on, like Flutter; its own
+        // interval replaces the previous account's timer.
+        val landed = activeAccountId
+        if (landed >= 0) {
+            loadAutoSyncMinutes(landed)
+            withContext(Dispatchers.Main) { restartAutoSync() }
+            syncAccount(landed)
+        }
     }
 
     private fun loadFolders() = io {
@@ -614,7 +749,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         reloadMessages()
         io {
             runCatching { MailNative.syncFolder(activeAccountId, id) }
-                .onFailure { fail(it.message ?: "sync failed") }
+                .onFailure { if (!it.isAlreadyRunning()) fail(it.message ?: "sync failed") }
         }
     }
 
@@ -649,7 +784,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     fun loadMore() = io {
         MailNative.ensureInit(appContext)
         runCatching { MailNative.loadOlderMessages(activeAccountId, folderId) }
-            .onFailure { fail(it.message ?: "load older failed") }
+            .onFailure { if (!it.isAlreadyRunning()) fail(it.message ?: "load older failed") }
         // The finished event reloads the page; rows appear then.
     }
 
@@ -663,55 +798,29 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     }
 
     /**
-     * Full sync of one account by id. A second pull while one is in flight is
-     * ignored rather than failed: the running job's finished event still
-     * clears the spinner, so the UI never sticks on an error while mail
-     * keeps arriving underneath.
-     *
-     * The spinner is set only when a job was actually queued. Setting it
-     * before the queue call sticks it on forever when the call is refused:
-     * no job means no finish event, and a finish already on its way clears
-     * the flag before it is even set.
+     * Full sync of one account by id. Only queues: the busy line comes from
+     * the core's in-flight table (see [busyKinds]). A second pull while the
+     * same job runs is refused by the core's dedupe and ignored here — the
+     * line already shows it.
      */
     fun syncAccount(id: Long) = io {
         MailNative.ensureInit(appContext)
-        val queued = runCatching { MailNative.syncAccount(id) }
-            .onFailure { e ->
-                if (!e.message.orEmpty().contains("already running", ignoreCase = true)) {
-                    fail(e.message ?: "sync failed")
-                } else {
-                    Log.d(TAG, "syncAccount($id) refused: already running")
-                }
-            }.isSuccess
-        if (queued) {
-            Log.d(TAG, "syncAccount($id) queued")
-            withContext(Dispatchers.Main) { syncing = true }
-        }
+        lastSyncRequest = SystemClock.elapsedRealtime()
+        runCatching { MailNative.syncAccount(id) }
+            .onFailure { if (!it.isAlreadyRunning()) fail(it.message ?: "sync failed") }
     }
 
     /**
      * Pull-to-refresh inside a folder syncs just that folder: new mail,
      * flags and pending moves for what is showing. The account-wide
-     * [syncAccount] stays on the Sync button and the folders pane.
+     * [syncAccount] stays on the Sync entry and the folders pane.
      */
     fun syncFolder(id: Long = folderId) = io {
         MailNative.ensureInit(appContext)
         val account = activeAccountId
         if (account < 0 || id < 0) return@io
-        // Set only when queued (see syncAccount): a refused pull must not
-        // light the spinner with no job behind it.
-        val queued = runCatching { MailNative.syncFolder(account, id) }
-            .onFailure { e ->
-                if (!e.message.orEmpty().contains("already running", ignoreCase = true)) {
-                    fail(e.message ?: "sync failed")
-                } else {
-                    Log.d(TAG, "syncFolder($id) refused: already running")
-                }
-            }.isSuccess
-        if (queued) {
-            Log.d(TAG, "syncFolder($id) queued")
-            withContext(Dispatchers.Main) { syncing = true }
-        }
+        runCatching { MailNative.syncFolder(account, id) }
+            .onFailure { if (!it.isAlreadyRunning()) fail(it.message ?: "sync failed") }
     }
 
     /** Re-read the folder list from the server (LIST); the event reloads. */
@@ -719,14 +828,8 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         val id = activeAccountId
         if (id < 0) return
         io {
-            val error = runCatching { MailNative.refreshFolders(id) }.exceptionOrNull()
-            if (error == null) {
-                // Set only when queued (see syncAccount): no job, no spinner.
-                withContext(Dispatchers.Main) { foldersBusy = true }
-            } else if (!error.message.orEmpty().contains("already running", ignoreCase = true)) {
-                withContext(Dispatchers.Main) { foldersBusy = false }
-                fail(error.message ?: "refresh failed")
-            }
+            runCatching { MailNative.refreshFolders(id) }
+                .onFailure { if (!it.isAlreadyRunning()) fail(it.message ?: "refresh failed") }
         }
     }
 
@@ -748,13 +851,11 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
             onDone(false, "No account")
             return
         }
-        foldersBusy = true
         finishWaiters.getOrPut("Folders") { mutableListOf() }.add(onDone)
         io {
             runCatching { MailNative.createFolder(id, path) }
                 .onFailure { e ->
                     withContext(Dispatchers.Main) {
-                        foldersBusy = false
                         finishWaiters["Folders"]?.remove(onDone)
                         onDone(false, e.message ?: "Could not create the folder")
                     }
@@ -945,6 +1046,8 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
 
     companion object {
         const val PAGE = 200L
+        // Flutter's shouldSyncOnResume gap.
+        const val RESUME_SYNC_GAP_MS = 60_000L
         const val TAG = "MailState"
 
         fun parseAccounts(json: String): List<Account> {

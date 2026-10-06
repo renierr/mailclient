@@ -28,7 +28,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,8 +40,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.R
-import de.renier.mailclient.ui.common.SyncStatusLine
-import kotlinx.coroutines.delay
 import de.renier.mailclient.ui.common.Avatar
 import de.renier.mailclient.ui.common.PullToSync
 import de.renier.mailclient.ui.folders.MoveToDialog
@@ -115,17 +112,6 @@ fun ListScreen(state: MailState, onOpenReader: (Long, Long, Int) -> Unit) {
         }
     }
     val jumpScope = rememberCoroutineScope()
-    // Pull handoff (see PullToSync below): the gesture spinner yields to
-    // the SyncStatusLine as soon as the job flag is up.
-    var gesture by remember { mutableStateOf(false) }
-    LaunchedEffect(gesture, state.syncing) {
-        if (state.syncing) {
-            gesture = false
-        } else if (gesture) {
-            delay(1500)
-            gesture = false
-        }
-    }
 
     var dateDialog by remember { mutableStateOf(false) }
     var bulkMove by remember { mutableStateOf(false) }
@@ -191,17 +177,9 @@ fun ListScreen(state: MailState, onOpenReader: (Long, Long, Int) -> Unit) {
     }
 
     PullToSync(
-        // The gesture spinner only covers the swipe: once the job's flag is
-        // up the SyncStatusLine below takes over, and a refused pull never
-        // sticks (errors surface on the status line instead).
-        syncing = gesture,
         // Inside a folder only that folder refreshes; account-wide search
-        // pulls the whole account like the Sync button.
-        onSync = {
-            if (state.syncing) return@PullToSync
-            gesture = true
-            if (state.searchActive) state.syncNow() else state.syncFolder()
-        },
+        // pulls the whole account like the Sync entry.
+        onSync = { if (state.searchActive) state.syncNow() else state.syncFolder() },
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             ListHeaderRow(
@@ -226,7 +204,6 @@ fun ListScreen(state: MailState, onOpenReader: (Long, Long, Int) -> Unit) {
             if (state.hasListFilter) {
                 FilterBar(state)
             }
-            SyncStatusLine(state)
             Box(modifier = Modifier.weight(1f)) {
                 LazyColumn(
                     state = listState,

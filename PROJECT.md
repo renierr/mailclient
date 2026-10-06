@@ -340,13 +340,15 @@ Update this section when a step lands (see AGENTS.md §7.4).
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
 | 3-pane / responsive / 1-pane | ✅ | ✅ | 🔄 | Native is a 1-pane stack (Folders→List→Reader); no tablet layout |
-| Compose, Sync, search field, tools | ✅ | ✅ | ✅ | Narrow Flutter collapses tools into overflow; native has overflow menu |
+| Compose, Sync, search field, tools | ✅ | ✅ | 🔄 | Narrow Flutter collapses tools into overflow; native has overflow menu, but Compose, Contacts and Settings are placeholder entries until Steps 6–8 |
 | Folder-scoped search toggle | ✅ | ✅ | ✅ | Native: tools-menu checkbox |
-| Status line + details + copy | ✅ | ✅ | 🔄 | Native StatusStrip only when busy/error/outbox; no details dialog |
+| Busy indicator (a job is queued or running) | ✅ | ✅ | ✅ | Qt: core `busy` flag; Flutter: `_busyKinds`; native: header progress line fed by the core's in-flight job table (`mailffi::net`, sent with every job event) — never a Kotlin-side flag |
+| Status line + details + copy | ✅ | ✅ | 🔄 | Native StatusStrip shows while a job runs (live progress), on error, with outbox mail, and keeps a job's result readable briefly after it ends; no details dialog or copy |
 | Outbox pill + dialog | ✅ | ✅ | ❌ | Native: chip only (Outbox screen is Step 9) |
-| Undo offer (snackbar/toast; Ctrl+Z where a keyboard exists) | ✅ | ✅ | ✅ | All honour the 8s `UNDO_GRACE_SECS` window |
+| Undo offer (snackbar/toast; Ctrl+Z where a keyboard exists) | ✅ | ✅ | 🔄 | Qt/Flutter honour `UNDO_GRACE_SECS`; native uses a long snackbar instead of `undoGraceSecs`, and has no Ctrl+Z for hardware keyboards |
 | Keyboard shortcuts | ✅ | ✅ | — | Touch: no shortcuts by design |
-| Auto-sync timer, quiet hours | ✅ | ✅ | 🔄 | Native: resume refresh only |
+| Sync on start, account switch, resume | ✅ (start + switch; no resume on desktop) | ✅ | ✅ | Resume syncs only with auto-sync on and no sync asked for in the last minute |
+| Auto-sync timer, quiet hours | ✅ | ✅ | ✅ | Native timer runs only while the app is in the foreground, so quiet hours (which gate unattended ticks) never apply there |
 
 ### Message list
 
@@ -363,6 +365,8 @@ Update this section when a step lands (see AGENTS.md §7.4).
 | List scroll memory | ✅ (per-folder, UID-anchored) | ✅ (per-folder PageStorageKey) | ✅ (per-folder index) | Native drifts when new mail arrives mid-read; Qt's UID anchor does not |
 | Load-older footer (Cached N [of M] / All loaded) | ✅ | ✅ | ✅ | |
 | Find-similar mode + chip | ✅ | ✅ | ✅ | From native reader only (no row menu yet) |
+| Drafts rows open the composer | ✅ | ✅ | ❌ | Native always opens the reader (needs the composer) |
+| List density (comfortable/compact) | ✅ | ✅ | ❌ | |
 | Swipe actions, mark-all-read | ❌ | ❌ | ❌ | None anywhere; not planned |
 | Save as .eml | ✅ | ✅ | ✅ | Native via reader menu |
 
@@ -385,6 +389,7 @@ Update this section when a step lands (see AGENTS.md §7.4).
 | Event card (ICS) | ✅ | ✅ | ✅ | |
 | Remote-image block + show-once | ✅ | ✅ | ✅ | |
 | Original/darkened colours, zoom | ✅ | ✅ | 🔄 | Native: paint + prefs scale, no in-UI zoom |
+| Fullscreen reader | ✅ | ✅ | ❌ | Native Step 10 |
 | Reply / Reply-all / Forward | ✅ | ✅ | ❌ | Native stubs with toast (composer is Step 6) |
 | Archive / Move / Delete / Star | ✅ | ✅ | ✅ | |
 | Prev/next message | ❌ | ❌ | ❌ | None anywhere |
@@ -423,12 +428,16 @@ Update this section when a step lands (see AGENTS.md §7.4).
 
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
-| Full settings (interface/mailbox/reading/composing/sync/maintenance/about) | ✅ dialog | ✅ page | ❌ | Native is Step 8; reader prefs + outbox state read from core read-only |
+| Full settings (interface/mailbox/reading/composing/sync/maintenance/about) | ✅ dialog | ✅ page | ❌ | Native is Step 8; reader prefs + outbox state read from core read-only. JNI for all of it exists (probes only) |
+| Per-account overrides, About + server capabilities | ✅ | ✅ | ❌ | Part of native Step 8 |
 
 ### Background & notifications (Android)
 
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
-| Poll / push / alarm schedulers, quiet hours | — | ✅ | ✅ | Shared `mailcore::sync::background`; desktop uses poll timer |
+| Poll / push / alarm schedulers, quiet hours | — | ✅ | 🔄 | Shared `mailcore::sync::background`; desktop uses poll timer. Native has the machinery, but the app never arms it (`MailSchedule.refresh` runs only on boot/update/time-zone change) |
+| Notification permission prompt (Android 13+) | — | ✅ | ❌ | Native never requests `POST_NOTIFICATIONS`, so notifications are dropped on a fresh install |
+| Clear notifications on resume | — | ✅ | ❌ | `MailNotifier.clear` has no caller in native |
+| Background status (permissions, battery, run history, heartbeat warning, test notification) | — | ✅ | ❌ | Native: run history in dev probes only; belongs to Step 8 |
 | Grouped notifications + Mark read buttons | — | ✅ | ✅ | Same native path (`MailAlarm`, `MailPushService`) |
 
