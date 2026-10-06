@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -86,10 +87,16 @@ private fun Toggle(
     onClick: () -> Unit,
     content: @Composable () -> Unit,
 ) {
+    // On reads at a glance: a filled pill plus the accent glyph. The
+    // defaults only re-tint the glyph, which the B/I/U letters swallow.
     IconToggleButton(
         checked = checked,
         onCheckedChange = { onClick() },
         enabled = enabled,
+        colors = IconButtonDefaults.iconToggleButtonColors(
+            checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+            checkedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        ),
         modifier = Modifier.semantics { contentDescription = label },
     ) { content() }
 }

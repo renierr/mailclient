@@ -5,6 +5,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -492,37 +494,57 @@ fun ComposerScreen(
             HorizontalDivider()
         }
 
-        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
-            if (sourceMode) {
-                Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                    header()
-                    OutlinedTextField(
-                        value = source,
-                        onValueChange = {
-                            if (it != source) {
-                                source = it
+        BoxWithConstraints(modifier = Modifier.padding(padding).fillMaxSize()) {
+            // Half the view: the most the pinned fields may take, so a
+            // short screen keeps a usable body under them.
+            val headerMax = maxHeight * 0.5f
+            Column(modifier = Modifier.fillMaxSize()) {
+                if (sourceMode) {
+                    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                        header()
+                        OutlinedTextField(
+                            value = source,
+                            onValueChange = {
+                                if (it != source) {
+                                    source = it
+                                    dirty = true
+                                    edits++
+                                }
+                            },
+                            placeholder = { Text("HTML source…") },
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                            keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
+                            minLines = 10,
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        )
+                    }
+                } else {
+                    // Pinned above the body: a To line that scrolls away
+                    // mid-draft is how misaddressed mail happens. Capped at
+                    // half the view with its own scroll, so a short screen
+                    // keeps a usable body; bring-into-view keeps the focused
+                    // field above the keyboard.
+                    val headerScroll = rememberScrollState()
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(headerScroll)
+                            .heightIn(max = headerMax),
+                    ) {
+                        header()
+                    }
+                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                        ComposerEditor(
+                            controller = editor,
+                            document = document,
+                            textZoom = textZoom,
+                            onChanged = {
                                 dirty = true
                                 edits++
-                            }
-                        },
-                        placeholder = { Text("HTML source…") },
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                        keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
-                        minLines = 10,
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    )
+                            },
+                        )
+                    }
                 }
-            } else {
-                ComposerEditor(
-                    controller = editor,
-                    document = document,
-                    textZoom = textZoom,
-                    onChanged = {
-                        dirty = true
-                        edits++
-                    },
-                    header = header,
-                )
             }
         }
     }
