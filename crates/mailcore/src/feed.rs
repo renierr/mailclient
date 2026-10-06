@@ -64,6 +64,8 @@ pub fn older_state(cached: u64, server: Option<u64>) -> OlderState {
 pub fn folders_json(db: &Db, account_id: i64) -> Result<String> {
     let counts = messages::counts_by_account(db, account_id)?;
     let list = folders::list_by_account(db, account_id)?;
+    let role_by_path: std::collections::HashMap<&str, FolderRole> =
+        list.iter().map(|f| (f.path.as_str(), f.role)).collect();
     let mut arr = Vec::new();
     for f in &list {
         let c = counts.get(&f.id).copied().unwrap_or_default();
@@ -85,9 +87,16 @@ pub fn folders_json(db: &Db, account_id: i64) -> Result<String> {
             "delimiter": f.delimiter,
             "depth": folder_depth(&f.path, &f.delimiter),
             "leaf": folder_leaf(&f.path, &f.delimiter),
-            // Sidebar collapse rule (see `FolderRole::always_visible`):
-            // known folders stay visible inside a collapsed parent.
-            "always_visible": f.role.always_visible(),
+            // Sidebar collapse rule: known folders stay visible inside a
+            // collapsed parent (see `FolderRole::always_visible`), and so
+            // do the inbox's direct children — on servers that file
+            // everything below the inbox those read as top-level. Deeper
+            // custom subfolders fold away.
+            "always_visible": f.role.always_visible() || {
+                parent_path(&f.path, &f.delimiter)
+                    .and_then(|p| role_by_path.get(p.as_str()))
+                    .is_some_and(|r| *r == FolderRole::Inbox)
+            },
             // `-1`: the server never reported a count.
             "server_total": f.server_total.map_or(-1, |s| s as i64),
             "older": older_state(c.total, f.server_total).as_str(),
@@ -116,6 +125,21 @@ pub fn folder_leaf(path: &str, delimiter: &str) -> String {
     } else {
         path.rsplit(delimiter).next().unwrap_or(path).to_string()
     }
+}
+
+/// The parent of an IMAP path: everything but the last segment
+/// (`Work/Client` → `Work`). None for a top-level folder or an empty
+/// delimiter.
+pub fn parent_path(path: &str, delimiter: &str) -> Option<String> {
+    if delimiter.is_empty() {
+        return None;
+    }
+    let mut segments: Vec<&str> = path.split(delimiter).collect();
+    if segments.len() < 2 {
+        return None;
+    }
+    segments.pop();
+    Some(segments.join(delimiter))
 }
 
 /// `[{id, name, email, from_name, imap_host, smtp_host, …}]` for the account

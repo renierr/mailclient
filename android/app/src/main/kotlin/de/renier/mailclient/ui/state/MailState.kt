@@ -5,6 +5,7 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateSetOf
 import androidx.compose.runtime.setValue
 import de.renier.mailclient.JobEvents
 import de.renier.mailclient.MailNative
@@ -105,6 +106,11 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         private set
     var folderId by mutableStateOf(-1L)
         private set
+    // Expanded folder parents, by id. Lives here (not in the pane) so
+    // navigating into a folder and back keeps the tree as it was.
+    // In-memory: every launch starts collapsed (default closed). Mutate
+    // only through toggleFolderExpanded.
+    val expandedFolders = mutableStateSetOf<Long>()
     var messages: List<MessageRow> by mutableStateOf(emptyList())
         private set
     var canLoadOlder by mutableStateOf(false)
@@ -873,6 +879,11 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         loadFolders()
         if (andMessages) reloadMessages()
         refreshOutbox()
+    }
+
+    /** Flip a folder parent's collapse state in the sidebar tree. */
+    fun toggleFolderExpanded(id: Long) {
+        if (!expandedFolders.remove(id)) expandedFolders.add(id)
     }
 
     /** Cache-first open: paint cached rows at once, fill from the server after. */

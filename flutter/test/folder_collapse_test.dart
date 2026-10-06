@@ -47,7 +47,9 @@ void main() {
         leaf: 'Work',
         unread: 2,
         total: 5,
-        alwaysVisible: false,
+        // The core marks the inbox's direct children always-visible, even
+        // custom ones (servers that file everything below the inbox).
+        alwaysVisible: true,
       ),
       _folder(4, 'Work', 'custom'),
       _folder(
@@ -66,11 +68,40 @@ void main() {
       final rows = collapseFolders(folders(), {});
       expect(
         rows.map((r) => r.folder.path),
-        ['INBOX', 'INBOX/Archive', 'Work'],
+        ['INBOX', 'INBOX/Archive', 'INBOX/Work', 'Work'],
       );
       expect(rows[0].hasChildren, isTrue);
       expect(rows[0].expanded, isFalse);
-      expect(rows[2].hasChildren, isTrue);
+      expect(rows[3].hasChildren, isTrue);
+    });
+
+    test('the inbox direct children show; deeper customs fold away', () {
+      final flat = [
+        _folder(1, 'INBOX', 'inbox'),
+        _folder(
+          2,
+          'INBOX/Mine',
+          'custom',
+          depth: 1,
+          leaf: 'Mine',
+          alwaysVisible: true,
+        ),
+        _folder(
+          3,
+          'INBOX/Mine/Deep',
+          'custom',
+          depth: 2,
+          leaf: 'Deep',
+          alwaysVisible: false,
+        ),
+      ];
+      final rows = collapseFolders(flat, {});
+      expect(
+        rows.map((r) => r.folder.path),
+        ['INBOX', 'INBOX/Mine'],
+      );
+      final mine = rows.firstWhere((r) => r.folder.path == 'INBOX/Mine');
+      expect(mine.hasChildren, isTrue);
     });
 
     test('a collapsed parent aggregates its hidden children counts', () {
@@ -78,16 +109,17 @@ void main() {
       final work = rows.firstWhere((r) => r.folder.path == 'Work');
       expect(work.unread, 3);
       expect(work.total, 7);
+      // Nothing hides below INBOX here, so it carries only its own counts.
       final inbox = rows.firstWhere((r) => r.folder.path == 'INBOX');
-      expect(inbox.unread, 2);
-      expect(inbox.total, 5);
+      expect(inbox.unread, 0);
+      expect(inbox.total, 0);
     });
 
     test('expanding reveals the children with their own counts', () {
       final rows = collapseFolders(folders(), {4});
       expect(
         rows.map((r) => r.folder.path),
-        ['INBOX', 'INBOX/Archive', 'Work', 'Work/Client'],
+        ['INBOX', 'INBOX/Archive', 'INBOX/Work', 'Work', 'Work/Client'],
       );
       final work = rows.firstWhere((r) => r.folder.path == 'Work');
       expect(work.expanded, isTrue);

@@ -382,8 +382,7 @@ class MailState extends ChangeNotifier {
 
   /// Open a folder. Cache-only and instant by design — the server fill is a
   /// separate, queued job, so clicking through folders never waits on IMAP.
-  Future<void> selectFolder(int id) async {
-    // Re-picking the shown folder returns to its list, like Qt: in the
+  Future<void> selectFolder(int id) async {    // Re-picking the shown folder returns to its list, like Qt: in the
     // two-pane layout the reader covers the list, and the folder is the way
     // back to it.
     if (id == _folderId) {
@@ -397,6 +396,20 @@ class MailState extends ChangeNotifier {
     notifyListeners();
     await _reloadMessages();
     unawaited(_core.syncFolder(_accountId, id).catchError(_ignoreBusy));
+  }
+
+  /// Expanded folder parents, by id. Lives here (not in the sidebar) so
+  /// navigating away and back keeps the tree as it was. In-memory: every
+  /// launch starts collapsed (default closed). Replaced, never mutated, so
+  /// `select` subscribers rebuild on every toggle.
+  Set<int> _expandedFolders = {};
+  Set<int> get expandedFolders => _expandedFolders;
+
+  /// Flip a folder parent's collapse state in the sidebar tree.
+  void toggleFolderExpanded(int id) {
+    _expandedFolders = {..._expandedFolders};
+    if (!_expandedFolders.remove(id)) _expandedFolders.add(id);
+    notifyListeners();
   }
 
   /// Open a message: load its body, and mark it read on the viewer's terms.

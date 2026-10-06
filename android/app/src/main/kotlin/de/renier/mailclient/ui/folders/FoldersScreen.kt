@@ -28,7 +28,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.mutableStateSetOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -74,12 +73,11 @@ fun FoldersScreen(
         HorizontalDivider()
 
         val folders = state.visibleFolders
-        // Expanded parents, by folder id. In-memory: every launch starts
-        // collapsed (default closed).
-        val expanded = remember { mutableStateSetOf<Long>() }
-        // Plain call, not memoized: reading the snapshot set subscribes
-        // this composition, so a toggle recomposes with fresh rows.
-        val rows = collapseFolders(folders, expanded)
+        // The set lives in MailState, so navigating into a folder and back
+        // keeps the tree as it was. Plain call, not memoized: reading the
+        // snapshot set subscribes this composition, so a toggle recomposes
+        // with fresh rows.
+        val rows = collapseFolders(folders, state.expandedFolders)
         PullToSync(onSync = { state.syncNow() }) {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 if (folders.isEmpty()) {
@@ -102,9 +100,7 @@ fun FoldersScreen(
                         total = row.total,
                         hasChildren = row.hasChildren,
                         expanded = row.expanded,
-                        onToggle = {
-                            if (!expanded.remove(row.folder.id)) expanded.add(row.folder.id)
-                        },
+                        onToggle = { state.toggleFolderExpanded(row.folder.id) },
                         onClick = {
                             state.openFolder(row.folder.id)
                             onOpenFolder()
@@ -265,11 +261,12 @@ private fun parentPathOf(folder: Folder): String? {
     return if (cut > 0) folder.path.substring(0, cut) else null
 }
 
-// Fold the flat visible list into sidebar rows: top-level and well-known
-// folders (`alwaysVisible`, e.g. an Archive filed below INBOX) always show;
-// custom subfolders show only while every ancestor up to the nearest
-// always-visible one is expanded. A folder whose parent is not visible
-// reads as a root, the way the old flat list showed it.
+// Fold the flat visible list into sidebar rows: `alwaysVisible` folders
+// (top-level, well-known, and the inbox's direct children — the core's
+// collapse rule) always show; custom subfolders show only while every
+// ancestor up to the nearest always-visible one is expanded. A folder whose
+// parent is not visible reads as a root, the way the old flat list showed
+// it.
 private fun collapseFolders(folders: List<Folder>, expanded: Set<Long>): List<FolderRowState> {
     val byPath = folders.associateBy { it.path }
     fun parentOf(folder: Folder): Folder? = byPath[parentPathOf(folder)]

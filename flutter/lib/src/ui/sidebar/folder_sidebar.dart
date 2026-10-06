@@ -8,8 +8,9 @@ import '../dialogs/sender_avatar.dart';
 
 /// Accounts on top, this account's folders below. Parents collapse (default
 /// closed); well-known folders stay visible inside a collapsed parent and a
-/// collapsed parent aggregates its hidden children's counts.
-class FolderSidebar extends StatefulWidget {
+/// collapsed parent aggregates its hidden children's counts. The expansion
+/// set lives in [MailState], so navigating away and back keeps the tree.
+class FolderSidebar extends StatelessWidget {
   const FolderSidebar({super.key, this.onFolderSelected});
 
   /// Called after a folder is picked, so a narrow layout can navigate away
@@ -17,22 +18,16 @@ class FolderSidebar extends StatefulWidget {
   final VoidCallback? onFolderSelected;
 
   @override
-  State<FolderSidebar> createState() => _FolderSidebarState();
-}
-
-class _FolderSidebarState extends State<FolderSidebar> {
-  /// Expanded parents, by folder id. In-memory: every launch starts
-  /// collapsed (default closed).
-  final Set<int> _expanded = {};
-
-  @override
   Widget build(BuildContext context) {
     final folders = context.select<MailState, List<Folder>>(
       (s) => s.visibleFolders,
     );
     final folderId = context.select<MailState, int>((s) => s.folderId);
+    final expanded = context.select<MailState, Set<int>>(
+      (s) => s.expandedFolders,
+    );
     final syncing = context.select<MailState, bool>((s) => s.isSyncing);
-    final rows = collapseFolders(folders, _expanded);
+    final rows = collapseFolders(folders, expanded);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -67,12 +62,12 @@ class _FolderSidebarState extends State<FolderSidebar> {
                       total: row.total,
                       hasChildren: row.hasChildren,
                       expanded: row.expanded,
-                      onToggle: () => setState(() {
-                        if (!_expanded.remove(f.id)) _expanded.add(f.id);
-                      }),
+                      onToggle: () => context
+                          .read<MailState>()
+                          .toggleFolderExpanded(f.id),
                       onTap: () {
                         context.read<MailState>().selectFolder(f.id);
-                        widget.onFolderSelected?.call();
+                        onFolderSelected?.call();
                       },
                     );
                   },
@@ -110,11 +105,12 @@ String? parentPathOf(Folder f) {
   return cut > 0 ? f.path.substring(0, cut) : null;
 }
 
-/// Fold the flat visible list into sidebar rows: top-level and well-known
-/// folders (`alwaysVisible`, e.g. an Archive filed below INBOX) always show;
-/// custom subfolders show only while every ancestor up to the nearest
-/// always-visible one is expanded. A folder whose parent is not visible
-/// reads as a root, the way the old flat list showed it.
+/// Fold the flat visible list into sidebar rows: `alwaysVisible` folders
+/// (top-level, well-known, and the inbox's direct children — the core's
+/// collapse rule) always show; custom subfolders show only while every
+/// ancestor up to the nearest always-visible one is expanded. A folder
+/// whose parent is not visible reads as a root, the way the old flat list
+/// showed it.
 List<FolderRow> collapseFolders(List<Folder> folders, Set<int> expanded) {
   final byPath = {for (final f in folders) f.path: f};
   Folder? parentOf(Folder f) => byPath[parentPathOf(f)];
