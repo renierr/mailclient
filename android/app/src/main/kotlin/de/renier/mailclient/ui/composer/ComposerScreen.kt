@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -49,8 +48,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
@@ -495,55 +496,49 @@ fun ComposerScreen(
         }
 
         BoxWithConstraints(modifier = Modifier.padding(padding).fillMaxSize()) {
-            // Half the view: the most the pinned fields may take, so a
-            // short screen keeps a usable body under them.
-            val headerMax = maxHeight * 0.5f
-            Column(modifier = Modifier.fillMaxSize()) {
+            // The whole page is one scroll: fields plus body. On a narrow
+            // screen, with the keyboard up, the fields scroll off and leave
+            // room to type — a pinned header would eat the viewport.
+            val density = LocalDensity.current
+            var headerPx by remember { mutableIntStateOf(0) }
+            // A one-line draft still fills the view below its fields.
+            val minBody = with(density) {
+                (maxHeight - headerPx.toDp()).coerceAtLeast(200.dp)
+            }
+            Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                 if (sourceMode) {
-                    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                        header()
-                        OutlinedTextField(
-                            value = source,
-                            onValueChange = {
-                                if (it != source) {
-                                    source = it
-                                    dirty = true
-                                    edits++
-                                }
-                            },
-                            placeholder = { Text("HTML source…") },
-                            textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                            keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
-                            minLines = 10,
-                            modifier = Modifier.fillMaxWidth().padding(16.dp),
-                        )
-                    }
+                    header()
+                    OutlinedTextField(
+                        value = source,
+                        onValueChange = {
+                            if (it != source) {
+                                source = it
+                                dirty = true
+                                edits++
+                            }
+                        },
+                        placeholder = { Text("HTML source…") },
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                        keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
+                        minLines = 10,
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    )
                 } else {
-                    // Pinned above the body: a To line that scrolls away
-                    // mid-draft is how misaddressed mail happens. Capped at
-                    // half the view with its own scroll, so a short screen
-                    // keeps a usable body; bring-into-view keeps the focused
-                    // field above the keyboard.
-                    val headerScroll = rememberScrollState()
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(headerScroll)
-                            .heightIn(max = headerMax),
+                    Box(
+                        modifier = Modifier.fillMaxWidth().onSizeChanged { headerPx = it.height },
                     ) {
                         header()
                     }
-                    Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                        ComposerEditor(
-                            controller = editor,
-                            document = document,
-                            textZoom = textZoom,
-                            onChanged = {
-                                dirty = true
-                                edits++
-                            },
-                        )
-                    }
+                    ComposerEditor(
+                        controller = editor,
+                        document = document,
+                        textZoom = textZoom,
+                        minHeight = minBody,
+                        onChanged = {
+                            dirty = true
+                            edits++
+                        },
+                    )
                 }
             }
         }

@@ -8,8 +8,8 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -17,6 +17,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -43,6 +45,10 @@ class EditorController {
     var ready by mutableStateOf(false)
         internal set
     var format by mutableStateOf(FormatState())
+        internal set
+    // The page's content height in device px, tracked so the view can sit
+    // inside the screen's scroll instead of scrolling itself.
+    var contentPx by mutableStateOf(0)
         internal set
 
     private fun run(js: String) {
@@ -86,6 +92,15 @@ class EditorController {
         )
     }
 
+    /** Re-read the page's height; the view is sized to its content so the
+     * screen's scroll owns the gesture. Zero while the page is not laid
+     * out yet — the caller keeps the old height then. */
+    internal fun refreshHeight() {
+        val w = web ?: return
+        val h = (w.contentHeight * w.resources.displayMetrics.density).toInt()
+        if (h > 0) contentPx = h
+    }
+
     /** An image (`data:` URL) at the caret; the sender makes it an inline part. */
     fun insertImage(dataUrl: String) = exec("insertImage", dataUrl)
 
@@ -122,10 +137,17 @@ internal class EditorHost(
 }
 
 /**
- * The WYSIWYG body: a WebView filling its pane, the one scroller. The
- * address fields stay pinned above it in the screen (unlike the reader,
- * whose header scrolls away with the mail) — a composer that loses its
- * To line mid-draft is a misaddressed mail.
+ * The WYSIWYG body: a WebView sized to its content, one row of the screen's
+ * scroll — not a scroller itself. The whole composer page (address fields
+ * plus body) scrolls as one, so on a narrow screen, with the keyboard up,
+ * the fields scroll off and leave room to type. (The reader instead pins
+ * nothing and overlays its header; a composer must keep its fields in the
+ * page flow so bring-into-view reaches the focused field.)
+ *
+ * The height tracks `contentHeight` on every input and poll tick, so the
+ * caret — fixed relative to the document top — stays visible without any
+ * caret math. [minHeight] fills short screens so a one-line draft does not
+ * leave a dead page.
  *
  * The page is ours (`MailNative.editorDocument`): JavaScript runs because
  * the editor is JavaScript, behind the core's nonce CSP; no network, no
@@ -138,74 +160,87 @@ fun ComposerEditor(
     controller: EditorController,
     document: String,
     textZoom: Int,
+    minHeight: Dp,
     onChanged: () -> Unit,
 ) {
     val changed by rememberUpdatedState(onChanged)
+    val density = LocalDensity.current
+    val minPx = with(density) { minHeight.roundToPx() }
+    val heightDp = with(density) { controller.contentPx.coerceAtLeast(minPx).toDp() }
 
     // `selectionchange` does not reliably reach the bridge from a WebView
     // (Qt polls `mc.state()` for the same reason), so the toggle state is
     // refreshed on a slow tick while the page is up. The push bridge stays
-    // for instant updates on tap; both write the same values.
+    // for instant updates on tap; both write the same values. The tick also
+    // re-measures the height, covering growth no input event reports (an
+    // image finishing loading, an undo).
     LaunchedEffect(controller) {
         while (true) {
             delay(FORMAT_POLL_MS)
-            val json = runCatching { controller.stateJson() }.getOrNull() ?: continue
-            controller.applyFormat(json)
+            val json = runCatching { controller.stateJson() }.getOrNull()
+            if (json != null) controller.applyFormat(json)
+            controller.refreshHeight()
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { context ->
-                WebView(context).apply {
-                    overScrollMode = View.OVER_SCROLL_NEVER
-                    settings.apply {
-                        javaScriptEnabled = true
-                        allowFileAccess = false
-                        allowContentAccess = false
-                        blockNetworkLoads = true
-                        setGeolocationEnabled(false)
-                        useWideViewPort = true
-                    }
-                    addJavascriptInterface(
-                        EditorHost(
-                            onChanged = { changed() },
-                            onState = { json -> controller.applyFormat(json) },
-                        ),
-                        "MCHost",
-                    )
-                    webViewClient = object : WebViewClient() {
-                        // A tapped link in the draft must not navigate the editor away.
-                        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) =
-                            !request.url.toString().startsWith("about:")
+    AndroidView(
+        modifier = Modifier.fillMaxWidth().height(heightDp),
+        factory = { context ->
+            WebView(context).apply {
+                overScrollMode = View.OVER_SCROLL_NEVER
+                // No internal range (height == content): drags belong to the
+                // screen's scroll through nested scrolling.
+                isNestedScrollingEnabled = true
+                settings.apply {
+                    javaScriptEnabled = true
+                    allowFileAccess = false
+                    allowContentAccess = false
+                    blockNetworkLoads = true
+                    setGeolocationEnabled(false)
+                    useWideViewPort = true
+                }
+                addJavascriptInterface(
+                    EditorHost(
+                        onChanged = {
+                            controller.refreshHeight()
+                            changed()
+                        },
+                        onState = { json -> controller.applyFormat(json) },
+                    ),
+                    "MCHost",
+                )
+                webViewClient = object : WebViewClient() {
+                    // A tapped link in the draft must not navigate the editor away.
+                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) =
+                        !request.url.toString().startsWith("about:")
 
-                        override fun onPageFinished(view: WebView, url: String?) {
-                            controller.ready = true
-                        }
+                    override fun onPageFinished(view: WebView, url: String?) {
+                        controller.ready = true
+                        controller.refreshHeight()
                     }
-                    controller.web = this
                 }
-            },
-            update = { web ->
-                web.settings.textZoom = textZoom
-                web.setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                // Identity, not equality: the document can be megabytes.
-                if (web.tag !== document) {
-                    web.tag = document
-                    controller.ready = false
-                    web.loadDataWithBaseURL(null, document, "text/html", "utf-8", null)
-                }
-            },
-            onRelease = {
-                if (controller.web === it) {
-                    controller.web = null
-                    controller.ready = false
-                }
-                it.destroy()
-            },
-        )
-    }
+                controller.web = this
+            }
+        },
+        update = { web ->
+            web.settings.textZoom = textZoom
+            web.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            // Identity, not equality: the document can be megabytes.
+            if (web.tag !== document) {
+                web.tag = document
+                controller.ready = false
+                controller.contentPx = 0
+                web.loadDataWithBaseURL(null, document, "text/html", "utf-8", null)
+            }
+        },
+        onRelease = {
+            if (controller.web === it) {
+                controller.web = null
+                controller.ready = false
+            }
+            it.destroy()
+        },
+    )
 }
 
 // Slow enough to never matter, fast enough that a caret move lights the
