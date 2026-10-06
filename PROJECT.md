@@ -345,7 +345,7 @@ Update this section when a step lands (see AGENTS.md §7.4).
 | Folder-scoped search toggle | ✅ | ✅ | ✅ | Native: tools-menu checkbox |
 | Busy indicator (a job is queued or running) | ✅ | ✅ | ✅ | Qt: core `busy` flag; Flutter: `_busyKinds`; native: header progress line fed by the core's in-flight job table (`mailffi::net`, sent with every job event) — never a Kotlin-side flag |
 | Status line + details + copy | ✅ | ✅ | 🔄 | Native StatusStrip shows while a job runs (live progress), on error, with outbox mail, and keeps a job's result readable briefly after it ends; no details dialog or copy |
-| Outbox pill + dialog | ✅ | ✅ | ❌ | Native: chip only (Outbox screen is Step 9) |
+| Outbox pill + dialog | ✅ | ✅ | ✅ page | Pill words from `outbox::status_json` (`label`); native opens a full page from the status-strip chip: rows with the core's state line and error, Sync now (only while something is retryable), forget a dead row after a confirm |
 | Undo offer (snackbar/toast; Ctrl+Z where a keyboard exists) | ✅ | ✅ | 🔄 | Qt/Flutter honour `UNDO_GRACE_SECS`; native uses a long snackbar instead of `undoGraceSecs`, and has no Ctrl+Z for hardware keyboards |
 | Keyboard shortcuts | ✅ | ✅ | — | Touch: no shortcuts by design |
 | Sync on start, account switch, resume | ✅ (start + switch; no resume on desktop) | ✅ | ✅ | Resume syncs only with auto-sync on and no sync asked for in the last minute |

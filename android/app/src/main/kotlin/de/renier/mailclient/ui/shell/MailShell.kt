@@ -56,6 +56,7 @@ import de.renier.mailclient.ui.folders.FolderManagerScreen
 import de.renier.mailclient.ui.folders.FoldersScreen
 import de.renier.mailclient.ui.home.HomeScreen
 import de.renier.mailclient.ui.list.ListScreen
+import de.renier.mailclient.ui.outbox.OutboxScreen
 import de.renier.mailclient.ui.reader.ReaderScreen
 import de.renier.mailclient.ui.settings.SettingsScreen
 import de.renier.mailclient.ui.state.MailState
@@ -87,6 +88,7 @@ private sealed interface Route {
     data class Composer(val seed: ComposerSeed, val accountId: Long, val folderId: Long) : Route
     // Draws its own bar (Save); a full page on every width.
     data object Settings : Route
+    data object Outbox : Route
 }
 
 @Composable
@@ -350,6 +352,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                                 Route.Accounts -> "Accounts"
                                 is Route.Setup -> if (route.accountId >= 0) "Edit account" else "Add account"
                                 Route.Dev -> "Dev probes"
+                            Route.Outbox -> "Outbox"
                                 Route.Folders, Route.List, is Route.Reader, is Route.Composer, Route.Settings -> ""
                             },
                             onBack = ::back,
@@ -366,7 +369,8 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                     busy = state.busy,
                     outboxPending = state.outboxPending,
                     outboxFailed = state.outboxFailed,
-                    onOutbox = { state.info("Outbox arrives in Step 9") },
+                    outboxLabel = state.outboxLabel,
+                    onOutbox = { if (route != Route.Outbox) go(Route.Outbox) },
                 )
             },
             snackbarHost = { SnackbarHost(snack) },
@@ -451,6 +455,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                     is Route.Reader -> reader(route)
                     Route.Dev -> HomeScreen(openPayload = null, onConsumeOpen = {})
                     Route.Settings -> SettingsScreen(state = state, onClose = ::back)
+                Route.Outbox -> OutboxScreen(state = state)
                     is Route.Composer ->
                         ComposerScreen(
                             state = state,

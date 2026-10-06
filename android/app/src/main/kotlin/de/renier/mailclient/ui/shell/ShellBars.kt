@@ -185,6 +185,7 @@ fun StatusStrip(
     busy: Boolean,
     outboxPending: Int,
     outboxFailed: Boolean,
+    outboxLabel: String,
     onOutbox: () -> Unit,
 ) {
     var linger by remember { mutableStateOf(false) }
@@ -222,7 +223,7 @@ fun StatusStrip(
             if (outboxPending > 0) {
                 AssistChip(
                     onClick = onOutbox,
-                    label = { Text("Outbox $outboxPending") },
+                    label = { Text(outboxLabel.ifEmpty { "$outboxPending unsent" }) },
                     leadingIcon = { ShellIcon(R.drawable.ic_send, null, Modifier.size(16.dp)) },
                     colors = if (outboxFailed) {
                         AssistChipDefaults.assistChipColors(

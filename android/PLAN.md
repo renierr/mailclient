@@ -264,7 +264,14 @@ battery exemption and exact alarms when the new plan needs them.
 - Verify: every key round-trips through `settingsJson`; quiet-hours plan
   changes scheduler behaviour; maintenance actions report correct stats.
 
-## Step 9 — Outbox + background integration
+## Step 9 — Outbox + background integration ✅ done
+
+Outbox is a shell page opened from the status-strip chip, which now shows
+the core's pill label. Forgetting a row asks first. The background wiring
+was already in place (resume reload and sync, mark-seen on pause,
+`MailNotifier.onMailChanged` refresh, test notification in Settings). The
+live checks below (offline send, a timed steady-state sync) are still to
+run on a device, each with explicit consent.
 
 - Outbox screen (queued/sending/failed rows, error text, sync-now retry,
   dismiss dead rows); status pill live from `outboxStatusJson` + job

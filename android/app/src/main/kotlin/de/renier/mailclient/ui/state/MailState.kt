@@ -124,6 +124,12 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         private set
     var outboxFailed by mutableStateOf(false)
         private set
+    // The chip's words from the core ("2 unsent (1 failed)") and how many
+    // rows a sync could still deliver.
+    var outboxLabel by mutableStateOf("")
+        private set
+    var outboxRetryable by mutableStateOf(0)
+        private set
     var undoOffer: UndoOffer? by mutableStateOf(null)
         private set
     var notice: String? by mutableStateOf(null)
@@ -1108,6 +1114,8 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
             withContext(Dispatchers.Main) {
                 outboxPending = 0
                 outboxFailed = false
+                outboxLabel = ""
+                outboxRetryable = 0
             }
             return@io
         }
@@ -1115,6 +1123,8 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         withContext(Dispatchers.Main) {
             outboxPending = o.optInt("pending", 0)
             outboxFailed = o.optInt("failed", 0) > 0
+            outboxLabel = o.optString("label")
+            outboxRetryable = o.optInt("retryable", 0)
         }
     }
 
