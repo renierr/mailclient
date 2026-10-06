@@ -7,9 +7,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,12 +21,14 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateSetOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -70,6 +74,12 @@ fun FoldersScreen(
         HorizontalDivider()
 
         val folders = state.visibleFolders
+        // Expanded parents, by folder id. In-memory: every launch starts
+        // collapsed (default closed).
+        val expanded = remember { mutableStateSetOf<Long>() }
+        // Plain call, not memoized: reading the snapshot set subscribes
+        // this composition, so a toggle recomposes with fresh rows.
+        val rows = collapseFolders(folders, expanded)
         PullToSync(onSync = { state.syncNow() }) {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 if (folders.isEmpty()) {
@@ -84,12 +94,19 @@ fun FoldersScreen(
                         }
                     }
                 }
-                items(folders, key = { it.id }) { folder ->
+                items(rows, key = { it.folder.id }) { row ->
                     FolderRow(
-                        folder = folder,
-                        selected = folder.id == state.folderId,
+                        folder = row.folder,
+                        selected = row.folder.id == state.folderId,
+                        unread = row.unread,
+                        total = row.total,
+                        hasChildren = row.hasChildren,
+                        expanded = row.expanded,
+                        onToggle = {
+                            if (!expanded.remove(row.folder.id)) expanded.add(row.folder.id)
+                        },
                         onClick = {
-                            state.openFolder(folder.id)
+                            state.openFolder(row.folder.id)
                             onOpenFolder()
                         },
                     )
@@ -168,7 +185,16 @@ private fun AccountChip(state: MailState) {
 }
 
 @Composable
-private fun FolderRow(folder: Folder, selected: Boolean, onClick: () -> Unit) {
+private fun FolderRow(
+    folder: Folder,
+    selected: Boolean,
+    unread: Int,
+    total: Int,
+    hasChildren: Boolean,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onClick: () -> Unit,
+) {
     val scheme = MaterialTheme.colorScheme
     Row(
         modifier = Modifier
@@ -184,19 +210,99 @@ private fun FolderRow(folder: Folder, selected: Boolean, onClick: () -> Unit) {
         Text(
             folder.leaf,
             style = MaterialTheme.typography.bodyLarge,
-            fontWeight = if (folder.unread > 0) FontWeight.SemiBold else null,
+            fontWeight = if (unread > 0) FontWeight.SemiBold else null,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        if (folder.unread > 0) {
-            Badge { Text(folder.unread.toString()) }
-        } else if (folder.count > 0) {
+        if (unread > 0) {
+            Badge { Text(unread.toString()) }
+        } else if (total > 0) {
             Text(
-                folder.count.toString(),
+                total.toString(),
                 style = MaterialTheme.typography.bodySmall,
                 color = scheme.outline,
             )
         }
+        // Collapse chevron last, so the label edge never moves whether a
+        // row has children or not. Rows without children hold the same
+        // slot, keeping badges aligned.
+        if (hasChildren) {
+            IconButton(
+                onClick = onToggle,
+                modifier = Modifier.size(28.dp),
+            ) {
+                Icon(
+                    painter = painterResource(
+                        if (expanded) R.drawable.ic_expand_more else R.drawable.ic_chevron_right,
+                    ),
+                    contentDescription = if (expanded) "Collapse subfolders" else "Expand subfolders",
+                    tint = scheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            Spacer(modifier = Modifier.size(28.dp))
+        }
+    }
+}
+
+// One visible sidebar row: the folder plus its collapse state and the counts
+// to paint (a collapsed parent aggregates its hidden children's counts, so
+// no unread badge disappears with them).
+private data class FolderRowState(
+    val folder: Folder,
+    val hasChildren: Boolean,
+    val expanded: Boolean,
+    val unread: Int,
+    val total: Int,
+)
+
+// The feed `leaf` is the last path segment; what precedes it (minus the
+// single-char IMAP delimiter) is the parent. Depth 0 has none.
+private fun parentPathOf(folder: Folder): String? {
+    if (folder.depth <= 0) return null
+    val cut = folder.path.length - folder.leaf.length - 1
+    return if (cut > 0) folder.path.substring(0, cut) else null
+}
+
+// Fold the flat visible list into sidebar rows: top-level and well-known
+// folders (`alwaysVisible`, e.g. an Archive filed below INBOX) always show;
+// custom subfolders show only while every ancestor up to the nearest
+// always-visible one is expanded. A folder whose parent is not visible
+// reads as a root, the way the old flat list showed it.
+private fun collapseFolders(folders: List<Folder>, expanded: Set<Long>): List<FolderRowState> {
+    val byPath = folders.associateBy { it.path }
+    fun parentOf(folder: Folder): Folder? = byPath[parentPathOf(folder)]
+
+    fun isShown(folder: Folder): Boolean {
+        if (folder.depth <= 0 || folder.alwaysVisible) return true
+        val parent = parentOf(folder) ?: return true
+        return expanded.contains(parent.id) && isShown(parent)
+    }
+
+    fun isUnder(row: Folder, d: Folder): Boolean {
+        var q: Folder? = d
+        while (q != null) {
+            if (q.id == row.id) return true
+            q = parentOf(q)
+        }
+        return false
+    }
+
+    return folders.mapNotNull { folder ->
+        if (!isShown(folder)) return@mapNotNull null
+        val kids = folders.any { parentOf(it)?.id == folder.id }
+        val open = expanded.contains(folder.id)
+        var unread = folder.unread
+        var total = folder.count
+        if (kids && !open) {
+            folders.forEach { d ->
+                if (d.id != folder.id && !isShown(d) && isUnder(folder, d)) {
+                    unread += d.unread
+                    total += d.count
+                }
+            }
+        }
+        FolderRowState(folder, kids, open, unread, total)
     }
 }

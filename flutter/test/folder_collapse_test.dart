@@ -1,0 +1,106 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:mailclient/src/models/models.dart';
+import 'package:mailclient/src/ui/sidebar/folder_sidebar.dart';
+
+Folder _folder(
+  int id,
+  String path,
+  String role, {
+  int unread = 0,
+  int total = 0,
+  int depth = 0,
+  String? leaf,
+  bool? alwaysVisible,
+}) {
+  final json = <String, Object>{
+    'id': id,
+    'name': path,
+    'role': role,
+    'unread': unread,
+    'count': total,
+    'subscribed': true,
+    'delimiter': '/',
+    'depth': depth,
+    'leaf': leaf ?? path,
+  };
+  if (alwaysVisible != null) json['always_visible'] = alwaysVisible;
+  return Folder.fromJson(json);
+}
+
+void main() {
+  group('collapseFolders', () {
+    List<Folder> folders() => [
+      _folder(1, 'INBOX', 'inbox'),
+      _folder(
+        2,
+        'INBOX/Archive',
+        'archive',
+        depth: 1,
+        leaf: 'Archive',
+        alwaysVisible: true,
+      ),
+      _folder(
+        3,
+        'INBOX/Work',
+        'custom',
+        depth: 1,
+        leaf: 'Work',
+        unread: 2,
+        total: 5,
+        alwaysVisible: false,
+      ),
+      _folder(4, 'Work', 'custom'),
+      _folder(
+        5,
+        'Work/Client',
+        'custom',
+        depth: 1,
+        leaf: 'Client',
+        unread: 3,
+        total: 7,
+        alwaysVisible: false,
+      ),
+    ];
+
+    test('custom children hide until expanded, known children always show', () {
+      final rows = collapseFolders(folders(), {});
+      expect(
+        rows.map((r) => r.folder.path),
+        ['INBOX', 'INBOX/Archive', 'Work'],
+      );
+      expect(rows[0].hasChildren, isTrue);
+      expect(rows[0].expanded, isFalse);
+      expect(rows[2].hasChildren, isTrue);
+    });
+
+    test('a collapsed parent aggregates its hidden children counts', () {
+      final rows = collapseFolders(folders(), {});
+      final work = rows.firstWhere((r) => r.folder.path == 'Work');
+      expect(work.unread, 3);
+      expect(work.total, 7);
+      final inbox = rows.firstWhere((r) => r.folder.path == 'INBOX');
+      expect(inbox.unread, 2);
+      expect(inbox.total, 5);
+    });
+
+    test('expanding reveals the children with their own counts', () {
+      final rows = collapseFolders(folders(), {4});
+      expect(
+        rows.map((r) => r.folder.path),
+        ['INBOX', 'INBOX/Archive', 'Work', 'Work/Client'],
+      );
+      final work = rows.firstWhere((r) => r.folder.path == 'Work');
+      expect(work.expanded, isTrue);
+      expect(work.unread, 0);
+      final client = rows.firstWhere((r) => r.folder.path == 'Work/Client');
+      expect(client.unread, 3);
+    });
+
+    test('a payload without the flag falls back to the role', () {
+      final custom = _folder(1, 'Work', 'custom');
+      final inbox = _folder(2, 'INBOX', 'inbox');
+      expect(custom.alwaysVisible, isFalse);
+      expect(inbox.alwaysVisible, isTrue);
+    });
+  });
+}

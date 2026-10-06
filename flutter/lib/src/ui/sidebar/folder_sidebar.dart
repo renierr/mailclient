@@ -6,13 +6,24 @@ import '../../state/mail_state.dart';
 import '../dialogs/mail_dialog.dart';
 import '../dialogs/sender_avatar.dart';
 
-/// Accounts on top, this account's folders below.
-class FolderSidebar extends StatelessWidget {
+/// Accounts on top, this account's folders below. Parents collapse (default
+/// closed); well-known folders stay visible inside a collapsed parent and a
+/// collapsed parent aggregates its hidden children's counts.
+class FolderSidebar extends StatefulWidget {
   const FolderSidebar({super.key, this.onFolderSelected});
 
   /// Called after a folder is picked, so a narrow layout can navigate away
   /// from the sidebar. Null in the three-pane layout, where nothing moves.
   final VoidCallback? onFolderSelected;
+
+  @override
+  State<FolderSidebar> createState() => _FolderSidebarState();
+}
+
+class _FolderSidebarState extends State<FolderSidebar> {
+  /// Expanded parents, by folder id. In-memory: every launch starts
+  /// collapsed (default closed).
+  final Set<int> _expanded = {};
 
   @override
   Widget build(BuildContext context) {
@@ -21,6 +32,7 @@ class FolderSidebar extends StatelessWidget {
     );
     final folderId = context.select<MailState, int>((s) => s.folderId);
     final syncing = context.select<MailState, bool>((s) => s.isSyncing);
+    final rows = collapseFolders(folders, _expanded);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -44,15 +56,23 @@ class FolderSidebar extends StatelessWidget {
                 )
               : ListView.builder(
                   padding: const EdgeInsets.symmetric(vertical: 4),
-                  itemCount: folders.length,
+                  itemCount: rows.length,
                   itemBuilder: (context, i) {
-                    final f = folders[i];
+                    final row = rows[i];
+                    final f = row.folder;
                     return FolderTile(
                       folder: f,
                       selected: f.id == folderId,
+                      unread: row.unread,
+                      total: row.total,
+                      hasChildren: row.hasChildren,
+                      expanded: row.expanded,
+                      onToggle: () => setState(() {
+                        if (!_expanded.remove(f.id)) _expanded.add(f.id);
+                      }),
                       onTap: () {
                         context.read<MailState>().selectFolder(f.id);
-                        onFolderSelected?.call();
+                        widget.onFolderSelected?.call();
                       },
                     );
                   },
@@ -61,6 +81,87 @@ class FolderSidebar extends StatelessWidget {
       ],
     );
   }
+}
+
+/// One visible sidebar row: the folder plus its collapse state and the counts
+/// to paint (a collapsed parent aggregates its hidden children's counts, so
+/// no unread badge disappears with them).
+class FolderRow {
+  const FolderRow({
+    required this.folder,
+    required this.hasChildren,
+    required this.expanded,
+    required this.unread,
+    required this.total,
+  });
+
+  final Folder folder;
+  final bool hasChildren;
+  final bool expanded;
+  final int unread;
+  final int total;
+}
+
+/// The feed `leaf` is the last path segment; what precedes it (minus the
+/// single-char IMAP delimiter) is the parent. Depth 0 has none.
+String? parentPathOf(Folder f) {
+  if (f.depth <= 0) return null;
+  final cut = f.path.length - f.leafName.length - 1;
+  return cut > 0 ? f.path.substring(0, cut) : null;
+}
+
+/// Fold the flat visible list into sidebar rows: top-level and well-known
+/// folders (`alwaysVisible`, e.g. an Archive filed below INBOX) always show;
+/// custom subfolders show only while every ancestor up to the nearest
+/// always-visible one is expanded. A folder whose parent is not visible
+/// reads as a root, the way the old flat list showed it.
+List<FolderRow> collapseFolders(List<Folder> folders, Set<int> expanded) {
+  final byPath = {for (final f in folders) f.path: f};
+  Folder? parentOf(Folder f) => byPath[parentPathOf(f)];
+
+  bool shown(Folder f) {
+    if (f.depth <= 0 || f.alwaysVisible) return true;
+    final p = parentOf(f);
+    if (p == null) return true;
+    return expanded.contains(p.id) && shown(p);
+  }
+
+  bool hasKids(Folder f) => folders.any((o) => parentOf(o)?.id == f.id);
+
+  bool under(Folder row, Folder d) {
+    Folder? q = d;
+    while (q != null) {
+      if (q.id == row.id) return true;
+      q = parentOf(q);
+    }
+    return false;
+  }
+
+  final rows = <FolderRow>[];
+  for (final f in folders) {
+    if (!shown(f)) continue;
+    final kids = hasKids(f);
+    final open = expanded.contains(f.id);
+    var unread = f.unread;
+    var total = f.total;
+    if (kids && !open) {
+      for (final d in folders) {
+        if (d.id == f.id || shown(d) || !under(f, d)) continue;
+        unread += d.unread;
+        total += d.total;
+      }
+    }
+    rows.add(
+      FolderRow(
+        folder: f,
+        hasChildren: kids,
+        expanded: open,
+        unread: unread,
+        total: total,
+      ),
+    );
+  }
+  return rows;
 }
 
 /// Who you are, like the Qt account chip: avatar and address in a bordered
@@ -148,15 +249,30 @@ class FolderTile extends StatelessWidget {
     required this.folder,
     required this.selected,
     required this.onTap,
+    this.unread,
+    this.total,
+    this.hasChildren = false,
+    this.expanded = false,
+    this.onToggle,
   });
 
   final Folder folder;
   final bool selected;
   final VoidCallback onTap;
 
+  /// Painted counts: a collapsed parent aggregates its hidden children's.
+  final int? unread;
+  final int? total;
+
+  final bool hasChildren;
+  final bool expanded;
+  final VoidCallback? onToggle;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final unreadCount = unread ?? folder.unread;
+    final totalCount = total ?? folder.total;
     final tile = ListTile(
       selected: selected,
       selectedTileColor: scheme.secondaryContainer,
@@ -168,22 +284,43 @@ class FolderTile extends StatelessWidget {
         folder.leafName,
         overflow: TextOverflow.ellipsis,
         style: TextStyle(
-          fontWeight: folder.unread > 0 ? FontWeight.w600 : FontWeight.normal,
+          fontWeight: unreadCount > 0 ? FontWeight.w600 : FontWeight.normal,
         ),
       ),
-      trailing: folder.unread > 0
-          ? Badge(label: Text('${folder.unread}'))
-          : (folder.total > 0
-                ? Text(
-                    '${folder.total}',
-                    style: TextStyle(color: scheme.outline, fontSize: 11),
-                  )
-                : null),
+      // Counts first, collapse chevron last: the label edge never moves
+      // whether a row has children or not, and the slot stays reserved so
+      // counts align down the list.
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (unreadCount > 0)
+            Badge(label: Text('$unreadCount'))
+          else if (totalCount > 0)
+            Text(
+              '$totalCount',
+              style: TextStyle(color: scheme.outline, fontSize: 11),
+            ),
+          if (hasChildren)
+            IconButton(
+              tooltip: expanded ? 'Collapse subfolders' : 'Expand subfolders',
+              constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+              padding: EdgeInsets.zero,
+              iconSize: 18,
+              icon: Icon(
+                expanded ? Icons.expand_more : Icons.chevron_right,
+                color: scheme.onSurfaceVariant,
+              ),
+              onPressed: onToggle,
+            )
+          else
+            const SizedBox(width: 28),
+        ],
+      ),
       onTap: onTap,
     );
     // Qt parity: tooltip names totals ("12 · 3 unread").
     return Tooltip(
-      message: '${folder.total} total · ${folder.unread} unread',
+      message: '$totalCount total · $unreadCount unread',
       child: tile,
     );
   }

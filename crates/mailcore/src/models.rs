@@ -47,6 +47,15 @@ impl FolderRole {
             _ => Self::Custom,
         }
     }
+
+    /// Sidebar collapse rule: well-known folders are always visible, even
+    /// nested below another folder (`INBOX/Archive` on servers that file
+    /// archive and junk under the inbox). Only `Custom` subfolders hide
+    /// inside a collapsed parent.
+    #[must_use]
+    pub fn always_visible(self) -> bool {
+        !matches!(self, Self::Custom)
+    }
 }
 
 impl std::str::FromStr for FolderRole {
@@ -303,5 +312,20 @@ mod tests {
         }
         assert_eq!(FolderRole::parse_role("SPAM"), FolderRole::Junk);
         assert_eq!(FolderRole::parse_role("whatever"), FolderRole::Custom);
+    }
+
+    #[test]
+    fn only_custom_folders_collapse_away() {
+        for role in [
+            FolderRole::Inbox,
+            FolderRole::Sent,
+            FolderRole::Drafts,
+            FolderRole::Trash,
+            FolderRole::Junk,
+            FolderRole::Archive,
+        ] {
+            assert!(role.always_visible(), "{role:?} must stay visible");
+        }
+        assert!(!FolderRole::Custom.always_visible());
     }
 }

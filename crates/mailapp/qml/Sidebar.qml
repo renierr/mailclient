@@ -6,9 +6,12 @@ import Mailclient
 import "components"
 
 // Folder/account sidebar. Expects `folders` ListModel with
-// {name, role, unread, subscribed, count} and `accounts` ListModel with
-// {id, name, email}. Only subscribed (visible) folders are listed — the rest
-// live in the Folders manager.
+// {id, name, role, unread, subscribed, count, depth, leaf, always_visible}.
+// Only subscribed (visible) folders are listed — the rest live in the
+// Folders manager. Parents collapse (default closed); well-known folders
+// (`always_visible`, e.g. an Archive filed below INBOX) always show, and a
+// collapsed parent aggregates its hidden children's counts so no unread
+// pill disappears with them.
 Rectangle {
     id: root
 
@@ -28,22 +31,116 @@ Rectangle {
         id: shown
     }
 
+    // Expanded parents, by folder id. In-memory: every launch starts
+    // collapsed (default closed).
+    property var expandedById: ({})
+
+    function parentPathOf(f) {
+        // Feed `leaf` is the last path segment; what precedes it (minus the
+        // single-char IMAP delimiter) is the parent. Depth 0 has none, and a
+        // parent outside the visible set counts as none — the child then
+        // reads as a root, the way the old flat list showed it.
+        if (f.depth === undefined || f.depth <= 0)
+            return null;
+        var leaf = f.leaf !== undefined ? f.leaf : "";
+        var cut = f.name.length - leaf.length - 1;
+        return cut > 0 ? f.name.substring(0, cut) : null;
+    }
+
     function refreshShown() {
-        var rows = [];
+        var all = [];
+        var byPath = {};
         if (root.folders) {
             for (var i = 0; i < root.folders.count; i++) {
                 var f = root.folders.get(i);
                 if (f.subscribed === false)
                     continue;
-                rows.push({
-                              name: f.name,
-                              role: f.role,
-                              unread: f.unread,
-                              count: f.count !== undefined ? f.count : 0
-                          });
+                var row = {
+                    id: f.id,
+                    name: f.name,
+                    role: f.role,
+                    unread: f.unread,
+                    count: f.count !== undefined ? f.count : 0,
+                    depth: f.depth !== undefined ? f.depth : 0,
+                    leaf: f.leaf !== undefined && f.leaf !== "" ? f.leaf : f.name,
+                    alwaysVisible: f.always_visible !== false
+                };
+                all.push(row);
+                byPath[row.name] = row;
             }
         }
+        var parentOf = function (row) {
+            var p = parentPathOf(row);
+            return p !== null && byPath[p] !== undefined ? byPath[p] : null;
+        };
+        var isShown = function (row) {
+            if (row.depth <= 0 || row.alwaysVisible)
+                return true;
+            var p = parentOf(row);
+            if (p === null)
+                return true;
+            return root.expandedById[p.id] === true && isShown(p);
+        };
+        var hasChildren = function (row) {
+            for (var i = 0; i < all.length; i++) {
+                if (parentOf(all[i]) === row)
+                    return true;
+            }
+            return false;
+        };
+        var rows = [];
+        for (var k = 0; k < all.length; k++) {
+            var r = all[k];
+            if (!isShown(r))
+                continue;
+            // A collapsed parent carries its hidden children's counts, so
+            // the unread pill stays honest while they are folded away.
+            var aggUnread = r.unread, aggTotal = r.count;
+            if (hasChildren(r) && root.expandedById[r.id] !== true) {
+                for (var m = 0; m < all.length; m++) {
+                    var d = all[m];
+                    if (d === r || isShown(d))
+                        continue;
+                    // Hidden offshoot of this row: walk up to confirm.
+                    var q = d, under = false;
+                    while (q !== null) {
+                        if (q === r) {
+                            under = true;
+                            break;
+                        }
+                        q = parentOf(q);
+                    }
+                    if (under) {
+                        aggUnread += d.unread;
+                        aggTotal += d.count;
+                    }
+                }
+            }
+            rows.push({
+                          id: r.id,
+                          name: r.name,
+                          role: r.role,
+                          unread: r.unread,
+                          count: r.count,
+                          depth: r.depth,
+                          leaf: r.leaf,
+                          hasChildren: hasChildren(r),
+                          expanded: root.expandedById[r.id] === true,
+                          aggUnread: aggUnread,
+                          aggTotal: aggTotal
+                      });
+        }
         ModelSync.sync(shown, rows, "name");
+    }
+
+    function toggleFolder(id) {
+        var map = root.expandedById;
+        if (map[id] === true)
+            delete map[id];
+        else
+            map[id] = true;
+        root.expandedById = map;
+        root.refreshShown();
     }
 
     onFoldersChanged: root.refreshShown()
@@ -189,10 +286,12 @@ Rectangle {
 
                 onClicked: root.emitLater(root.folderSelected, folderRow.model.name)
                 ToolTip.visible: folderRow.hovered
-                ToolTip.text: qsTr("%1 total · %2 unread").arg(folderRow.model.count || 0).arg(folderRow.model.unread)
+                ToolTip.text: qsTr("%1 total · %2 unread").arg(folderRow.model.aggTotal || 0).arg(
+                                  folderRow.model.aggUnread)
                 // Padding, not anchors: a control's contentItem is sized by
                 // the control, so anchor margins inside it are ignored.
-                leftPadding: Theme.md + Theme.sm
+                // Indent follows the hierarchy depth, the way MoveTo does.
+                leftPadding: Theme.md + Theme.sm + (folderRow.model.depth || 0) * 16
                 rightPadding: Theme.md + Theme.sm
 
                 background: Rectangle {
@@ -229,24 +328,25 @@ Rectangle {
                         font.pixelSize: Theme.fontBase
                     }
                     Label {
-                        text: folderRow.model.name
+                        text: folderRow.model.leaf
                         Layout.fillWidth: true
                         elide: Text.ElideRight
                         color: folderRow.current ? Theme.accent : Theme.text
                         font.pixelSize: Theme.fontBase
-                        font.bold: folderRow.model.unread > 0
+                        font.bold: (folderRow.model.aggUnread || 0) > 0
                     }
                     // Total cached, muted — with the unread pill next to it
-                    // the row reads as "3 unread of 128".
+                    // the row reads as "3 unread of 128". Both aggregate
+                    // hidden children's counts while collapsed.
                     Label {
-                        visible: (folderRow.model.count || 0) > 0
-                        text: folderRow.model.count
+                        visible: (folderRow.model.aggTotal || 0) > 0
+                        text: folderRow.model.aggTotal
                         color: Theme.textMuted
                         font.pixelSize: Theme.fontSmall
                     }
                     // Unread count as a pill, the way mail clients do it.
                     Rectangle {
-                        visible: folderRow.model.unread > 0
+                        visible: (folderRow.model.aggUnread || 0) > 0
                         implicitWidth: Math.max(Math.round(20 * Theme.uiScale), unreadLabel.implicitWidth + Theme.sm)
                         implicitHeight: Math.round(18 * Theme.uiScale)
                         radius: Math.round(9 * Theme.uiScale)
@@ -254,11 +354,30 @@ Rectangle {
                         Label {
                             id: unreadLabel
                             anchors.centerIn: parent
-                            text: folderRow.model.unread
+                            text: folderRow.model.aggUnread
                             color: folderRow.current ? Theme.accentText : Theme.textMuted
                             font.pixelSize: Theme.fontTiny
                             font.bold: true
                         }
+                    }
+                    // Collapse chevron last, so the label edge never moves
+                    // whether a row has children or not. Rows without
+                    // children hold the same slot, keeping pills aligned.
+                    Item {
+                        visible: folderRow.model.hasChildren !== true
+                        Layout.preferredWidth: 24
+                        Layout.preferredHeight: 1
+                    }
+                    IconButton {
+                        visible: folderRow.model.hasChildren === true
+                        Layout.preferredWidth: 24
+                        Layout.preferredHeight: 24
+                        text: folderRow.model.expanded === true ? Icons.expandLess : Icons.expandMore
+                        iconFont: true
+                        fontSize: Theme.fontSmall
+                        tooltip: folderRow.model.expanded === true ? qsTr("Collapse subfolders") : qsTr(
+                                                                         "Expand subfolders")
+                        onClicked: root.toggleFolder(folderRow.model.id)
                     }
                 }
             }

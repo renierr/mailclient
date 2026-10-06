@@ -46,6 +46,10 @@ data class Folder(
     val count: Int,
     // Sidebar visibility only: hidden folders keep their cache and syncing.
     val subscribed: Boolean = true,
+    // Collapse rule from the feed (`FolderRole::always_visible`): known
+    // folders stay visible inside a collapsed parent; only custom
+    // subfolders fold away.
+    val alwaysVisible: Boolean = true,
     // Delete here destroys instead of moving to Trash (core decides).
     val deleteIsPermanent: Boolean = false,
 )
@@ -1278,15 +1282,17 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
             return List(arr.length()) { i ->
                 val o = arr.optJSONObject(i) ?: JSONObject()
                 val path = o.optString("name")
+                val role = o.optString("role")
                 Folder(
                     id = o.optLong("id", -1),
                     path = path,
                     leaf = o.optString("leaf").ifEmpty { path },
                     depth = o.optInt("depth", 0),
-                    role = o.optString("role"),
+                    role = role,
                     unread = o.optInt("unread", 0),
                     count = o.optInt("count", 0),
                     subscribed = o.optBoolean("subscribed", true),
+                    alwaysVisible = o.optBoolean("always_visible", role != "custom"),
                     deleteIsPermanent = o.optBoolean("delete_is_permanent", false),
                 )
             }.filter { it.id >= 0 }

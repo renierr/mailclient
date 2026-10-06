@@ -107,6 +107,7 @@ class Folder {
     this.deleteIsPermanent = true,
     required this.depth,
     required this.leafName,
+    required this.alwaysVisible,
   });
 
   final int id;
@@ -134,13 +135,19 @@ class Folder {
   /// Short name from the feed (`mailcore::feed::folder_leaf`).
   final String leafName;
 
+  /// Collapse rule from the feed (`FolderRole::always_visible`): known
+  /// folders stay visible inside a collapsed parent; only custom subfolders
+  /// fold away.
+  final bool alwaysVisible;
+
   factory Folder.fromJson(Map<String, dynamic> j) {
     final path = _str(j['name']);
     final delimiter = _str(j['delimiter'], orElse: '/');
+    final role = FolderRole.parse(_str(j['role']));
     return Folder(
       id: _int(j['id']),
       path: path,
-      role: FolderRole.parse(_str(j['role'])),
+      role: role,
       unread: _int(j['unread']),
       total: _int(j['count']),
       subscribed: _bool(j['subscribed'], orElse: true),
@@ -153,6 +160,8 @@ class Folder {
       leafName:
           _optStr(j['leaf']) ??
           (delimiter.isEmpty ? path : path.split(delimiter).last),
+      alwaysVisible:
+          _optBool(j['always_visible']) ?? role != FolderRole.custom,
     );
   }
 }
@@ -693,6 +702,15 @@ bool _bool(Object? v, {bool orElse = false}) => switch (v) {
   'true' || '1' => true,
   'false' || '0' => false,
   _ => orElse,
+};
+
+/// Null when the field is missing, so callers can fall back to a default.
+bool? _optBool(Object? v) => switch (v) {
+  bool b => b,
+  num n => n != 0,
+  'true' || '1' => true,
+  'false' || '0' => false,
+  _ => null,
 };
 
 List<Map<String, dynamic>> _list(Object? v) => switch (v) {

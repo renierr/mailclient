@@ -399,6 +399,29 @@ fn folders_carry_depth_and_leaf_for_indent_and_label() {
 }
 
 #[test]
+fn folders_carry_always_visible_for_collapse() {
+    let (db, acc, _inbox) = setup();
+    folders::upsert(&db, acc, "INBOX/Archive", "/", FolderRole::Archive).unwrap();
+    folders::upsert(&db, acc, "Work/Client", "/", FolderRole::Custom).unwrap();
+    let folders: serde_json::Value =
+        serde_json::from_str(&folders_json(&db, acc).unwrap()).unwrap();
+    let by_name = |name: &str| {
+        folders
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == name)
+            .unwrap()
+            .clone()
+    };
+    // Known folders stay visible even nested below another folder; only
+    // custom subfolders hide inside a collapsed parent.
+    assert_eq!(by_name("INBOX")["always_visible"], true);
+    assert_eq!(by_name("INBOX/Archive")["always_visible"], true);
+    assert_eq!(by_name("Work/Client")["always_visible"], false);
+}
+
+#[test]
 fn folders_carry_subscribed_and_count() {
     let (db, acc, f) = setup();
     let folders: serde_json::Value =

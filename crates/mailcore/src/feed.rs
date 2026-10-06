@@ -57,8 +57,8 @@ pub fn older_state(cached: u64, server: Option<u64>) -> OlderState {
 }
 
 /// `[{id, name, role, unread, subscribed, count, delimiter, depth, leaf,
-/// server_total, older, can_load_older, delete_is_permanent}]` ordered by
-/// path. `depth`/`leaf` derive from the path and delimiter here so the move
+/// always_visible, server_total, older, can_load_older,
+/// delete_is_permanent}]` ordered by path. `depth`/`leaf` derive from the
 /// picker and the sidebar indent and label subfolders identically instead of
 /// each splitting the path itself.
 pub fn folders_json(db: &Db, account_id: i64) -> Result<String> {
@@ -85,6 +85,9 @@ pub fn folders_json(db: &Db, account_id: i64) -> Result<String> {
             "delimiter": f.delimiter,
             "depth": folder_depth(&f.path, &f.delimiter),
             "leaf": folder_leaf(&f.path, &f.delimiter),
+            // Sidebar collapse rule (see `FolderRole::always_visible`):
+            // known folders stay visible inside a collapsed parent.
+            "always_visible": f.role.always_visible(),
             // `-1`: the server never reported a count.
             "server_total": f.server_total.map_or(-1, |s| s as i64),
             "older": older_state(c.total, f.server_total).as_str(),
