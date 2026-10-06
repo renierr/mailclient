@@ -355,17 +355,17 @@ Update this section when a step lands (see AGENTS.md §7.4).
 
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
-| Rows (avatar, unread, star, attach, snippet) | ✅ | ✅ | ✅ | |
+| Rows (avatar, unread, star, attach, snippet) | ✅ | ✅ | ✅ | Same arrangement everywhere: small avatar top left with the unread dot on its corner and the paperclip under it; sender + star, date on the right; subject with the ⋮ under the date; snippet (not in compact) |
 | Sort (date/from/subject ±) | ✅ | ✅ | ✅ | Hidden during search everywhere |
 | Quick filters (unread/starred/attach + dates + custom range) | ✅ | ✅ | ✅ | AND-combined; client-side over loaded rows + hits |
 | Full query syntax (`is:`, `has:`, `after:`…) | ✅ | ✅ | 🔄 | Core parses everywhere; native has no syntax-help UI |
 | Selection + bulk bar (read/star/archive/move/trash/purge) | ✅ | ✅ | ✅ | Native bar docks at bottom; purge always confirms |
-| Row menu (read/star/archive/move/trash/similar/eml) | ✅ | ✅ | ❌ | Native: tap opens, long-press selects; no per-row menu |
+| Row menu (read/star/archive/move/trash/similar/eml) | ✅ | ✅ | ✅ | Touch: ⋮ on the subject line under the date (tap opens, long-press selects); Qt and Flutter desktop add right-click. A search hit acts in its own folder; trash follows the confirm preference, purge always asks |
 | Jump top/bottom buttons | ✅ | ✅ | ✅ | |
 | Pull-to-refresh scope | — (toolbar syncs the account) | — (toolbar syncs the account) | ✅ folder-only inside a folder, account-wide in search | Native-only gesture; desktop has no pull |
 | List scroll memory | ✅ (per-folder, UID-anchored) | ✅ (per-folder PageStorageKey) | ✅ (per-folder index) | Native drifts when new mail arrives mid-read; Qt's UID anchor does not |
 | Load-older footer (Cached N [of M] / All loaded) | ✅ | ✅ | ✅ | |
-| Find-similar mode + chip | ✅ | ✅ | ✅ | From native reader only (no row menu yet) |
+| Find-similar mode + chip | ✅ | ✅ | ✅ | From the reader and the row menu |
 | Drafts rows open the composer | ✅ | ✅ | ✅ | Native: any row whose folder has the `drafts` role, search hits included |
 | List density (comfortable/compact) | ✅ | ✅ | ✅ | Compact drops the snippet line and tightens the rows |
 | Swipe actions, mark-all-read | ❌ | ❌ | ❌ | None anywhere; not planned |

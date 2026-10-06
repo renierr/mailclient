@@ -1,5 +1,6 @@
 package de.renier.mailclient.ui.list
 
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -36,18 +38,24 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import de.renier.mailclient.MailNative
 import de.renier.mailclient.R
 import de.renier.mailclient.ui.common.Avatar
 import de.renier.mailclient.ui.common.PullToSync
 import de.renier.mailclient.ui.folders.MoveToDialog
+import de.renier.mailclient.ui.reader.CreateTypedDocument
+import de.renier.mailclient.ui.reader.ReaderFiles
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.state.MessageRow
 import de.renier.mailclient.ui.theme.starColor
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // Message list: a pinned header (folder or search title, sort, filter,
 // selection), an active-filter bar, rows with avatar + unread dot (a
@@ -123,6 +131,90 @@ fun ListScreen(
     var bulkMove by remember { mutableStateOf(false) }
     var confirmTrash by remember { mutableStateOf(false) }
     var confirmPurge by remember { mutableStateOf(false) }
+    // The ⋮ menu's pending row action: move picker or delete confirm.
+    var rowMove by remember { mutableStateOf<MessageRow?>(null) }
+    var rowTrash by remember { mutableStateOf<MessageRow?>(null) }
+    var rowPurge by remember { mutableStateOf<MessageRow?>(null) }
+    var pendingEml by remember { mutableStateOf<ByteArray?>(null) }
+    val context = LocalContext.current
+    val saveEml = rememberLauncherForActivityResult(CreateTypedDocument()) { uri ->
+        val bytes = pendingEml
+        pendingEml = null
+        if (uri != null && bytes != null) {
+            jumpScope.launch {
+                val ok = withContext(Dispatchers.IO) { runCatching { ReaderFiles.write(context, uri, bytes) }.isSuccess }
+                state.info(if (ok) "Saved" else "Could not save the message")
+            }
+        }
+    }
+
+    fun onRowAction(action: RowAction, m: MessageRow) {
+        when (action) {
+            RowAction.Read -> state.rowMarkRead(m, m.unread)
+            RowAction.Star -> state.rowStar(m, !m.starred)
+            RowAction.Archive -> state.rowArchive(m)
+            RowAction.Move -> rowMove = m
+            // Trash follows the confirm preference; where delete destroys,
+            // it always asks.
+            RowAction.Trash ->
+                if (state.readerPrefs.confirmDelete || state.rowDeleteIsPermanent(m)) rowTrash = m else state.rowTrash(m)
+            RowAction.Purge -> rowPurge = m
+            RowAction.Similar -> state.findSimilar(state.rowFolderId(m), m.uid)
+            RowAction.SaveEml -> jumpScope.launch {
+                val folderId = state.rowFolderId(m)
+                val file = withContext(Dispatchers.IO) {
+                    runCatching { MailNative.exportEmlBytes(folderId, m.uid) to MailNative.suggestedEmlName(folderId, m.uid) }
+                }
+                file.onSuccess { (bytes, name) ->
+                    pendingEml = bytes
+                    saveEml.launch(name to "message/rfc822")
+                }.onFailure { state.info(it.message ?: "Could not export the message") }
+            }
+        }
+    }
+
+    rowMove?.let { m ->
+        MoveToDialog(
+            folders = state.visibleFolders,
+            currentFolderId = state.rowFolderId(m),
+            count = 1,
+            subject = m.subject,
+            onPick = { dest ->
+                rowMove = null
+                state.rowMove(m, dest.path)
+            },
+            onDismiss = { rowMove = null },
+        )
+    }
+    rowTrash?.let { m ->
+        val permanent = state.rowDeleteIsPermanent(m)
+        DeleteConfirmDialog(
+            title = if (permanent) "Delete permanently?" else "Move to Trash?",
+            text = if (permanent) {
+                "“${m.subject}” will be destroyed on the server. This cannot be undone."
+            } else {
+                "“${m.subject}” will be moved to Trash."
+            },
+            confirmLabel = if (permanent) "Delete permanently" else "Move to Trash",
+            onConfirm = {
+                rowTrash = null
+                state.rowTrash(m)
+            },
+            onDismiss = { rowTrash = null },
+        )
+    }
+    rowPurge?.let { m ->
+        DeleteConfirmDialog(
+            title = "Delete permanently?",
+            text = "“${m.subject}” will be destroyed on the server. This cannot be undone.",
+            confirmLabel = "Delete permanently",
+            onConfirm = {
+                rowPurge = null
+                state.rowPurge(m)
+            },
+            onDismiss = { rowPurge = null },
+        )
+    }
 
     if (bulkMove) {
         // One shared folder when the selection sits in it, else none
@@ -239,6 +331,8 @@ fun ListScreen(
                             folderLabel = if (showFolder) folderNames[m.folderId] else null,
                             selected = if (state.selectionMode) key in state.selectedKeys else null,
                             compact = state.compactList,
+                            permanent = state.rowDeleteIsPermanent(m),
+                            onAction = { onRowAction(it, m) },
                             modifier = Modifier
                                 .then(
                                     if (openMessage == rowFolder to m.uid) {
@@ -487,52 +581,81 @@ private fun MessageItem(
     onToggle: () -> Unit,
     // List density "compact": no snippet line, tighter rows.
     compact: Boolean = false,
+    // The ⋮ menu; hidden while selecting (the bulk bar acts then).
+    permanent: Boolean = false,
+    onAction: ((RowAction) -> Unit)? = null,
 ) {
     val scheme = MaterialTheme.colorScheme
-    val unreadDot = scheme.primary
-    val ring = scheme.surface
+    // Qt's and Flutter's row: a small avatar at the top left with the
+    // unread dot on its corner and the paperclip under it; sender (and
+    // star) with the date on the right, subject with the ⋮ under the date,
+    // then the snippet.
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = if (compact) 5.dp else 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+            .padding(start = 12.dp, end = 4.dp, top = if (compact) 4.dp else 8.dp, bottom = if (compact) 4.dp else 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        if (selected != null) {
-            Checkbox(checked = selected, onCheckedChange = { onToggle() })
-        } else {
-            Box {
-                Avatar(initials = m.initials, avatarLight = m.avatarLight, avatarDark = m.avatarDark)
-                if (m.unread) {
-                    Canvas(
-                        modifier = Modifier
-                            .size(14.dp)
-                            .align(Alignment.TopEnd)
-                            .offset(x = 3.dp, y = (-3).dp),
-                    ) {
-                        drawCircle(color = ring, radius = size.minDimension / 2)
-                        drawCircle(color = unreadDot, radius = size.minDimension / 2 - 3.dp.toPx() / 2)
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.width(32.dp),
+        ) {
+            if (selected != null) {
+                Checkbox(checked = selected, onCheckedChange = { onToggle() }, modifier = Modifier.size(32.dp))
+            } else {
+                Box {
+                    Avatar(initials = m.initials, avatarLight = m.avatarLight, avatarDark = m.avatarDark, size = 28.dp)
+                    if (m.unread) {
+                        Canvas(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .align(Alignment.TopStart)
+                                .offset(x = (-2).dp, y = (-2).dp),
+                        ) {
+                            drawCircle(color = scheme.surface, radius = size.minDimension / 2)
+                            drawCircle(color = scheme.primary, radius = size.minDimension / 2 - 1.5.dp.toPx())
+                        }
                     }
                 }
             }
+            if (m.hasAttachments) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_attach),
+                    contentDescription = "Has attachments",
+                    tint = scheme.outline,
+                    modifier = Modifier.padding(top = 6.dp).size(14.dp),
+                )
+            }
         }
         Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    m.fromName.ifEmpty { m.from },
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = if (m.unread) FontWeight.Bold else null,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        m.fromName.ifEmpty { m.from },
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = if (m.unread) FontWeight.Bold else null,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (m.starred) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_star),
+                            contentDescription = "Starred",
+                            tint = starColor(true),
+                            modifier = Modifier.padding(start = 4.dp).size(14.dp),
+                        )
+                    }
+                }
                 Text(
                     m.date,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = if (m.unread) FontWeight.Bold else null,
-                    color = if (m.unread) scheme.primary else scheme.onSurfaceVariant,
+                    color = if (m.unread) scheme.primary else scheme.outline,
+                    modifier = Modifier.padding(start = 8.dp, end = 8.dp),
                 )
             }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     m.subject,
                     style = MaterialTheme.typography.bodyMedium,
@@ -542,21 +665,8 @@ private fun MessageItem(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                if (m.hasAttachments) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_attach),
-                        contentDescription = "Has attachments",
-                        tint = scheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-                if (m.starred) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_star),
-                        contentDescription = "Starred",
-                        tint = starColor(true),
-                        modifier = Modifier.size(16.dp),
-                    )
+                if (selected == null && onAction != null) {
+                    RowMenuButton(m, permanent, onAction)
                 }
             }
             if (!compact && m.snippet.isNotEmpty()) {
@@ -566,6 +676,7 @@ private fun MessageItem(
                     color = scheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(end = 8.dp),
                 )
             }
             folderLabel?.let {

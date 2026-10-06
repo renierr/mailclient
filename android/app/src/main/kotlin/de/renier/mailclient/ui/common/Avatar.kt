@@ -14,6 +14,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 // Sender avatar: core-decided initials and per-theme colour
 // (mailcore::badge, carried on every account/row feed). White text, like the
@@ -43,7 +44,7 @@ fun Avatar(
         Text(
             initials.take(2),
             color = Color.White,
-            style = MaterialTheme.typography.titleSmall,
+            style = MaterialTheme.typography.titleSmall.copy(fontSize = (size.value * 0.36f).sp),
         )
     }
 }

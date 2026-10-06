@@ -727,6 +727,62 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         afterBulk()
     }
 
+    // One row's actions (the list's ⋮ menu). A search hit acts in the
+    // folder it lives in, a list row in the open one.
+
+    /** The folder [m] lives in. */
+    fun rowFolderId(m: MessageRow): Long = rowFolder(m)?.id ?: folderId
+
+    /** Delete in [m]'s folder destroys instead of moving to Trash. */
+    fun rowDeleteIsPermanent(m: MessageRow): Boolean = rowFolder(m)?.deleteIsPermanent == true
+
+    fun rowMarkRead(m: MessageRow, read: Boolean) = io {
+        MailNative.ensureInit(appContext)
+        MailNative.markReadMany(activeAccountId, rowFolderId(m), "[${m.uid}]", read)
+        afterRow()
+    }
+
+    fun rowStar(m: MessageRow, starred: Boolean) = io {
+        MailNative.ensureInit(appContext)
+        MailNative.setStarMany(activeAccountId, rowFolderId(m), "[${m.uid}]", starred)
+        afterRow()
+    }
+
+    fun rowArchive(m: MessageRow) = io {
+        MailNative.ensureInit(appContext)
+        val result = MailNative.archiveMessages(activeAccountId, rowFolderId(m), "[${m.uid}]")
+        withContext(Dispatchers.Main) { offerUndo(result) }
+        afterRow()
+    }
+
+    fun rowMove(m: MessageRow, destPath: String) = io {
+        MailNative.ensureInit(appContext)
+        val result = MailNative.moveMessages(activeAccountId, rowFolderId(m), "[${m.uid}]", destPath)
+        withContext(Dispatchers.Main) { offerUndo(result) }
+        afterRow()
+    }
+
+    /** To Trash (undoable), or destroyed where the folder says so. */
+    fun rowTrash(m: MessageRow) = io {
+        MailNative.ensureInit(appContext)
+        val result = MailNative.deleteMessages(activeAccountId, rowFolderId(m), "[${m.uid}]")
+        withContext(Dispatchers.Main) { offerUndo(result) }
+        afterRow()
+    }
+
+    /** Destroy server-side. No undo — the UI always confirms first. */
+    fun rowPurge(m: MessageRow) = io {
+        MailNative.ensureInit(appContext)
+        MailNative.purgeMessages(activeAccountId, rowFolderId(m), "[${m.uid}]")
+        afterRow()
+    }
+
+    private suspend fun afterRow() {
+        reloadMessages()
+        loadFolders()
+        withContext(Dispatchers.Main) { if (searchActive && similarLabel == null) runSearch() }
+    }
+
     private suspend fun afterBulk() {
         withContext(Dispatchers.Main) { exitSelectionMode() }
         reloadMessages()
