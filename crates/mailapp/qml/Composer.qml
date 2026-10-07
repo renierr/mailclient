@@ -93,6 +93,9 @@ Dialog {
     property var backend
     property bool collectContacts: true
     property bool sourceMode: false
+    // What the body goes out as right now (`send_format_note`), like the
+    // native composer's line: Auto names plain or HTML by the content.
+    property string formatNote: ""
     // UID of the server draft being edited; -1 means a new draft.
     property int draftUid: -1
 
@@ -108,7 +111,8 @@ Dialog {
     // Cleared on reset; the banner hides itself once the user edits To to
     // something else (they took control of the recipient).
     property string replyNoticeAddr: ""
-    property string replyNoticeSender: ""
+    // mailcore's sentence for it (`AnswerDraft.notice`).
+    property string replyNotice: ""
 
     // Outgoing files picked via FileDialog: [{path, name}]. Paths (plain or
     // `file://` URLs) travel in the send payload; Rust reads the bytes at
@@ -167,7 +171,7 @@ Dialog {
             anchors.verticalCenter: parent.verticalCenter
             anchors.right: parent.right
             anchors.rightMargin: Theme.lg
-            text: root.sendFormat === "auto" ? qsTr("Send as: Auto") : qsTr("Send as: %1").arg(root.sendFormat)
+            text: root.formatNote
             color: Theme.textMuted
             font.pixelSize: Theme.fontTiny
         }
@@ -241,7 +245,7 @@ Dialog {
         root.showBcc = false;
         root.showReplyTo = false;
         root.replyNoticeAddr = "";
-        root.replyNoticeSender = "";
+        root.replyNotice = "";
         root.attachments = [];
         root.draftUid = -1;
     }
@@ -249,7 +253,28 @@ Dialog {
     function setBody(html) {
         bodyEditor.setHtml(html);
         sourceArea.text = html;
+        formatNoteTimer.restart();
     }
+
+    function refreshFormatNote() {
+        if (!root.backend)
+            return;
+        // The source view, or an editor still loading, holds the body as text.
+        if (root.sourceMode || !bodyEditor.ready) {
+            root.formatNote = root.backend.send_format_note(root.sendFormat, sourceArea.text);
+            return;
+        }
+        bodyEditor.fetchHtml(html => root.formatNote = root.backend.send_format_note(root.sendFormat, html || ""));
+    }
+
+    Timer {
+        id: formatNoteTimer
+        interval: 300
+        onTriggered: root.refreshFormatNote()
+    }
+
+    onSendFormatChanged: formatNoteTimer.restart()
+    onSourceModeChanged: formatNoteTimer.restart()
 
     // New mail and answers come prepared by mailcore (compose::answer):
     // recipients, subject, quote and signature in their placement. The
@@ -283,7 +308,7 @@ Dialog {
         subjectField.text = draft.subject || "";
         // Reply-To elsewhere than the sender: the banner says so out loud.
         root.replyNoticeAddr = draft.notice_addr || "";
-        root.replyNoticeSender = draft.notice_sender || "";
+        root.replyNotice = draft.notice || "";
         root.setBody(draft.body_html);
         root.markClean();
         open();
@@ -663,8 +688,7 @@ Dialog {
                     wrapMode: Text.Wrap
                     color: Theme.text
                     font.pixelSize: Theme.fontSmall
-                    text: qsTr("Replies to this mail go to %1 — not to the sender (%2).").arg(root.replyNoticeAddr).arg(
-                              root.replyNoticeSender)
+                    text: root.replyNotice
                 }
             }
         }
@@ -704,7 +728,10 @@ Dialog {
                 anchors.fill: parent
                 anchors.margins: 1
                 visible: !root.sourceMode
-                onContentChanged: root.dirty = true
+                onContentChanged: {
+                    root.dirty = true;
+                    formatNoteTimer.restart();
+                }
             }
 
             ScrollView {
@@ -724,7 +751,10 @@ Dialog {
                     placeholderTextColor: Theme.textMuted
                     selectByMouse: true
                     background: null
-                    onTextChanged: root.dirty = true
+                    onTextChanged: {
+                        root.dirty = true;
+                        formatNoteTimer.restart();
+                    }
                 }
             }
         }

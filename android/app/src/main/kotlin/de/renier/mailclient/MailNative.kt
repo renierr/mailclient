@@ -73,6 +73,18 @@ object MailNative {
     // Re-sanitized HTML with remote images kept — the "show once" path.
     @JvmStatic external fun readerMessageHtml(folderId: Long, uid: Int, allowRemote: Boolean): String
 
+    // What an empty message list says (core words for every case).
+    @JvmStatic external fun emptyListText(
+        searching: Boolean,
+        serverSearching: Boolean,
+        quickFilter: Boolean,
+        unfiltered: Int,
+        query: String,
+    ): String
+
+    // The reader text size's factor on mail text (core table).
+    @JvmStatic external fun readerTextScale(size: String): Float
+
     // Whether a delete destroys and whether to ask first:
     // `{"permanent","ask"}`. One `delete_is_permanent` (or null) per target.
     @JvmStatic external fun deletePrompt(confirmPref: Boolean, bulk: Boolean, permanentJson: String): String
@@ -195,6 +207,10 @@ object MailNative {
     @JvmStatic external fun sendMail(accountId: Long, folderId: Long, form: String)
     @JvmStatic external fun saveDraft(accountId: Long, form: String)
     @JvmStatic external fun draftForm(accountId: Long, uid: Int): String
+
+    // The draft's own files staged under [dir] to re-attach: `[{path,name}]`.
+    // Throws while bytes are missing (`missing_files` in draftForm).
+    @JvmStatic external fun draftFiles(accountId: Long, uid: Int, dir: String): String
     @JvmStatic external fun deleteDraft(accountId: Long, uid: Int)
     @JvmStatic external fun answerDraft(folderId: Long, uid: Int, mode: String): String
     @JvmStatic external fun blankDraft(): String

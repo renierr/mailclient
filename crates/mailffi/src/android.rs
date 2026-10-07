@@ -501,6 +501,50 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_readerMessageHtml<'c
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `MailNative.emptyListText(searching, serverSearching, quickFilter,
+/// unfiltered, query)`: what an empty message list says
+/// (`mailcore::search::empty_list_text`).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_emptyListText<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    searching: bool,
+    server_searching: bool,
+    quick_filter: bool,
+    unfiltered: i32,
+    query: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let text = mailcore::search::empty_list_text(
+                searching,
+                server_searching,
+                quick_filter,
+                unfiltered.max(0) as usize,
+                &string(env, &query)?,
+            );
+            Ok(env.new_string(text)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.readerTextScale(size)`: the reader text size's factor
+/// (`mailcore::store::settings::reader_text_scale`).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_readerTextScale<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    size: JString<'caller>,
+) -> f32 {
+    unowned
+        .with_env(|env| -> Result<f32> {
+            Ok(mailcore::store::settings::reader_text_scale(&string(
+                env, &size,
+            )?))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `MailNative.deletePrompt(confirmPref, bulk, permanentJson)`: whether a
 /// delete destroys and whether to ask first — `{"permanent","ask"}`
 /// (`mailcore::undo::delete_prompt`). `permanentJson` holds one target
@@ -1822,6 +1866,36 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_saveDraft<'caller>(
         .with_env(|env| -> Result<()> {
             crate::api::composer::save_draft(account_id, string(env, &form)?)?;
             Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.draftFiles(accountId, uid, dir)`: the draft's own files
+/// staged under `dir` for the composer, `[{path, name}]`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_draftFiles<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    uid: i32,
+    dir: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            // JNI only: Flutter is retired, so no FRB surface (and codegen)
+            // for it.
+            let db = crate::db::shared_db()?;
+            let drafts = mailcore::compose::drafts_folder(db, account_id)
+                .ok_or_else(|| anyhow::anyhow!("this account has no Drafts folder"))?;
+            let m = mailcore::compose::open_draft(db, drafts.id, uid.max(0) as u32)
+                .map_err(anyhow::Error::msg)?;
+            let files = mailcore::compose::stage_draft_files(
+                db,
+                m.id,
+                std::path::Path::new(&string(env, &dir)?),
+            )
+            .map_err(anyhow::Error::msg)?;
+            Ok(env.new_string(serde_json::to_string(&files)?)?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }

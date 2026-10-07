@@ -400,10 +400,10 @@ the open Qt ↔ native differences are listed at the end.
 |---|---|---|---|---|
 | Header (subject/sender/date/To, expandable) | ✅ | ✅ | ✅ | |
 | Reply-To warning, link examine, headers view | ✅ | ✅ | ✅ | |
-| Attachments (open/save/save-all) | ✅ | ✅ | ✅ | Native via SAF + FileProvider. Qt lacks the "N inline images not downloaded" banner + Download that native and Flutter have (gap G7) |
+| Attachments (open/save/save-all) | ✅ | ✅ | ✅ | Native via SAF + FileProvider. Inline images sync never kept show a notice with Download in both readers (`missing_inline_images`) |
 | Event card (ICS) | ✅ | ✅ | ✅ | |
 | Remote-image block + show-once | ✅ | ✅ | ✅ | |
-| Original/darkened colours, zoom | 🔄 | ✅ | ✅ | Android readers: pinch zoom in the WebView; mail text follows the reader text size and the interface scale. Qt applies the reader text size to plain text only (gap G13) |
+| Original/darkened colours, zoom | ✅ | ✅ | ✅ | Reader text size factor is `settings::reader_text_scale`: Qt scales the HTML document's base size by it (sizes a mail sets stay its own), native uses it as WebView text zoom with pinch zoom on top |
 | Fullscreen reader | ✅ | ✅ | ✅ | Toggle in the reader bar; hides the shell bars and the other panes, back leaves it first. Native also hides the Android system bars (swipe shows them briefly), so it gains room on a phone too |
 | Reply / Reply-all / Forward | ✅ | ✅ | ✅ | Recipients, subject, quote and signature from `mailcore::compose::answer` everywhere |
 | Archive / Move / Delete / Star | ✅ | ✅ | ✅ | |
@@ -414,8 +414,8 @@ the open Qt ↔ native differences are listed at the end.
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
 | Full composer (To/Cc/Bcc, editor, attach, drafts, send) | ✅ dialog | ✅ page | ✅ page | Touch composers are full pages on every width (keyboard). Locked From domain, contact autocomplete, Reply-To, reply-to-mismatch notice, server-draft notice, delete draft, dirty guard. Flutter carries the quote as a card beside its text box; Qt and native edit it inline in the body |
-| Editor | ✅ WYSIWYG HTML + source | ✅ Markdown + preview | ✅ WYSIWYG HTML + source | Qt and native edit HTML in a web view (`execCommand`: bold, italic, underline, list, quote, link, clear, inline image; toolbar lights up at the caret). Native's page is `mailcore::compose::editor::document`; Qt still builds its own (see SHARED-CORE.md). With send format "auto" every frontend sends plain text when nothing is formatted (the sender's `needs_html_formatting`); native's footer says which (`send_format_note`), Qt only repeats the setting (gap G10) |
-| Inline images, attachments | ✅ (+ drop) | ✅ (+ desktop drop) | 🔄 | Native copies picked `content://` files into app cache, the core reads paths at send time. A reopened draft drops its attachments on native (notice asks to re-attach) and may lose uncached inline images; Qt downloads and re-attaches both (gap G6). A failed draft save reopens the native composer with the text, like a failed send |
+| Editor | ✅ WYSIWYG HTML + source | ✅ Markdown + preview | ✅ WYSIWYG HTML + source | Qt and native edit HTML in a web view (`execCommand`: bold, italic, underline, list, quote, link, clear, inline image; toolbar lights up at the caret). Native's page is `mailcore::compose::editor::document`; Qt still builds its own (see SHARED-CORE.md). With send format "auto" every frontend sends plain text when nothing is formatted (the sender's `needs_html_formatting`); both composers say which as you type (`compose::editor::send_format_note`) |
+| Inline images, attachments | ✅ (+ drop) | ✅ (+ desktop drop) | ✅ | Native copies picked `content://` files into app cache, the core reads paths at send time. A reopened draft fetches missing bytes first and re-attaches its files in both (`compose::stage_draft_files`); a failed draft save reopens the native composer with the text |
 | Send failure after the composer closed | ✅ reopens with the text | 🔄 status line | ✅ reopens with the text | SMTP runs after close. Qt and native keep the composition until SMTP accepts it and reopen it with the reason; new compositions wait meanwhile. The core drops the MIME on failure, so the retry cannot send twice. Flutter reports a late failure on the status strip only |
 
 ### Folders
@@ -463,19 +463,9 @@ the open Qt ↔ native differences are listed at the end.
 
 From a code audit of both frontends. Fix in `mailcore` where the gap is a
 decision both should share; remove the row when closed (numbers stay, so
-a closed gap leaves a hole). Closed so far: G1 find-similar, G2 delete
-confirm rule (`undo::delete_prompt`), G3 folder-scoped search, G4 short
-input, G5 reader closes when its mail leaves (`messages::is_listed`), the
-draft-save half of G6, G8 account form, G9 plain-text draft reopen.
+a closed gap leaves a hole). G1–G14 are closed; what is left are the
+deliberate or minor differences below.
 
 | # | Gap | Side | Kind |
 |---|---|---|---|
-| G6 | Reopened drafts drop attachments (notice asks to re-attach) and may lose uncached inline images; Qt downloads and re-attaches both. Needs a core "materialize draft attachments" step the JNI side can use | native | feature |
-| G7 | No "inline images not downloaded" banner: never-fetched `cid:` images stay broken with no way to fetch them | Qt | feature |
-| G10 | Composer has no live "sends as plain/HTML" note (`send_format_note` not exposed by the Qt bridge) | Qt | UX |
-| G11 | List has no empty states ("folder is empty", "no match", "press ⟳ to sync") | native | UX |
-| G12 | No long-press Copy link / Examine link when `link_click_action` is "browser" (Qt has right-click) | native | feature |
-| G13 | Reader text size does not reach HTML mail in Qt (native applies it as WebView text zoom) | Qt | UX |
-| G14 | Headers dialog is a plain text dump on native (Qt: grid + collapsible complete headers) | native | UX |
-| G15 | Smaller differences: bulk mark/star leaves selection mode on native (Qt keeps it so actions chain); load-older button wording and busy gating; undo toast dismiss button (Qt only); recipient pick inserts `Name <addr>` in Qt, address only in native; reply-to-mismatch notice hides after editing To only in Qt; Send disabled without recipients only in Qt; failed About capability refresh shows no error on native; .eml export on native runs outside the job queue with no progress; Qt refuses Send while any job (even a sync) runs | both | minor |
-
+| G15 | .eml export on native downloads on a throwaway runtime outside the job queue, with no progress line; Qt refuses Send and Save draft while any job (even a sync) runs, native only while that same job runs; an account switch re-runs an active search in Qt, clears it on native | both | minor |

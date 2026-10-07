@@ -11,12 +11,10 @@ use crate::bridge::qobject;
 use crate::bridge::worker::{spawn_flag_push, spawn_job};
 use crate::bridge::{push_feeds, qstring, shared_db, MAX_MESSAGE_LIMIT};
 
-mod attachments;
 mod bulk;
 mod files;
 mod maintenance;
 
-pub(crate) use attachments::draft_attachment_path;
 pub(crate) use files::file_url;
 
 /// Parse a bulk UID argument (JSON array of numbers from QML) into a
@@ -282,6 +280,10 @@ impl qobject::Bridge {
         qstring(&serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string()))
     }
 
+    pub fn reader_text_scale(&self, size: &QString) -> f32 {
+        mailcore::store::settings::reader_text_scale(&size.to_string())
+    }
+
     pub fn delete_prompt_json(
         &self,
         confirm_pref: bool,
@@ -347,6 +349,23 @@ impl qobject::Bridge {
         )
     }
 
+    pub fn empty_list_text(
+        &self,
+        searching: bool,
+        server_searching: bool,
+        quick_filter: bool,
+        unfiltered: i32,
+        query: &QString,
+    ) -> QString {
+        qstring(&mailcore::search::empty_list_text(
+            searching,
+            server_searching,
+            quick_filter,
+            unfiltered.max(0) as usize,
+            &query.to_string(),
+        ))
+    }
+
     pub fn date_filter_label(&self, after: &QString, before: &QString) -> QString {
         let after = after.to_string();
         let before = before.to_string();
@@ -401,6 +420,19 @@ impl qobject::Bridge {
             let saved =
                 messages::save_all_attachments_to(db, msg.id, &dir).map_err(|e| e.to_string())?;
             Ok((format!("Saved {saved} attachment(s)"), None))
+        })
+    }
+
+    pub fn download_inline_images(self: Pin<&mut Self>, uid: i32) -> QString {
+        let folder_id = *self.current_folder_id();
+        spawn_job(self, "Download images", move |db, _progress| async move {
+            if folder_id < 0 || uid < 0 {
+                return Err("no message selected".to_string());
+            }
+            let msg = messages::get_by_uid(db, folder_id, uid as u32)
+                .map_err(|_| "unknown message".to_string())?;
+            ensure_cached(db, msg.id, true).await?;
+            Ok(("Inline images downloaded".to_string(), None))
         })
     }
 

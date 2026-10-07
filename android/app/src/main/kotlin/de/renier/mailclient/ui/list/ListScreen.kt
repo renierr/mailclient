@@ -41,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.MailNative
@@ -374,17 +375,33 @@ fun ListScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                                 if (state.canLoadOlder) {
+                                    // Qt's wording: an unchecked folder asks the
+                                    // server first; any running job waits.
                                     OutlinedButton(
                                         onClick = { state.loadMore() },
-                                        enabled = !state.syncing,
+                                        enabled = !state.busy,
                                         modifier = Modifier.padding(top = 8.dp),
                                     ) {
-                                        Text("Load older messages")
+                                        Text(
+                                            when {
+                                                state.busy -> "Loading…"
+                                                state.olderState == "unchecked" -> "Check server"
+                                                else -> "Load older"
+                                            },
+                                        )
                                     }
                                 }
                             }
                         }
                     }
+                }
+                if (rows.isEmpty()) {
+                    EmptyList(
+                        text = state.emptyListText(),
+                        // Nothing filtered away: the folder itself is empty.
+                        syncHint = !searching && !state.hasListFilter && state.rowFilterQuery.isEmpty(),
+                        modifier = Modifier.align(Alignment.Center),
+                    )
                 }
                 // Jump to top / bottom (Qt ScrollJumpButtons, Flutter
                 // ScrollJumpOverlay): only over long lists, each end only
@@ -570,6 +587,37 @@ private fun FilterBar(state: MailState) {
             modifier = Modifier.weight(1f),
         )
         TextButton(onClick = { state.clearListFilters() }) { Text("Clear") }
+    }
+}
+
+// Qt's empty-list block: the core's words, plus how to fetch mail when the
+// folder itself is empty (pull here, ⟳ on the desktop).
+@Composable
+private fun EmptyList(text: String, syncHint: Boolean, modifier: Modifier) {
+    Column(
+        modifier = modifier.padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            painterResource(if (syncHint) R.drawable.ic_inbox else R.drawable.ic_search),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+            modifier = Modifier.size(32.dp),
+        )
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        if (syncHint) {
+            Text(
+                "Pull down to sync",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

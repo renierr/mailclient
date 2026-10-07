@@ -1,6 +1,8 @@
 package de.renier.mailclient.ui.reader
 
 import android.annotation.SuppressLint
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -64,10 +66,13 @@ fun MailWebView(
     textZoom: Int,
     fitWidths: Boolean,
     onTapUrl: (String) -> Unit,
+    // Long-press on a link: Qt's right-click Copy / Examine, for touch.
+    onLongPressUrl: (String) -> Unit,
     header: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
     val tap by rememberUpdatedState(onTapUrl)
+    val longPress by rememberUpdatedState(onLongPressUrl)
     var headerPx by remember { mutableIntStateOf(0) }
     var scrollPx by remember { mutableIntStateOf(0) }
     var doc by remember { mutableStateOf<String?>(null) }
@@ -121,6 +126,27 @@ fun MailWebView(
                         }
                     }
                     setOnScrollChangeListener { _, _, y, _, _ -> scrollPx = y.coerceAtLeast(0) }
+                    // A text link reports its href directly; a linked image
+                    // reports the image, so its href is asked for.
+                    setOnLongClickListener { v ->
+                        val web = v as WebView
+                        val hit = web.hitTestResult
+                        when (hit.type) {
+                            WebView.HitTestResult.SRC_ANCHOR_TYPE -> {
+                                hit.extra?.let { longPress(it) }
+                                hit.extra != null
+                            }
+                            WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE -> {
+                                val reply = Handler(Looper.getMainLooper()) { msg ->
+                                    msg.data.getString("url")?.takeIf { it.isNotEmpty() }?.let { longPress(it) }
+                                    true
+                                }.obtainMessage()
+                                web.requestFocusNodeHref(reply)
+                                true
+                            }
+                            else -> false
+                        }
+                    }
                 }
             },
             update = { web ->

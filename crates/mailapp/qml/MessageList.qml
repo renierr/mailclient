@@ -436,20 +436,13 @@ Rectangle {
     }
 
     // Empty states, distinguishing "still looking" from "nothing matched"
-    // and from "nothing here".
+    // and from "nothing here" — mailcore's words (`search::empty_list_text`),
+    // the same the native list shows.
     function emptyText() {
-        if (root.searching) {
-            if (root.serverSearching)
-                return qsTr("Searching the server…");
-            if (root.hasQuickFilter && (root.searchRows || []).length > 0)
-                return qsTr("No match survives this filter");
-            return qsTr("No matches for “%1”").arg(root.filterText.trim());
-        }
-        if (root.hasQuickFilter && root.filterText === "")
-            return qsTr("No message matches this filter");
-        if (root.filterText !== "")
-            return qsTr("No message matches “%1”").arg(root.filterText);
-        return qsTr("This folder is empty");
+        if (!root.backend)
+            return "";
+        return root.backend.empty_list_text(root.searching, root.serverSearching, root.hasQuickFilter,
+                                            (root.searchRows || []).length, root.filterText);
     }
 
     function rebuildFiltered() {

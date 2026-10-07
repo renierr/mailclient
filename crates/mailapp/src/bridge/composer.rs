@@ -3,7 +3,7 @@ use std::pin::Pin;
 use cxx_qt_lib::QString;
 use mailcore::compose::{self, ComposeForm};
 
-use crate::bridge::messages::draft_attachment_path;
+use crate::bridge::messages::file_url;
 use crate::bridge::qobject;
 use crate::bridge::qstring;
 use crate::bridge::worker::{spawn_job, JobDone, JobRefresh, BUSY_MESSAGE};
@@ -101,27 +101,30 @@ impl qobject::Bridge {
         ))
     }
 
+    pub fn send_format_note(&self, format: &QString, html: &QString) -> QString {
+        qstring(compose::editor::send_format_note(
+            &format.to_string(),
+            &html.to_string(),
+        ))
+    }
+
     pub fn draft_form(self: Pin<&mut Self>, uid: i32) -> QString {
         let folder_id = *self.current_folder_id();
         spawn_job(self, "Open draft", move |db, _progress| async move {
             let message = compose::open_draft(db, folder_id, uid as u32)?;
             ensure_cached(db, message.id, true).await?;
-            // QML's FileDialog deals in paths, so the draft's files are
-            // materialized as temp copies the composer can re-attach.
-            // Inline images come back inside the body (see `draft_html`),
-            // so only real attachments are re-attached as files.
-            let attachments = mailcore::store::messages::list_attachments(db, message.id)
-                .map_err(|e| e.to_string())?
-                .into_iter()
-                .filter(|a| !a.is_inline)
-                .map(|a| {
-                    let path = draft_attachment_path(db, a.id)?;
-                    Ok(serde_json::json!({
-                        "path": path,
-                        "name": mailcore::paths::safe_attachment_name(a.filename.as_deref(), a.id),
-                    }))
-                })
-                .collect::<Result<Vec<_>, String>>()?;
+            // The draft's own files as temp copies the composer re-attaches
+            // (`compose::stage_draft_files`); inline images stay in the body.
+            let attachments: Vec<_> =
+                compose::stage_draft_files(db, message.id, &std::env::temp_dir())?
+                    .into_iter()
+                    .map(|f| {
+                        serde_json::json!({
+                            "path": file_url(std::path::Path::new(&f.path)),
+                            "name": f.name,
+                        })
+                    })
+                    .collect();
             // The editor takes HTML: a plain draft becomes paragraphs, not
             // one run-together line.
             let body_html = compose::draft_editor_html(db, &message);

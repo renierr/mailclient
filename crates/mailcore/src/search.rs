@@ -407,6 +407,42 @@ pub fn date_preset_range(preset: &str) -> (Option<String>, Option<String>) {
     date_preset_range_at(preset, chrono::Local::now().date_naive())
 }
 
+/// What an empty message list says, telling "still looking" from "nothing
+/// matched" from "nothing here", in both frontends. `searching`: the list
+/// shows search or similar hits; `server_searching`: a server backfill is
+/// still out; `quick_filter`: unread/starred/attachment/date filters are
+/// on; `unfiltered`: rows before those filters; `query`: the typed text
+/// (the search, or a short in-folder row filter).
+#[must_use]
+pub fn empty_list_text(
+    searching: bool,
+    server_searching: bool,
+    quick_filter: bool,
+    unfiltered: usize,
+    query: &str,
+) -> String {
+    let query = query.trim();
+    if searching {
+        if server_searching {
+            return "Searching the server…".into();
+        }
+        if quick_filter && unfiltered > 0 {
+            return "No match survives this filter".into();
+        }
+        if query.is_empty() {
+            return "No matches".into();
+        }
+        return format!("No matches for “{query}”");
+    }
+    if !query.is_empty() {
+        return format!("No message matches “{query}”");
+    }
+    if quick_filter {
+        return "No message matches this filter".into();
+    }
+    "This folder is empty".into()
+}
+
 /// The words for an active date quick-filter, phrased once here so both
 /// frontends show the same chip: `""` (no filter), `"Since 2026-09-01"`,
 /// `"Before 2026-10-01"`, or `"2026-09-01 – 2026-10-01"` for a range.
@@ -443,6 +479,35 @@ pub fn filter_matches(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_list_text_tells_the_cases_apart() {
+        assert_eq!(
+            empty_list_text(true, true, false, 0, "x"),
+            "Searching the server…"
+        );
+        assert_eq!(
+            empty_list_text(true, false, true, 3, "x"),
+            "No match survives this filter"
+        );
+        assert_eq!(
+            empty_list_text(true, false, false, 0, " invoice "),
+            "No matches for “invoice”"
+        );
+        assert_eq!(empty_list_text(true, false, false, 0, ""), "No matches");
+        assert_eq!(
+            empty_list_text(false, false, true, 5, "ab"),
+            "No message matches “ab”"
+        );
+        assert_eq!(
+            empty_list_text(false, false, true, 5, ""),
+            "No message matches this filter"
+        );
+        assert_eq!(
+            empty_list_text(false, false, false, 0, ""),
+            "This folder is empty"
+        );
+    }
 
     fn term(field: SearchField, text: &str, phrase: bool, negated: bool) -> SearchTerm {
         SearchTerm {

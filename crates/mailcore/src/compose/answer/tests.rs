@@ -80,6 +80,10 @@ fn a_differing_reply_to_is_the_target_and_raises_the_notice() {
     assert_eq!(d.to, "list@example.org");
     assert_eq!(d.notice_addr, "list@example.org");
     assert_eq!(d.notice_sender, "alice@example.com");
+    assert_eq!(
+        d.notice,
+        "Replies to this mail go to list@example.org — not to the sender (alice@example.com)."
+    );
     // The sender is copied once; its other spelling in Cc stays out.
     assert_eq!(
         d.cc,

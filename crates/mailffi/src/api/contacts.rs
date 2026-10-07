@@ -7,13 +7,7 @@ use crate::db::shared_db;
 /// Known recipients as JSON, ranked by use. An empty `prefix` lists them all
 /// (the contacts manager); a non-empty one is the composer's autocomplete.
 pub fn contacts_json(prefix: String) -> anyhow::Result<String> {
-    let db = shared_db()?;
-    let list = if prefix.trim().is_empty() {
-        contacts::list(db, 200)?
-    } else {
-        contacts::suggest(db, &prefix, 10)?
-    };
-    Ok(serde_json::to_string(&list)?)
+    Ok(contacts::contacts_json(shared_db()?, &prefix)?)
 }
 
 /// Set or clear a contact's user-defined alias. An empty alias clears it,

@@ -1,6 +1,7 @@
 package de.renier.mailclient.ui.composer
 
 import de.renier.mailclient.MailNative
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** How the composer was opened: what it prefills and what Send replaces. */
@@ -34,6 +35,7 @@ data class ComposerSeed(
     val serverAttachments: List<String> = emptyList(),
     // Answering mail whose replies go somewhere unexpected.
     val replyNotice: String = "",
+    val replyNoticeAddr: String = "",
     // A send that failed after the composer closed comes back with
     // everything as it was sent: sender name, picked files, and why.
     val fromName: String? = null,
@@ -55,26 +57,32 @@ data class ComposerSeed(
                 else -> "reply"
             }
             val d = JSONObject(MailNative.answerDraft(folderId, uid, wire))
-            val noticeAddr = d.optString("notice_addr")
             return ComposerSeed(
                 mode = mode,
                 to = d.optString("to"),
                 cc = d.optString("cc"),
                 subject = d.optString("subject"),
                 bodyHtml = d.optString("body_html"),
-                replyNotice = if (noticeAddr.isEmpty()) {
-                    ""
-                } else {
-                    "Replies to this mail go to $noticeAddr — not to the sender (${d.optString("notice_sender")})."
-                },
+                // The core's sentence; shown while To still holds the address.
+                replyNotice = d.optString("notice"),
+                replyNoticeAddr = d.optString("notice_addr"),
             )
         }
 
-        /** Continue a stored draft of the Drafts folder. */
-        fun draft(accountId: Long, uid: Int): ComposerSeed {
+        /**
+         * Continue a stored draft of the Drafts folder. Its files are staged
+         * under [stageDir] and re-attached (Qt does the same); only when
+         * their bytes could not be fetched are they named instead, so saving
+         * does not drop them silently.
+         */
+        fun draft(accountId: Long, uid: Int, stageDir: String): ComposerSeed {
             val f = JSONObject(MailNative.draftForm(accountId, uid))
+            val staged = runCatching {
+                val a = JSONArray(MailNative.draftFiles(accountId, uid, stageDir))
+                List(a.length()) { i -> a.getJSONObject(i).let { PickedFile(it.getString("path"), it.getString("name")) } }
+            }.getOrNull()
             val files = f.optJSONArray("attachments")
-            val names = buildList {
+            val names = if (staged != null) emptyList() else buildList {
                 for (i in 0 until (files?.length() ?: 0)) {
                     val a = files!!.optJSONObject(i) ?: continue
                     if (!a.optBoolean("is_inline")) add(a.optString("filename"))
@@ -91,6 +99,7 @@ data class ComposerSeed(
                 bodyHtml = f.optString("editor_html"),
                 draftUid = f.optInt("draft_uid", uid),
                 serverAttachments = names,
+                attachments = staged.orEmpty(),
             )
         }
     }

@@ -21,7 +21,8 @@ pub use answer::{
     AnswerOptions, AnswerSource,
 };
 pub use drafts::{
-    delete_draft, draft_editor_html, draft_html, drafts_folder, open_draft, save_draft, DraftSaved,
+    delete_draft, draft_editor_html, draft_html, drafts_folder, open_draft, save_draft,
+    stage_draft_files, DraftSaved, StagedFile,
 };
 pub use form::ComposeForm;
 pub use from::{effective_from, sender_parts, SenderParts};

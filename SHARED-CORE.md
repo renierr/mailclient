@@ -61,6 +61,12 @@ still to promote") points here instead of keeping its own list.
 | List date quick-filter: after (inclusive) / before (exclusive) day bounds, presets, chip label | `mailcore::search::{date_passes, date_preset_range, date_filter_label}`; feeds carry `date_raw`; frontends only pick dates and show the label |
 | Delete confirmation: does it destroy (any target), ask first (destroys, bulk, or `confirm_delete`) | `mailcore::undo::delete_prompt` (`DeletePrompt`); Qt `delete_prompt_json`, native `MailNative.deletePrompt`; frontends pass each target folder's `delete_is_permanent` |
 | Is the open message still listed (cached, not waiting out an undoable move) | `mailcore::store::messages::is_listed`; native closes its reader on it (`MailNative.messageListed`), Qt drops its preview from the reloaded rows |
+| Composer "sends as" line | `mailcore::compose::editor::send_format_note`; Qt `send_format_note`, native from the editor page |
+| Reply-To notice sentence | `AnswerDraft.notice` (shown while To still holds `notice_addr`) |
+| What a picked contact inserts | `mailcore::store::contacts::recipient_entry`, as `entry` on every row of `contacts::contacts_json` (both adapters call it) |
+| Reader text size factor | `mailcore::store::settings::reader_text_scale` |
+| Empty message list words | `mailcore::search::empty_list_text` |
+| Draft files re-attached on reopen | `mailcore::compose::stage_draft_files` (was a `mailapp` helper); native stages through `MailNative.draftFiles` after fetching `missing_files` |
 
 ## Open
 
@@ -91,15 +97,12 @@ already has `parent_path`.
 ### 8. Small UI-flavoured twins
 
 Each small, each written in both frontends: custom date-range validation
-(Qt accepts 1-digit parts and both-empty, Kotlin not), how a picked
-recipient is written (`Name <addr>` vs address), the reply-notice sentence
-(`Composer.qml` / `ComposerSeed.kt`), contact cleanup reason wording
-(`Contacts.qml` / `ContactsScreen.kt`), the reader size → zoom factor
-table, when the colours toggle shows (Kotlin-only decision), the undo
-result text (`mailapp` and `mailffi` adapters), and the server-capabilities
-job (`mailapp` carries the error in the payload, `mailffi` fails the job).
-Drift: yes for the first two. Fix: one `mailcore` function or feed field
-each.
+(Qt accepts 1-digit parts and both-empty, Kotlin not), contact cleanup
+reason wording (`Contacts.qml` / `ContactsScreen.kt`), when the colours
+toggle shows (Kotlin-only decision), the undo result text (`mailapp` and
+`mailffi` adapters), and the server-capabilities job (`mailapp` carries the
+error in the payload, `mailffi` fails the job). Drift: yes for the date
+range. Fix: one `mailcore` function or feed field each.
 
 ### 2. Sync-on-resume gap
 

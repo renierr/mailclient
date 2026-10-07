@@ -418,19 +418,30 @@ private fun AboutSection(state: MailState) {
     )
     OutlinedButton(onClick = { state.refreshCapabilities(accountId) }, enabled = accountId >= 0) { Text("Refresh") }
     val caps = state.capabilities[accountId]
-    if (caps == null) {
+    // Only this job's own state: a sync running elsewhere is not "loading".
+    val loading = "Capabilities" in state.busyKinds
+    val failure = state.capabilitiesError[accountId]
+    if (!loading && failure != null) {
+        Text(
+            failure,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+    }
+    if (caps == null || loading) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
-            if (state.busy) CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
+            if (loading) CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
             Text(
                 when {
-                    state.busy -> "Loading capabilities…"
-                    state.statusError && state.status.isNotEmpty() -> state.status
+                    loading -> "Loading capabilities…"
+                    failure != null -> ""
                     else -> "No capabilities loaded yet — press Refresh."
                 },
                 modifier = Modifier.padding(start = 8.dp),
             )
         }
-    } else {
+    }
+    if (caps != null) {
         SelectionContainer {
             Text(
                 "${caps.optString("email")} · ${caps.optString("imap_host")}",

@@ -49,6 +49,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -68,7 +69,7 @@ private sealed interface ReaderDialog {
     data object Delete : ReaderDialog
     data object Purge : ReaderDialog
     data object Move : ReaderDialog
-    data class Headers(val text: String) : ReaderDialog
+    data class Headers(val headers: JSONObject) : ReaderDialog
     data class Link(val url: String, val info: JSONObject) : ReaderDialog
 }
 
@@ -235,6 +236,13 @@ fun ReaderScreen(
         }
     }
 
+    // Always the examine dialog (Copy, and Open where the link is safe),
+    // whatever a tap does.
+    fun onLongPressUrl(url: String) = bg {
+        val info = JSONObject(MailNative.linkInfo(url))
+        withContext(Dispatchers.Main) { dialog = ReaderDialog.Link(url, info) }
+    }
+
     LaunchedEffect(error) { if (error != null) { state.info(error!!); onClose() } }
 
     val m = msg
@@ -396,8 +404,8 @@ fun ReaderScreen(
                                 },
                                 onHeaders = {
                                     bg {
-                                        val text = headersText(JSONObject(MailNative.readerHeaders(folderId, uid)))
-                                        withContext(Dispatchers.Main) { dialog = ReaderDialog.Headers(text) }
+                                        val h = JSONObject(MailNative.readerHeaders(folderId, uid))
+                                        withContext(Dispatchers.Main) { dialog = ReaderDialog.Headers(h) }
                                     }
                                 },
                                 onPurge = { dialog = ReaderDialog.Purge },
@@ -432,6 +440,7 @@ fun ReaderScreen(
                     // "As sent" shows the original fixed widths too.
                     fitWidths = !originalColors,
                     onTapUrl = ::onTapUrl,
+                    onLongPressUrl = ::onLongPressUrl,
                     header = header,
                 )
             } else {
@@ -489,20 +498,7 @@ fun ReaderScreen(
             },
             onDismiss = { dialog = null },
         )
-        is ReaderDialog.Headers -> AlertDialog(
-            onDismissRequest = { dialog = null },
-            title = { Text("Headers") },
-            text = {
-                SelectionContainer {
-                    Text(
-                        d.text.ifEmpty { "No headers" },
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
-                    )
-                }
-            },
-            confirmButton = { TextButton(onClick = { dialog = null }) { Text("Close") } },
-        )
+        is ReaderDialog.Headers -> HeadersDialog(d.headers) { dialog = null }
         is ReaderDialog.Link -> LinkDialog(
             url = d.url,
             info = d.info,
@@ -590,7 +586,10 @@ private fun LinkDialog(url: String, info: JSONObject, onCopy: () -> Unit, onOpen
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onOpen) { Text("Open in browser") } },
+        // A blocked link (core `link_info.safe`) can be copied, never opened.
+        confirmButton = {
+            if (info.optBoolean("safe")) TextButton(onClick = onOpen) { Text("Open in browser") }
+        },
         dismissButton = {
             Row {
                 TextButton(onClick = onCopy) { Text("Copy") }
@@ -605,22 +604,52 @@ private fun openBrowser(context: Context, url: String, onError: (String) -> Unit
         .onFailure { onError("Cannot open link") }
 }
 
-private fun headersText(h: JSONObject): String = buildString {
-    for ((k, v) in listOf(
-        "From" to h.optString("from"),
-        "To" to h.optString("to"),
-        "Cc" to h.optString("cc"),
-        "Date" to h.optString("date"),
-        "Subject" to h.optString("subject"),
-        "Message-ID" to h.optString("message_id"),
-        "Reply-To" to h.optString("reply_to"),
-    )) if (v.isNotEmpty()) appendLine("$k: $v")
+// Qt's Headers dialog: the main fields as label over value, then the
+// complete header block behind a toggle (or why it is missing).
+@Composable
+private fun HeadersDialog(h: JSONObject, onDismiss: () -> Unit) {
+    var showRaw by remember { mutableStateOf(false) }
     val raw = h.optString("raw")
-    if (raw.isNotEmpty()) {
-        appendLine()
-        appendLine("-- Complete headers --")
-        append(raw)
-    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Headers") },
+        text = {
+            SelectionContainer {
+                Column(
+                    modifier = Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    for ((label, key) in listOf(
+                        "From" to "from", "To" to "to", "Cc" to "cc", "Date" to "date",
+                        "Subject" to "subject", "Message-ID" to "message_id", "Reply-To" to "reply_to",
+                    )) {
+                        val value = h.optString(key)
+                        if (value.isEmpty()) continue
+                        Column {
+                            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(value, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    TextButton(onClick = { showRaw = !showRaw }, contentPadding = PaddingValues(0.dp)) {
+                        Icon(
+                            painterResource(if (showRaw) R.drawable.ic_expand_more else R.drawable.ic_chevron_right),
+                            null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Text("Complete headers", modifier = Modifier.padding(start = 4.dp))
+                    }
+                    if (showRaw) {
+                        Text(
+                            raw.ifEmpty { "Complete headers are unavailable until this message is downloaded again." },
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = if (raw.isEmpty()) null else FontFamily.Monospace,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
 }
 
 // The core decides the paint (theme / original / darkened) and the colours

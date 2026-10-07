@@ -31,7 +31,8 @@ Rectangle {
     // and the custom link context menu.
     property string hoveredLinkUrl: ""
     // "small" | "normal" (default) | "large": plain-text body size, bound to
-    // the `reader_font_size` setting via Main. HTML mail brings its own sizes.
+    // the `reader_font_size` setting via Main. HTML mail takes it as the
+    // document's base size; sizes a mail sets itself stay its own.
     property string readerFont: "normal"
     // What a link click does: `examine` (default, safety dialog first) or
     // `browser` (open directly). Bound to the `link_click_action` setting
@@ -108,6 +109,7 @@ Rectangle {
     onAllowRemoteOnceChanged: root.reloadHtml()
     onPaintModeChanged: root.reloadHtml()
     onFitLayoutChanged: root.reloadHtml()
+    onReaderFontChanged: root.reloadHtml()
 
     function reloadHtml() {
         if (root.isHtml && bodyLoader.item)
@@ -230,6 +232,17 @@ Rectangle {
         saveAllDialog.open();
     }
 
+    // Inline images sync never kept: fetch them from the server on request.
+    // The finished job reloads the feed, and the body comes back with them.
+    function downloadInline() {
+        if (!root.backend || !root.message)
+            return;
+        root.statusMessage(qsTr("Downloading images…"));
+        var r = root.backend.download_inline_images(root.message.uid);
+        if (r !== "")
+            root.statusMessage(r);
+    }
+
     // Open in the system viewer — downloads first when not cached yet.
     function openOne(a) {
         if (!root.backend || !root.backend.open_attachment)
@@ -328,7 +341,8 @@ Rectangle {
                                                                       // `syncSpacer`).
                                                                       "top_space": Math.ceil(headerBlock.height),
                                                                       "allow_remote": root.effectiveAutoLoad(),
-                                                                      "scale": Theme.uiScale,
+                                                                      // Reader text size on top of the interface scale.
+                                                                      "scale": Theme.uiScale * root.backend.reader_text_scale(root.readerFont),
                                                                       "fit": root.fitLayout,
                                                                       "extra_css": Theme.webScrollbarCss()
                                                                   }));
@@ -721,6 +735,47 @@ Rectangle {
                                              "id": root.message.event.attachment_id,
                                              "file_name": root.message.event.save_name || ""
                                          });
+                        }
+                    }
+                }
+
+                // --- inline images not downloaded ----------------------------------
+                // Mail cached before sync kept inline bytes shows their alt
+                // text; the feed counts them (`missing_inline_images`).
+                Rectangle {
+                    id: inlineNotice
+
+                    readonly property int missing: root.isHtml && root.message && root.message.missing_inline_images
+                                                   ? root.message.missing_inline_images : 0
+
+                    Layout.fillWidth: true
+                    Layout.margins: Theme.md
+                    implicitHeight: inlineRow.implicitHeight + Theme.sm * 2
+                    visible: missing > 0
+                    radius: Theme.radius
+                    color: Theme.bgAlt
+                    border.width: 1
+                    border.color: Theme.border
+
+                    RowLayout {
+                        id: inlineRow
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.margins: Theme.sm
+                        spacing: Theme.sm
+                        Label {
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            text: inlineNotice.missing === 1 ? qsTr("1 inline image not downloaded")
+                                                             : qsTr("%1 inline images not downloaded").arg(inlineNotice.missing)
+                            color: Theme.text
+                            wrapMode: Text.WordWrap
+                        }
+                        AppButton {
+                            text: root.backend && root.backend.busy ? qsTr("Downloading…") : qsTr("Download")
+                            enabled: !(root.backend && root.backend.busy)
+                            onClicked: root.downloadInline()
                         }
                     }
                 }

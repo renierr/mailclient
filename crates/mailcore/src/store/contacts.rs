@@ -511,9 +511,83 @@ pub fn cleanup_candidates(db: &Db, limit: u64) -> Result<Vec<CleanupCandidate>> 
     Ok(out)
 }
 
+/// What the composer inserts for a picked contact: `Alias <address>` (or
+/// the transferred name), or the bare address when it has neither. The
+/// recipient field splits on `,` and `;` (`ComposeForm`), so a name's own
+/// separators become spaces.
+#[must_use]
+pub fn recipient_entry(c: &Contact) -> String {
+    let usable = |s: &Option<String>| {
+        s.as_deref()
+            .map(|s| s.replace([',', ';'], " ").trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    match usable(&c.alias).or_else(|| usable(&c.name)) {
+        Some(d) => format!("{d} <{}>", c.address),
+        None => c.address.clone(),
+    }
+}
+
+/// Contacts as the frontends read them: every one for an empty `prefix`
+/// (the contacts manager, ranked by use), else the composer's suggestions.
+/// Each row also carries `entry` ([`recipient_entry`]).
+pub fn contacts_json(db: &Db, prefix: &str) -> Result<String> {
+    let list = if prefix.trim().is_empty() {
+        list(db, 200)?
+    } else {
+        suggest(db, prefix, 10)?
+    };
+    let rows: Vec<serde_json::Value> = list
+        .iter()
+        .map(|c| {
+            let mut v = serde_json::to_value(c).unwrap_or_default();
+            if let Some(o) = v.as_object_mut() {
+                o.insert("entry".into(), recipient_entry(c).into());
+            }
+            v
+        })
+        .collect();
+    Ok(serde_json::Value::Array(rows).to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recipient_entry_prefers_alias_and_drops_separators() {
+        let c = |name: Option<&str>, alias: Option<&str>| Contact {
+            address: "a@example.com".into(),
+            name: name.map(Into::into),
+            alias: alias.map(Into::into),
+            times_seen: 1,
+            sent_count: 0,
+            last_seen_at: String::new(),
+        };
+        assert_eq!(recipient_entry(&c(None, None)), "a@example.com");
+        assert_eq!(
+            recipient_entry(&c(Some("Ann"), None)),
+            "Ann <a@example.com>"
+        );
+        assert_eq!(
+            recipient_entry(&c(Some("Ann"), Some("Annie"))),
+            "Annie <a@example.com>"
+        );
+        assert_eq!(
+            recipient_entry(&c(Some("Doe, Ann"), Some(" "))),
+            "Doe  Ann <a@example.com>"
+        );
+    }
+
+    #[test]
+    fn contacts_json_carries_the_entry() {
+        let db = Db::open_in_memory().unwrap();
+        seen(&db, "alice@example.com", Some("Alice")).unwrap();
+        let rows: serde_json::Value =
+            serde_json::from_str(&contacts_json(&db, "ali").unwrap()).unwrap();
+        assert_eq!(rows[0]["entry"], "Alice <alice@example.com>");
+        assert_eq!(rows[0]["address"], "alice@example.com");
+    }
 
     #[test]
     fn seen_sets_transferred_name_as_initial_alias() {

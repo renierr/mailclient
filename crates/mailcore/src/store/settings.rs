@@ -410,6 +410,18 @@ pub fn normalize_reader_font(raw: &str) -> &'static str {
     }
 }
 
+/// How much the reader's `reader_font_size` enlarges mail text over the
+/// interface scale: the factor on the HTML document's base size (Qt) and
+/// the WebView text zoom (native). 14px is the normal size.
+#[must_use]
+pub fn reader_text_scale(size: &str) -> f32 {
+    match normalize_reader_font(size) {
+        "small" => 12.0 / 14.0,
+        "large" => 18.0 / 14.0,
+        _ => 1.0,
+    }
+}
+
 /// Current reader size, resilient to unknown stored values.
 pub fn get_reader_font(db: &Db) -> String {
     match get(db, READER_FONT_SIZE) {
@@ -552,6 +564,14 @@ pub fn set_ui_scale(db: &Db, value: f32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reader_text_scale_follows_the_size() {
+        assert!((reader_text_scale("normal") - 1.0).abs() < f32::EPSILON);
+        assert!(reader_text_scale("small") < 1.0);
+        assert!(reader_text_scale(" LARGE ") > 1.0);
+        assert!((reader_text_scale("bogus") - 1.0).abs() < f32::EPSILON);
+    }
 
     #[test]
     fn send_format_resilient() {

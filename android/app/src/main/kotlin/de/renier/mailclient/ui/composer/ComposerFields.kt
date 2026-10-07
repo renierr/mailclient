@@ -142,9 +142,8 @@ fun RecipientField(
                 List(arr.length()) { i ->
                     val c = arr.getJSONObject(i)
                     val address = c.optString("address")
-                    val name = c.optString("alias").takeIf { it.isNotEmpty() && it != "null" }
-                        ?: c.optString("name").takeIf { it.isNotEmpty() && it != "null" }
-                    Suggestion(address, if (name != null) "$name <$address>" else address)
+                    // `Name <address>`, as inserted (core `recipient_entry`).
+                    Suggestion(address, c.optString("entry").ifEmpty { address })
                 }.filter { it.address.isNotEmpty() }
             }.getOrDefault(emptyList())
         }
@@ -168,7 +167,7 @@ fun RecipientField(
                 DropdownMenuItem(
                     text = { Text(s.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     onClick = {
-                        val next = MailNative.replaceRecipientSegment(text, s.address)
+                        val next = MailNative.replaceRecipientSegment(text, s.label)
                         onValueChange(TextFieldValue(next, TextRange(next.length)))
                         suggestions = emptyList()
                     },

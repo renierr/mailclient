@@ -164,6 +164,11 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         private set
     // Server capabilities per account, from the "Capabilities" job (About).
     var capabilities by mutableStateOf<Map<Long, JSONObject>>(emptyMap())
+    // Why the last refresh failed, per account; kept beside an older list.
+    var capabilitiesError by mutableStateOf<Map<Long, String>>(emptyMap())
+    // The account last asked: a failed job's event names no account.
+    @Volatile
+    private var capabilitiesFor = -1L
         private set
     // A "Folders" job (LIST refresh, create) is queued or running.
     val foldersBusy: Boolean get() = "Folders" in busyKinds
@@ -484,10 +489,16 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         }
         val ok = e.optBoolean("ok", true)
         val text = e.optString("status")
+        if (kind == "Capabilities" && !ok && phase == "finished") {
+            val id = e.optLong("account_id", -1).takeIf { it >= 0 } ?: capabilitiesFor
+            capabilitiesError = capabilitiesError + (id to text.ifEmpty { "Refresh failed" })
+        }
         if (kind == "Capabilities" && ok && phase == "finished") {
             val caps = runCatching { JSONObject(text) }.getOrNull()
             if (caps != null) {
-                capabilities = capabilities + (caps.optLong("account_id", -1) to caps)
+                val id = caps.optLong("account_id", -1)
+                capabilities = capabilities + (id to caps)
+                capabilitiesError = capabilitiesError - id
                 status = "Server capabilities loaded"
                 statusError = false
             }
@@ -651,6 +662,17 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         pruneSelection()
     }
 
+    /** What the empty list says (`mailcore::search::empty_list_text`). */
+    fun emptyListText(): String = runCatching {
+        MailNative.emptyListText(
+            searchActive,
+            serverSearchPending,
+            hasListFilter,
+            if (searchActive) searchHits.size else messages.size,
+            if (searchActive) searchQuery else rowFilterQuery,
+        )
+    }.getOrDefault("")
+
     /** Rows of the active pane (folder or search), after filters. */
     fun visibleRows(): List<MessageRow> = if (searchActive) shownHits else shownMessages
 
@@ -752,7 +774,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         } else {
             MailNative.markReadMany(activeAccountId, folderId, selectionUidsJson(), read)
         }
-        afterBulk()
+        afterBulk(keepSelection = true)
     }
 
     fun bulkStar(starred: Boolean) = io {
@@ -762,7 +784,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         } else {
             MailNative.setStarMany(activeAccountId, folderId, selectionUidsJson(), starred)
         }
-        afterBulk()
+        afterBulk(keepSelection = true)
     }
 
     fun bulkArchive() = io {
@@ -869,8 +891,10 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         withContext(Dispatchers.Main) { refreshSearch() }
     }
 
-    private suspend fun afterBulk() {
-        withContext(Dispatchers.Main) { exitSelectionMode() }
+    // Mark read / star keep the selection so actions chain (Qt); actions that
+    // take the rows away end selection mode.
+    private suspend fun afterBulk(keepSelection: Boolean = false) {
+        if (!keepSelection) withContext(Dispatchers.Main) { exitSelectionMode() }
         reloadMessages()
         loadFolders()
         refreshSearch()
@@ -1179,11 +1203,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
             loadRemoteImages = o.optBoolean("load_remote_images", false),
             confirmDelete = o.optBoolean("confirm_delete", true),
             linkClickAction = o.optString("link_click_action", "examine"),
-            scale = when (o.optString("reader_font_size")) {
-                "small" -> 12f / 14f
-                "large" -> 18f / 14f
-                else -> 1f
-            },
+            scale = runCatching { MailNative.readerTextScale(o.optString("reader_font_size")) }.getOrDefault(1f),
         )
         withContext(Dispatchers.Main) {
             readerPrefs = prefs
@@ -1214,10 +1234,16 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     /** Ask the server for its capability list; arrives in [capabilities]. */
     fun refreshCapabilities(accountId: Long) = io {
         MailNative.ensureInit(appContext)
+        capabilitiesFor = accountId
+        withContext(Dispatchers.Main) { capabilitiesError = capabilitiesError - accountId }
         try {
             MailNative.refreshServerCapabilities(accountId)
         } catch (e: Exception) {
-            if (!e.isAlreadyRunning()) fail(e.message ?: "Could not ask the server")
+            if (!e.isAlreadyRunning()) {
+                val msg = e.message ?: "Could not ask the server"
+                withContext(Dispatchers.Main) { capabilitiesError = capabilitiesError + (accountId to msg) }
+                fail(msg)
+            }
         }
     }
 

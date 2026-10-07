@@ -85,6 +85,9 @@ pub fn draft_form(account_id: i64, uid: u32) -> anyhow::Result<String> {
             .unwrap_or_else(|_| serde_json::Value::Array(Vec::new()));
     let body_html = compose::draft_html(db, &m);
     let editor_html = compose::draft_editor_html(db, &m);
+    // Files and inline images whose bytes are not cached: fetch them before
+    // staging the files, or the reopened draft would lose them.
+    let missing_files = mailcore::sync::attachments::missing_count(db, m.id, true).unwrap_or(0);
     Ok(serde_json::json!({
         "draft_uid": uid,
         "from": m.from_addr.unwrap_or_default(),
@@ -97,6 +100,7 @@ pub fn draft_form(account_id: i64, uid: u32) -> anyhow::Result<String> {
         "body_html": body_html,
         "editor_html": editor_html,
         "attachments": attachments,
+        "missing_files": missing_files,
     })
     .to_string())
 }

@@ -132,11 +132,8 @@ Item {
                         visible: text !== ""
                     }
                 }
-                onClicked: {
-                    var display = (model.alias || model.name || "").replace(/[;,]/g, " ").trim();
-                    var formatted = display !== "" ? display + " <" + model.address + ">" : model.address;
-                    root.choose(formatted);
-                }
+                // What a pick inserts is mailcore's (`contacts::recipient_entry`).
+                onClicked: root.choose(model.entry || model.address)
             }
         }
     }

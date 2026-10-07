@@ -247,6 +247,11 @@ pub mod qobject {
         #[qinvokable]
         fn link_info_json(&self, url: &QString) -> QString;
 
+        /// The reader text size's factor on HTML mail
+        /// (`mailcore::store::settings::reader_text_scale`).
+        #[qinvokable]
+        fn reader_text_scale(&self, size: &QString) -> f32;
+
         /// Whether a delete destroys and whether to ask first, as JSON
         /// `{permanent, ask}` (`mailcore::undo::delete_prompt`).
         /// `permanent_json` is one target folder's `delete_is_permanent` per
@@ -342,6 +347,17 @@ pub mod qobject {
         #[qinvokable]
         fn date_filter_label(&self, after: &QString, before: &QString) -> QString;
 
+        /// What an empty message list says (`mailcore::search::empty_list_text`).
+        #[qinvokable]
+        fn empty_list_text(
+            &self,
+            searching: bool,
+            server_searching: bool,
+            quick_filter: bool,
+            unfiltered: i32,
+            query: &QString,
+        ) -> QString;
+
         /// Server-side search backfill for thin local results: runs IMAP
         /// `TEXT` search per token across the account's folders — or just one
         /// folder when `folder` is set — and fetches missing hits into the
@@ -371,6 +387,13 @@ pub mod qobject {
         /// Returns e.g. `"Saved 3 attachments"` or an error message.
         #[qinvokable]
         fn save_all_attachments(self: Pin<&mut Self>, uid: i32, dir: &QString) -> QString;
+
+        /// Fetch the inline (`cid:`) images of a message in the current
+        /// folder that sync never kept (mail cached before inline bytes were
+        /// stored). The finished job reloads the feeds, and the reader's body
+        /// then carries them as `data:` URIs. `""` when queued, else why not.
+        #[qinvokable]
+        fn download_inline_images(self: Pin<&mut Self>, uid: i32) -> QString;
 
         /// Export one message as a standard RFC 5322 .eml file at `path`.
         /// Downloads attachments first when they are not cached yet.
@@ -575,6 +598,11 @@ pub mod qobject {
         /// domain, or the account address when blank.
         #[qinvokable]
         fn effective_from(&self, local: &QString, account_email: &QString) -> QString;
+
+        /// What the composer's body will be sent as under `format`
+        /// (`mailcore::compose::editor::send_format_note`).
+        #[qinvokable]
+        fn send_format_note(&self, format: &QString, html: &QString) -> QString;
 
         /// Full Composer form for a draft in the current Drafts folder.
         /// Opening a draft explicitly downloads and materializes its files.
@@ -856,16 +884,7 @@ pub(crate) fn sync_sort_props(bridge: &mut Pin<&mut qobject::Bridge>, db: &mailc
 impl qobject::Bridge {
     pub fn contacts_json(&self, prefix: &QString) -> QString {
         let result = shared_db().and_then(|db| {
-            let prefix = prefix.to_string();
-            let contacts = if prefix.trim().is_empty() {
-                mailcore::store::contacts::list(db, 200)
-            } else {
-                mailcore::store::contacts::suggest(db, &prefix, 10)
-            };
-            contacts
-                .map(|contacts| {
-                    serde_json::to_string(&contacts).unwrap_or_else(|_| "[]".to_string())
-                })
+            mailcore::store::contacts::contacts_json(db, &prefix.to_string())
                 .map_err(|e| e.to_string())
         });
         qstring(&result.unwrap_or_else(|e| {

@@ -29,6 +29,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -340,11 +341,18 @@ fun ComposerScreen(
                 Icon(painterResource(R.drawable.ic_save), "Save draft")
             }
         }
-        IconButton(onClick = ::send, enabled = !working) {
+        // Like Qt: nothing to send to, nothing to press.
+        val hasRecipient = to.text.isNotBlank() || cc.text.isNotBlank() || bcc.text.isNotBlank()
+        IconButton(onClick = ::send, enabled = !working && hasRecipient) {
             if (sending) {
                 CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
             } else {
-                Icon(painterResource(R.drawable.ic_send), "Send", tint = MaterialTheme.colorScheme.primary)
+                // An explicit tint would ignore the disabled state.
+                Icon(
+                    painterResource(R.drawable.ic_send),
+                    "Send",
+                    tint = if (hasRecipient) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                )
             }
         }
     }
@@ -419,7 +427,10 @@ fun ComposerScreen(
                 error?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(bottom = 8.dp))
                 }
-                if (seed.replyNotice.isNotEmpty()) ComposerNotice(seed.replyNotice, danger = true)
+                // Qt: only while To still holds the Reply-To address.
+                if (seed.replyNotice.isNotEmpty() && to.text.trim().equals(seed.replyNoticeAddr, ignoreCase = true)) {
+                    ComposerNotice(seed.replyNotice, danger = true)
+                }
 
                 ComposerHeaderRow(
                     label = "From",
@@ -475,8 +486,8 @@ fun ComposerScreen(
 
                 if (seed.serverAttachments.isNotEmpty()) {
                     ComposerNotice(
-                        "${seed.serverAttachments.size} file(s) live on the server copy of this draft. " +
-                            "Saving replaces it — re-attach them afterwards.",
+                        "${seed.serverAttachments.size} file(s) of this draft could not be downloaded. " +
+                            "Saving replaces the server copy without them — re-attach them afterwards.",
                     )
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         for (name in seed.serverAttachments) {

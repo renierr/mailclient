@@ -75,6 +75,9 @@ pub struct AnswerDraft {
     /// composer says so (`notice_addr`, not `notice_sender`).
     pub notice_addr: String,
     pub notice_sender: String,
+    /// The sentence both composers show while To still holds `notice_addr`;
+    /// `""` when replies go to the sender.
+    pub notice: String,
     /// `<p>-- <br>…</p>` and `-- \n…`, both `""` without a signature.
     pub signature_html: String,
     pub signature_text: String,
@@ -96,6 +99,7 @@ pub fn blank_draft(opts: &AnswerOptions) -> AnswerDraft {
         subject: String::new(),
         notice_addr: String::new(),
         notice_sender: String::new(),
+        notice: String::new(),
         body_html: signature_html.clone(),
         signature_html,
         signature_text,
@@ -125,6 +129,7 @@ pub fn answer_draft(src: &AnswerSource, mode: AnswerMode, opts: &AnswerOptions) 
             subject: prefixed(&src.subject, "Fwd:", &["fwd:", "fw:", "wg:"]),
             notice_addr: String::new(),
             notice_sender: String::new(),
+            notice: String::new(),
             body_html: format!("{signature_html}<p></p>{quote_html}"),
             signature_html,
             signature_text,
@@ -177,6 +182,14 @@ pub fn answer_draft(src: &AnswerSource, mode: AnswerMode, opts: &AnswerOptions) 
         },
         notice_sender: if reply.differs {
             src.from.clone()
+        } else {
+            String::new()
+        },
+        notice: if reply.differs {
+            format!(
+                "Replies to this mail go to {} — not to the sender ({}).",
+                reply.target, src.from
+            )
         } else {
             String::new()
         },

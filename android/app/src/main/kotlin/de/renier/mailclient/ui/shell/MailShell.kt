@@ -66,6 +66,7 @@ import de.renier.mailclient.ui.folders.FolderManagerScreen
 import de.renier.mailclient.ui.folders.FoldersScreen
 import de.renier.mailclient.ui.list.ListScreen
 import de.renier.mailclient.ui.outbox.OutboxScreen
+import de.renier.mailclient.ui.reader.ReaderFiles
 import de.renier.mailclient.ui.reader.ReaderScreen
 import de.renier.mailclient.ui.settings.SettingsScreen
 import de.renier.mailclient.ui.state.MailState
@@ -73,6 +74,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
+import java.io.File
 
 // The shell: manual back stack (no navigation dependency), search bar on
 // the mail panes and a plain back + title bar on every other page, Compose
@@ -173,9 +176,21 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
     }
 
     // A row of the Drafts folder continues the draft instead of reading it.
+    // Files or inline images not cached yet are fetched first (Qt's "Open
+    // draft" job does the same), so the reopened draft keeps them.
     fun openRow(accountId: Long, folderId: Long, uid: Int) {
         if (state.folders.firstOrNull { it.id == folderId }?.role == "drafts") {
-            startCompose { ComposerSeed.draft(accountId, uid) }
+            val stageDir = File(context.cacheDir, "outgoing").absolutePath
+            scope.launch {
+                withContext(Dispatchers.IO) {
+                    val missing = runCatching {
+                        MailNative.ensureInit(context)
+                        JSONObject(MailNative.draftForm(accountId, uid)).optInt("missing_files")
+                    }.getOrDefault(0)
+                    if (missing > 0) ReaderFiles.downloadAll(state, accountId, folderId, uid)
+                }
+                startCompose { ComposerSeed.draft(accountId, uid, stageDir) }
+            }
         } else {
             openReader(Route.Reader(accountId, folderId, uid))
         }
@@ -306,6 +321,8 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                 snack.showSnackbar(
                     message = offer.label.ifEmpty { "Done" },
                     actionLabel = "Undo",
+                    // Qt's toast has a Dismiss too.
+                    withDismissAction = true,
                     duration = SnackbarDuration.Indefinite,
                 )
             }
