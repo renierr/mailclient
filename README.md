@@ -1,7 +1,9 @@
 # Mailclient
 
-Full-featured mail client for **Omarchy Linux** (Windows and Android via
-Flutter): Rust backend + SQLite cache, QML and Flutter frontends.
+Full-featured mail client for **Omarchy Linux** (plus Windows and
+Android): Rust backend + SQLite cache, a Qt/QML desktop frontend and a
+native Kotlin/Compose Android frontend. The earlier Flutter frontend is
+retired (kept building, bug fixes only).
 
 - Multiple IMAP/SMTP accounts, folder trees, background sync
 - HTML + text mail, rich-text composer, attachments, drafts
@@ -9,7 +11,7 @@ Flutter): Rust backend + SQLite cache, QML and Flutter frontends.
 
 Details: [`PROJECT.md`](PROJECT.md) (goal, architecture, roadmap),
 [`SYNC.md`](SYNC.md) (when and how mail is synced, push and polling) and
-[`AGENT.md`](AGENT.md) (agent rules, dependency policy, Definition of Done).
+[`AGENTS.md`](AGENTS.md) (agent rules, dependency policy, Definition of Done).
 
 ## Quick start
 
@@ -18,7 +20,8 @@ Details: [`PROJECT.md`](PROJECT.md) (goal, architecture, roadmap),
 ./dev.sh --flutter      # Flutter debug run (uses ./data/dev.sqlite)
 ./build.sh --qt         # Qt release bundle -> dist/mailclient/
 ./build.sh --flutter    # Flutter Linux release bundle -> dist/mailclient-flutter/
-./build.sh --apk        # signed Android APK -> dist/mailclient-apk/ (needs NDK + key.properties, see flutter/README.md)
+./build.sh --android    # signed native Android APK -> dist/mailclient-android/ (see android/README.md)
+./build.sh --apk        # retired Flutter APK -> dist/mailclient-apk/ (see flutter/README.md)
 /scripts/install-local.sh  # install to ~/.local (+ .desktop entry)
 
 cargo test -p mailcore      # backend unit tests
@@ -85,8 +88,9 @@ come from the `directories` crate, so on Windows the SQLite cache lands under
 ```text
 crates/mailcore/   pure-Rust core: db, models, store, sync, search
 crates/mailapp/    cxx-qt bridge binary (Qt models + main) + qml/ UI
-crates/mailffi/    flutter_rust_bridge cdylib exposing mailcore to Flutter
-flutter/           Dart frontend (Linux/Windows desktop + Android APK)
+crates/mailffi/    cdylib exposing mailcore to Android: JNI (native) + flutter_rust_bridge
+android/           native Android frontend (Kotlin + Jetpack Compose)
+flutter/           retired Dart frontend (bug fixes only)
 resources/         .desktop entry + icon + omarchy bar-widget plugin
 scripts/           helpers: install-local.sh, qt-env.sh, smoke.sh
 dist/              gitignored build output

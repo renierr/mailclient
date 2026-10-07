@@ -1,9 +1,15 @@
-# Flutter frontend
+# Flutter frontend — retired
 
-An alternative UI for mailclient that replaces Qt/QML with Flutter, over the
-same Rust core. It is a peer of `crates/mailapp`, not a replacement: both
-frontends sit on `crates/mailcore`, and on a desktop where both are installed
-they open the same database file.
+**Retired.** The native Kotlin app in `android/` is the Android client and
+Qt/QML the desktop client; those two are kept in sync over `mailcore`.
+Flutter stays in the tree and keeps building, but gets no new features —
+only obvious bugs are fixed (AGENTS.md §1). Its column in the PROJECT.md
+parity table may fall behind, and its open `SHARED-CORE.md` items are not
+pursued.
+
+A Flutter UI over the same Rust core. Like every frontend it sits on
+`crates/mailcore`, and on a desktop where it and the Qt app are both
+installed they open the same database file.
 
 ```text
 flutter/            Dart app (this directory)

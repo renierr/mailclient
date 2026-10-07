@@ -1,8 +1,10 @@
 # Shared core: what moves out of the frontends
 
-Both frontends (Qt/QML and Flutter) sit over `mailcore`. This file tracks
-logic that is still written twice, or once in one frontend while the other
-has its own version, and what replaces it.
+The active frontends — Qt/QML (desktop) and native Kotlin (Android) — sit
+over `mailcore`. This file tracks logic that is still written twice, or once
+in one frontend while the other has its own version, and what replaces it.
+Flutter is retired (AGENTS.md §1): its Dart copies are left as they are,
+and an item that only concerns Flutter is closed unless it is a bug.
 
 ## The rule
 
@@ -18,7 +20,7 @@ has its own version, and what replaces it.
   the reader's HTML document versus how each toolkit paints dark mode),
   move the common half and keep only the toolkit half in the frontend.
 - A frontend-only copy of shared logic is a deliberate, stated exception,
-  listed here with the reason. A QML helper plus a Dart twin kept in step
+  listed here with the reason. A QML helper plus a Kotlin twin kept in step
   by matching tests is not an exception; it is a candidate.
 
 AGENTS.md §1 states the rule for agents. `flutter/README.md` ("Shared code
@@ -63,24 +65,6 @@ still to promote") points here instead of keeping its own list.
 Ordered by priority; numbers stay as first assigned, so a done item leaves
 a gap. "Drift" says whether the two versions already behave differently.
 
-### 1. Busy state: which jobs are in flight
-
-Native reads the core's in-flight job table (`mailffi::net::busy_snapshot`,
-carried as `busy` on every JNI job event, plus a `queued` event per job).
-Flutter still keeps its own `_busyKinds` set, filled on a successful queue
-call and cleared by kind on the first finished event. Drift: yes — when two
-jobs of one kind overlap (an account sync plus a folder sync or "Load
-older"), Flutter's spinner goes off at the first finish while the second
-still runs. Fix: add the snapshot to the FRB `JobEvent` (codegen) and drop
-`_busyKinds`.
-
-### 2. Sync-on-resume gap
-
-"Resume syncs unless a sync was asked for within the last minute" exists
-twice: Dart `shouldSyncOnResume` and Kotlin `MailState.RESUME_SYNC_GAP_MS`.
-Drift: none yet. Fix: a `mailcore` predicate taking the seconds since the
-last request.
-
 ### 3. WYSIWYG editor document
 
 `mailcore::compose::editor::document` builds the HTML editor page (CSS,
@@ -90,26 +74,68 @@ nonce CSP, the `window.mc` script) that native Android loads. Qt's
 header spacer, and quote toggling and links go through `mc.quote` /
 `mc.link`. Fix: give the Qt bridge the core document (its colours and
 scale as `EditorStyle`) and keep only the WebEngine wiring in QML; Qt polls
-`mc.state()` since it has no `MCHost`. Flutter's Markdown editor is
-Flutter's own and not a copy of anything.
+`mc.state()` since it has no `MCHost`.
 
-### 4. "Does anything check in the background"
+### 6. Folder sidebar collapse
 
-The core now serialises `any` with the background plan
-(`BackgroundPlan::view`); native reads it. Flutter's
-`BackgroundPlan.any` getter recomputes it. Drift: none. Fix: read the
-`any` field in `BackgroundPlan.fromJson`.
+`mailcore` supplies only `always_visible` (feed); the parent of a folder,
+whether it can collapse and the hidden children's counts added to the
+parent are derived in `Sidebar.qml` and in Kotlin `collapseFolders`
+(`FoldersScreen.kt`), each from `path`/`leaf` with a one-character
+delimiter assumption. Drift: none known. Fix: feed fields (`parent_id`,
+`collapsible`, hidden unread/total sums) from `feed::folders_json`, which
+already has `parent_path`.
 
-### 5. Background run history in words
+### 7. Delete confirmation rule
 
-`mailcore::sync::background::describe` (`last_run_line`, `run_line`,
-`run_lines`, `limiting_bucket`, `heartbeat_gap`) words the Settings status
-block for native Android. Flutter still runs its Dart originals:
-`describeLastRun`, `describeRun`, `limitingBucketLabel` in
-`sync/background_power.dart` and `AccountSettings.describeGap`. Drift: none
-yet (same wording, ported with the stale-run threshold). Fix: an FRB
-function returning `RunLines` plus the two small helpers (codegen), then
-delete the Dart copies.
+Whether a delete asks first is decided in QML (`Main.qml`, only with
+`confirm_delete`) and in Kotlin (`ListScreen.kt`, `ReaderScreen.kt`:
+always for permanent and bulk), and a bulk delete's "is it permanent" is
+`any` in Qt but `all` in Kotlin. Drift: yes — PROJECT.md §9 gap G2. Fix:
+one core decision over (preference, per-target permanence, bulk) that
+returns permanent + ask.
+
+### 8. Small UI-flavoured twins
+
+Each small, each written in both frontends: custom date-range validation
+(Qt accepts 1-digit parts and both-empty, Kotlin not), how a picked
+recipient is written (`Name <addr>` vs address), the reply-notice sentence
+(`Composer.qml` / `ComposerSeed.kt`), contact cleanup reason wording
+(`Contacts.qml` / `ContactsScreen.kt`), the reader size → zoom factor
+table, when the colours toggle shows (Kotlin-only decision), the undo
+result text (`mailapp` and `mailffi` adapters), and the server-capabilities
+job (`mailapp` carries the error in the payload, `mailffi` fails the job).
+Drift: yes for the first two. Fix: one `mailcore` function or feed field
+each.
+
+### 2. Sync-on-resume gap
+
+"Resume syncs unless a sync was asked for within the last minute" lives in
+Kotlin (`MailState.RESUME_SYNC_GAP_MS`) and in Flutter's retired
+`shouldSyncOnResume`. Qt has no resume sync, so among the active frontends
+it is not duplicated today. Fix only if Qt gains a resume/focus sync: then
+a `mailcore` predicate taking the seconds since the last request.
+
+## Flutter-only (retired, not pursued)
+
+Flutter is retired, so Dart copies of core logic stay as they are. Listed
+so nobody mistakes them for active work; a real Flutter bug among them may
+still be fixed.
+
+- **Busy state** — Flutter keeps its own `_busyKinds` set instead of the
+  core's in-flight job table that native reads
+  (`mailffi::net::busy_snapshot`). Known bug: when two jobs of one kind
+  overlap (an account sync plus a folder sync or "Load older"), the spinner
+  goes off at the first finish while the second still runs. Fix if it
+  bites: add the snapshot to the FRB `JobEvent` (codegen) and drop
+  `_busyKinds`.
+- **"Does anything check in the background"** — Flutter's
+  `BackgroundPlan.any` getter recomputes what the core serialises as `any`
+  (`BackgroundPlan::view`). Same result today.
+- **Background run history in words** — Flutter words the Settings status
+  block in Dart (`describeLastRun`, `describeRun`, `limitingBucketLabel`,
+  `AccountSettings.describeGap`) instead of
+  `mailcore::sync::background::describe`. Same wording today.
 
 ## Deliberate frontend-only logic
 

@@ -2,7 +2,7 @@
 
 ## 1. Goal
 
-A **full-featured, modern, responsive desktop mail client** for **Omarchy Linux** first (Windows later):
+A **full-featured, modern, responsive mail client** for **Omarchy Linux** first, plus Windows (same Qt client) and Android (native Kotlin client):
 
 - Multiple IMAP/SMTP accounts, full folder trees, background sync (polling + instant navigation sync + Omarchy bar widget).
 - Send/receive **text + HTML** mail with a nice composer (rich-text editor, attachments, drafts).
@@ -13,34 +13,45 @@ A **full-featured, modern, responsive desktop mail client** for **Omarchy Linux*
 ## 2. Architecture
 
 ```text
-crates/mailapp/qml/ ──QtQuick UI──▶  crates/mailapp (cxx-qt bridge, Qt models) ─┐
-                                                                               ├─▶ crates/mailcore (db/store/sync/queue)
-flutter/lib/ ────────Flutter UI───▶  crates/mailffi (flutter_rust_bridge, FFI) ─┘
+crates/mailapp/qml/ ─QtQuick UI (desktop)─▶ crates/mailapp (cxx-qt bridge, Qt models) ─┐
+                                                                                       │
+android/ ─────────Compose UI (Android)───▶ crates/mailffi  JNI (src/android.rs) ───────┼─▶ crates/mailcore (db/store/sync/queue)
+                                                                                       │
+flutter/lib/ ─────Flutter UI (retired)───▶ crates/mailffi  flutter_rust_bridge ────────┘
                                                   ▲
                                   SQLite (~/.local/share/mailclient/mailclient.sqlite)
 ```
 
-Two frontends, one core. Neither is authoritative: behaviour lives in
-`mailcore` so both inherit it, and each adapter crate only translates. On a
-desktop with both installed they open the same database file, on purpose.
+One core, two active frontends: **Qt/QML** on the desktop and **native
+Kotlin/Compose** on Android, kept feature-for-feature in sync (§9).
+`mailcore` is the base for all of them: behaviour lives there so every
+frontend inherits it, and each adapter crate only translates. **Flutter is
+retired** — it keeps building, gets obvious bug fixes, no new features
+(AGENTS.md §1). On a desktop with Qt and Flutter installed they open the
+same database file, on purpose.
 
 - `crates/mailcore`: pure Rust. Modules: `error`, `models`, `compose` (composer send/drafts for both frontends), `undo` (undoable delete/archive/move), `db/{mod,schema,migrations}`, `store/{accounts,folders,messages,pending_moves,queue,contacts}`, `sync/{traits,imap,sender}`, `search`.
 - `crates/mailapp`: `cxx-qt` QObject bridge (`Bridge`, `SettingsBridge`, `AccountListModel`, `FolderTreeModel`, `MessageListModel`, composer controller) + `main.rs` loading `Main.qml` (embedded `Mailclient` module, filesystem override via `MAILCLIENT_QML_DIR`).
 - `crates/mailapp/qml/`: `Main.qml`, `Sidebar.qml`, `MessageList.qml`, `MessageView.qml`, `Composer.qml`, `AccountSetup.qml`, `Settings.qml`, `components/*`.
-- `crates/mailffi`: `cdylib` over `mailcore` for the Flutter frontend —
+- `crates/mailffi`: `cdylib` over `mailcore` for the Android frontends —
+  `android.rs` (JNI externs behind `MailNative.kt`) for native, and
   `api/{init,events,accounts,folders,messages,mutate,sync,search,composer,attachments,contacts,settings}`
-  plus `net` (the shared `mailclient-net` thread), `session` (IMAP pool) and
-  `db` (per-thread handle). No mail logic, no Qt.
-- `flutter/`: the Dart app — `src/ffi` (library loading + generated bindings),
-  `src/models`, `src/state`, `src/ui/{shell,sidebar,message_list,reader,accounts}`.
-  See `flutter/README.md` for the layering and its open questions.
+  (flutter_rust_bridge) for Flutter, plus `net` (the shared `mailclient-net`
+  thread), `session` (IMAP pool) and `db` (per-thread handle). No mail
+  logic, no Qt.
+- `android/`: the native Android app (Kotlin + Jetpack Compose) — shell,
+  folders, list, reader, composer, accounts, contacts, settings, outbox,
+  plus native background checks, push and notifications. See
+  `android/README.md`.
+- `flutter/`: the retired Dart app — `src/ffi` (library loading + generated
+  bindings), `src/models`, `src/state`, `src/ui/*`. See `flutter/README.md`.
 - `scripts/`: `install-local.sh`, `qt-env.sh`, `smoke.sh`. Output bundle: `dist/mailclient/`.
 - `flutter_rust_bridge.yaml` (repo root): FFI codegen config, with the
   Windows twin `flutter_rust_bridge.windows.yaml` (backslash paths). At the
   root rather than in `flutter/` because the tool does not normalise a
   leading `..`.
 
-See `AGENT.md` for agent rules, dependency policy, and Definition of Done.
+See `AGENTS.md` for agent rules, dependency policy, and Definition of Done.
 
 ## 3. SQLite Schema
 
@@ -78,14 +89,14 @@ Secrets live in the OS keyring keyed by `accounts.auth_vault_key`, never in SQLi
 | 4 | Contacts + settings UI extras (threading, notifications explicitly dropped — not needed) | ✅ done (contacts manager, About with version/licence + server capabilities) |
 | 5 | Polish: background polling sync, offline/error states, onboarding, `.desktop`/icons, Windows feasibility | ✅ done (polling + pooled sessions + manual ⟳ done; offline-first cache + status-bar errors done; empty-state setup onboarding done; `.desktop`+icon installed; IDLE dropped; Windows portable via MSYS2/Git Bash scripts, built as a GUI-subsystem exe with its own icon linked in, so launching it opens no console window; headless `--sync-once`/`--status` JSON + Omarchy bar widget `mailclient.unread` done, see below) |
 | 6 | Bar integration: shared `mailcore::sync::headless` (GUI + CLI same orchestration), `mailapp --sync-once/--status [--json]`, cross-process `.sync.lock` (serializes `--sync-once` runs; the GUI never takes it, the outbox claim keeps GUI + CLI overlap safe), `resources/omarchy/mailclient/` bar-widget plugin (status poll + sync timers, notify-on-rise, click-to-open) | ✅ done |
-| 7 | Flutter frontend: `mailffi` cdylib (flutter_rust_bridge 2, in-process `dart:ffi`), Dart app in `flutter/` with responsive 3/2/1-pane shell, sidebar, list, reader, account setup; CMake wiring for Windows + Linux, Gradle wiring for Android | ✅ done (full parity with QML: link safety & hover URL overlay, row action menus with passive stars, composer & outbox resilience, Linux release bundle + signed Android APK) |
+| 7 | Flutter frontend (**retired** — superseded on Android by milestone 14; builds kept, bug fixes only): `mailffi` cdylib (flutter_rust_bridge 2, in-process `dart:ffi`), Dart app in `flutter/` with responsive 3/2/1-pane shell, sidebar, list, reader, account setup; CMake wiring for Windows + Linux, Gradle wiring for Android | ✅ done (full parity with QML: link safety & hover URL overlay, row action menus with passive stars, composer & outbox resilience, Linux release bundle + signed Android APK) |
 | 8 | Maintenance settings section in both frontends: storage stats (DB/messages/cached/temp sizes), database export (`VACUUM INTO` snapshot), temp cleanup, downloaded-file eviction (re-downloads on open), local-only cache trim to the newest 200 per folder (drafts/unpushed/pending/queued rows kept, server never contacted) — all in `mailcore::maintenance`, frontends are UI only | ✅ done |
 | 9 | Outbox visibility: shared `mailcore::outbox` (counts, list metadata, dismiss, one-line state), status-bar pill (count + red on failure) and outbox dialog (rows, error, retry-via-sync, dismiss dead rows) in both Qt/QML (`Outbox.qml`) and Flutter (`OutboxDialog`) | ✅ done |
 | 10 | Find similar messages: shared `mailcore::similar` (3-tier matching: same `thread_id`, same sender + normalized subject, subject keywords via FTS5 ranked best-first; self-exclusion, account-wide scope, JSON matching `search_json`), exposed via Qt bridge and `mailffi`/FRB, with "Find similar" in row and reader menus and dismissable `Similar to: "<Subject>" ✕` chip in both Qt/QML (`MessageList.qml`) and Flutter (`MessageListPane`) | ✅ done |
 | 11 | Export message as .eml: shared `mailcore::export` (`assemble_eml`, `export_eml_to`, `suggested_eml_name` — RFC 5322 MIME reconstruction preserving routing/technical headers, body tree shared with the composer's lettre `mime_body`, missing attachments downloaded first via `export::prepare`, safe filename sanitization), exposed via Qt bridge and `mailffi`/FRB, with "Save as .eml…" in row context menus and reader action menus across Qt/QML and Flutter | ✅ done |
 | 12 | Calendar / ICS event preview card: pure-Rust RFC 5545 `VEVENT` parsing in `mailcore::calendar` (unfolding, quote-aware parameter & unescaping parsing, nested `VALARM` ignored, TZID labels / fixed-offset `VTIMEZONE`, exclusive all-day ends, formatted date ranges, cancellation detection), instant offline preview via small .ics sync caching in `store_attachment_meta`, reader event preview card with summary, date/time, location, organizer, cancellation badge and "Open in Calendar" / "Save .ics…" actions across Qt/QML (`EventCard.qml`) and Flutter (`EventCard`) | ✅ done |
 | 13 | Search refinements: structured query tokens (`is:unread`, `is:read`, `is:starred`, `is:flagged`, `has:attachment`, `after:YYYY-MM-DD`, `before:YYYY-MM-DD` and negations) in `mailcore::search` (`parse_query_full`, `SearchFilters`, `ParsedQuery`), filter-only non-FTS query execution & combined SQL filtering in `feed::search_json`, IMAP criteria translation in `imap_criteria` (only with a positive text term; flags/dates narrow it, `has:` stays local-only); quick filters stay in the list header's filter menu in both frontends | ✅ done |
-| 14 | Native Android frontend (Kotlin + Jetpack Compose, `android/`): standalone Gradle project built screen by screen next to the Flutter Android client (which stays) — same `mailcore` over the same JNI (`MailNative`, package `de.renier.mailclient` is JNI-bound), backend files (workers, push, notifications) moved unchanged, Compose BOM pinned in `android/app/build.gradle.kts`, `./build.sh --android` signed APK into `dist/mailclient-android/` | 🔄 in progress (scaffold: launcher Home, delegation placeholder, Views reader + icon set from the experiment; message list done: sort, filter, selection + bulk actions with mandatory confirms, jump buttons, server-status footer, setup connection test; next: remaining screens) |
+| 14 | Native Android frontend (Kotlin + Jetpack Compose, `android/`): the Android client, kept in step with Qt — same `mailcore` over JNI (`MailNative` ↔ `mailffi/src/android.rs`, package `de.renier.mailclient` is JNI-bound), native background checks, push and notifications, Compose BOM pinned in `android/app/build.gradle.kts`, `./build.sh --android` signed APK into `dist/mailclient-android/` | ✅ done — every screen of the Qt client exists (shell, folders, list, search, reader, composer, accounts, contacts, settings, outbox); remaining Qt ↔ native differences are tracked in §9 "Open Qt ↔ native gaps" |
 
 Milestone 7 detail — what works and what does not:
 - **Works**: the whole read path and the local write path. Accounts
@@ -328,12 +339,15 @@ Reported working (keep while fixing): account setup + keyring, manual ⟳ sync, 
 
 ## 9. Frontend feature parity (QML-first reference)
 
-Rules: Qt/QML is the mature frontend and the reference for what exists.
-Flutter and native match it feature-for-feature or record the exception
-here. UI may differ (touch vs desktop: bottom bars, fullscreen pages,
-long-press instead of hover/menus); behaviour must not — it lives in
-`mailcore`, frontends only translate. ✅ present, 🔄 partial, ❌ missing.
-Update this section when a step lands (see AGENTS.md §7.4).
+Rules: Qt/QML (desktop) and native Kotlin (Android) are the two active
+frontends and match each other feature-for-feature, or record the
+exception here; a feature that lands in one lands in the other. UI may
+differ (touch vs desktop: bottom bars, fullscreen pages, long-press instead
+of hover/menus); behaviour must not — it lives in `mailcore`, frontends
+only translate. **Flutter is retired**: its column is kept for reference
+and is not updated for new features (AGENTS.md §1). ✅ present, 🔄 partial,
+❌ missing. Update this section when a step lands (see AGENTS.md §7.4);
+the open Qt ↔ native differences are listed at the end.
 
 ### Shell, toolbar, status
 
@@ -360,12 +374,12 @@ Update this section when a step lands (see AGENTS.md §7.4).
 | Quick filters (unread/starred/attach + dates + custom range) | ✅ | ✅ | ✅ | AND-combined; client-side over loaded rows + hits |
 | Full query syntax (`is:`, `has:`, `after:`…) | ✅ | ✅ | ✅ | Core parses everywhere; the help text is the core's (Qt tooltip; Flutter and native a help button in the empty search field) |
 | Selection + bulk bar (read/star/archive/move/trash/purge) | ✅ | ✅ | ✅ | Native bar docks at bottom; purge always confirms |
-| Row menu (read/star/archive/move/trash/similar/eml) | ✅ | ✅ | ✅ | Touch: ⋮ on the subject line under the date (tap opens, long-press selects); Qt and Flutter desktop add right-click. A search hit acts in its own folder; trash follows the confirm preference, purge always asks |
+| Row menu (read/star/archive/move/trash/similar/eml) | ✅ | ✅ | ✅ | Touch: ⋮ on the subject line under the date (tap opens, long-press selects); Qt and Flutter desktop add right-click. A search hit acts in its own folder; purge always asks. The trash/permanent confirm rule differs between Qt and native (gap G2) |
 | Jump top/bottom buttons | ✅ | ✅ | ✅ | |
 | Pull-to-refresh scope | — (toolbar syncs the account) | — (toolbar syncs the account) | ✅ folder-only inside a folder, account-wide in search | Native-only gesture; desktop has no pull |
 | List scroll memory | ✅ (per-folder, UID-anchored) | ✅ (per-folder PageStorageKey) | ✅ (per-folder index) | Native drifts when new mail arrives mid-read; Qt's UID anchor does not |
 | Load-older footer (Cached N [of M] / All loaded) | ✅ | ✅ | ✅ | |
-| Find-similar mode + chip | ✅ | ✅ | ✅ | From the reader and the row menu |
+| Find-similar mode + chip | ✅ | ✅ | 🔄 | From the reader and the row menu. Native: no dismissable chip (only the list title), hits not refreshed after row actions, and the reader closes even in three panes (gaps G1) |
 | Drafts rows open the composer | ✅ | ✅ | ✅ | Native: any row whose folder has the `drafts` role, search hits included |
 | List density (comfortable/compact) | ✅ | ✅ | ✅ | Compact drops the snippet line and tightens the rows |
 | Swipe actions, mark-all-read | ❌ | ❌ | ❌ | None anywhere; not planned |
@@ -375,8 +389,8 @@ Update this section when a step lands (see AGENTS.md §7.4).
 
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
-| Short input = row filter, 3+ = FTS + server backfill | ✅ | ✅ | ✅ | Core `search::plan`; same thresholds |
-| Folder-scoped vs account-wide | ✅ | ✅ | ✅ | |
+| Short input = row filter, 3+ = FTS + server backfill | ✅ | ✅ | 🔄 | Core `search::plan`; same thresholds. Native turns 1–2 letters into a search view (title, no sort/footer) instead of filtering the folder, and debounces the local query too (gap G4) |
+| Folder-scoped vs account-wide | ✅ | ✅ | 🔄 | Native does not re-run a folder-scoped search when the folder changes, nor reset the server backfill on a scope toggle (gap G3) |
 | Hits grouped under folder section headers | ✅ | ✅ | ✅ | Account-wide + similar only; folder-scoped stays flat everywhere |
 | Jump to hit (opens in its folder) | ✅ | ✅ | ✅ | Native opens hit directly |
 
@@ -386,29 +400,29 @@ Update this section when a step lands (see AGENTS.md §7.4).
 |---|---|---|---|---|
 | Header (subject/sender/date/To, expandable) | ✅ | ✅ | ✅ | |
 | Reply-To warning, link examine, headers view | ✅ | ✅ | ✅ | |
-| Attachments (open/save/save-all) | ✅ | ✅ | ✅ | Native via SAF + FileProvider |
+| Attachments (open/save/save-all) | ✅ | ✅ | ✅ | Native via SAF + FileProvider. Qt lacks the "N inline images not downloaded" banner + Download that native and Flutter have (gap G7) |
 | Event card (ICS) | ✅ | ✅ | ✅ | |
 | Remote-image block + show-once | ✅ | ✅ | ✅ | |
-| Original/darkened colours, zoom | ✅ | ✅ | ✅ | Android readers: pinch zoom in the WebView; mail text follows the reader text size and the interface scale |
+| Original/darkened colours, zoom | 🔄 | ✅ | ✅ | Android readers: pinch zoom in the WebView; mail text follows the reader text size and the interface scale. Qt applies the reader text size to plain text only (gap G13) |
 | Fullscreen reader | ✅ | ✅ | ✅ | Toggle in the reader bar; hides the shell bars and the other panes, back leaves it first. Native also hides the Android system bars (swipe shows them briefly), so it gains room on a phone too |
 | Reply / Reply-all / Forward | ✅ | ✅ | ✅ | Recipients, subject, quote and signature from `mailcore::compose::answer` everywhere |
 | Archive / Move / Delete / Star | ✅ | ✅ | ✅ | |
-| Prev/next message | ❌ | ❌ | ❌ | None anywhere |
+| Prev/next message | ✅ keys | ❌ | ❌ | Qt: Up/Down step through the list and open the message; no button anywhere |
 
 ### Composer
 
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
 | Full composer (To/Cc/Bcc, editor, attach, drafts, send) | ✅ dialog | ✅ page | ✅ page | Touch composers are full pages on every width (keyboard). Locked From domain, contact autocomplete, Reply-To, reply-to-mismatch notice, server-draft notice, delete draft, dirty guard. Flutter carries the quote as a card beside its text box; Qt and native edit it inline in the body |
-| Editor | ✅ WYSIWYG HTML + source | ✅ Markdown + preview | ✅ WYSIWYG HTML + source | Qt and native edit HTML in a web view (`execCommand`: bold, italic, underline, list, quote, link, clear, inline image; toolbar lights up at the caret). Native's page is `mailcore::compose::editor::document`; Qt still builds its own (see SHARED-CORE.md). With send format "auto" every frontend sends plain text when nothing is formatted (the sender's `needs_html_formatting`), and the editor footer says which |
-| Inline images, attachments | ✅ | ✅ (+ desktop drop) | ✅ | Native copies picked `content://` files into app cache, the core reads paths at send time |
+| Editor | ✅ WYSIWYG HTML + source | ✅ Markdown + preview | ✅ WYSIWYG HTML + source | Qt and native edit HTML in a web view (`execCommand`: bold, italic, underline, list, quote, link, clear, inline image; toolbar lights up at the caret). Native's page is `mailcore::compose::editor::document`; Qt still builds its own (see SHARED-CORE.md). With send format "auto" every frontend sends plain text when nothing is formatted (the sender's `needs_html_formatting`); native's footer says which (`send_format_note`), Qt only repeats the setting (gap G10) |
+| Inline images, attachments | ✅ (+ drop) | ✅ (+ desktop drop) | 🔄 | Native copies picked `content://` files into app cache, the core reads paths at send time. A reopened draft drops its attachments on native (notice asks to re-attach) and may lose uncached inline images; Qt downloads and re-attaches both (gap G6) |
 | Send failure after the composer closed | ✅ reopens with the text | 🔄 status line | ✅ reopens with the text | SMTP runs after close. Qt and native keep the composition until SMTP accepts it and reopen it with the reason; new compositions wait meanwhile. The core drops the MIME on failure, so the retry cannot send twice. Flutter reports a late failure on the status strip only |
 
 ### Folders
 
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
-| Sidebar tree + unread pills + account switch | ✅ | ✅ | ✅ | |
+| Sidebar tree + unread pills + account switch | ✅ | ✅ | ✅ | Collapsible subfolders everywhere; known folders and inbox children always visible (`FolderRole::always_visible`). Qt shows total and unread side by side, native one or the other |
 | Manager (create, refresh, hide) | ✅ | ✅ | ✅ | Hide is display-only everywhere (no IMAP unsubscribe) |
 | Move picker | ✅ | ✅ | ✅ | |
 | Rename / delete / empty folder | ❌ | ❌ | ❌ | None anywhere |
@@ -418,7 +432,7 @@ Update this section when a step lands (see AGENTS.md §7.4).
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
 | List (use/edit/remove + confirm) | ✅ | ✅ | ✅ | |
-| Setup form (identity, IMAP+SMTP, guess, port-follow) | ✅ | ✅ | ✅ | |
+| Setup form (identity, IMAP+SMTP, guess, port-follow) | ✅ | ✅ | 🔄 | Native shows no plaintext warning for security "none", lists raw `tls`/`starttls`/`none` instead of the core's `security_choices` labels, and its address guess can overwrite a typed username (gap G8) |
 | Pre-save connection test | ❌ | ❌ | ✅ | Native-only so far; promote to Qt/Flutter on demand |
 | OAuth | ❌ | ❌ | ❌ | None anywhere |
 
@@ -444,4 +458,27 @@ Update this section when a step lands (see AGENTS.md §7.4).
 | Clear notifications on resume; no alert while open | — | ✅ | ✅ | Open app: a background check refreshes the list instead of alerting |
 | Background status (permissions, battery, run history, heartbeat warning, test notification) | — | ✅ | ✅ | Run lines, standby-bucket name and heartbeat wording from `mailcore::sync::background::describe` on native; Flutter still words them in Dart (SHARED-CORE.md) |
 | Grouped notifications + Mark read buttons | — | ✅ | ✅ | Same native path (`MailAlarm`, `MailPushService`) |
+
+### Open Qt ↔ native gaps
+
+From a code audit of both frontends. Fix in `mailcore` where the gap is a
+decision both should share; tick off here when closed.
+
+| # | Gap | Side | Kind |
+|---|---|---|---|
+| G1 | Find-similar: no dismissable chip (mode sticks on a tablet until a query is typed and cleared), hits stale after row actions, reader closes on "Find similar" in three panes | native | bug |
+| G2 | Delete confirm rule differs: Qt confirms only with `confirm_delete` on (a permanent delete from Trash/Junk then runs unasked); native always confirms permanent and bulk trash. Native's bulk label uses `all` permanent where Qt uses `any`, so a search selection spanning Inbox and Trash says "Move to Trash? You can undo" while Trash rows are destroyed. One core rule needed (e.g. `needs_confirm`) | both | bug |
+| G3 | Folder-scoped search keeps the old folder's hits after a folder change; scope toggle does not reset the server backfill; account switch clears the search (Qt re-runs it) | native | bug |
+| G4 | 1–2 letters become a "Search results" view (no sort, no footer) instead of a folder filter; local query debounced too | native | UX |
+| G5 | The reader is not closed when its message leaves via a list row/bulk action or a sync (three panes): it keeps showing a gone mail whose actions then fail | native | bug |
+| G6 | A failed draft save loses the text (composer closes as soon as the job is queued; Qt stays open until success). Reopened drafts drop attachments and may lose uncached inline images | native | bug + feature |
+| G7 | No "inline images not downloaded" banner: never-fetched `cid:` images stay broken with no way to fetch them | Qt | feature |
+| G8 | Account form: no plaintext warning, raw security values, username overwritten by the guess; account rows likely cramped at 360dp (three text buttons in a plain `Row`) | native | bug + UX |
+| G9 | A plain-text draft reopens without line breaks (`body_text` into the editor's `innerHTML`; core `draft_editor_html` exists and native uses it) | Qt | bug |
+| G10 | Composer has no live "sends as plain/HTML" note (`send_format_note` not exposed by the Qt bridge) | Qt | UX |
+| G11 | List has no empty states ("folder is empty", "no match", "press ⟳ to sync") | native | UX |
+| G12 | No long-press Copy link / Examine link when `link_click_action` is "browser" (Qt has right-click) | native | feature |
+| G13 | Reader text size does not reach HTML mail in Qt (native applies it as WebView text zoom) | Qt | UX |
+| G14 | Headers dialog is a plain text dump on native (Qt: grid + collapsible complete headers) | native | UX |
+| G15 | Smaller differences: bulk mark/star leaves selection mode on native (Qt keeps it so actions chain); load-older button wording and busy gating; undo toast dismiss button (Qt only); recipient pick inserts `Name <addr>` in Qt, address only in native; reply-to-mismatch notice hides after editing To only in Qt; Send disabled without recipients only in Qt; failed About capability refresh shows no error on native; .eml export on native runs outside the job queue with no progress; Qt refuses Send while any job (even a sync) runs | both | minor |
 

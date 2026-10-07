@@ -1,9 +1,10 @@
 # Native Android frontend (Kotlin + Jetpack Compose)
 
-The all-in native app, a peer of the Flutter Android client (which
-stays), built screen by screen. Same `mailcore` over the same JNI the experiment proved — the
-backend files (`MailNative`, workers, push, notifications) moved here
-unchanged; only the UI is new, written in Compose.
+The Android client. Native Kotlin + Compose over `mailcore` through JNI
+(`MailNative` ↔ `crates/mailffi/src/android.rs`); background checks, push
+and notifications run natively too. It is kept feature-for-feature in step
+with the Qt desktop client (AGENTS.md §1, PROJECT.md §9); the Flutter
+Android app is retired.
 
 ## Layout
 
@@ -76,8 +77,8 @@ x86_64 only, so the loop stays fast).
 
 - **Namespace `de.renier.mailclient` never changes.** The Rust JNI exports
   (`Java_de_renier_mailclient_MailNative_*`) encode it. The `applicationId`
-  is free — currently `de.renier.mailclient.native` so this installs next to
-  the Flutter app. It stays: both apps are kept side by side.
+  is free — `de.renier.mailclient.native`, so it installs next to the
+  retired Flutter app.
 - Behaviour changes belong in `mailcore` (AGENTS.md core-first rule); this
   app only translates ids and renders. New screens that need core data add
   `MailNative` externs in `crates/mailffi/src/android.rs` next to the reader
@@ -85,8 +86,8 @@ x86_64 only, so the loop stays fast).
 - New dependencies (beyond the pinned Compose BOM / WorkManager / core-ktx
   already here) need user approval, same as crates and pubspec.
 
-## Screen roadmap
+## Parity with Qt
 
-Reader (done, Views) → message list → folder shell + accounts → composer →
-settings → no delegation left. Each step stays shippable: every
-screen talks to the same database the other frontends use.
+Every screen exists; `PLAN.md` is the build history. What still differs
+from the Qt client is tracked in PROJECT.md §9 — a feature that lands in
+one of the two lands in the other.

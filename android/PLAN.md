@@ -1,5 +1,9 @@
 # Native Android UI plan — 100% Kotlin frontend over `mailcore`
 
+> Build history. The plan's screens are done and the native app is now the
+> Android client; Flutter is retired (AGENTS.md §1). Remaining differences
+> from Qt live in PROJECT.md §9 "Open Qt ↔ native gaps", not here.
+
 Goal: a standalone native Android app (Kotlin + Jetpack Compose, `android/`)
 with full feature parity to the QML desktop client and the Flutter app, over
 the same Rust `mailcore` through JNI (`MailNative`, package
