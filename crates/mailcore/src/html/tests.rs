@@ -37,6 +37,47 @@ fn blocks_private_hosts_even_when_allowed() {
 }
 
 #[test]
+fn blocked_remote_img_is_our_own_compact_badge() {
+    // Long alt text used to render inline and break narrow table cells
+    // per-character into tall columns; the badge below stays 64x48 and
+    // reveals the alt on hover (title) or tap (details disclosure).
+    let long_alt = "A".repeat(100);
+    let s = sanitize(
+        &format!("<img src=\"https://example.com/t.png\" alt=\"{long_alt}\">"),
+        false,
+    );
+    assert!(s.had_remote);
+    assert!(!s.html.contains("example.com"));
+    assert!(!s.html.contains("[image:"));
+    assert!(!s.html.contains("<img"), "{}", s.html);
+    assert!(
+        s.html.contains("<details class=\"mc-blocked\">"),
+        "{}",
+        s.html
+    );
+    assert!(s.html.contains("<svg"), "{}", s.html);
+    assert!(!s.html.contains("<script"), "{}", s.html);
+    assert!(
+        s.html.contains(&format!("title=\"{long_alt}\"")),
+        "{}",
+        s.html
+    );
+    assert!(
+        s.html.contains(&format!("<span>{long_alt}</span>")),
+        "{}",
+        s.html
+    );
+
+    let generic = sanitize("<img src=\"https://example.com/t.png\">", false);
+    assert!(
+        generic.html.contains("<details class=\"mc-blocked\">"),
+        "{}",
+        generic.html
+    );
+    assert!(generic.html.contains("Blocked image"), "{}", generic.html);
+}
+
+#[test]
 fn rejects_javascript_href() {
     let s = sanitize("<a href=\"javascript:alert(1)\">x</a>", true);
     assert!(!s.html.contains("javascript"));

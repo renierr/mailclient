@@ -107,15 +107,20 @@ pub fn sanitize(raw: &str, allow_remote: bool) -> Sanitized {
                 }
             }
             if t.name == "img" && !attrs_out.contains("src=") {
-                // Keep alt text only: emit nothing (text already outside tag).
-                // If alt present, surface it so newsletters don't go blank.
+                // Blocked remote image: our own compact badge instead of the
+                // raw alt text. Inline `[image: {full alt}]` broke narrow
+                // table cells (`td{overflow-wrap:anywhere}` wraps it
+                // per-character into tall coloured columns, e.g. shipment
+                // trackers). The disclosure below stays 64x48; hover
+                // (`title`) and tap (`details`, no script) reveal the
+                // original alt. If alt present, surface it so newsletters
+                // don't go blank.
                 if let Some((_, alt)) = t.attrs.iter().find(|(k, _)| k == "alt") {
-                    let a: String = alt.chars().take(120).collect();
-                    if !a.trim().is_empty() {
-                        push_capped(&mut out, &escape_text(&format!("[image: {}]", a.trim())));
+                    if !alt.trim().is_empty() {
+                        push_capped(&mut out, &blocked_img_placeholder(alt));
                     }
                 } else if had_remote {
-                    push_capped(&mut out, "[image blocked]");
+                    push_capped(&mut out, &blocked_img_placeholder(""));
                 }
                 continue;
             }
@@ -157,6 +162,33 @@ pub fn sanitize(raw: &str, allow_remote: bool) -> Sanitized {
         had_remote,
     }
 }
+
+/// Placeholder for a blocked or missing `<img>`: our own small badge.
+///
+/// A `<details class="mc-blocked">` disclosure holding an inline SVG
+/// pictogram (mountain + sun, `#888` reads on light and dark sheets).
+/// Collapsed it is always 64x48, so narrow table cells keep their layout.
+/// Hover shows the original alt via `title`; tapping the badge expands the
+/// `<span>` with the full alt text. HTML + CSS only — no script, and the
+/// inline `<svg>` carries none. With no alt the label reads
+/// `Blocked image`.
+pub(crate) fn blocked_img_placeholder(alt: &str) -> String {
+    let title: String = alt.trim().chars().take(200).collect();
+    let label = if title.is_empty() {
+        "Blocked image".to_string()
+    } else {
+        title.clone()
+    };
+    format!(
+        "<details class=\"mc-blocked\"><summary title=\"{}\">{SVG_BADGE}</summary><span>{}</span></details>",
+        escape_attr(&label),
+        escape_text(&label)
+    )
+}
+
+/// The badge: dashed rounded frame, sun, mountain. Static shapes only —
+/// no `script`, no handlers, no external references.
+const SVG_BADGE: &str = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"48\" viewBox=\"0 0 64 48\"><rect x=\"1\" y=\"1\" width=\"62\" height=\"46\" rx=\"6\" fill=\"none\" stroke=\"#888888\" stroke-width=\"1.5\" stroke-dasharray=\"5 3\"/><circle cx=\"22\" cy=\"18\" r=\"4\" fill=\"none\" stroke=\"#888888\" stroke-width=\"1.5\"/><path d=\"M12 36 L26 24 L34 31 L40 26 L52 36\" fill=\"none\" stroke=\"#888888\" stroke-width=\"1.5\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/></svg>";
 
 /// Layout attributes that are safe on any allowed tag: `style` filtered to
 /// presentation, colours, sizes, alignment and table spacing. Everything

@@ -293,9 +293,15 @@ pub fn document(sanitized: &str, opts: &DocumentOptions<'_>) -> String {
          <style>html,body{{background:{paper}}}\
          body{{margin:0 {m}px {m}px;background:{paper};color:{ink};font-family:sans-serif;\
          font-size:{font}px;line-height:1.5;overflow-wrap:break-word}}\
-         #mc-top{{margin-bottom:{m}px}}a{{color:{link}}}\
-         img{{max-width:100%!important;height:auto!important}}\
-         table{{max-width:100%!important}}td,th{{overflow-wrap:anywhere}}{fit_css}\
+          #mc-top{{margin-bottom:{m}px}}a{{color:{link}}}\
+          img{{max-width:100%!important;height:auto!important}}\
+          .mc-blocked{{display:inline-block;max-width:min(160px,100%);vertical-align:middle;font-size:12px;line-height:1.4;box-sizing:border-box}}\
+          .mc-blocked>summary{{list-style:none;cursor:pointer;display:inline-block;line-height:0}}\
+          .mc-blocked>summary::-webkit-details-marker{{display:none}}\
+          .mc-blocked>summary::marker{{content:\"\"}}\
+          .mc-blocked svg{{display:block;width:64px;height:48px;max-width:100%;opacity:.7}}\
+          .mc-blocked>span{{display:block;max-width:220px;white-space:normal;overflow-wrap:anywhere;font-size:12px;line-height:1.4;opacity:.8;margin-top:4px}}\
+          table{{max-width:100%!important}}td,th{{overflow-wrap:anywhere}}{fit_css}\
          pre{{white-space:pre-wrap}}\
          blockquote{{margin:8px 0;padding-left:12px;border-left:3px solid {rule};color:{quote}}}\
          {extra}</style></head><body><div id=\"mc-top\" style=\"height:{top}px\"></div>\

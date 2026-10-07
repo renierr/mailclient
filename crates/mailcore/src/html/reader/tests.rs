@@ -251,6 +251,16 @@ fn the_document_blocks_every_network_load_by_default() {
 }
 
 #[test]
+fn the_document_styles_blocked_image_disclosures() {
+    let doc = document("<p>hi</p>", &options(Paint::Theme));
+    assert!(doc.contains(".mc-blocked"), "{doc}");
+    assert!(doc.contains(".mc-blocked>summary"), "{doc}");
+    assert!(doc.contains("::-webkit-details-marker"), "{doc}");
+    assert!(doc.contains(".mc-blocked svg"), "{doc}");
+    assert!(doc.contains(".mc-blocked>span"), "{doc}");
+}
+
+#[test]
 fn the_policy_comes_before_the_body_and_a_spacer_reserves_the_header() {
     let doc = document(
         "<p>marker</p>",
@@ -271,7 +281,7 @@ fn the_document_loosens_the_layout_only_when_asked() {
     let body = r#"<table width="600"><tr><td width="600">x</td></tr></table>"#;
     let plain = document(body, &options(Paint::Original));
     assert!(plain.contains(body));
-    assert!(!plain.contains("box-sizing"));
+    assert!(!plain.contains("div,table{box-sizing:border-box}"));
     assert!(plain.contains("td,th{overflow-wrap:anywhere}"));
     let fitted = document(
         body,

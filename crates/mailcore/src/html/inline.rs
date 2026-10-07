@@ -5,7 +5,7 @@
 //! the network; a reference with no stored bytes is replaced by its alt
 //! text rather than left for a renderer to try and resolve.
 
-use super::entities::{decode_entities, escape_text};
+use super::entities::decode_entities;
 
 /// Largest single inline image kept, and the most one body embeds.
 pub const MAX_INLINE_IMAGE_BYTES: usize = 1_500_000;
@@ -164,7 +164,7 @@ pub fn inline_cid_images(html: &str, images: &[InlineImage]) -> (String, usize) 
                 let alt = attr(tag, "alt").map(decode_entities).unwrap_or_default();
                 let alt = alt.trim();
                 if !alt.is_empty() {
-                    out.push_str(&escape_text(&format!("[image: {alt}]")));
+                    out.push_str(&super::sanitize::blocked_img_placeholder(alt));
                 }
             }
         }
@@ -308,8 +308,10 @@ mod tests {
         let (out, missing) = inline_cid_images(&html, &[]);
         assert_eq!(missing, 2);
         assert!(!out.contains("cid:"));
-        assert!(!out.contains("<img"));
-        assert!(out.contains("[image: Chart]"));
+        assert!(!out.contains("[image:"));
+        assert!(out.contains("<details class=\"mc-blocked\">"));
+        assert!(out.contains("<svg"));
+        assert!(out.contains("<span>Chart</span>"));
     }
 
     #[test]
