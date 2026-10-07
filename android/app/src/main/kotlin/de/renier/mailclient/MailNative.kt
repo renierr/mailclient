@@ -66,8 +66,16 @@ object MailNative {
     // `{from, to, cc, date, subject, message_id, reply_to}` headers view.
     @JvmStatic external fun readerHeaders(folderId: Long, uid: Int): String
 
+    // Still listed (cached, not waiting out an undoable move)? A reader
+    // whose message is gone closes.
+    @JvmStatic external fun messageListed(folderId: Long, uid: Int): Boolean
+
     // Re-sanitized HTML with remote images kept — the "show once" path.
     @JvmStatic external fun readerMessageHtml(folderId: Long, uid: Int, allowRemote: Boolean): String
+
+    // Whether a delete destroys and whether to ask first:
+    // `{"permanent","ask"}`. One `delete_is_permanent` (or null) per target.
+    @JvmStatic external fun deletePrompt(confirmPref: Boolean, bulk: Boolean, permanentJson: String): String
 
     // Whether and when opening an unread row marks it read:
     // `{"plan":"off"|"now"|"after","delay_secs":n}`.

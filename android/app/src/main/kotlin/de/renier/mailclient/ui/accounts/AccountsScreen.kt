@@ -3,6 +3,8 @@ package de.renier.mailclient.ui.accounts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,12 +23,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.ui.common.Avatar
 import de.renier.mailclient.ui.state.MailState
 
 // Step 2 accounts manager: switch, edit, remove (confirmed), add. The setup
 // form itself is AccountSetupScreen; secrets never come back out.
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AccountsScreen(
     state: MailState,
@@ -53,19 +57,31 @@ fun AccountsScreen(
                         avatarDark = a.avatarDark,
                         size = 44.dp,
                     )
+                    // Actions sit under the text, not beside it: three
+                    // buttons in the row leave a 360dp phone no room for
+                    // the name.
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(a.name, style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            a.name,
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                         Text(
                             a.email + if (active) " · active" else "",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
+                        FlowRow {
+                            if (!active) {
+                                TextButton(onClick = { state.selectAccount(a.id) }) { Text("Use") }
+                            }
+                            TextButton(onClick = { onEdit(a.id) }) { Text("Edit") }
+                            TextButton(onClick = { pendingRemove = a.id }) { Text("Remove") }
+                        }
                     }
-                    if (!active) {
-                        TextButton(onClick = { state.selectAccount(a.id) }) { Text("Use") }
-                    }
-                    TextButton(onClick = { onEdit(a.id) }) { Text("Edit") }
-                    TextButton(onClick = { pendingRemove = a.id }) { Text("Remove") }
                 }
                 HorizontalDivider(modifier = Modifier.padding(start = 72.dp))
             }

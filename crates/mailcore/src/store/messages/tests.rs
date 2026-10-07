@@ -52,6 +52,29 @@ fn upsert_list_flags_unread_delete() {
 }
 
 #[test]
+fn is_listed_hides_pending_moves_and_deleted_rows() {
+    use crate::store::pending_moves::{self, PendingAction};
+    let (db, acc, f) = setup();
+    let id = upsert(&db, &sample_new(acc, f, 1)).unwrap();
+    assert!(is_listed(&db, f, 1).unwrap());
+    assert!(!is_listed(&db, f, 2).unwrap());
+    pending_moves::queue(
+        &db,
+        &[id],
+        PendingAction::Trash,
+        None,
+        "b",
+        "2099-01-01T00:00:00Z",
+    )
+    .unwrap();
+    assert!(!is_listed(&db, f, 1).unwrap());
+    pending_moves::cancel_batch(&db, "b").unwrap();
+    assert!(is_listed(&db, f, 1).unwrap());
+    delete(&db, id).unwrap();
+    assert!(!is_listed(&db, f, 1).unwrap());
+}
+
+#[test]
 fn local_flag_change_queues_for_push_then_clears() {
     let (db, acc, f) = setup();
     let id = upsert(&db, &sample_new(acc, f, 1)).unwrap();

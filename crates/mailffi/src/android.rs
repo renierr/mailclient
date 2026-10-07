@@ -383,6 +383,27 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_readerMessage<'calle
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `MailNative.messageListed(folderId, uid)`: whether the message is still
+/// one the lists show (`mailcore::store::messages::is_listed`); a reader
+/// whose message is gone closes.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_messageListed<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+    uid: i32,
+) -> bool {
+    unowned
+        .with_env(|_env| -> Result<bool> {
+            Ok(mailcore::store::messages::is_listed(
+                crate::db::shared_db()?,
+                folder_id,
+                uid.max(0) as u32,
+            )?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `MailNative.readerHeaders(folderId, uid)`: `{from, to, cc, date, subject,
 /// message_id, reply_to}`, same JSON as `api::messages::headers_json`.
 #[unsafe(no_mangle)]
@@ -476,6 +497,28 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_readerMessageHtml<'c
                 allow_remote,
             )?;
             Ok(env.new_string(html)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.deletePrompt(confirmPref, bulk, permanentJson)`: whether a
+/// delete destroys and whether to ask first — `{"permanent","ask"}`
+/// (`mailcore::undo::delete_prompt`). `permanentJson` holds one target
+/// folder's `delete_is_permanent` per entry, `null` for an unknown folder.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_deletePrompt<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    confirm_pref: bool,
+    bulk: bool,
+    permanent_json: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let permanent: Vec<Option<bool>> =
+                serde_json::from_str(&string(env, &permanent_json)?).unwrap_or_default();
+            let p = mailcore::undo::delete_prompt(confirm_pref, bulk, &permanent);
+            Ok(env.new_string(serde_json::to_string(&p)?)?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }

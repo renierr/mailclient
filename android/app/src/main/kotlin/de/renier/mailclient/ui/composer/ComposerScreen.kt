@@ -119,7 +119,7 @@ fun ComposerScreen(
     var dirty by remember { mutableStateOf(seed.failure.isNotEmpty()) }
     var sending by remember { mutableStateOf(false) }
     var savingDraft by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf(seed.failure.ifEmpty { null }?.let { "Not sent: $it" }) }
+    var error by remember { mutableStateOf(seed.failure.ifEmpty { null }) }
     var confirmClose by remember { mutableStateOf(false) }
     var confirmDeleteDraft by remember { mutableStateOf(false) }
     var linkDialog by remember { mutableStateOf(false) }
@@ -261,7 +261,12 @@ fun ComposerScreen(
 
     fun saveDraft() {
         if (working) return
-        submit("Could not save the draft", { savingDraft = it }) { MailNative.saveDraft(accountId, it) }
+        submit(
+            "Could not save the draft",
+            { savingDraft = it },
+            before = { state.pendingDraft = PendingSend(snapshot(it), accountId, folderId) },
+            onFail = { state.pendingDraft = null },
+        ) { MailNative.saveDraft(accountId, it) }
     }
 
     fun deleteDraft() {

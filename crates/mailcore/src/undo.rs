@@ -57,6 +57,30 @@ pub fn delete_is_permanent(src: &Folder, folders: &[Folder]) -> bool {
             .any(|f| f.role == FolderRole::Trash && f.id != src.id)
 }
 
+/// What a delete is about to do, and whether the user is asked first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct DeletePrompt {
+    /// At least one target is destroyed rather than moved to Trash.
+    pub permanent: bool,
+    /// Show the confirm dialog before deleting.
+    pub ask: bool,
+}
+
+/// The one delete-confirm rule for every frontend. `permanent` holds each
+/// target's folder `delete_is_permanent` (`None`: folder not known, which
+/// counts as destroying, so the dialog never under-warns). A delete
+/// destroys when any target would — a search selection can span Inbox and
+/// Trash. It asks when it destroys (no undo), for every bulk delete, and
+/// otherwise when the `confirm_delete` preference is on.
+#[must_use]
+pub fn delete_prompt(confirm_pref: bool, bulk: bool, permanent: &[Option<bool>]) -> DeletePrompt {
+    let permanent = permanent.is_empty() || permanent.iter().any(|p| *p != Some(false));
+    DeletePrompt {
+        permanent,
+        ask: permanent || bulk || confirm_pref,
+    }
+}
+
 /// Queue an undoable action on `uids` of `folder_id`.
 pub fn queue_move(
     db: &Db,
@@ -229,6 +253,26 @@ mod tests {
     use super::*;
     use crate::models::NewAccount;
     use crate::store::accounts;
+
+    #[test]
+    fn delete_prompt_destroys_when_any_target_does() {
+        let p = delete_prompt(false, true, &[Some(false), Some(true)]);
+        assert!(p.permanent && p.ask);
+        let p = delete_prompt(false, true, &[Some(false), None]);
+        assert!(p.permanent, "an unknown folder counts as destroying");
+        assert!(delete_prompt(false, false, &[]).permanent);
+    }
+
+    #[test]
+    fn delete_prompt_asks_for_permanent_bulk_or_preference() {
+        let trash = [Some(false)];
+        assert!(!delete_prompt(false, false, &trash).ask);
+        assert!(delete_prompt(true, false, &trash).ask);
+        assert!(delete_prompt(false, true, &trash).ask);
+        let p = delete_prompt(false, false, &[Some(true)]);
+        assert!(p.permanent && p.ask, "no undo, so it always asks");
+        assert!(!delete_prompt(true, false, &trash).permanent);
+    }
 
     struct Fx {
         db: Db,

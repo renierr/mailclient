@@ -247,6 +247,18 @@ pub mod qobject {
         #[qinvokable]
         fn link_info_json(&self, url: &QString) -> QString;
 
+        /// Whether a delete destroys and whether to ask first, as JSON
+        /// `{permanent, ask}` (`mailcore::undo::delete_prompt`).
+        /// `permanent_json` is one target folder's `delete_is_permanent` per
+        /// entry, `null` for a folder not in the feed.
+        #[qinvokable]
+        fn delete_prompt_json(
+            &self,
+            confirm_pref: bool,
+            bulk: bool,
+            permanent_json: &QString,
+        ) -> QString;
+
         /// Attachment metadata for one message in the current folder as JSON
         /// (`[{id, filename, mime_type, size, content_id, is_inline}]`, no
         /// bytes). Mirrors the `attachments` array already in the feed; use

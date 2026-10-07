@@ -122,7 +122,9 @@ impl qobject::Bridge {
                     }))
                 })
                 .collect::<Result<Vec<_>, String>>()?;
-            let body_html = compose::draft_html(db, &message);
+            // The editor takes HTML: a plain draft becomes paragraphs, not
+            // one run-together line.
+            let body_html = compose::draft_editor_html(db, &message);
             Ok((
                 serde_json::json!({
                     "draft_uid": message.uid,
@@ -132,10 +134,7 @@ impl qobject::Bridge {
                     "cc": message.cc_addrs.join(", "),
                     "bcc": message.bcc_addrs.join(", "),
                     "subject": message.subject.unwrap_or_default(),
-                    "body": Some(body_html)
-                        .filter(|h| !h.is_empty())
-                        .or(message.body_text)
-                        .unwrap_or_default(),
+                    "body": body_html,
                     "attachments": attachments,
                 })
                 .to_string(),

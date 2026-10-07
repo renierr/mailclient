@@ -275,6 +275,18 @@ pub fn get_by_uid(db: &Db, folder_id: i64, uid: u32) -> Result<Message> {
         .ok_or_else(|| StoreError::NotFound(format!("message uid {uid} in folder {folder_id}")))
 }
 
+/// Whether `(folder_id, uid)` is still a message the lists show: cached and
+/// not waiting out an undoable delete, archive or move. A reader showing a
+/// message that is no longer listed closes, in every frontend.
+pub fn is_listed(db: &Db, folder_id: i64, uid: u32) -> Result<bool> {
+    let n: i64 = db.conn().query_row(
+        &format!("select count(*) from messages where folder_id = ?1 and uid = ?2 and {HIDDEN}"),
+        params![folder_id, uid as i64],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
+
 /// Number of unread messages in a folder (badge counter).
 pub fn count_unread(db: &Db, folder_id: i64) -> Result<u64> {
     let n: i64 = db.conn().query_row(

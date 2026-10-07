@@ -59,6 +59,8 @@ still to promote") points here instead of keeping its own list.
 | On-demand attachment download ("make sure the bytes are cached") | `mailcore::sync::attachments::{ensure_cached, download}`; was a private helper in `mailapp` and an inline copy in `mailffi` |
 | Calendar invite parsing: RFC 5545 VEVENT extraction, line unfolding, unescaping, date formatting, .ics save name | `mailcore::calendar` (`parse_ics`, `parse_ics_bytes`, `CalendarEvent` incl. `save_name`); `feed::message_json` supplies `"event"` directly; frontends are UI only |
 | List date quick-filter: after (inclusive) / before (exclusive) day bounds, presets, chip label | `mailcore::search::{date_passes, date_preset_range, date_filter_label}`; feeds carry `date_raw`; frontends only pick dates and show the label |
+| Delete confirmation: does it destroy (any target), ask first (destroys, bulk, or `confirm_delete`) | `mailcore::undo::delete_prompt` (`DeletePrompt`); Qt `delete_prompt_json`, native `MailNative.deletePrompt`; frontends pass each target folder's `delete_is_permanent` |
+| Is the open message still listed (cached, not waiting out an undoable move) | `mailcore::store::messages::is_listed`; native closes its reader on it (`MailNative.messageListed`), Qt drops its preview from the reloaded rows |
 
 ## Open
 
@@ -85,15 +87,6 @@ parent are derived in `Sidebar.qml` and in Kotlin `collapseFolders`
 delimiter assumption. Drift: none known. Fix: feed fields (`parent_id`,
 `collapsible`, hidden unread/total sums) from `feed::folders_json`, which
 already has `parent_path`.
-
-### 7. Delete confirmation rule
-
-Whether a delete asks first is decided in QML (`Main.qml`, only with
-`confirm_delete`) and in Kotlin (`ListScreen.kt`, `ReaderScreen.kt`:
-always for permanent and bulk), and a bulk delete's "is it permanent" is
-`any` in Qt but `all` in Kotlin. Drift: yes — PROJECT.md §9 gap G2. Fix:
-one core decision over (preference, per-target permanence, bulk) that
-returns permanent + ask.
 
 ### 8. Small UI-flavoured twins
 

@@ -153,6 +153,10 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
             state.info("Still sending the last message…")
             return
         }
+        if (state.pendingDraft != null) {
+            state.info("Still saving the last draft…")
+            return
+        }
         scope.launch {
             val seed = withContext(Dispatchers.IO) {
                 runCatching {
@@ -190,6 +194,22 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                 stack
             }
         }
+    }
+
+    // The open message left (a list row or bulk action beside the reader,
+    // a sync, another device): close the reader like Qt drops its preview,
+    // instead of showing a mail whose actions would fail. Rows reload after
+    // every such change, so they are the trigger; the core says "listed".
+    val shownReader = stack.lastOrNull { it is Route.Reader } as Route.Reader?
+    LaunchedEffect(shownReader, state.messages, state.searchHits) {
+        val r = shownReader ?: return@LaunchedEffect
+        val listed = withContext(Dispatchers.IO) {
+            runCatching {
+                MailNative.ensureInit(context)
+                MailNative.messageListed(r.folderId, r.uid)
+            }.getOrDefault(true)
+        }
+        if (!listed) stack = stack.filter { it != r }
     }
 
     BackHandler(enabled = stack.size > 1) { back() }
@@ -452,8 +472,12 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                             folderId = r.folderId,
                             uid = r.uid,
                             onClose = ::back,
-                            // Similar hits show in the list pane under the reader.
-                            onShowSimilar = ::back,
+                            // Similar hits show in the list pane: beside the
+                            // reader in three panes (Qt keeps it open there),
+                            // in its place otherwise.
+                            onShowSimilar = {
+                                if (layout == PaneLayout.Three) readerFullscreen = false else back()
+                            },
                             onCompose = { mode -> startCompose { ComposerSeed.answer(r.folderId, r.uid, mode) } },
                             closeIcon = layout == PaneLayout.Three,
                             fullscreen = fullscreen,

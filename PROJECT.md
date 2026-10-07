@@ -374,12 +374,12 @@ the open Qt ↔ native differences are listed at the end.
 | Quick filters (unread/starred/attach + dates + custom range) | ✅ | ✅ | ✅ | AND-combined; client-side over loaded rows + hits |
 | Full query syntax (`is:`, `has:`, `after:`…) | ✅ | ✅ | ✅ | Core parses everywhere; the help text is the core's (Qt tooltip; Flutter and native a help button in the empty search field) |
 | Selection + bulk bar (read/star/archive/move/trash/purge) | ✅ | ✅ | ✅ | Native bar docks at bottom; purge always confirms |
-| Row menu (read/star/archive/move/trash/similar/eml) | ✅ | ✅ | ✅ | Touch: ⋮ on the subject line under the date (tap opens, long-press selects); Qt and Flutter desktop add right-click. A search hit acts in its own folder; purge always asks. The trash/permanent confirm rule differs between Qt and native (gap G2) |
+| Row menu (read/star/archive/move/trash/similar/eml) | ✅ | ✅ | ✅ | Touch: ⋮ on the subject line under the date (tap opens, long-press selects); Qt and Flutter desktop add right-click. A search hit acts in its own folder; purge always asks. Whether a delete asks first is `mailcore::undo::delete_prompt` everywhere: it asks when it destroys (any target folder would; an unknown folder counts), for every bulk delete, and otherwise per `confirm_delete` |
 | Jump top/bottom buttons | ✅ | ✅ | ✅ | |
 | Pull-to-refresh scope | — (toolbar syncs the account) | — (toolbar syncs the account) | ✅ folder-only inside a folder, account-wide in search | Native-only gesture; desktop has no pull |
 | List scroll memory | ✅ (per-folder, UID-anchored) | ✅ (per-folder PageStorageKey) | ✅ (per-folder index) | Native drifts when new mail arrives mid-read; Qt's UID anchor does not |
 | Load-older footer (Cached N [of M] / All loaded) | ✅ | ✅ | ✅ | |
-| Find-similar mode + chip | ✅ | ✅ | 🔄 | From the reader and the row menu. Native: no dismissable chip (only the list title), hits not refreshed after row actions, and the reader closes even in three panes (gaps G1) |
+| Find-similar mode + chip | ✅ | ✅ | ✅ | From the reader and the row menu; dismissable "Similar to: …" bar on native. Hits re-read after row, reader, undo and job changes; three panes keep the reader open |
 | Drafts rows open the composer | ✅ | ✅ | ✅ | Native: any row whose folder has the `drafts` role, search hits included |
 | List density (comfortable/compact) | ✅ | ✅ | ✅ | Compact drops the snippet line and tightens the rows |
 | Swipe actions, mark-all-read | ❌ | ❌ | ❌ | None anywhere; not planned |
@@ -389,8 +389,8 @@ the open Qt ↔ native differences are listed at the end.
 
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
-| Short input = row filter, 3+ = FTS + server backfill | ✅ | ✅ | 🔄 | Core `search::plan`; same thresholds. Native turns 1–2 letters into a search view (title, no sort/footer) instead of filtering the folder, and debounces the local query too (gap G4) |
-| Folder-scoped vs account-wide | ✅ | ✅ | 🔄 | Native does not re-run a folder-scoped search when the folder changes, nor reset the server backfill on a scope toggle (gap G3) |
+| Short input = row filter, 3+ = FTS + server backfill | ✅ | ✅ | ✅ | Core `search::plan`; same thresholds. 1–2 letters filter the open folder in place ("X of Y shown", sort and footer stay); the local index answers every keystroke, only the server backfill waits out the debounce |
+| Folder-scoped vs account-wide | ✅ | ✅ | ✅ | A folder-scoped search follows a folder change; a scope toggle or folder change starts a fresh server backfill. An account switch re-runs the search in Qt, clears it on native |
 | Hits grouped under folder section headers | ✅ | ✅ | ✅ | Account-wide + similar only; folder-scoped stays flat everywhere |
 | Jump to hit (opens in its folder) | ✅ | ✅ | ✅ | Native opens hit directly |
 
@@ -415,7 +415,7 @@ the open Qt ↔ native differences are listed at the end.
 |---|---|---|---|---|
 | Full composer (To/Cc/Bcc, editor, attach, drafts, send) | ✅ dialog | ✅ page | ✅ page | Touch composers are full pages on every width (keyboard). Locked From domain, contact autocomplete, Reply-To, reply-to-mismatch notice, server-draft notice, delete draft, dirty guard. Flutter carries the quote as a card beside its text box; Qt and native edit it inline in the body |
 | Editor | ✅ WYSIWYG HTML + source | ✅ Markdown + preview | ✅ WYSIWYG HTML + source | Qt and native edit HTML in a web view (`execCommand`: bold, italic, underline, list, quote, link, clear, inline image; toolbar lights up at the caret). Native's page is `mailcore::compose::editor::document`; Qt still builds its own (see SHARED-CORE.md). With send format "auto" every frontend sends plain text when nothing is formatted (the sender's `needs_html_formatting`); native's footer says which (`send_format_note`), Qt only repeats the setting (gap G10) |
-| Inline images, attachments | ✅ (+ drop) | ✅ (+ desktop drop) | 🔄 | Native copies picked `content://` files into app cache, the core reads paths at send time. A reopened draft drops its attachments on native (notice asks to re-attach) and may lose uncached inline images; Qt downloads and re-attaches both (gap G6) |
+| Inline images, attachments | ✅ (+ drop) | ✅ (+ desktop drop) | 🔄 | Native copies picked `content://` files into app cache, the core reads paths at send time. A reopened draft drops its attachments on native (notice asks to re-attach) and may lose uncached inline images; Qt downloads and re-attaches both (gap G6). A failed draft save reopens the native composer with the text, like a failed send |
 | Send failure after the composer closed | ✅ reopens with the text | 🔄 status line | ✅ reopens with the text | SMTP runs after close. Qt and native keep the composition until SMTP accepts it and reopen it with the reason; new compositions wait meanwhile. The core drops the MIME on failure, so the retry cannot send twice. Flutter reports a late failure on the status strip only |
 
 ### Folders
@@ -432,7 +432,7 @@ the open Qt ↔ native differences are listed at the end.
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
 | List (use/edit/remove + confirm) | ✅ | ✅ | ✅ | |
-| Setup form (identity, IMAP+SMTP, guess, port-follow) | ✅ | ✅ | 🔄 | Native shows no plaintext warning for security "none", lists raw `tls`/`starttls`/`none` instead of the core's `security_choices` labels, and its address guess can overwrite a typed username (gap G8) |
+| Setup form (identity, IMAP+SMTP, guess, port-follow) | ✅ | ✅ | ✅ | Security values from the core's `security_choices`, labelled in the same words, with the core's plaintext warning under the picker. The address guess never replaces a field the user typed |
 | Pre-save connection test | ❌ | ❌ | ✅ | Native-only so far; promote to Qt/Flutter on demand |
 | OAuth | ❌ | ❌ | ❌ | None anywhere |
 
@@ -462,19 +462,16 @@ the open Qt ↔ native differences are listed at the end.
 ### Open Qt ↔ native gaps
 
 From a code audit of both frontends. Fix in `mailcore` where the gap is a
-decision both should share; tick off here when closed.
+decision both should share; remove the row when closed (numbers stay, so
+a closed gap leaves a hole). Closed so far: G1 find-similar, G2 delete
+confirm rule (`undo::delete_prompt`), G3 folder-scoped search, G4 short
+input, G5 reader closes when its mail leaves (`messages::is_listed`), the
+draft-save half of G6, G8 account form, G9 plain-text draft reopen.
 
 | # | Gap | Side | Kind |
 |---|---|---|---|
-| G1 | Find-similar: no dismissable chip (mode sticks on a tablet until a query is typed and cleared), hits stale after row actions, reader closes on "Find similar" in three panes | native | bug |
-| G2 | Delete confirm rule differs: Qt confirms only with `confirm_delete` on (a permanent delete from Trash/Junk then runs unasked); native always confirms permanent and bulk trash. Native's bulk label uses `all` permanent where Qt uses `any`, so a search selection spanning Inbox and Trash says "Move to Trash? You can undo" while Trash rows are destroyed. One core rule needed (e.g. `needs_confirm`) | both | bug |
-| G3 | Folder-scoped search keeps the old folder's hits after a folder change; scope toggle does not reset the server backfill; account switch clears the search (Qt re-runs it) | native | bug |
-| G4 | 1–2 letters become a "Search results" view (no sort, no footer) instead of a folder filter; local query debounced too | native | UX |
-| G5 | The reader is not closed when its message leaves via a list row/bulk action or a sync (three panes): it keeps showing a gone mail whose actions then fail | native | bug |
-| G6 | A failed draft save loses the text (composer closes as soon as the job is queued; Qt stays open until success). Reopened drafts drop attachments and may lose uncached inline images | native | bug + feature |
+| G6 | Reopened drafts drop attachments (notice asks to re-attach) and may lose uncached inline images; Qt downloads and re-attaches both. Needs a core "materialize draft attachments" step the JNI side can use | native | feature |
 | G7 | No "inline images not downloaded" banner: never-fetched `cid:` images stay broken with no way to fetch them | Qt | feature |
-| G8 | Account form: no plaintext warning, raw security values, username overwritten by the guess; account rows likely cramped at 360dp (three text buttons in a plain `Row`) | native | bug + UX |
-| G9 | A plain-text draft reopens without line breaks (`body_text` into the editor's `innerHTML`; core `draft_editor_html` exists and native uses it) | Qt | bug |
 | G10 | Composer has no live "sends as plain/HTML" note (`send_format_note` not exposed by the Qt bridge) | Qt | UX |
 | G11 | List has no empty states ("folder is empty", "no match", "press ⟳ to sync") | native | UX |
 | G12 | No long-press Copy link / Examine link when `link_click_action` is "browser" (Qt has right-click) | native | feature |

@@ -468,35 +468,31 @@ ApplicationWindow {
     // Moves to Trash — except spam (destroyed outright, junk never touches
     // Trash) and Trash itself (deleting there is permanent). The bridge
     // reports which it did because "moved" and "destroyed" differ.
-    // Goes through the delete-confirm gate first (setting `confirm_delete`).
-    // Whether delete destroys is the folder feed's `delete_is_permanent`
-    // (`mailcore::undo::delete_is_permanent`); an unknown folder asks as if
-    // it did.
-    function deleteIsPermanent(path) {
+    // Whether it destroys and whether to ask first is one core rule
+    // (`mailcore::undo::delete_prompt`); QML only looks up each target
+    // folder's feed flag `delete_is_permanent` (null when not in the feed).
+    function folderDeletePermanent(path) {
         var folder = path !== undefined ? path : root.currentFolder;
         for (var i = 0; i < folderModel.count; i++) {
             if (folderModel.get(i).name === folder)
-                return folderModel.get(i).delete_is_permanent !== false;
+                return folderModel.get(i).delete_is_permanent === true;
         }
-        return true;
+        return null;
     }
 
-    // A bulk delete destroys when any target's folder would (search
-    // selections can span folders).
-    function bulkDeleteIsPermanent(targets) {
-        if (!root.isSearchTargets(targets))
-            return root.deleteIsPermanent();
-        for (var i = 0; i < targets.length; i++) {
-            if (root.deleteIsPermanent(targets[i].folder))
-                return true;
-        }
-        return false;
+    function deletePrompt(bulk, permanent) {
+        var json = backend.delete_prompt_json(appSettings.confirm_delete, bulk, JSON.stringify(permanent));
+        return FeedJson.parse(json, ({
+                "permanent": true,
+                "ask": true
+            }));
     }
 
     function deleteMessage(uid) {
         if (uid < 0)
             return;
-        if (!appSettings.confirm_delete) {
+        var prompt = root.deletePrompt(false, [root.folderDeletePermanent()]);
+        if (!prompt.ask) {
             root.doDelete(uid);
             return;
         }
@@ -504,7 +500,7 @@ ApplicationWindow {
         deleteConfirm.uid = uid;
         deleteConfirm.uids = [];
         deleteConfirm.subject = m !== undefined ? m.subject : "";
-        deleteConfirm.permanent = root.deleteIsPermanent();
+        deleteConfirm.permanent = prompt.permanent;
         deleteConfirm.open();
     }
 
@@ -655,14 +651,19 @@ ApplicationWindow {
     function bulkDelete(targets) {
         if (!targets || targets.length === 0)
             return;
-        if (!appSettings.confirm_delete) {
+        // Search selections can span folders: one flag per target.
+        var permanent = [root.folderDeletePermanent()];
+        if (root.isSearchTargets(targets))
+            permanent = targets.map(t => root.folderDeletePermanent(t.folder));
+        var prompt = root.deletePrompt(true, permanent);
+        if (!prompt.ask) {
             root.doBulkDelete(targets);
             return;
         }
         deleteConfirm.uid = -1;
         deleteConfirm.uids = targets.slice();
         deleteConfirm.subject = "";
-        deleteConfirm.permanent = root.bulkDeleteIsPermanent(targets);
+        deleteConfirm.permanent = prompt.permanent;
         deleteConfirm.open();
     }
 

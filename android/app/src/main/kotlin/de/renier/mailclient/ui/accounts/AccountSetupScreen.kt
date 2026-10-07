@@ -72,6 +72,12 @@ fun AccountSetupScreen(
     var showImapPassword by remember { mutableStateOf(false) }
     var showSmtpPassword by remember { mutableStateOf(false) }
     var touchedHosts by remember { mutableStateOf(false) }
+    // What the address guess last filled in: a field still holding it may
+    // follow the next guess, one the user typed never does (Qt fills only
+    // empty fields).
+    var guessed by remember { mutableStateOf(mapOf<String, String>()) }
+    // The core's offered values, in display order (`SECURITY_CHOICES`).
+    var securityChoices by remember { mutableStateOf(listOf("tls", "starttls", "none")) }
     var errors by remember { mutableStateOf(mapOf<String, String>()) }
     var warnings by remember { mutableStateOf(mapOf<String, String>()) }
     var saveError by remember { mutableStateOf<String?>(null) }
@@ -114,7 +120,12 @@ fun AccountSetupScreen(
                 if (editing) MailNative.accountForm(accountId)
                 else MailNative.accountFormDefaults()
             }
+            val choices = runCatching {
+                val a = JSONObject(MailNative.accountFormDefaults()).getJSONArray("security_choices")
+                List(a.length()) { a.getString(it) }
+            }.getOrNull()
             withContext(Dispatchers.Main) {
+                if (!choices.isNullOrEmpty()) securityChoices = choices
                 result
                     .onSuccess { form ->
                         val o = JSONObject(form)
@@ -167,9 +178,16 @@ fun AccountSetupScreen(
             if (g.length() == 0) return@launch
             withContext(Dispatchers.Main) {
                 if (!touchedHosts) {
-                    imapHost = g.optString("imap_host", imapHost)
-                    smtpHost = g.optString("smtp_host", smtpHost)
-                    imapUser = g.optString("imap_user", imapUser)
+                    fun follow(key: String, current: String): String =
+                        if (current.isEmpty() || current == guessed[key]) g.optString(key, current) else current
+                    imapHost = follow("imap_host", imapHost)
+                    smtpHost = follow("smtp_host", smtpHost)
+                    imapUser = follow("imap_user", imapUser)
+                    guessed = mapOf(
+                        "imap_host" to g.optString("imap_host"),
+                        "smtp_host" to g.optString("smtp_host"),
+                        "imap_user" to g.optString("imap_user"),
+                    )
                     recheck()
                 }
             }
@@ -290,7 +308,7 @@ fun AccountSetupScreen(
                 imapPort = it
                 recheck()
             }
-            SecurityPicker("Security", imapSec, Modifier.weight(1f)) {
+            SecurityPicker("Security", imapSec, securityChoices, warnings["imap_sec"], Modifier.weight(1f)) {
                 securityChanged("imap", it)
             }
         }
@@ -321,7 +339,7 @@ fun AccountSetupScreen(
                 smtpPort = it
                 recheck()
             }
-            SecurityPicker("Security", smtpSec, Modifier.weight(1f)) {
+            SecurityPicker("Security", smtpSec, securityChoices, warnings["smtp_sec"], Modifier.weight(1f)) {
                 securityChanged("smtp", it)
             }
         }
@@ -485,21 +503,24 @@ private fun PasswordField(
 private fun SecurityPicker(
     label: String,
     value: String,
+    choices: List<String>,
+    // The core's warning while plaintext ("none") is chosen.
+    warning: String?,
     modifier: Modifier = Modifier,
     onPick: (String) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val choices = listOf("tls", "starttls", "none")
     ExposedDropdownMenuBox(
         expanded = expanded,
         onExpandedChange = { expanded = it },
         modifier = modifier,
     ) {
         OutlinedTextField(
-            value = value,
+            value = securityLabel(value),
             onValueChange = {},
             readOnly = true,
             label = { Text(label) },
+            supportingText = warning?.let { { Text(it) } },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
             modifier = Modifier.fillMaxWidth().menuAnchor(
                 ExposedDropdownMenuAnchorType.PrimaryNotEditable,
@@ -508,7 +529,7 @@ private fun SecurityPicker(
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             for (c in choices) {
                 DropdownMenuItem(
-                    text = { Text(c) },
+                    text = { Text(securityLabel(c)) },
                     onClick = {
                         expanded = false
                         if (c != value) onPick(c)
@@ -517,4 +538,11 @@ private fun SecurityPicker(
             }
         }
     }
+}
+
+// The same words as Qt's account form for the core's security values.
+private fun securityLabel(value: String): String = when (value) {
+    "starttls" -> "STARTTLS"
+    "none" -> "None (unencrypted)"
+    else -> "SSL/TLS"
 }

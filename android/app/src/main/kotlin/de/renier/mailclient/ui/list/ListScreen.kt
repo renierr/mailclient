@@ -154,10 +154,8 @@ fun ListScreen(
             RowAction.Star -> state.rowStar(m, !m.starred)
             RowAction.Archive -> state.rowArchive(m)
             RowAction.Move -> rowMove = m
-            // Trash follows the confirm preference; where delete destroys,
-            // it always asks.
-            RowAction.Trash ->
-                if (state.readerPrefs.confirmDelete || state.rowDeleteIsPermanent(m)) rowTrash = m else state.rowTrash(m)
+            // Whether to ask is the core's rule (preference, or no undo).
+            RowAction.Trash -> if (state.rowDeletePrompt(m).ask) rowTrash = m else state.rowTrash(m)
             RowAction.Purge -> rowPurge = m
             RowAction.Similar -> state.findSimilar(state.rowFolderId(m), m.uid)
             RowAction.SaveEml -> jumpScope.launch {
@@ -239,10 +237,9 @@ fun ListScreen(
         )
     }
     if (confirmTrash) {
-        // Bulk delete always confirms — even where delete is permanent
-        // (no undo there) and even with the confirm preference off. The
-        // preference only governs single-message reader deletes.
-        val permanent = state.selectionDeleteIsPermanent
+        // The core always asks for a bulk delete; it destroys when any
+        // selected row's folder would.
+        val permanent = state.selectionDeletePrompt.permanent
         DeleteConfirmDialog(
             title = if (permanent) "Delete permanently?" else "Move to Trash?",
             text = if (permanent) {
@@ -292,13 +289,15 @@ fun ListScreen(
                     searching && total == 0 -> "No matches"
                     searching -> "${rows.size} found" +
                         if (state.searchFolderOnly && folder != null) " in ${folder.leaf}" else ""
-                    folder != null && state.hasListFilter -> "${rows.size} of $total shown"
+                    folder != null && (state.hasListFilter || state.rowFilterQuery.isNotEmpty()) ->
+                        "${rows.size} of $total shown"
                     folder != null && folder.unread > 0 -> "${folder.count} messages · ${folder.unread} unread"
                     folder != null -> "${folder.count} messages"
                     else -> ""
                 },
                 onCustomRange = { dateDialog = true },
             )
+            state.similarLabel?.let { label -> SimilarBar(label) { state.clearSearch() } }
             if (state.hasListFilter) {
                 FilterBar(state)
             }
@@ -428,7 +427,7 @@ fun ListScreen(
                 ListBulkBar(
                     state = state,
                     onMove = { bulkMove = true },
-                    onTrash = { confirmTrash = true },
+                    onTrash = { if (state.selectionDeletePrompt.ask) confirmTrash = true else state.bulkTrash() },
                     onPurge = { confirmPurge = true },
                 )
             }
@@ -570,6 +569,28 @@ private fun FilterBar(state: MailState) {
             modifier = Modifier.weight(1f),
         )
         TextButton(onClick = { state.clearListFilters() }) { Text("Clear") }
+    }
+}
+
+// Qt's dismissable "Similar to: …" chip: leaving similar mode returns to
+// the folder (a tablet has no other way out while the field is empty).
+@Composable
+private fun SimilarBar(label: String, onClose: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        IconButton(onClick = onClose) {
+            Icon(painterResource(R.drawable.ic_close), "Close similar messages")
+        }
     }
 }
 

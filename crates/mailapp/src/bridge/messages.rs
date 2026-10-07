@@ -282,6 +282,18 @@ impl qobject::Bridge {
         qstring(&serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string()))
     }
 
+    pub fn delete_prompt_json(
+        &self,
+        confirm_pref: bool,
+        bulk: bool,
+        permanent_json: &QString,
+    ) -> QString {
+        let permanent: Vec<Option<bool>> =
+            serde_json::from_str(&permanent_json.to_string()).unwrap_or_default();
+        let p = mailcore::undo::delete_prompt(confirm_pref, bulk, &permanent);
+        qstring(&serde_json::to_string(&p).unwrap_or_else(|_| "{}".to_string()))
+    }
+
     pub fn search_syntax_help(&self) -> QString {
         qstring(mailcore::search::SYNTAX_HELP)
     }

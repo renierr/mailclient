@@ -89,6 +89,9 @@ data class MessageRow(
 
 data class UndoOffer(val batch: String, val label: String)
 
+/** What a delete does and whether to ask first (`mailcore::undo::delete_prompt`). */
+data class DeletePrompt(val permanent: Boolean, val ask: Boolean)
+
 /** A composition sent but not yet accepted by SMTP, as the composer held it. */
 data class PendingSend(val seed: ComposerSeed, val accountId: Long, val folderId: Long)
 
@@ -179,11 +182,18 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     // "Similar to: …" when the hits are a find-similar result, not a query.
     var similarLabel: String? by mutableStateOf(null)
         private set
+    // The message the similar hits are about, so they refresh like Qt's.
+    private var similarTarget: Pair<Long, Int>? = null
     // A server backfill is in flight for the current query (thin index
     // results, like Qt/Flutter); the Search job's finish re-runs the query.
     var serverSearchPending by mutableStateOf(false)
         private set
     private var serverSearchFired = false
+    // 1–2 letters (core plan "filter"): the open folder's rows filtered in
+    // place, like Qt — still the folder view (count, sort, footer), not a
+    // search. "" when no row filter is on.
+    var rowFilterQuery by mutableStateOf("")
+        private set
     // Step 4 list state: sort (persisted in core settings), AND-combined
     // quick filters, and multi-select. The core sorts the page itself; the
     // filters apply client-side to loaded rows and search hits alike, like
@@ -248,6 +258,12 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     @Volatile
     var pendingSend: PendingSend? = null
 
+    // The same for Save draft: the composer closes once the save is queued,
+    // and a failed save reopens it with the text (Qt keeps it open until
+    // the save lands; either way nothing typed is lost).
+    @Volatile
+    var pendingDraft: PendingSend? = null
+
     /** A failed send for the shell to reopen. */
     var reopenSend by mutableStateOf<PendingSend?>(null)
 
@@ -264,8 +280,17 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
             phase == "progress" -> pendingSend = null
             phase == "finished" && !ok -> {
                 pendingSend = null
-                reopenSend = p.copy(seed = p.seed.copy(failure = status.ifEmpty { "Sending failed" }))
+                reopenSend = p.copy(seed = p.seed.copy(failure = "Not sent: ${status.ifEmpty { "Sending failed" }}"))
             }
+        }
+    }
+
+    private fun settleDraft(phase: String, ok: Boolean, status: String) {
+        val p = pendingDraft ?: return
+        if (phase != "finished") return
+        pendingDraft = null
+        if (!ok) {
+            reopenSend = p.copy(seed = p.seed.copy(failure = "Draft not saved: ${status.ifEmpty { "saving failed" }}"))
         }
     }
 
@@ -441,6 +466,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         applyBusy(e.optJSONObject("busy"))
         val phase = e.optString("phase")
         if (kind == "Send") settleSend(phase, e.optBoolean("ok", true), e.optString("status"))
+        if (kind == "Save draft") settleDraft(phase, e.optBoolean("ok", true), e.optString("status"))
         if (phase == "queued") {
             // Something to read before the job's first progress arrives; a
             // job queued behind a running one leaves that one's status alone.
@@ -487,7 +513,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
             }
         }
         refreshOutbox()
-        if (searchActive && similarLabel == null) runSearch()
+        refreshSearch()
     }
 
     fun refreshAll(syncAfter: Boolean = false) = io {
@@ -613,9 +639,14 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         return true
     }
 
+    /** The typed row filter over one folder row (core match rule). */
+    private fun rowFilterPasses(m: MessageRow): Boolean =
+        rowFilterQuery.isEmpty() ||
+            MailNative.searchFilterMatches(rowFilterQuery, m.subject, m.from, m.fromName, m.snippet) == "true"
+
     /** What the list paints; the backing rows stay untouched. */
     private fun recomputeShown() {
-        shownMessages = messages.filter { rowShown(it) }
+        shownMessages = messages.filter { rowShown(it) && rowFilterPasses(it) }
         shownHits = searchHits.filter { rowShown(it) }
         pruneSelection()
     }
@@ -677,13 +708,19 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
 
     val selectionAllStarred: Boolean get() = selectedRows().all { it.starred }
 
-    /** Delete here destroys instead of moving to Trash (core decides). */
-    val selectionDeleteIsPermanent: Boolean
-        get() {
-            val rows = selectedRows()
-            if (rows.isEmpty()) return false
-            return rows.all { rowFolder(it)?.deleteIsPermanent == true }
-        }
+    /** Bulk delete of the selection: destroys when any row's folder would. */
+    val selectionDeletePrompt: DeletePrompt
+        get() = deletePrompt(bulk = true, selectedRows().map { rowFolder(it) })
+
+    /**
+     * The core's delete-confirm rule over the target folders (`null`: not
+     * in the feed, which the core treats as destroying).
+     */
+    fun deletePrompt(bulk: Boolean, folders: List<Folder?>): DeletePrompt {
+        val flags = folders.joinToString(",", "[", "]") { f -> f?.deleteIsPermanent?.toString() ?: "null" }
+        val o = runCatching { JSONObject(MailNative.deletePrompt(readerPrefs.confirmDelete, bulk, flags)) }.getOrNull()
+        return DeletePrompt(o?.optBoolean("permanent", true) ?: true, o?.optBoolean("ask", true) ?: true)
+    }
 
     /** The folder a row lives in: hits carry their own, rows use the open one. */
     private fun rowFolder(m: MessageRow): Folder? {
@@ -779,8 +816,11 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     /** The folder [m] lives in. */
     fun rowFolderId(m: MessageRow): Long = rowFolder(m)?.id ?: folderId
 
+    /** Deleting [m] alone: destroys or moves to Trash, and whether to ask. */
+    fun rowDeletePrompt(m: MessageRow): DeletePrompt = deletePrompt(bulk = false, listOf(rowFolder(m)))
+
     /** Delete in [m]'s folder destroys instead of moving to Trash. */
-    fun rowDeleteIsPermanent(m: MessageRow): Boolean = rowFolder(m)?.deleteIsPermanent == true
+    fun rowDeleteIsPermanent(m: MessageRow): Boolean = rowDeletePrompt(m).permanent
 
     fun rowMarkRead(m: MessageRow, read: Boolean) = io {
         MailNative.ensureInit(appContext)
@@ -826,14 +866,14 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     private suspend fun afterRow() {
         reloadMessages()
         loadFolders()
-        withContext(Dispatchers.Main) { if (searchActive && similarLabel == null) runSearch() }
+        withContext(Dispatchers.Main) { refreshSearch() }
     }
 
     private suspend fun afterBulk() {
         withContext(Dispatchers.Main) { exitSelectionMode() }
         reloadMessages()
         loadFolders()
-        if (searchActive && similarLabel == null) runSearch()
+        refreshSearch()
     }
 
     fun selectAccount(id: Long) = io {
@@ -899,6 +939,13 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         olderState = ""
         olderLabel = ""
         reloadMessages()
+        // A folder-scoped search follows the folder: fresh scope, fresh
+        // server top-up (Qt `updateSearch` on a folder change).
+        if (searchActive && searchFolderOnly && similarTarget == null) {
+            serverSearchFired = false
+            serverSearchPending = false
+            runSearch()
+        }
         io {
             runCatching { MailNative.syncFolder(activeAccountId, id) }
                 .onFailure { if (!it.isAlreadyRunning()) fail(it.message ?: "sync failed") }
@@ -1045,7 +1092,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         val result = MailNative.moveMessages(activeAccountId, fromFolder, "[$uid]", destPath)
         withContext(Dispatchers.Main) {
             offerUndo(result)
-            if (searchActive && similarLabel == null) runSearch()
+            refreshSearch()
         }
         reloadMessages()
         loadFolders()
@@ -1061,7 +1108,10 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
 
     fun toggleSearchScope() {
         searchFolderOnly = !searchFolderOnly
-        runSearch()
+        // Fresh scope, fresh server top-up (Qt `folderScopeToggled`).
+        serverSearchFired = false
+        serverSearchPending = false
+        if (similarTarget == null) runSearch()
     }
 
     fun clearSearch() {
@@ -1073,21 +1123,48 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         searchHits = emptyList()
         searchActive = false
         similarLabel = null
+        similarTarget = null
+        if (rowFilterQuery.isNotEmpty()) {
+            rowFilterQuery = ""
+            recomputeShown()
+        }
     }
 
     /** Mail like this one across the account, shown as list hits. */
-    fun findSimilar(folder: Long, uid: Int) = io {
+    fun findSimilar(folder: Long, uid: Int) = loadSimilar(folder, uid, refresh = false)
+
+    /**
+     * Re-read whatever the hits show — the query, or the find-similar
+     * result — after a row, reader, undo or job change. Main thread.
+     */
+    private fun refreshSearch() {
+        if (!searchActive) return
+        val t = similarTarget
+        if (t != null) loadSimilar(t.first, t.second, refresh = true) else runSearch()
+    }
+
+    private fun loadSimilar(folder: Long, uid: Int, refresh: Boolean) = io {
         val accountId = activeAccountId
-        val hits = parseMessages(MailNative.similarJson(accountId, folder, uid))
+        // A refresh whose target is gone keeps the hits it has.
+        val hits = runCatching { parseMessages(MailNative.similarJson(accountId, folder, uid)) }
+            .getOrElse { if (refresh) return@io else throw it }
         val subject = runCatching { MailNative.similarSubject(accountId, folder, uid) }.getOrDefault("")
         withContext(Dispatchers.Main) {
+            if (refresh && similarTarget != folder to uid) return@withContext
             searchJob?.cancel()
-            exitSelectionMode()
+            if (refresh) pruneSelection() else exitSelectionMode()
             searchQuery = ""
+            if (rowFilterQuery.isNotEmpty()) {
+                rowFilterQuery = ""
+                recomputeShown()
+            }
             searchHits = hits
             searchActive = true
             shownHits = hits.filter { rowShown(it) }
-            similarLabel = "Similar to: ${subject.ifEmpty { "this message" }}"
+            similarTarget = folder to uid
+            if (!refresh || similarLabel == null) {
+                similarLabel = "Similar to: ${subject.ifEmpty { "this message" }}"
+            }
         }
     }
 
@@ -1148,31 +1225,24 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     fun afterReaderChange() {
         reloadMessages()
         loadFolders()
-        if (searchActive && similarLabel == null) runSearch()
+        refreshSearch()
     }
 
     private fun runSearch() {
         searchJob?.cancel()
         similarLabel = null
+        similarTarget = null
         val query = searchQuery
         val accountId = activeAccountId
         val folderScope = if (searchFolderOnly) openFolder?.path.orEmpty() else ""
-        val shown = messages
-        val shownFolder = folderId
         searchJob = scope.launch(Dispatchers.IO) {
             MailNative.ensureInit(appContext)
             val plan = runCatching { JSONObject(MailNative.searchPlan(query)) }.getOrNull()
+            val filter = if (plan?.optString("mode") == "filter") plan.optString("query") else ""
             val rows = runCatching { when (plan?.optString("mode")) {
-                // Short input filters the shown folder's rows in place.
-                "filter" -> shown
-                    .filter {
-                        MailNative.searchFilterMatches(
-                            plan.optString("query"), it.subject, it.from, it.fromName, it.snippet,
-                        ) == "true"
-                    }
-                    .map { it.copy(folderId = shownFolder) }
+                // The local index answers every keystroke; only the server
+                // backfill waits out the core's debounce.
                 "indexed" -> {
-                    delay(plan.optLong("debounce_ms", 0))
                     val found = parseMessages(MailNative.searchJson(accountId, plan.optString("query"), folderScope))
                     // Thin index results trigger one queued server backfill
                     // per query; its finish event re-runs this search.
@@ -1196,7 +1266,8 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
                 searchActive = rows != null
                 searchHits = rows.orEmpty()
                 shownHits = rows.orEmpty().filter { rowShown(it) }
-                pruneSelection()
+                rowFilterQuery = filter
+                recomputeShown()
             }
         }
     }
@@ -1220,7 +1291,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         // The rows are visible again: the tree counts must come back too,
         // like the Flutter undo does (messages + folders + hits).
         loadFolders()
-        if (searchActive && similarLabel == null) runSearch()
+        refreshSearch()
     }
 
     fun offerUndo(resultJson: String) {

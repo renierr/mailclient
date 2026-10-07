@@ -187,7 +187,8 @@ fun ReaderScreen(
     }
 
     val folder = state.folders.firstOrNull { it.id == folderId }
-    val deletePermanent = folder?.deleteIsPermanent == true
+    val deletePrompt = remember(folder, prefs.confirmDelete) { state.deletePrompt(bulk = false, listOf(folder)) }
+    val deletePermanent = deletePrompt.permanent
 
     fun leaveWith(result: String) {
         val r = runCatching { JSONObject(result) }.getOrNull()
@@ -325,7 +326,7 @@ fun ReaderScreen(
                             }
                         }) { Icon(painterResource(R.drawable.ic_archive), "Archive") }
                         IconButton(onClick = {
-                            if (deletePermanent || prefs.confirmDelete) dialog = ReaderDialog.Delete else runDelete()
+                            if (deletePrompt.ask) dialog = ReaderDialog.Delete else runDelete()
                         }) { Icon(painterResource(R.drawable.ic_delete), if (deletePermanent) "Delete permanently" else "Delete") }
                         val starred = m.optBoolean("starred")
                         IconButton(onClick = {
