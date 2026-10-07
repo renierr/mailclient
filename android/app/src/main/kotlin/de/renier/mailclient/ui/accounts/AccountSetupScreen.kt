@@ -308,10 +308,11 @@ fun AccountSetupScreen(
                 imapPort = it
                 recheck()
             }
-            SecurityPicker("Security", imapSec, securityChoices, warnings["imap_sec"], Modifier.weight(1f)) {
+            SecurityPicker("Security", imapSec, securityChoices, Modifier.weight(1f)) {
                 securityChanged("imap", it)
             }
         }
+        SecurityWarning(warnings["imap_sec"])
         Field("Username", imapUser, errors["imap_user"], warnings["imap_user"]) {
             imapUser = it
             recheck()
@@ -339,10 +340,11 @@ fun AccountSetupScreen(
                 smtpPort = it
                 recheck()
             }
-            SecurityPicker("Security", smtpSec, securityChoices, warnings["smtp_sec"], Modifier.weight(1f)) {
+            SecurityPicker("Security", smtpSec, securityChoices, Modifier.weight(1f)) {
                 securityChanged("smtp", it)
             }
         }
+        SecurityWarning(warnings["smtp_sec"])
         Field("Username", smtpUser, errors["smtp_user"], warnings["smtp_user"]) {
             smtpUser = it
             recheck()
@@ -504,8 +506,6 @@ private fun SecurityPicker(
     label: String,
     value: String,
     choices: List<String>,
-    // The core's warning while plaintext ("none") is chosen.
-    warning: String?,
     modifier: Modifier = Modifier,
     onPick: (String) -> Unit,
 ) {
@@ -520,7 +520,7 @@ private fun SecurityPicker(
             onValueChange = {},
             readOnly = true,
             label = { Text(label) },
-            supportingText = warning?.let { { Text(it) } },
+            singleLine = true,
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
             modifier = Modifier.fillMaxWidth().menuAnchor(
                 ExposedDropdownMenuAnchorType.PrimaryNotEditable,
@@ -545,4 +545,17 @@ private fun securityLabel(value: String): String = when (value) {
     "starttls" -> "STARTTLS"
     "none" -> "None (unencrypted)"
     else -> "SSL/TLS"
+}
+
+// The core's warning while plaintext ("none") is chosen, full width under
+// the port/security row: the half-width picker is too narrow to hold it.
+@Composable
+private fun SecurityWarning(text: String?) {
+    if (text.isNullOrEmpty()) return
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.error,
+        modifier = Modifier.fillMaxWidth(),
+    )
 }

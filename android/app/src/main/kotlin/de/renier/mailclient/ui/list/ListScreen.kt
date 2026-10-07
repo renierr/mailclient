@@ -280,7 +280,8 @@ fun ListScreen(
             ListHeaderRow(
                 state = state,
                 title = if (searching) {
-                    state.similarLabel ?: "Search results"
+                    // The bar below names the message; the title stays short.
+                    if (state.similarLabel != null) "Similar messages" else "Search results"
                 } else {
                     folder?.leaf.orEmpty()
                 },
