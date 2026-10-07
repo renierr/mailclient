@@ -1,22 +1,24 @@
 package de.renier.mailclient.ui.composer
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,7 +45,6 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.PopupProperties
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.R
 import kotlinx.coroutines.Dispatchers
@@ -117,6 +118,12 @@ private data class Suggestion(val address: String, val label: String)
  * A recipient line with suggestions from known contacts. Only the segment
  * being typed is completed (the core finds and replaces it), so a
  * half-typed list is never clobbered.
+ *
+ * The matches render as a small list *below* the field, in the page flow:
+ * no popup, so nothing floats over the input and there is no popup window
+ * for the keyboard to leave without room (the crash seen with many matches
+ * and the keyboard up). The list is capped in height (about five rows) and
+ * scrolls inside; the core already caps the matches at ten.
  */
 @Composable
 fun RecipientField(
@@ -127,12 +134,21 @@ fun RecipientField(
 ) {
     var focused by remember { mutableStateOf(false) }
     var suggestions by remember { mutableStateOf(emptyList<Suggestion>()) }
+    // The text as last inserted by a pick: do not immediately suggest for
+    // it again until the user types something else (Qt only refreshes on
+    // edits, while this effect would rerun for the programmatic change).
+    var picked by remember { mutableStateOf<String?>(null) }
     val text = value.text
     LaunchedEffect(text, focused, suggest) {
         if (!suggest || !focused) {
             suggestions = emptyList()
             return@LaunchedEffect
         }
+        if (picked != null && text == picked) {
+            suggestions = emptyList()
+            return@LaunchedEffect
+        }
+        picked = null
         delay(150)
         suggestions = withContext(Dispatchers.IO) {
             runCatching {
@@ -144,11 +160,11 @@ fun RecipientField(
                     val address = c.optString("address")
                     // `Name <address>`, as inserted (core `recipient_entry`).
                     Suggestion(address, c.optString("entry").ifEmpty { address })
-                }.filter { it.address.isNotEmpty() }
+                }.filter { it.address.isNotEmpty() }.take(10)
             }.getOrDefault(emptyList())
         }
     }
-    Box {
+    Column {
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
@@ -157,21 +173,28 @@ fun RecipientField(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
             modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused },
         )
-        DropdownMenu(
-            expanded = suggestions.isNotEmpty(),
-            onDismissRequest = { suggestions = emptyList() },
-            // Typing goes on in the field while the list is open.
-            properties = PopupProperties(focusable = false),
-        ) {
-            for (s in suggestions) {
-                DropdownMenuItem(
-                    text = { Text(s.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    onClick = {
-                        val next = MailNative.replaceRecipientSegment(text, s.label)
-                        onValueChange(TextFieldValue(next, TextRange(next.length)))
-                        suggestions = emptyList()
-                    },
-                )
+        if (suggestions.isNotEmpty()) {
+            Card(
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            ) {
+                Column(modifier = Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
+                    for (s in suggestions) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                val next = runCatching {
+                                    MailNative.replaceRecipientSegment(text, s.label)
+                                }.getOrDefault(s.label)
+                                picked = next
+                                onValueChange(TextFieldValue(next, TextRange(next.length)))
+                                suggestions = emptyList()
+                            }.padding(horizontal = 12.dp, vertical = 10.dp),
+                        ) {
+                            Text(s.label, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
             }
         }
     }
