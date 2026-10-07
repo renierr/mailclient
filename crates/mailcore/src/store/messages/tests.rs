@@ -283,15 +283,28 @@ fn sorted_listing_orders_by_field_and_direction() {
             .map(|m| m.uid)
             .collect::<Vec<_>>()
     };
-    // IMAP UIDs define the server arrival order. The Date header is
-    // sender-controlled, so a stale/future header must not reorder the
-    // newest server window in the default list.
-    assert_eq!(uids("date", true), vec![3, 2, 1]);
-    assert_eq!(uids("date", false), vec![1, 2, 3]);
+    // Date follows the shown date, not the UID: a mail moved in later gets a
+    // higher UID but keeps its place among its dates.
+    assert_eq!(uids("date", true), vec![2, 3, 1]);
+    assert_eq!(uids("date", false), vec![1, 3, 2]);
     assert_eq!(uids("from", true), vec![1, 3, 2]);
     assert_eq!(uids("subject", false), vec![2, 1, 3]);
     // Unknown fields fall back to date ordering.
-    assert_eq!(uids("size", true), vec![3, 2, 1]);
+    assert_eq!(uids("size", true), vec![2, 3, 1]);
+
+    // An old mail moved in (new high UID) sorts by its date; undated rows go
+    // last in both directions, equal dates fall back to the UID.
+    let mut moved = sample_new(acc, f, 50);
+    moved.date = Some("2026-08-01T10:00:00+00:00".to_string());
+    upsert(&db, &moved).unwrap();
+    let mut undated = sample_new(acc, f, 60);
+    undated.date = None;
+    upsert(&db, &undated).unwrap();
+    let mut twin = sample_new(acc, f, 70);
+    twin.date = Some("2026-09-02T10:00:00+00:00".to_string());
+    upsert(&db, &twin).unwrap();
+    assert_eq!(uids("date", true), vec![2, 70, 3, 1, 50, 60]);
+    assert_eq!(uids("date", false), vec![50, 1, 3, 70, 2, 60]);
 }
 
 #[test]

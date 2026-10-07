@@ -52,6 +52,15 @@ Rectangle {
     // action selects the hit's folder first (`searchFolderNeeded`), since
     // every bridge mutation is scoped to the selected folder.
     property bool searching: false
+    // Whether deleting `targets` (selectionTargets() shape) destroys them;
+    // Main asks the core's `delete_prompt`. The bulk bar and the menus then
+    // offer Delete permanently in place of Move to Trash.
+    property var deletePermanentFor: targets => false
+    readonly property bool bulkDeletePermanent: root.deletePermanentFor(root.selectionTargets())
+    readonly property bool menuDeletePermanent: root.deletePermanentFor(root.searching ? [{
+                                                                                              folder: root.menuFolderPath,
+                                                                                              uid: root.menuUid
+                                                                                          }] : [root.menuUid])
     property var searchRows: []
     // Similar messages mode: if non-empty, displays the dismissable chip
     property string similarSubject: ""
@@ -803,6 +812,7 @@ Rectangle {
                     width: parent.width
                     selectedCount: root.selectedKeys.length
                     allStarred: root.selectionAllStarred()
+                    deletePermanent: root.bulkDeletePermanent
                     onClearRequested: root.clearSelection()
                     onMarkReadRequested: root.emitLater2(root.bulkMarkReadRequested, root.selectionTargets(), true)
                     onMarkUnreadRequested: root.emitLater2(root.bulkMarkReadRequested, root.selectionTargets(), false)
@@ -1211,8 +1221,8 @@ Rectangle {
             onTriggered: root.emitLater(root.moveRequested, root.menuTarget())
         }
         AppMenuItem {
-            glyph: Icons.trash
-            label: qsTr("Move to Trash")
+            glyph: root.menuDeletePermanent ? Icons.deleteForever : Icons.trash
+            label: root.menuDeletePermanent ? qsTr("Delete permanently…") : qsTr("Move to Trash")
             onTriggered: root.emitLater(root.deleteRequested, root.menuTarget())
         }
         MenuSeparator {}
@@ -1227,6 +1237,7 @@ Rectangle {
             onTriggered: exportEmlDialog.openFor(root.menuFolderPath, root.menuUid)
         }
         AppMenuItem {
+            visible: !root.menuDeletePermanent
             glyph: Icons.deleteForever
             label: qsTr("Delete permanently…")
             onTriggered: root.emitLater(root.purgeRequested, root.menuTarget())
@@ -1476,6 +1487,30 @@ Rectangle {
         // Complete action set: the bulk bar collapses buttons into here on
         // narrow panes, so every bar action must have a menu twin.
         AppMenuItem {
+            glyph: Icons.archive
+            label: qsTr("Archive selected")
+            onTriggered: {
+                var uids = root.selectionTargets();
+                Qt.callLater(root.bulkArchiveRequested, uids);
+            }
+        }
+        AppMenuItem {
+            glyph: root.bulkDeletePermanent ? Icons.deleteForever : Icons.trash
+            label: root.bulkDeletePermanent ? qsTr("Delete selected permanently…") : qsTr("Move selected to Trash")
+            onTriggered: {
+                var uids = root.selectionTargets();
+                Qt.callLater(root.bulkDeleteRequested, uids);
+            }
+        }
+        AppMenuItem {
+            glyph: Icons.driveFileMove
+            label: qsTr("Move selected to…")
+            onTriggered: {
+                var uids = root.selectionTargets();
+                Qt.callLater(root.bulkMoveRequested, uids);
+            }
+        }
+        AppMenuItem {
             glyph: Icons.markRead
             label: qsTr("Mark selected as read")
             onTriggered: root.emitLater2(root.bulkMarkReadRequested, root.selectionTargets(), true)
@@ -1489,30 +1524,6 @@ Rectangle {
             glyph: root.selectionAllStarred() ? Icons.starBorder : Icons.star
             label: root.selectionAllStarred() ? qsTr("Remove star from selected") : qsTr("Star selected")
             onTriggered: root.emitLater2(root.bulkStarRequested, root.selectionTargets(), !root.selectionAllStarred())
-        }
-        AppMenuItem {
-            glyph: Icons.archive
-            label: qsTr("Archive selected")
-            onTriggered: {
-                var uids = root.selectionTargets();
-                Qt.callLater(root.bulkArchiveRequested, uids);
-            }
-        }
-        AppMenuItem {
-            glyph: Icons.driveFileMove
-            label: qsTr("Move selected to…")
-            onTriggered: {
-                var uids = root.selectionTargets();
-                Qt.callLater(root.bulkMoveRequested, uids);
-            }
-        }
-        AppMenuItem {
-            glyph: Icons.trash
-            label: qsTr("Move selected to Trash")
-            onTriggered: {
-                var uids = root.selectionTargets();
-                Qt.callLater(root.bulkDeleteRequested, uids);
-            }
         }
         MenuSeparator {}
         AppMenuItem {
@@ -1530,8 +1541,13 @@ Rectangle {
             label: qsTr("Clear selection")
             onTriggered: root.clearSelection()
         }
-        MenuSeparator {}
+        // Where deleting already destroys, the delete entry above says so
+        // and this one would only repeat it.
+        MenuSeparator {
+            visible: !root.bulkDeletePermanent
+        }
         AppMenuItem {
+            visible: !root.bulkDeletePermanent
             glyph: Icons.deleteForever
             label: qsTr("Delete permanently…")
             onTriggered: {

@@ -292,8 +292,8 @@ pub(crate) fn one_line(s: &str) -> String {
 
 /// Rows for the mailbox list: `[{uid, subject, from, date, date_key, snippet,
 /// unread, starred, has_attachments}]`, in the user's sort order (see
-/// `message_sort_field` / `message_sort_desc` — Date means newest IMAP UID
-/// first).
+/// `message_sort_field` / `message_sort_desc` — Date means newest shown
+/// date first).
 ///
 /// Bodies and attachment records are deliberately absent: they are loaded
 /// only for the selected message, via [`message_json`]. Serializing and

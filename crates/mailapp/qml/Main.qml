@@ -480,6 +480,13 @@ ApplicationWindow {
         return null;
     }
 
+    // Search selections can span folders: one flag per target.
+    function targetsDeletePermanent(targets) {
+        if (root.isSearchTargets(targets))
+            return targets.map(t => root.folderDeletePermanent(t.folder));
+        return [root.folderDeletePermanent()];
+    }
+
     function deletePrompt(bulk, permanent) {
         var json = backend.delete_prompt_json(appSettings.confirm_delete, bulk, JSON.stringify(permanent));
         return FeedJson.parse(json, ({
@@ -651,11 +658,7 @@ ApplicationWindow {
     function bulkDelete(targets) {
         if (!targets || targets.length === 0)
             return;
-        // Search selections can span folders: one flag per target.
-        var permanent = [root.folderDeletePermanent()];
-        if (root.isSearchTargets(targets))
-            permanent = targets.map(t => root.folderDeletePermanent(t.folder));
-        var prompt = root.deletePrompt(true, permanent);
+        var prompt = root.deletePrompt(true, root.targetsDeletePermanent(targets));
         if (!prompt.ask) {
             root.doBulkDelete(targets);
             return;
@@ -1335,6 +1338,7 @@ ApplicationWindow {
             sortDescending: backend.sort_descending
             density: appSettings.list_density
             searching: root.searching
+            deletePermanentFor: targets => root.deletePrompt(true, root.targetsDeletePermanent(targets)).permanent
             searchRows: root.searchRows
             // Similar results span the account whatever the scope checkbox says.
             searchFolder: root.searching && root.similarSubject === "" ? root.searchScope() : ""

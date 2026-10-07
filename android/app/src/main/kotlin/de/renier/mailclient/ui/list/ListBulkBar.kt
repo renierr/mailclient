@@ -23,9 +23,12 @@ import de.renier.mailclient.ui.theme.starColor
 
 // Bulk action bar (Qt BulkActionBar, Flutter BulkActionBar): the selection's
 // count plus every action as an icon+text button in one scrollable row —
-// no overflow menu. Move opens the picker's bulk form; trash and purge
-// confirm in the list screen first. The select helpers (all / unread /
-// starred / invert) live only in the header's select menu, not here.
+// no overflow menu. The common actions lead (Archive, Trash). Where the
+// core says deleting destroys (Trash itself, a folder without Trash), the
+// Trash button becomes "Delete" and the separate purge button goes, since
+// both would do the same. Move opens the picker's bulk form; trash and
+// purge confirm in the list screen first. The select helpers (all / unread
+// / starred / invert) live only in the header's select menu, not here.
 @Composable
 fun ListBulkBar(
     state: MailState,
@@ -54,6 +57,16 @@ fun ListBulkBar(
             BulkButton("Clear", R.drawable.ic_close, "Clear selection") {
                 state.exitSelectionMode()
             }
+            val permanent = state.selectionDeletePrompt.permanent
+            BulkButton("Archive", R.drawable.ic_archive, "Archive") {
+                state.bulkArchive()
+            }
+            if (permanent) {
+                BulkButton("Delete", R.drawable.ic_delete_forever, "Delete permanently", onClick = onTrash)
+            } else {
+                BulkButton("Trash", R.drawable.ic_delete, "Move to Trash", onClick = onTrash)
+            }
+            BulkButton("Move", R.drawable.ic_folder, "Move to folder", onClick = onMove)
             BulkButton("Read", R.drawable.ic_check, "Mark read") {
                 state.bulkMarkRead(true)
             }
@@ -68,12 +81,9 @@ fun ListBulkBar(
             ) {
                 state.bulkStar(!state.selectionAllStarred)
             }
-            BulkButton("Archive", R.drawable.ic_archive, "Archive") {
-                state.bulkArchive()
+            if (!permanent) {
+                BulkButton("Delete…", R.drawable.ic_delete_forever, "Delete permanently", onClick = onPurge)
             }
-            BulkButton("Move", R.drawable.ic_folder, "Move to folder", onClick = onMove)
-            BulkButton("Trash", R.drawable.ic_delete, "Move to Trash", onClick = onTrash)
-            BulkButton("Delete…", R.drawable.ic_delete_forever, "Delete permanently", onClick = onPurge)
         }
     }
 }

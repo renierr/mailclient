@@ -160,8 +160,10 @@ pub struct CompactMessage {
 ///
 /// `sort_field` is allowlisted (`date` | `from` | `subject`, anything else =
 /// `date`). `descending` flips the primary key; `from`/`subject` keep newest-first
-/// as the stable secondary order. The Date view orders by IMAP UID, which reflects
-/// the server's delivery order.
+/// as the stable secondary order. The Date view orders by the stored `Date:`
+/// (the date the list shows), undated rows last, UID as the tiebreaker. Not by
+/// UID alone: a mail moved into a folder gets a fresh, high UID there, so an
+/// old archived mail would jump above newer ones.
 fn folder_sort_clause(sort_field: &str, descending: bool) -> String {
     let dir = if descending { "desc" } else { "asc" };
     match sort_field.trim().to_ascii_lowercase().as_str() {
@@ -171,7 +173,7 @@ fn folder_sort_clause(sort_field: &str, descending: bool) -> String {
         "subject" => {
             format!("coalesce(subject, '') collate nocase {dir}, date desc, id desc")
         }
-        _ => format!("uid {dir}"),
+        _ => format!("date is null, date {dir}, uid {dir}"),
     }
 }
 
@@ -230,7 +232,7 @@ pub fn display_name_from_headers(raw_headers: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Paged message list for a folder, newest server arrival first — full rows,
+/// Paged message list for a folder, newest date first — full rows,
 /// bodies included.
 ///
 /// The UI does not use this: it pages with [`list_compact_by_folder_sorted`]
