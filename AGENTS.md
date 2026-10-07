@@ -79,6 +79,12 @@ This file is normative for all coding agents (human or AI) working in this repo.
   The harness enforces this mechanically (requires `-- --live`); do not
   bypass or remove that guard. `cargo test` must stay offline (in-memory
   SQLite only) — never add a test that dials out.
+- **Never uninstall the app from a device or emulator.** `./scripts/android-dev.sh --uninstall`
+  and `adb uninstall` wipe the app's data (accounts, settings, cached mail,
+  seeded databases) with no way back. If an install fails (e.g. a version
+  downgrade that would need a reinstall), stop and ask instead of
+  uninstalling — data loss is never an acceptable side effect of deploying
+  a test build.
 - Do **not** add broad new external dependencies without justification. Prefer: std → small well-scoped crate → large framework. Large additions (new Qt modules, new async runtime, new DB) require user approval.
 - Do **not** put business logic in QML. QML is view-only; logic lives in Rust and is exposed via explicit bridge types.
 - Do **not** invent new top-level directories without updating this file and `PROJECT.md`. Current ones: `crates/`, `flutter/`, `android/`, `qml` (inside `mailapp`), `resources/`, `scripts/`, `dist/` (gitignored). Root docs: `AGENTS.md`, `PROJECT.md`, `SHARED-CORE.md`.

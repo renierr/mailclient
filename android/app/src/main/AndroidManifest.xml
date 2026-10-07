@@ -31,6 +31,7 @@
          default: every account uses TLS unless explicitly configured
          otherwise, which is why the global flag stays on. -->
     <application
+        android:name=".MailApplication"
         android:label="mailclient"
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.Mailclient"

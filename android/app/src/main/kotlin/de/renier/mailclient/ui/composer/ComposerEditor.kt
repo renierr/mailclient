@@ -94,10 +94,12 @@ class EditorController {
 
     /** Re-read the page's height; the view is sized to its content so the
      * screen's scroll owns the gesture. Zero while the page is not laid
-     * out yet — the caller keeps the old height then. */
+     * out yet — the caller keeps the old height then. Clamped to
+     * [MAX_BODY_PX]: see below. */
     internal fun refreshHeight() {
         val w = web ?: return
-        val h = (w.contentHeight * w.resources.displayMetrics.density).toInt()
+        val h = (w.contentHeight * w.resources.displayMetrics.density).toLong()
+            .coerceAtMost(MAX_BODY_PX.toLong()).toInt()
         if (h > 0) contentPx = h
     }
 
@@ -147,7 +149,10 @@ internal class EditorHost(
  * The height tracks `contentHeight` on every input and poll tick, so the
  * caret — fixed relative to the document top — stays visible without any
  * caret math. [minHeight] fills short screens so a one-line draft does not
- * leave a dead page.
+ * leave a dead page. Very tall bodies (a long forwarded quote) stop at
+ * [MAX_BODY_PX] and scroll inside the view past that — an unbounded height
+ * crashes Compose layout (see below), and the reader keeps its own
+ * scroller for the same reason.
  *
  * The page is ours (`MailNative.editorDocument`): JavaScript runs because
  * the editor is JavaScript, behind the core's nonce CSP; no network, no
@@ -166,7 +171,7 @@ fun ComposerEditor(
     val changed by rememberUpdatedState(onChanged)
     val density = LocalDensity.current
     val minPx = with(density) { minHeight.roundToPx() }
-    val heightDp = with(density) { controller.contentPx.coerceAtLeast(minPx).toDp() }
+    val heightDp = with(density) { controller.contentPx.coerceAtLeast(minPx).coerceAtMost(MAX_BODY_PX).toDp() }
 
     // `selectionchange` does not reliably reach the bridge from a WebView
     // (Qt polls `mc.state()` for the same reason), so the toggle state is
@@ -246,3 +251,13 @@ fun ComposerEditor(
 // Slow enough to never matter, fast enough that a caret move lights the
 // toolbar up while the finger is still down.
 private const val FORMAT_POLL_MS = 500L
+
+// Compose packs both axes of a Constraints into 31 bits
+// (`createConstraints`: bits(width) + bits(height) must fit, with a floor
+// per axis), so a view around 2^18 px or taller crashes layout with
+// "Can't represent a width/height in Constraints" — exactly the forward
+// crash: a long quote measured contentHeight × density = 433709 px, and the
+// next recomposition (typing in To) laid the page out with it. Past this
+// cap the WebView keeps its own scroller instead of growing the page;
+// 32_767 px is ~9k dp on a 490 dpi phone, far past any real screen.
+private const val MAX_BODY_PX = 32_767

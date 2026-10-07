@@ -1,5 +1,6 @@
 package de.renier.mailclient.ui.settings
 
+import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -7,9 +8,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -30,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import de.renier.mailclient.CrashLog
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.ui.state.MailState
 import kotlinx.coroutines.Dispatchers
@@ -94,6 +100,43 @@ fun MaintenanceSection(state: MailState) {
             } finally {
                 tmp.delete()
             }
+        }
+    }
+
+    // Crash reports (CrashLog): uncaught exceptions the app wrote before
+    // dying, for installs without adb. Nothing leaves the device except
+    // through Share/Save below.
+    var crashes by remember { mutableStateOf<List<File>>(emptyList()) }
+    var crashReload by remember { mutableIntStateOf(0) }
+    var viewing by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var saveTarget by remember { mutableStateOf<File?>(null) }
+    LaunchedEffect(crashReload) {
+        crashes = withContext(Dispatchers.IO) { CrashLog.list(context) }
+    }
+    fun shareCrash(file: File) {
+        scope.launch {
+            val text = withContext(Dispatchers.IO) { runCatching { file.readText() }.getOrNull() }
+            if (text == null) {
+                state.info("Could not read the crash report")
+            } else {
+                val send = Intent(Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(Intent.EXTRA_SUBJECT, "mailclient ${file.name}")
+                    .putExtra(Intent.EXTRA_TEXT, text)
+                context.startActivity(Intent.createChooser(send, "Share crash report"))
+            }
+        }
+    }
+    val crashSaver = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri ->
+        val target = saveTarget
+        saveTarget = null
+        if (uri == null || target == null) return@rememberLauncherForActivityResult
+        act {
+            context.contentResolver.openOutputStream(uri)?.use { out ->
+                target.inputStream().use { it.copyTo(out) }
+            } ?: error("Could not write the crash report")
+            "Crash report saved"
         }
     }
 
@@ -172,6 +215,77 @@ fun MaintenanceSection(state: MailState) {
                 }
             }) { Text("Trim old messages") }
         }
+
+        SettingHeading("Crash reports")
+        Text(
+            "When the app closes unexpectedly it writes a report here: app version, device and the " +
+                "stack trace. No mail content, no passwords — share one when a crash is investigated.",
+        )
+        if (crashes.isEmpty()) {
+            Text("No crash reports saved.", modifier = Modifier.padding(top = 8.dp))
+        } else {
+            Column(modifier = Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (report in crashes) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(CrashLog.describe(report), style = MaterialTheme.typography.bodySmall)
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedButton(onClick = {
+                                scope.launch {
+                                    val text = withContext(Dispatchers.IO) {
+                                        runCatching { report.readText() }.getOrNull()
+                                            ?: "Could not read the crash report"
+                                    }
+                                    viewing = report.name to text
+                                }
+                            }) { Text("View") }
+                            OutlinedButton(onClick = { shareCrash(report) }) { Text("Share") }
+                            OutlinedButton(onClick = {
+                                saveTarget = report
+                                crashSaver.launch(report.name)
+                            }) { Text("Save…") }
+                        }
+                    }
+                }
+            }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 8.dp),
+            ) {
+                OutlinedButton(enabled = !acting, onClick = { crashReload++ }) { Text("Refresh") }
+                OutlinedButton(enabled = !acting, onClick = {
+                    confirm = Confirm(
+                        "Delete crash reports?",
+                        "Delete all ${crashes.size} saved crash report(s) from this device?",
+                        "Delete",
+                    ) {
+                        CrashLog.deleteAll(context)
+                        crashReload++
+                        "Crash reports deleted"
+                    }
+                }) { Text("Delete all") }
+            }
+        }
+    }
+
+    viewing?.let { (name, text) ->
+        AlertDialog(
+            onDismissRequest = { viewing = null },
+            title = { Text(name) },
+            text = {
+                SelectionContainer {
+                    Text(
+                        text,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.verticalScroll(rememberScrollState()).heightIn(max = 400.dp),
+                    )
+                }
+            },
+            confirmButton = { TextButton(onClick = { viewing = null }) { Text("Close") } },
+        )
     }
 
     confirm?.let { c ->
