@@ -70,6 +70,14 @@ import de.renier.mailclient.ui.reader.ReaderFiles
 import de.renier.mailclient.ui.reader.ReaderScreen
 import de.renier.mailclient.ui.settings.SettingsScreen
 import de.renier.mailclient.ui.state.MailState
+import de.renier.mailclient.ui.state.clearSearch
+import de.renier.mailclient.ui.state.openFolder
+import de.renier.mailclient.ui.state.refreshFolders
+import de.renier.mailclient.ui.state.selectAccount
+import de.renier.mailclient.ui.state.setSearch
+import de.renier.mailclient.ui.state.syncNow
+import de.renier.mailclient.ui.state.toggleSearchScope
+import de.renier.mailclient.ui.state.undo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext

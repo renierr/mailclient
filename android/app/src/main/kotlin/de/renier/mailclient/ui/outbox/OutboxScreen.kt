@@ -38,6 +38,8 @@ import androidx.compose.ui.unit.dp
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.R
 import de.renier.mailclient.ui.state.MailState
+import de.renier.mailclient.ui.state.refreshOutbox
+import de.renier.mailclient.ui.state.syncNow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext

@@ -36,6 +36,10 @@ import androidx.compose.ui.unit.dp
 import de.renier.mailclient.R
 import de.renier.mailclient.ui.state.Folder
 import de.renier.mailclient.ui.state.MailState
+import de.renier.mailclient.ui.state.createFolder
+import de.renier.mailclient.ui.state.openFolder
+import de.renier.mailclient.ui.state.refreshFolderList
+import de.renier.mailclient.ui.state.setFolderSubscribed
 
 // The IMAP folder manager (Flutter FolderManagerDialog / Qt Folders.qml):
 // create folders (`/` nests), hide them from the sidebar, refresh the server

@@ -42,6 +42,12 @@ import de.renier.mailclient.ui.common.Avatar
 import de.renier.mailclient.ui.common.PullToSync
 import de.renier.mailclient.ui.state.Folder
 import de.renier.mailclient.ui.state.MailState
+import de.renier.mailclient.ui.state.activeAccount
+import de.renier.mailclient.ui.state.openFolder
+import de.renier.mailclient.ui.state.selectAccount
+import de.renier.mailclient.ui.state.syncNow
+import de.renier.mailclient.ui.state.toggleFolderExpanded
+import de.renier.mailclient.ui.state.visibleFolders
 
 // The sidebar pane: account chip (switch only — adding and managing live
 // under Accounts), then this account's subscribed folders. A tap paints the

@@ -18,6 +18,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.ui.common.FormDialog
 import de.renier.mailclient.ui.state.MailState
+import de.renier.mailclient.ui.state.applyDatePreset
+import de.renier.mailclient.ui.state.clearDateFilter
+import de.renier.mailclient.ui.state.clearListFilters
+import de.renier.mailclient.ui.state.hasDateFilter
+import de.renier.mailclient.ui.state.hasListFilter
+import de.renier.mailclient.ui.state.setAfterDay
+import de.renier.mailclient.ui.state.setAttachmentsOnly
+import de.renier.mailclient.ui.state.setBeforeDay
+import de.renier.mailclient.ui.state.setSort
+import de.renier.mailclient.ui.state.setStarredOnly
+import de.renier.mailclient.ui.state.setUnreadOnly
 
 // Sort menu (Qt sortMenu, Flutter sort PopupMenuButton): newest/oldest,
 // From A–Z/Z–A, Subject A–Z/Z–A, with a tick on the active order. Hidden

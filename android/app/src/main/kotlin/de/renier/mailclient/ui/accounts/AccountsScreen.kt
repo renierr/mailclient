@@ -27,6 +27,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.ui.common.Avatar
 import de.renier.mailclient.ui.state.MailState
+import de.renier.mailclient.ui.state.removeAccount
+import de.renier.mailclient.ui.state.selectAccount
 
 // Step 2 accounts manager: switch, edit, remove (confirmed), add. The setup
 // form itself is AccountSetupScreen; secrets never come back out.

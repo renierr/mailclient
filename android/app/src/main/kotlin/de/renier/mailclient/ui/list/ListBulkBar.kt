@@ -19,6 +19,13 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.R
 import de.renier.mailclient.ui.state.MailState
+import de.renier.mailclient.ui.state.bulkArchive
+import de.renier.mailclient.ui.state.bulkMarkRead
+import de.renier.mailclient.ui.state.bulkStar
+import de.renier.mailclient.ui.state.exitSelectionMode
+import de.renier.mailclient.ui.state.selectionAllStarred
+import de.renier.mailclient.ui.state.selectionCount
+import de.renier.mailclient.ui.state.selectionDeletePrompt
 import de.renier.mailclient.ui.theme.starColor
 
 // Bulk action bar (Qt BulkActionBar, Flutter BulkActionBar): the selection's

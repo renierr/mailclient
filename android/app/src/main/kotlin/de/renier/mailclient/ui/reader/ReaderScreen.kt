@@ -58,6 +58,11 @@ import de.renier.mailclient.R
 import de.renier.mailclient.ui.composer.ComposeMode
 import de.renier.mailclient.ui.folders.MoveToDialog
 import de.renier.mailclient.ui.state.MailState
+import de.renier.mailclient.ui.state.afterReaderChange
+import de.renier.mailclient.ui.state.deletePrompt
+import de.renier.mailclient.ui.state.findSimilar
+import de.renier.mailclient.ui.state.offerUndo
+import de.renier.mailclient.ui.state.visibleFolders
 import de.renier.mailclient.ui.theme.starColor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
