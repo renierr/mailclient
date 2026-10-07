@@ -26,12 +26,12 @@ android/
         ui/
           MailApp.kt                 (root: theme around the shell)
           shell/                     (route stack, search bar, status strip)
-          state/MailState.kt         (what the shell shows, over JNI)
+          state/                     (MailState + Folders/List/Search/Prefs/Models/Parsers: what the shell shows, over JNI)
           folders/ list/ reader/     (panes: tree + manager, list, reader)
           composer/                  (WYSIWYG editor page, fields, attachments)
           accounts/ contacts/        (account manager + setup form, contacts)
           settings/ outbox/          (settings pages, outbox list)
-          common/                    (avatar and other shared pieces)
+          common/                    (avatar, dialogs, EML saver and other shared pieces)
           theme/Theme.kt             (Material You, brand blue #3B82F6 below Android 12)
       res/                           (launcher icons, vector icons, FileProvider paths)
 ```
