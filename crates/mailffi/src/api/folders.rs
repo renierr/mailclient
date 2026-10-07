@@ -16,6 +16,19 @@ pub fn folders_json(account_id: i64) -> anyhow::Result<String> {
     Ok(mailcore::feed::folders_json(shared_db()?, account_id)?)
 }
 
+/// Painted sidebar rows as JSON: `[{id, collapsible, expanded, unread,
+/// total}]` for `expanded` (expanded folder ids, empty = all collapsed).
+/// The single implementation of the sidebar fold both frontends paint
+/// (`mailcore::feed::sidebar_rows`).
+pub fn sidebar_rows_json(account_id: i64, expanded_json: String) -> anyhow::Result<String> {
+    let expanded: Vec<i64> = serde_json::from_str(&expanded_json).unwrap_or_default();
+    Ok(mailcore::feed::sidebar_rows_json(
+        shared_db()?,
+        account_id,
+        &expanded,
+    )?)
+}
+
 /// Resolve a folder path to its local id, for a UI that navigated by path.
 pub fn folder_id_for_path(account_id: i64, path: String) -> anyhow::Result<i64> {
     Ok(folders::get_by_path(shared_db()?, account_id, &path)?.id)

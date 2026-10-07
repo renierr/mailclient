@@ -76,6 +76,20 @@ data class DeletePrompt(val permanent: Boolean, val ask: Boolean)
 /** A composition sent but not yet accepted by SMTP, as the composer held it. */
 data class PendingSend(val seed: ComposerSeed, val accountId: Long, val folderId: Long)
 
+/**
+ * One painted sidebar row: the folder's id plus its collapse state and the
+ * counts to show, folded by the core (`mailcore::feed::sidebar_rows`). A
+ * collapsed parent already aggregates its hidden children's counts.
+ * Path, role, depth and leaf still come from [Folder], joined by id.
+ */
+data class SidebarRow(
+    val id: Long,
+    val collapsible: Boolean,
+    val expanded: Boolean,
+    val unread: Int,
+    val total: Int,
+)
+
 /** A queue call refused because the same job is in flight: not an error. */
 internal fun Throwable.isAlreadyRunning(): Boolean =
     message.orEmpty().contains("already running", ignoreCase = true)

@@ -79,11 +79,14 @@ fun FoldersScreen(
         HorizontalDivider()
 
         val folders = state.visibleFolders
-        // The set lives in MailState, so navigating into a folder and back
-        // keeps the tree as it was. Plain call, not memoized: reading the
-        // snapshot set subscribes this composition, so a toggle recomposes
-        // with fresh rows.
-        val rows = collapseFolders(folders, state.expandedFolders)
+        // The fold lives in the core (`mailcore::feed::sidebar_rows`); the
+        // set lives in MailState, so navigating into a folder and back
+        // keeps the tree as it was. Reading both snapshots subscribes this
+        // composition, so a toggle recomposes with fresh rows.
+        val byId = folders.associateBy { it.id }
+        val rows = state.sidebarRows.mapNotNull { r ->
+            byId[r.id]?.let { f -> FolderRowState(f, r.collapsible, r.expanded, r.unread, r.total) }
+        }
         PullToSync(onSync = { state.syncNow() }) {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 if (folders.isEmpty()) {
@@ -248,9 +251,9 @@ private fun FolderRow(
     }
 }
 
-// One visible sidebar row: the folder plus its collapse state and the counts
-// to paint (a collapsed parent aggregates its hidden children's counts, so
-// no unread badge disappears with them).
+// One visible sidebar row: the folder plus the core-folded collapse state
+// and the counts to paint (a collapsed parent aggregates its hidden
+// children's counts, so no unread badge disappears with them).
 private data class FolderRowState(
     val folder: Folder,
     val collapsible: Boolean,
@@ -258,57 +261,3 @@ private data class FolderRowState(
     val unread: Int,
     val total: Int,
 )
-
-// The feed `leaf` is the last path segment; what precedes it (minus the
-// single-char IMAP delimiter) is the parent. Depth 0 has none.
-private fun parentPathOf(folder: Folder): String? {
-    if (folder.depth <= 0) return null
-    val cut = folder.path.length - folder.leaf.length - 1
-    return if (cut > 0) folder.path.substring(0, cut) else null
-}
-
-// Fold the flat visible list into sidebar rows: `alwaysVisible` folders
-// (top-level, well-known, and the inbox's direct children — the core's
-// collapse rule) always show; custom subfolders show only while every
-// ancestor up to the nearest always-visible one is expanded. A folder whose
-// parent is not visible reads as a root, the way the old flat list showed
-// it.
-private fun collapseFolders(folders: List<Folder>, expanded: Set<Long>): List<FolderRowState> {
-    val byPath = folders.associateBy { it.path }
-    fun parentOf(folder: Folder): Folder? = byPath[parentPathOf(folder)]
-
-    fun isShown(folder: Folder): Boolean {
-        if (folder.depth <= 0 || folder.alwaysVisible) return true
-        val parent = parentOf(folder) ?: return true
-        return expanded.contains(parent.id) && isShown(parent)
-    }
-
-    fun isUnder(row: Folder, d: Folder): Boolean {
-        var q: Folder? = d
-        while (q != null) {
-            if (q.id == row.id) return true
-            q = parentOf(q)
-        }
-        return false
-    }
-
-    return folders.mapNotNull { folder ->
-        if (!isShown(folder)) return@mapNotNull null
-        // Collapsible only when the toggle hides something: a direct child
-        // that folds away (custom role). INBOX, whose children all stay
-        // visible, gets no chevron and stays inbox-only in counts.
-        val collapsible = folders.any { parentOf(it)?.id == folder.id && !it.alwaysVisible }
-        val open = expanded.contains(folder.id)
-        var unread = folder.unread
-        var total = folder.count
-        if (collapsible && !open) {
-            folders.forEach { d ->
-                if (d.id != folder.id && !isShown(d) && isUnder(folder, d)) {
-                    unread += d.unread
-                    total += d.count
-                }
-            }
-        }
-        FolderRowState(folder, collapsible, open, unread, total)
-    }
-}

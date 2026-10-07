@@ -119,6 +119,10 @@ object MailNative {
     // The move picker's folder tree.
     @JvmStatic external fun foldersJson(accountId: Long): String
 
+    // Painted sidebar rows (`[{id, collapsible, expanded, unread, total}]`)
+    // for the expanded folder ids in expandedJson (`[]` = all collapsed).
+    @JvmStatic external fun sidebarRowsJson(accountId: Long, expandedJson: String): String
+
     // A clicked link split for the examine dialog:
     // `{"safe","scheme","host","path"}`.
     @JvmStatic external fun linkInfo(url: String): String

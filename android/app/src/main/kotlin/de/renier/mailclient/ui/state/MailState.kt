@@ -52,6 +52,11 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
     // In-memory: every launch starts collapsed (default closed). Mutate
     // only through toggleFolderExpanded.
     val expandedFolders = mutableStateSetOf<Long>()
+    // Painted sidebar rows for the current expanded set, folded by the core
+    // (`mailcore::feed::sidebar_rows`). Re-folded on every folders load and
+    // toggle; the sidebar paints these joined to `folders` by id.
+    var sidebarRows: List<SidebarRow> by mutableStateOf(emptyList())
+        internal set
     var messages: List<MessageRow> by mutableStateOf(emptyList())
         internal set
     var canLoadOlder by mutableStateOf(false)

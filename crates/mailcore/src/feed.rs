@@ -8,7 +8,7 @@ use crate::badge::sender_badge;
 use crate::db::Db;
 use crate::error::Result;
 use crate::html::{self, Sanitized};
-use crate::models::FolderRole;
+use crate::models::{Folder, FolderRole};
 use crate::store::{accounts, folders, messages, settings};
 
 /// What a folder's "Show older" row says and offers, from the cached count
@@ -69,16 +69,11 @@ pub fn folders_json(db: &Db, account_id: i64) -> Result<String> {
     let mut arr = Vec::new();
     for f in &list {
         let c = counts.get(&f.id).copied().unwrap_or_default();
-        let unread = if f.role == FolderRole::Trash {
-            0
-        } else {
-            c.unread
-        };
         arr.push(json!({
             "id": f.id,
             "name": f.path,
             "role": f.role.as_str(),
-            "unread": unread,
+            "unread": folder_unread(f, c.unread),
             // Sidebar visibility toggle + cached total (see Folders dialog),
             // plus the hierarchy fields so the move picker can indent
             // subfolders (depth = segments - 1) and show the short name.
@@ -87,16 +82,7 @@ pub fn folders_json(db: &Db, account_id: i64) -> Result<String> {
             "delimiter": f.delimiter,
             "depth": folder_depth(&f.path, &f.delimiter),
             "leaf": folder_leaf(&f.path, &f.delimiter),
-            // Sidebar collapse rule: known folders stay visible inside a
-            // collapsed parent (see `FolderRole::always_visible`), and so
-            // do the inbox's direct children — on servers that file
-            // everything below the inbox those read as top-level. Deeper
-            // custom subfolders fold away.
-            "always_visible": f.role.always_visible() || {
-                parent_path(&f.path, &f.delimiter)
-                    .and_then(|p| role_by_path.get(p.as_str()))
-                    .is_some_and(|r| *r == FolderRole::Inbox)
-            },
+            "always_visible": folder_always_visible(f, &role_by_path),
             // `-1`: the server never reported a count.
             "server_total": f.server_total.map_or(-1, |s| s as i64),
             "older": older_state(c.total, f.server_total).as_str(),
@@ -105,6 +91,151 @@ pub fn folders_json(db: &Db, account_id: i64) -> Result<String> {
         }));
     }
     Ok(serde_json::to_string(&arr)?)
+}
+
+/// Sidebar collapse rule: known folders stay visible inside a collapsed
+/// parent (see `FolderRole::always_visible`), and so do the inbox's direct
+/// children — on servers that file everything below the inbox those read
+/// as top-level. Deeper custom subfolders fold away.
+fn folder_always_visible(
+    f: &Folder,
+    role_by_path: &std::collections::HashMap<&str, FolderRole>,
+) -> bool {
+    f.role.always_visible() || {
+        parent_path(&f.path, &f.delimiter)
+            .and_then(|p| role_by_path.get(p.as_str()))
+            .is_some_and(|r| *r == FolderRole::Inbox)
+    }
+}
+
+/// The sidebar's unread pill: Trash never carries one (the list uses the
+/// same zero to decide its badge).
+fn folder_unread(f: &Folder, unread: u64) -> u64 {
+    if f.role == FolderRole::Trash {
+        0
+    } else {
+        unread
+    }
+}
+
+/// One painted sidebar row: the folder's id plus its collapse state and
+/// the counts to show. A collapsed parent aggregates its hidden children's
+/// counts so no unread pill disappears with them. Painted columns only —
+/// path, role, depth and leaf still come from `folders_json`, joined by id.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SidebarRow {
+    pub id: i64,
+    pub collapsible: bool,
+    pub expanded: bool,
+    pub unread: u64,
+    pub total: u64,
+}
+
+/// Fold one account's subscribed folders into painted sidebar rows for the
+/// given expanded parents (`expanded`: folder ids, in-memory UI state).
+/// The single implementation of the rule both frontends used to duplicate
+/// (`Sidebar.qml`, Kotlin `collapseFolders`): well-known folders always
+/// show, custom subfolders show only while every ancestor up to the nearest
+/// always-visible one is expanded, a folder whose parent is not visible
+/// reads as a root, and a collapsed parent carries its hidden children's
+/// counts. Parentage uses each folder's real IMAP delimiter — never a
+/// one-character assumption. Feed order is kept; hidden rows are omitted.
+#[must_use = "the rows are the sidebar; discarding them paints nothing"]
+pub fn sidebar_rows(db: &Db, account_id: i64, expanded: &[i64]) -> Result<Vec<SidebarRow>> {
+    let counts = messages::counts_by_account(db, account_id)?;
+    let list = folders::list_by_account(db, account_id)?;
+    // Both frontends fold the subscribed subset, so a parent outside it
+    // counts as none and the child reads as a root.
+    let visible: Vec<&Folder> = list.iter().filter(|f| f.subscribed).collect();
+    let role_by_path: std::collections::HashMap<&str, FolderRole> =
+        visible.iter().map(|f| (f.path.as_str(), f.role)).collect();
+    let id_by_path: std::collections::HashMap<&str, i64> =
+        visible.iter().map(|f| (f.path.as_str(), f.id)).collect();
+    let always: std::collections::HashMap<i64, bool> = visible
+        .iter()
+        .map(|f| (f.id, folder_always_visible(f, &role_by_path)))
+        .collect();
+    let expanded_set: std::collections::HashSet<i64> = expanded.iter().copied().collect();
+
+    let parent_of = |id: i64| -> Option<i64> {
+        let f = visible.iter().find(|f| f.id == id)?;
+        parent_path(&f.path, &f.delimiter).and_then(|p| id_by_path.get(p.as_str()).copied())
+    };
+    // Shown while every ancestor up to the nearest always-visible one is
+    // expanded (top-level and well-known folders always show).
+    let is_shown = |mut id: i64| -> bool {
+        loop {
+            if visible
+                .iter()
+                .find(|f| f.id == id)
+                .is_none_or(|f| folder_depth(&f.path, &f.delimiter) == 0 || always[&id])
+            {
+                return true;
+            }
+            match parent_of(id) {
+                None => return true,
+                Some(p) => {
+                    if !expanded_set.contains(&p) {
+                        return false;
+                    }
+                    id = p;
+                }
+            }
+        }
+    };
+    let is_under = |row: i64, mut id: i64| -> bool {
+        loop {
+            if id == row {
+                return true;
+            }
+            match parent_of(id) {
+                None => return false,
+                Some(p) => id = p,
+            }
+        }
+    };
+
+    let mut rows = Vec::new();
+    for f in &visible {
+        if !is_shown(f.id) {
+            continue;
+        }
+        // Collapsible only when the toggle hides something: a direct child
+        // that folds away. INBOX, whose children all stay visible, gets no
+        // chevron and stays inbox-only in counts.
+        let collapsible = visible
+            .iter()
+            .any(|d| parent_of(d.id) == Some(f.id) && !always[&d.id]);
+        let open = expanded_set.contains(&f.id);
+        let c = counts.get(&f.id).copied().unwrap_or_default();
+        let mut unread = folder_unread(f, c.unread);
+        let mut total = c.total;
+        if collapsible && !open {
+            for d in &visible {
+                if d.id != f.id && !is_shown(d.id) && is_under(f.id, d.id) {
+                    let dc = counts.get(&d.id).copied().unwrap_or_default();
+                    unread += folder_unread(d, dc.unread);
+                    total += dc.total;
+                }
+            }
+        }
+        rows.push(SidebarRow {
+            id: f.id,
+            collapsible,
+            expanded: open,
+            unread,
+            total,
+        });
+    }
+    Ok(rows)
+}
+
+/// `[{id, collapsible, expanded, unread, total}]` for the sidebar: the
+/// painted rows of [`sidebar_rows`] as JSON.
+pub fn sidebar_rows_json(db: &Db, account_id: i64, expanded: &[i64]) -> Result<String> {
+    Ok(serde_json::to_string(&sidebar_rows(
+        db, account_id, expanded,
+    )?)?)
 }
 
 /// Hierarchy depth of an IMAP path: segments minus one (`INBOX` → 0,

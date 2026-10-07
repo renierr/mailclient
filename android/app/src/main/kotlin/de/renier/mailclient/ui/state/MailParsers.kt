@@ -66,3 +66,17 @@ internal fun parseMessages(json: String): List<MessageRow> {
         )
     }.filter { it.uid >= 0 }
 }
+
+internal fun parseSidebarRows(json: String): List<SidebarRow> {
+    val arr = runCatching { org.json.JSONArray(json) }.getOrElse { return emptyList() }
+    return List(arr.length()) { i ->
+        val o = arr.optJSONObject(i) ?: JSONObject()
+        SidebarRow(
+            id = o.optLong("id", -1),
+            collapsible = o.optBoolean("collapsible", false),
+            expanded = o.optBoolean("expanded", false),
+            unread = o.optInt("unread", 0),
+            total = o.optInt("total", 0),
+        )
+    }.filter { it.id >= 0 }
+}

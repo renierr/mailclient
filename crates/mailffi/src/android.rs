@@ -790,6 +790,26 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_foldersJson<'caller>
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `MailNative.sidebarRowsJson(accountId, expandedJson)`: painted sidebar
+/// rows (`[{id, collapsible, expanded, unread, total}]`) for the expanded
+/// folder ids in `expandedJson` (`[]` = all collapsed).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_sidebarRowsJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    expanded_json: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let expanded = string(env, &expanded_json)?;
+            Ok(env.new_string(crate::api::folders::sidebar_rows_json(
+                account_id, expanded,
+            )?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `MailNative.linkInfo(url)`: a clicked link split for the examine dialog,
 /// and whether it may be opened at all — `{"safe","scheme","host","path"}`.
 #[unsafe(no_mangle)]

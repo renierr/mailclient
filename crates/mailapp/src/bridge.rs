@@ -205,6 +205,13 @@ pub mod qobject {
         fn set_folder_subscribed(self: Pin<&mut Self>, path: &QString, subscribed: bool)
             -> QString;
 
+        /// Painted sidebar rows (`[{id, collapsible, expanded, unread,
+        /// total}]`) for `expanded_json` (a JSON array of expanded folder
+        /// ids, `[]` = all collapsed). The single implementation of the
+        /// sidebar fold (`mailcore::feed::sidebar_rows`); `"[]"` on error.
+        #[qinvokable]
+        fn sidebar_rows_json(&self, account_id: i64, expanded_json: &QString) -> QString;
+
         /// Sanitized HTML for one message in the current folder.
         /// `allow_remote=true` re-sanitizes the stored raw body with remote
         /// images kept — the "Show once" path (the list feed strips them when
@@ -1027,6 +1034,7 @@ impl Default for SettingsBridgeRust {
 mod accounts;
 mod capabilities;
 mod composer;
+mod folders;
 mod messages;
 mod outbox;
 mod settings;

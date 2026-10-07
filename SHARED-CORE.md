@@ -67,6 +67,7 @@ still to promote") points here instead of keeping its own list.
 | Reader text size factor | `mailcore::store::settings::reader_text_scale` |
 | Empty message list words | `mailcore::search::empty_list_text` |
 | Draft files re-attached on reopen | `mailcore::compose::stage_draft_files` (was a `mailapp` helper); native stages through `MailNative.draftFiles` after fetching `missing_files` |
+| Folder sidebar fold: visible rows, collapse rule, hidden-count aggregation | `mailcore::feed::{sidebar_rows, sidebar_rows_json}` (`SidebarRow {id, collapsible, expanded, unread, total}`, expanded ids in, feed order kept); Qt via `sidebar_rows_json` invokable, native via `MailNative.sidebarRowsJson`; `Sidebar.qml` and Kotlin `collapseFolders` deleted |
 
 ## Open
 
@@ -83,16 +84,6 @@ header spacer, and quote toggling and links go through `mc.quote` /
 `mc.link`. Fix: give the Qt bridge the core document (its colours and
 scale as `EditorStyle`) and keep only the WebEngine wiring in QML; Qt polls
 `mc.state()` since it has no `MCHost`.
-
-### 6. Folder sidebar collapse
-
-`mailcore` supplies only `always_visible` (feed); the parent of a folder,
-whether it can collapse and the hidden children's counts added to the
-parent are derived in `Sidebar.qml` and in Kotlin `collapseFolders`
-(`FoldersScreen.kt`), each from `path`/`leaf` with a one-character
-delimiter assumption. Drift: none known. Fix: feed fields (`parent_id`,
-`collapsible`, hidden unread/total sums) from `feed::folders_json`, which
-already has `parent_path`.
 
 ### 8. Small UI-flavoured twins
 

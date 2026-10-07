@@ -8,10 +8,11 @@ import "components"
 // Folder/account sidebar. Expects `folders` ListModel with
 // {id, name, role, unread, subscribed, count, depth, leaf, always_visible}.
 // Only subscribed (visible) folders are listed — the rest live in the
-// Folders manager. Parents collapse (default closed); well-known folders
-// (`always_visible`, e.g. an Archive filed below INBOX) always show, and a
+// Folders manager. The fold itself lives in the core
+// (`mailcore::feed::sidebar_rows`, via `backend.sidebar_rows_json`):
+// parents collapse (default closed), well-known folders always show, and a
 // collapsed parent aggregates its hidden children's counts so no unread
-// pill disappears with them.
+// pill disappears with them. This file only paints the returned rows.
 Rectangle {
     id: root
 
@@ -20,6 +21,8 @@ Rectangle {
     property string currentFolder: ""
     property string currentEmail: ""
     property int currentAccountId: -1
+    // The Rust bridge, for the folded rows. Main.qml passes it through.
+    property var backend
 
     signal folderSelected(string path)
     signal accountSelected(int id)
@@ -35,103 +38,46 @@ Rectangle {
     // collapsed (default closed).
     property var expandedById: ({})
 
-    function parentPathOf(f) {
-        // Feed `leaf` is the last path segment; what precedes it (minus the
-        // single-char IMAP delimiter) is the parent. Depth 0 has none, and a
-        // parent outside the visible set counts as none — the child then
-        // reads as a root, the way the old flat list showed it.
-        if (f.depth === undefined || f.depth <= 0)
-            return null;
-        var leaf = f.leaf !== undefined ? f.leaf : "";
-        var cut = f.name.length - leaf.length - 1;
-        return cut > 0 ? f.name.substring(0, cut) : null;
-    }
-
     function refreshShown() {
-        var all = [];
-        var byPath = {};
+        var byId = {};
         if (root.folders) {
             for (var i = 0; i < root.folders.count; i++) {
                 var f = root.folders.get(i);
                 if (f.subscribed === false)
                     continue;
-                var row = {
-                    id: f.id,
+                byId[f.id] = {
                     name: f.name,
                     role: f.role,
-                    unread: f.unread,
-                    count: f.count !== undefined ? f.count : 0,
                     depth: f.depth !== undefined ? f.depth : 0,
-                    leaf: f.leaf !== undefined && f.leaf !== "" ? f.leaf : f.name,
-                    alwaysVisible: f.always_visible !== false
+                    leaf: f.leaf !== undefined && f.leaf !== "" ? f.leaf : f.name
                 };
-                all.push(row);
-                byPath[row.name] = row;
             }
         }
-        var parentOf = function (row) {
-            var p = parentPathOf(row);
-            return p !== null && byPath[p] !== undefined ? byPath[p] : null;
-        };
-        var isShown = function (row) {
-            if (row.depth <= 0 || row.alwaysVisible)
-                return true;
-            var p = parentOf(row);
-            if (p === null)
-                return true;
-            return root.expandedById[p.id] === true && isShown(p);
-        };
-        // A row is collapsible only when its toggle hides something: a
-        // direct child that folds away (custom role). INBOX, whose children
-        // all stay visible, gets no chevron and stays inbox-only in counts.
-        var canCollapse = function (row) {
-            for (var i = 0; i < all.length; i++) {
-                if (parentOf(all[i]) === row && all[i].alwaysVisible !== true)
-                    return true;
-            }
-            return false;
-        };
+        var expanded = [];
+        for (var key in root.expandedById) {
+            if (root.expandedById[key] === true)
+                expanded.push(parseInt(key, 10));
+        }
+        var coreRows = [];
+        if (root.backend && root.currentAccountId >= 0)
+            coreRows = FeedJson.parse(root.backend.sidebar_rows_json(root.currentAccountId, JSON.stringify(expanded)),
+                                      []);
         var rows = [];
-        for (var k = 0; k < all.length; k++) {
-            var r = all[k];
-            if (!isShown(r))
+        for (var k = 0; k < coreRows.length; k++) {
+            var r = coreRows[k];
+            var paint = byId[r.id];
+            if (paint === undefined)
                 continue;
-            // A collapsed parent carries its hidden children's counts, so
-            // the unread pill stays honest while they are folded away.
-            var aggUnread = r.unread, aggTotal = r.count;
-            var collapsible = canCollapse(r);
-            if (collapsible && root.expandedById[r.id] !== true) {
-                for (var m = 0; m < all.length; m++) {
-                    var d = all[m];
-                    if (d === r || isShown(d))
-                        continue;
-                    // Hidden offshoot of this row: walk up to confirm.
-                    var q = d, under = false;
-                    while (q !== null) {
-                        if (q === r) {
-                            under = true;
-                            break;
-                        }
-                        q = parentOf(q);
-                    }
-                    if (under) {
-                        aggUnread += d.unread;
-                        aggTotal += d.count;
-                    }
-                }
-            }
             rows.push({
                           id: r.id,
-                          name: r.name,
-                          role: r.role,
-                          unread: r.unread,
-                          count: r.count,
-                          depth: r.depth,
-                          leaf: r.leaf,
-                          collapsible: collapsible,
-                          expanded: root.expandedById[r.id] === true,
-                          aggUnread: aggUnread,
-                          aggTotal: aggTotal
+                          name: paint.name,
+                          role: paint.role,
+                          depth: paint.depth,
+                          leaf: paint.leaf,
+                          collapsible: r.collapsible === true,
+                          expanded: r.expanded === true,
+                          aggUnread: r.unread,
+                          aggTotal: r.total
                       });
         }
         ModelSync.sync(shown, rows, "name");
@@ -148,6 +94,7 @@ Rectangle {
     }
 
     onFoldersChanged: root.refreshShown()
+    onCurrentAccountIdChanged: root.refreshShown()
 
     // Switching account or folder rebuilds the models these delegates and the
     // account popup are built from, so the emit is deferred out of the click

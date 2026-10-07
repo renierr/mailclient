@@ -839,3 +839,113 @@ END:VCALENDAR\r\n";
     assert!(reader["event"].get("start_iso").is_none());
     assert_eq!(reader["event"]["is_cancelled"], false);
 }
+
+#[test]
+fn sidebar_rows_fold_and_aggregate() {
+    let (db, acc, _inbox) = setup();
+    let projects = folders::upsert(&db, acc, "Projects", "/", FolderRole::Custom).unwrap();
+    let client = folders::upsert(&db, acc, "Projects/Client", "/", FolderRole::Custom).unwrap();
+    let deep = folders::upsert(&db, acc, "Projects/Client/Deep", "/", FolderRole::Custom).unwrap();
+    // Two unread in the child, one unread in the grandchild, one read mail
+    // of the parent's own.
+    for uid in [11u32, 12] {
+        msg_store::upsert(&db, &msg_store::sample_new(acc, client, uid)).unwrap();
+    }
+    msg_store::upsert(&db, &msg_store::sample_new(acc, deep, 13)).unwrap();
+    let mut own = msg_store::sample_new(acc, projects, 14);
+    own.is_read = true;
+    msg_store::upsert(&db, &own).unwrap();
+
+    let rows = |expanded: &[i64]| {
+        serde_json::from_str::<serde_json::Value>(&sidebar_rows_json(&db, acc, expanded).unwrap())
+            .unwrap()
+    };
+    let by_id = |v: &serde_json::Value, id: i64| {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    let shown_ids = |v: &serde_json::Value| {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_i64().unwrap())
+            .collect::<Vec<_>>()
+    };
+
+    // Collapsed (default): descendants fold away transitively and the
+    // parent carries their counts, so no unread pill disappears.
+    let collapsed = rows(&[]);
+    let p = by_id(&collapsed, projects);
+    assert_eq!(p["collapsible"], true);
+    assert_eq!(p["expanded"], false);
+    assert_eq!(p["unread"], 3);
+    assert_eq!(p["total"], 4);
+    assert!(!shown_ids(&collapsed).contains(&client));
+    assert!(!shown_ids(&collapsed).contains(&deep));
+
+    // Expanded: every row carries only its own counts.
+    let open = rows(&[projects]);
+    let p = by_id(&open, projects);
+    assert_eq!(p["expanded"], true);
+    assert_eq!(p["unread"], 0);
+    assert_eq!(p["total"], 1);
+    let c = by_id(&open, client);
+    assert_eq!(c["collapsible"], true);
+    assert_eq!(c["expanded"], false);
+    assert_eq!(c["unread"], 3);
+    assert_eq!(c["total"], 3);
+    assert!(!shown_ids(&open).contains(&deep));
+}
+
+#[test]
+fn sidebar_rows_show_well_known_skip_hidden_and_split_delimiters() {
+    let (db, acc, _inbox) = setup();
+    let work = folders::upsert(&db, acc, "INBOX/Work", "/", FolderRole::Custom).unwrap();
+    let trash = folders::upsert(&db, acc, "Trash", "/", FolderRole::Trash).unwrap();
+    // Unread mail in Trash never pills, collapsed or not.
+    msg_store::upsert(&db, &msg_store::sample_new(acc, trash, 21)).unwrap();
+    // Dotted hierarchy resolves on its real delimiter.
+    let lists = folders::upsert(&db, acc, "Lists", ".", FolderRole::Custom).unwrap();
+    let rust = folders::upsert(&db, acc, "Lists.Rust", ".", FolderRole::Custom).unwrap();
+    // No hierarchy at all: a root like any other.
+    let flat = folders::upsert(&db, acc, "Flat", "", FolderRole::Custom).unwrap();
+    // An unsubscribed folder leaves the tree; its custom child reads as a
+    // root, the way the old flat list showed it.
+    let hidden = folders::upsert(&db, acc, "Hidden", "/", FolderRole::Custom).unwrap();
+    let orphan = folders::upsert(&db, acc, "Hidden/Child", "/", FolderRole::Custom).unwrap();
+    folders::set_subscribed(&db, hidden, false).unwrap();
+
+    let rows =
+        serde_json::from_str::<serde_json::Value>(&sidebar_rows_json(&db, acc, &[]).unwrap())
+            .unwrap();
+    let by_id = |id: i64| {
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    let shown: Vec<i64> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_i64().unwrap())
+        .collect();
+
+    // The inbox's direct custom child stays visible inside the collapsed
+    // inbox and has nothing to fold, so no chevron and inbox-only counts.
+    assert!(shown.contains(&work));
+    assert_eq!(by_id(work)["collapsible"], false);
+    assert_eq!(by_id(trash)["unread"], 0);
+    // Dotted child folds into its parent on the "." delimiter.
+    assert!(!shown.contains(&rust));
+    assert_eq!(by_id(lists)["collapsible"], true);
+    assert!(shown.contains(&flat));
+    assert!(!shown.contains(&hidden));
+    assert!(shown.contains(&orphan));
+}

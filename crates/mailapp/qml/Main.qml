@@ -491,9 +491,9 @@ ApplicationWindow {
     function deletePrompt(bulk, permanent) {
         var json = backend.delete_prompt_json(appSettings.confirm_delete, bulk, JSON.stringify(permanent));
         return FeedJson.parse(json, ({
-                "permanent": true,
-                "ask": true
-            }));
+                                         "permanent": true,
+                                         "ask": true
+                                     }));
     }
 
     function deleteMessage(uid) {
@@ -1312,6 +1312,7 @@ ApplicationWindow {
             SplitView.minimumWidth: 160
             folders: folderModel
             accounts: accountModel
+            backend: backend
             currentFolder: root.currentFolder
             currentEmail: backend.current_account_email
             currentAccountId: backend.current_account_id

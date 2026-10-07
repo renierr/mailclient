@@ -77,7 +77,10 @@ internal fun MailState.loadFolders() = io {
     MailNative.ensureInit(appContext)
     val id = activeAccountId
     if (id < 0) {
-        withContext(Dispatchers.Main) { folders = emptyList() }
+        withContext(Dispatchers.Main) {
+            folders = emptyList()
+            refreshSidebarRows()
+        }
         return@io
     }
     val tree = parseFolders(MailNative.foldersJson(id))
@@ -87,6 +90,7 @@ internal fun MailState.loadFolders() = io {
             folderId = -1
             messages = emptyList()
         }
+        refreshSidebarRows()
     }
 }
 
@@ -99,6 +103,19 @@ fun MailState.refreshFolders(andMessages: Boolean = false) {
 /** Flip a folder parent's collapse state in the sidebar tree. */
 fun MailState.toggleFolderExpanded(id: Long) {
     if (!expandedFolders.remove(id)) expandedFolders.add(id)
+    refreshSidebarRows()
+}
+
+/** Re-fold the sidebar for the current expanded set (main thread; local DB read). */
+internal fun MailState.refreshSidebarRows() {
+    val id = activeAccountId
+    sidebarRows = if (id < 0) {
+        emptyList()
+    } else {
+        val expanded = "[${expandedFolders.sorted().joinToString(",")}]"
+        runCatching { parseSidebarRows(MailNative.sidebarRowsJson(id, expanded)) }
+            .getOrDefault(emptyList())
+    }
 }
 
 /** Cache-first open: paint cached rows at once, fill from the server after. */
