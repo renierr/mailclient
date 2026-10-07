@@ -404,6 +404,25 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_messageListed<'calle
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `MailNative.resumeSyncDue(accountId)`: whether returning to the app
+/// should sync the account (`mailcore::sync::resume::resume_sync_due`) —
+/// not when it finished a sync within the grace period.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_resumeSyncDue<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+) -> bool {
+    unowned
+        .with_env(|_env| -> Result<bool> {
+            Ok(mailcore::sync::resume::resume_sync_due(
+                crate::db::shared_db()?,
+                account_id,
+            ))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `MailNative.readerHeaders(folderId, uid)`: `{from, to, cc, date, subject,
 /// message_id, reply_to}`, same JSON as `api::messages::headers_json`.
 #[unsafe(no_mangle)]

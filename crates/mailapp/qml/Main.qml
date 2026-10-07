@@ -71,7 +71,8 @@ ApplicationWindow {
     readonly property bool wideLayout: root.width >= 1100
     readonly property bool mediumLayout: root.width >= 720 && root.width < 1100
     property bool sidebarOpen: true
-    // Narrow navigation: folders | list | reader.
+    // Narrow navigation: folders | list | reader. A cold start opens where
+    // the `start_view` setting says (Component.onCompleted).
     property string narrowPane: "list"
     // Toolbar controls grow with the interface scale but the window minimum
     // does not, so below this width the secondary actions fold into a menu.
@@ -985,6 +986,7 @@ ApplicationWindow {
 
     Component.onCompleted: {
         appSettings.load();
+        root.narrowPane = appSettings.start_view === "inbox" ? "list" : "folders";
         var r = reloadAll();
         if (backend.account_count === 0) {
             root.statusText = qsTr("Add an account to start");
@@ -995,6 +997,7 @@ ApplicationWindow {
             // Cold start from a widget/notification click: already on the
             // right account + inbox. A switch syncs by itself; same-account
             // clicks refresh here (the deferred switch sync skips on busy).
+            root.narrowPane = "list";
             Qt.callLater(function () {
                 if (!root.busy && backend.account_count > 0)
                     root.syncNow();

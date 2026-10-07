@@ -52,6 +52,7 @@ const TABLE: &[(&str, Kind, &[&str])] = &[
     (LIST_DENSITY, Kind::Text, &["comfortable", "compact"]),
     (READER_FONT_SIZE, Kind::Text, &["small", "normal", "large"]),
     (LINK_CLICK_ACTION, Kind::Text, &["examine", "browser"]),
+    (START_VIEW, Kind::Text, &["folders", "inbox"]),
     (
         SYNC_INTERVAL_MINUTES,
         Kind::Int,
@@ -127,6 +128,7 @@ mod tests {
                 LIST_DENSITY => normalize_density(raw).into(),
                 READER_FONT_SIZE => normalize_reader_font(raw).into(),
                 LINK_CLICK_ACTION => normalize_link_click(raw).into(),
+                START_VIEW => normalize_start_view(raw).into(),
                 BACKGROUND_SCHEDULER => normalize_background_scheduler(raw).into(),
                 MARK_READ_DELAY_SECS => normalize_delay_secs(raw.parse().unwrap()).to_string(),
                 SYNC_INTERVAL_MINUTES => normalize_sync_interval(raw.parse().unwrap()).to_string(),

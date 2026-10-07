@@ -666,6 +666,7 @@ pub mod qobject {
         #[qproperty(QString, list_density)]
         #[qproperty(QString, reader_font_size)]
         #[qproperty(QString, link_click_action)]
+        #[qproperty(QString, start_view)]
         #[qproperty(i32, sync_interval_minutes)]
         #[qproperty(bool, quiet_hours_enabled)]
         #[qproperty(QString, quiet_hours_start)]
@@ -983,6 +984,7 @@ pub struct SettingsBridgeRust {
     list_density: QString,
     reader_font_size: QString,
     link_click_action: QString,
+    start_view: QString,
     sync_interval_minutes: i32,
     quiet_hours_enabled: bool,
     quiet_hours_start: QString,
@@ -1008,6 +1010,7 @@ impl Default for SettingsBridgeRust {
             list_density: qstring("comfortable"),
             reader_font_size: qstring("normal"),
             link_click_action: qstring("examine"),
+            start_view: qstring("folders"),
             sync_interval_minutes: 0,
             quiet_hours_enabled: false,
             quiet_hours_start: qstring("00:00"),

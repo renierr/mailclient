@@ -50,6 +50,11 @@ pub const READER_FONT_SIZE: &str = "reader_font_size";
 /// Clicking a link in HTML mail: `examine` (default, safety dialog first)
 /// | `browser` (open directly). Unknown/empty values fall back to `examine`.
 pub const LINK_CLICK_ACTION: &str = "link_click_action";
+/// Where a cold start opens on a one-pane (phone-sized) layout: `folders`
+/// (default, the folder list) | `inbox` (the last used account's inbox).
+/// Wider layouts show both anyway; returning from the background keeps
+/// whatever was open. Unknown/empty values fall back to `folders`.
+pub const START_VIEW: &str = "start_view";
 /// Automatic mail check, in minutes (`0` = manually only, default).
 /// Clamped to 0..1440; the UI offers fixed steps.
 pub const SYNC_INTERVAL_MINUTES: &str = "sync_interval_minutes";
@@ -114,6 +119,7 @@ pub fn defaults(key: &str) -> Option<&'static str> {
         LIST_DENSITY => Some("comfortable"),
         READER_FONT_SIZE => Some("normal"),
         LINK_CLICK_ACTION => Some("examine"),
+        START_VIEW => Some("folders"),
         SYNC_INTERVAL_MINUTES => Some("0"),
         SIGNATURE_ENABLED => Some("0"),
         SIGNATURE_TEXT => Some(""),
@@ -447,6 +453,23 @@ pub fn get_link_click(db: &Db) -> String {
     }
 }
 
+/// Validated start view: `folders` | `inbox`.
+#[must_use]
+pub fn normalize_start_view(raw: &str) -> &'static str {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "inbox" | "list" => "inbox",
+        _ => "folders",
+    }
+}
+
+/// Current start view, resilient to unknown stored values.
+pub fn get_start_view(db: &Db) -> String {
+    match get(db, START_VIEW) {
+        Ok(Some(v)) => normalize_start_view(&v).to_string(),
+        _ => defaults(START_VIEW).unwrap_or("folders").to_string(),
+    }
+}
+
 /// Clamp an auto-check interval into the sane range (minutes, 0 = manual).
 #[must_use]
 pub fn normalize_sync_interval(raw: i64) -> i64 {
@@ -728,6 +751,13 @@ mod tests {
         assert_eq!(get_link_click(&db), "browser");
         set(&db, LINK_CLICK_ACTION, "nonsense").unwrap();
         assert_eq!(get_link_click(&db), "examine");
+        assert_eq!(normalize_start_view(" INBOX "), "inbox");
+        assert_eq!(normalize_start_view("sidebar"), "folders");
+        assert_eq!(get_start_view(&db), "folders");
+        set(&db, START_VIEW, "inbox").unwrap();
+        assert_eq!(get_start_view(&db), "inbox");
+        set(&db, START_VIEW, "nonsense").unwrap();
+        assert_eq!(get_start_view(&db), "folders");
         assert_eq!(get_sync_interval(&db), 0);
         assert_eq!(get_signature_text(&db), "");
         assert_eq!(get_background_scheduler(&db), "workmanager");

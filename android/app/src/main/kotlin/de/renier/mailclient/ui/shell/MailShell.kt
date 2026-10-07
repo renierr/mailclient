@@ -243,6 +243,16 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
         onDispose { state.release() }
     }
 
+    // Cold start: the `start_view` setting picks what a one pane opens on —
+    // the folder list, or the landing folder (the last used account's
+    // inbox). Applied once; wider layouts show both anyway, and a notification
+    // tap that already moved the stack wins.
+    LaunchedEffect(state.startView) {
+        val view = state.startView ?: return@LaunchedEffect
+        state.consumeStartView()
+        if (view == "inbox" && state.folderId >= 0 && stack == listOf(Route.Folders)) stack = mailStack()
+    }
+
     // Notification tap: land on the folder, open the message in the reader.
     LaunchedEffect(openPayload) {
         val parts = openPayload?.split(":") ?: return@LaunchedEffect

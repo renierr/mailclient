@@ -110,6 +110,8 @@ impl qobject::SettingsBridge {
             self.as_mut()
                 .set_link_click_action(qstring(&mailcore::store::settings::get_link_click(db)));
             self.as_mut()
+                .set_start_view(qstring(&mailcore::store::settings::get_start_view(db)));
+            self.as_mut()
                 .set_sync_interval_minutes(mailcore::store::settings::get_sync_interval(db) as i32);
             self.as_mut().set_quiet_hours_enabled(
                 mailcore::store::settings::get_bool(
@@ -187,6 +189,9 @@ impl qobject::SettingsBridge {
                 .to_string();
         let link_click =
             mailcore::store::settings::normalize_link_click(&self.link_click_action().to_string())
+                .to_string();
+        let start_view =
+            mailcore::store::settings::normalize_start_view(&self.start_view().to_string())
                 .to_string();
         let sync_interval = *self.sync_interval_minutes() as i64;
         let quiet_enabled = *self.quiet_hours_enabled();
@@ -280,6 +285,10 @@ impl qobject::SettingsBridge {
                 mailcore::store::settings::LINK_CLICK_ACTION,
                 &link_click,
             ),
+        );
+        note(
+            "start view",
+            mailcore::store::settings::set(db, mailcore::store::settings::START_VIEW, &start_view),
         );
         note(
             "sync interval",

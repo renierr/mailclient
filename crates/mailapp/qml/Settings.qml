@@ -42,6 +42,7 @@ AppDialog {
     property string localDensity
     property string localReaderFont
     property string localLinkClick
+    property string localStartView
     property real localUiScale: 1.0
     property int localSyncInterval
     property bool localQuietEnabled
@@ -262,6 +263,8 @@ AppDialog {
             return v === "from" ? qsTr("Sender") : (v === "subject" ? qsTr("Subject") : qsTr("Date"));
         case "list_density":
             return v === "compact" ? qsTr("Compact") : qsTr("Comfortable");
+        case "start_view":
+            return v === "inbox" ? qsTr("Inbox of the last used account") : qsTr("Folder list");
         case "mark_read_delay_secs":
             return v === 0 ? qsTr("Immediately") : qsTr("After %1 seconds").arg(v);
         case "link_click_action":
@@ -445,6 +448,7 @@ AppDialog {
         root.localDensity = settingsBridge.list_density;
         root.localReaderFont = settingsBridge.reader_font_size;
         root.localLinkClick = settingsBridge.link_click_action;
+        root.localStartView = settingsBridge.start_view;
         root.localUiScale = settingsBridge.ui_scale;
         root.localSyncInterval = settingsBridge.sync_interval_minutes;
         root.localQuietEnabled = settingsBridge.quiet_hours_enabled;
@@ -653,6 +657,16 @@ AppDialog {
                         help: qsTr("Applies to plain-text mail; HTML mail brings its own sizes.")
                         onChosen: index => {
                             root.localReaderFont = root.choiceValue("reader_font_size", index);
+                        }
+                    }
+                    ChoiceRow {
+                        caption: qsTr("Start in")
+                        model: root.choiceLabels("start_view")
+                        currentIndex: root.choiceIndex("start_view", root.localStartView)
+                        help: qsTr(
+                                  "Where the app opens when started in a narrow window. Wider windows show folders and messages side by side.")
+                        onChosen: index => {
+                            root.localStartView = root.choiceValue("start_view", index);
                         }
                     }
                 }
@@ -1311,6 +1325,7 @@ AppDialog {
         settingsBridge.list_density = root.localDensity;
         settingsBridge.reader_font_size = root.localReaderFont;
         settingsBridge.link_click_action = root.localLinkClick;
+        settingsBridge.start_view = root.localStartView;
         settingsBridge.ui_scale = root.localUiScale;
         settingsBridge.sync_interval_minutes = root.localSyncInterval;
         settingsBridge.quiet_hours_enabled = root.localQuietEnabled;

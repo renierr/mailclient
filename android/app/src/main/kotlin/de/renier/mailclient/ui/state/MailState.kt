@@ -1,7 +1,6 @@
 package de.renier.mailclient.ui.state
 
 import android.content.Context
-import android.os.SystemClock
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -371,7 +370,7 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         loadBusy()
         // Cold start: the cache paints first, then the account syncs, like
         // Flutter's start() — a slow server never holds the first paint.
-        refreshAll(syncAfter = true)
+        refreshAll(syncAfter = true, coldStart = true)
         loadReaderPrefs()
     }
 
@@ -383,8 +382,6 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
 
     // ---- Foreground auto-sync (Flutter's start/resumed/_autoSyncTick) ----
 
-    // elapsedRealtime of the last account sync asked for; 0 = never.
-    @Volatile private var lastSyncRequest = 0L
     private var autoSyncMinutes = 0
     private var autoSyncJob: Job? = null
     private var foreground = true
@@ -392,8 +389,9 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
     /**
      * Back in the foreground. Android froze the timer meanwhile, while the
      * background check may have filled the cache: show the cache at once,
-     * then sync unless auto-sync is off or a sync was asked for within the
-     * last minute (a quick app switch, the startup sync).
+     * then sync unless auto-sync is off, one is running, or the account
+     * finished one within the core's grace period (a quick app switch, the
+     * startup sync, a background check). Only this trigger is held back.
      */
     fun resumed() {
         foreground = true
@@ -403,11 +401,10 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
             val id = activeAccountId
             if (id < 0) return@io
             loadAutoSyncMinutes(id)
-            val gapOk = lastSyncRequest == 0L ||
-                SystemClock.elapsedRealtime() - lastSyncRequest >= RESUME_SYNC_GAP_MS
+            val due = runCatching { MailNative.resumeSyncDue(id) }.getOrDefault(true)
             withContext(Dispatchers.Main) {
                 restartAutoSync()
-                if (autoSyncMinutes > 0 && !syncing && gapOk) syncAccount(id)
+                if (autoSyncMinutes > 0 && !syncing && due) syncAccount(id)
             }
         }
     }
@@ -527,7 +524,20 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
         refreshSearch()
     }
 
-    fun refreshAll(syncAfter: Boolean = false) = io {
+    /**
+     * Cold start only: where a one-pane layout opens, the `start_view`
+     * setting (`folders` | `inbox`), once the landing folder is known. The
+     * shell applies it once and clears it; a return from the background
+     * never sets it.
+     */
+    var startView by mutableStateOf<String?>(null)
+        private set
+
+    fun consumeStartView() {
+        startView = null
+    }
+
+    fun refreshAll(syncAfter: Boolean = false, coldStart: Boolean = false) = io {
         MailNative.ensureInit(appContext)
         val parsed = JSONObject(MailNative.initialSelection())
         val accountId = parsed.optLong("account_id", -1)
@@ -539,6 +549,10 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
             folderId = landing
         }
         loadFolders()
+        if (coldStart) {
+            val view = runCatching { JSONObject(MailNative.settingsJson()).optString("start_view") }.getOrNull()
+            withContext(Dispatchers.Main) { startView = view ?: "folders" }
+        }
         refreshOutbox()
         loadSort()
         if (folderId >= 0) reloadMessages()
@@ -1028,7 +1042,6 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
      */
     fun syncAccount(id: Long) = io {
         MailNative.ensureInit(appContext)
-        lastSyncRequest = SystemClock.elapsedRealtime()
         runCatching { MailNative.syncAccount(id) }
             .onFailure { if (!it.isAlreadyRunning()) fail(it.message ?: "sync failed") }
     }
@@ -1365,8 +1378,6 @@ class MailState(private val appContext: Context, private val scope: CoroutineSco
 
     companion object {
         const val PAGE = 200L
-        // Flutter's shouldSyncOnResume gap.
-        const val RESUME_SYNC_GAP_MS = 60_000L
         const val TAG = "MailState"
 
         fun parseAccounts(json: String): List<Account> {

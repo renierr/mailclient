@@ -302,6 +302,12 @@ private fun Offered(d: SettingsDraft, title: String, key: String, help: String? 
 private fun InterfaceSection(d: SettingsDraft) {
     Offered(d, "Interface scale", "ui_scale")
     Offered(d, "Mail text size", "reader_font_size")
+    Offered(
+        d,
+        "Start in",
+        "start_view",
+        help = "Where the app opens when started on a narrow screen. Returning from the background keeps what was open.",
+    )
 }
 
 @Composable

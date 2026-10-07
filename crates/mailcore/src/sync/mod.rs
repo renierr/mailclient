@@ -7,5 +7,6 @@ pub mod headless;
 pub mod imap;
 pub mod pool;
 pub mod push;
+pub mod resume;
 pub mod sender;
 pub mod traits;

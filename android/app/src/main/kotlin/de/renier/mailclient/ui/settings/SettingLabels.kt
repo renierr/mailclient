@@ -20,6 +20,7 @@ object SettingLabels {
             else -> "Date"
         }
         "list_density" -> if (value == "compact") "Compact" else "Comfortable"
+        "start_view" -> if (value == "inbox") "Inbox of the last used account" else "Folder list"
         "mark_read_delay_secs" -> if (value == "0") "Immediately" else "After $value seconds"
         "link_click_action" ->
             if (value == "browser") "Open directly in browser" else "Show safety dialog first (recommended)"

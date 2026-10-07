@@ -70,6 +70,9 @@ object MailNative {
     // whose message is gone closes.
     @JvmStatic external fun messageListed(folderId: Long, uid: Int): Boolean
 
+    // Back in the foreground: sync, or did one finish moments ago?
+    @JvmStatic external fun resumeSyncDue(accountId: Long): Boolean
+
     // Re-sanitized HTML with remote images kept — the "show once" path.
     @JvmStatic external fun readerMessageHtml(folderId: Long, uid: Int, allowRemote: Boolean): String
 

@@ -362,7 +362,8 @@ the open Qt ↔ native differences are listed at the end.
 | Outbox pill + dialog | ✅ | ✅ | ✅ page | Pill words from `outbox::status_json` (`label`); native opens a full page from the status-strip chip: rows with the core's state line and error, Sync now (only while something is retryable), forget a dead row after a confirm |
 | Undo offer (snackbar/toast; Ctrl+Z where a keyboard exists) | ✅ | ✅ | ✅ | The bar lasts the core's `UNDO_GRACE_SECS` everywhere; native takes Ctrl+Z from a hardware keyboard outside the composer |
 | Keyboard shortcuts | ✅ | ✅ | — | Touch: no shortcuts by design |
-| Sync on start, account switch, resume | ✅ (start + switch; no resume on desktop) | ✅ | ✅ | Resume syncs only with auto-sync on and no sync asked for in the last minute |
+| Sync on start, account switch, resume | ✅ (start + switch; no resume on desktop) | ✅ | ✅ | Resume syncs only with auto-sync on and no sync of the account finished within the core's grace period (`mailcore::sync::resume`, 5 minutes); Flutter keeps its own one-minute gap. Start, switch, timer and manual syncs are never held back |
+| Start view on narrow layouts (`start_view`: folder list or the last used account's inbox) | ✅ (narrow window, cold start) | — | ✅ (one pane, cold start) | Returning from the background keeps what was open |
 | Auto-sync timer, quiet hours | ✅ | ✅ | ✅ | Native timer runs only while the app is in the foreground, so quiet hours (which gate unattended ticks) never apply there |
 
 ### Message list
