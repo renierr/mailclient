@@ -1,6 +1,5 @@
 package de.renier.mailclient.ui.list
 
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -38,19 +37,17 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import de.renier.mailclient.MailNative
 import de.renier.mailclient.R
 import de.renier.mailclient.ui.common.Avatar
+import de.renier.mailclient.ui.common.DeleteConfirmDialog
 import de.renier.mailclient.ui.common.PullToSync
+import de.renier.mailclient.ui.common.rememberEmlSaver
 import de.renier.mailclient.ui.folders.MoveToDialog
-import de.renier.mailclient.ui.reader.CreateTypedDocument
-import de.renier.mailclient.ui.reader.ReaderFiles
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.state.bulkMove
 import de.renier.mailclient.ui.state.bulkPurge
@@ -87,9 +84,7 @@ import de.renier.mailclient.ui.state.visibleFolders
 import de.renier.mailclient.ui.state.visibleRows
 import de.renier.mailclient.ui.state.MessageRow
 import de.renier.mailclient.ui.theme.starColor
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 // Message list: a pinned header (folder or search title, sort, filter,
 // selection), an active-filter bar, rows with avatar + unread dot (a
@@ -169,18 +164,10 @@ fun ListScreen(
     var rowMove by remember { mutableStateOf<MessageRow?>(null) }
     var rowTrash by remember { mutableStateOf<MessageRow?>(null) }
     var rowPurge by remember { mutableStateOf<MessageRow?>(null) }
-    var pendingEml by remember { mutableStateOf<ByteArray?>(null) }
-    val context = LocalContext.current
-    val saveEml = rememberLauncherForActivityResult(CreateTypedDocument()) { uri ->
-        val bytes = pendingEml
-        pendingEml = null
-        if (uri != null && bytes != null) {
-            jumpScope.launch {
-                val ok = withContext(Dispatchers.IO) { runCatching { ReaderFiles.write(context, uri, bytes) }.isSuccess }
-                state.info(if (ok) "Saved" else "Could not save the message")
-            }
-        }
-    }
+    val emlSaver = rememberEmlSaver(
+        onSaved = { state.info("Saved") },
+        onFailed = { state.info(it) },
+    )
 
     fun onRowAction(action: RowAction, m: MessageRow) {
         when (action) {
@@ -192,16 +179,7 @@ fun ListScreen(
             RowAction.Trash -> if (state.rowDeletePrompt(m).ask) rowTrash = m else state.rowTrash(m)
             RowAction.Purge -> rowPurge = m
             RowAction.Similar -> state.findSimilar(state.rowFolderId(m), m.uid)
-            RowAction.SaveEml -> jumpScope.launch {
-                val folderId = state.rowFolderId(m)
-                val file = withContext(Dispatchers.IO) {
-                    runCatching { MailNative.exportEmlBytes(folderId, m.uid) to MailNative.suggestedEmlName(folderId, m.uid) }
-                }
-                file.onSuccess { (bytes, name) ->
-                    pendingEml = bytes
-                    saveEml.launch(name to "message/rfc822")
-                }.onFailure { state.info(it.message ?: "Could not export the message") }
-            }
+            RowAction.SaveEml -> emlSaver(state.rowFolderId(m), m.uid)
         }
     }
 

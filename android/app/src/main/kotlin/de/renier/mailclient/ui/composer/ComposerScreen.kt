@@ -23,7 +23,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -62,6 +61,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.R
+import de.renier.mailclient.ui.common.DeleteConfirmDialog
 import de.renier.mailclient.ui.common.FormDialog
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.state.PendingSend
@@ -605,23 +605,15 @@ fun ComposerScreen(
         )
     }
     if (confirmDeleteDraft) {
-        AlertDialog(
-            onDismissRequest = { confirmDeleteDraft = false },
-            title = { Text("Delete draft?") },
-            text = { Text("The server copy is destroyed permanently. This cannot be undone.") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        confirmDeleteDraft = false
-                        deleteDraft()
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError,
-                    ),
-                ) { Text("Delete draft") }
+        DeleteConfirmDialog(
+            title = "Delete draft?",
+            text = "The server copy is destroyed permanently. This cannot be undone.",
+            confirmLabel = "Delete draft",
+            onConfirm = {
+                confirmDeleteDraft = false
+                deleteDraft()
             },
-            dismissButton = { TextButton(onClick = { confirmDeleteDraft = false }) { Text("Cancel") } },
+            onDismiss = { confirmDeleteDraft = false },
         )
     }
 }

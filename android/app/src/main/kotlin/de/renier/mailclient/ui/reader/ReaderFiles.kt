@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
-import androidx.activity.result.contract.ActivityResultContract
 import androidx.core.content.FileProvider
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.ui.state.MailState
@@ -110,11 +109,6 @@ object ReaderFiles {
         return Intent.createChooser(view, "Open with")
     }
 
-    fun write(context: Context, uri: Uri, bytes: ByteArray) {
-        context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
-            ?: throw IllegalStateException("cannot write")
-    }
-
     /** Write each file into a picked directory tree; the count written. */
     fun writeAll(context: Context, tree: Uri, files: List<SaveFile>): Int {
         val parent = DocumentsContract.buildDocumentUriUsingTree(
@@ -134,16 +128,3 @@ object ReaderFiles {
 }
 
 class SaveFile(val name: String, val mime: String, val bytes: ByteArray)
-
-/** CREATE_DOCUMENT with the type chosen per launch: (suggested name, MIME). */
-class CreateTypedDocument : ActivityResultContract<Pair<String, String>, Uri?>() {
-    override fun createIntent(context: Context, input: Pair<String, String>): Intent =
-        Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = input.second
-            putExtra(Intent.EXTRA_TITLE, input.first)
-        }
-
-    override fun parseResult(resultCode: Int, intent: Intent?): Uri? =
-        if (resultCode == android.app.Activity.RESULT_OK) intent?.data else null
-}

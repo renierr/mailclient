@@ -56,6 +56,10 @@ import androidx.compose.ui.unit.sp
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.R
 import de.renier.mailclient.ui.composer.ComposeMode
+import de.renier.mailclient.ui.common.CreateTypedDocument
+import de.renier.mailclient.ui.common.DeleteConfirmDialog
+import de.renier.mailclient.ui.common.rememberEmlSaver
+import de.renier.mailclient.ui.common.writeBytes
 import de.renier.mailclient.ui.folders.MoveToDialog
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.state.afterReaderChange
@@ -139,7 +143,7 @@ fun ReaderScreen(
         pendingSave = null
         if (uri != null && bytes != null) {
             bg {
-                ReaderFiles.write(context, uri, bytes)
+                writeBytes(context, uri, bytes)
                 withContext(Dispatchers.Main) { state.info("Saved") }
             }
         }
@@ -154,6 +158,10 @@ fun ReaderScreen(
             }
         }
     }
+    val emlSaver = rememberEmlSaver(
+        onSaved = { state.info("Saved") },
+        onFailed = { state.info(it) },
+    )
 
     LaunchedEffect(folderId, uid, reloadTick, allowRemote) {
         try {
@@ -398,14 +406,7 @@ fun ReaderScreen(
                                 },
                                 onRemote = { remoteOnce = true },
                                 onSaveEml = {
-                                    bg {
-                                        val bytes = MailNative.exportEmlBytes(folderId, uid)
-                                        val name = MailNative.suggestedEmlName(folderId, uid)
-                                        withContext(Dispatchers.Main) {
-                                            pendingSave = bytes
-                                            saveOne.launch(name to "message/rfc822")
-                                        }
-                                    }
+                                    emlSaver(folderId, uid)
                                 },
                                 onHeaders = {
                                     bg {
@@ -464,18 +465,18 @@ fun ReaderScreen(
     }
 
     when (val d = dialog) {
-        ReaderDialog.Delete -> ConfirmDialog(
+        ReaderDialog.Delete -> DeleteConfirmDialog(
             title = if (deletePermanent) "Delete permanently?" else "Move to Trash?",
             text = if (deletePermanent) "“${m?.optString("subject")}” will be destroyed on the server. This cannot be undone."
             else "“${m?.optString("subject")}” will be moved to Trash.",
-            confirm = if (deletePermanent) "Delete permanently" else "Move to Trash",
+            confirmLabel = if (deletePermanent) "Delete permanently" else "Move to Trash",
             onConfirm = { dialog = null; runDelete() },
             onDismiss = { dialog = null },
         )
-        ReaderDialog.Purge -> ConfirmDialog(
+        ReaderDialog.Purge -> DeleteConfirmDialog(
             title = "Delete permanently?",
             text = "“${m?.optString("subject")}” will be destroyed on the server. This cannot be undone.",
-            confirm = "Delete permanently",
+            confirmLabel = "Delete permanently",
             onConfirm = {
                 dialog = null
                 bg {
@@ -560,17 +561,6 @@ private fun ReaderMenu(
         item("Show headers", R.drawable.ic_info, onHeaders)
         item("Delete permanently…", R.drawable.ic_delete_forever, onPurge)
     }
-}
-
-@Composable
-private fun ConfirmDialog(title: String, text: String, confirm: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = { Text(text) },
-        confirmButton = { TextButton(onClick = onConfirm) { Text(confirm, color = MaterialTheme.colorScheme.error) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
 }
 
 @Composable
