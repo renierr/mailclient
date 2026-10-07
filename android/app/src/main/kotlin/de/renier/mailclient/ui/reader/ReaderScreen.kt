@@ -120,13 +120,16 @@ fun ReaderScreen(
     var remoteOnce by remember(folderId, uid) { mutableStateOf(false) }
     var originalColors by remember(folderId, uid) { mutableStateOf(false) }
     var downloadingInline by remember(folderId, uid) { mutableStateOf(false) }
-    var dialog by remember { mutableStateOf<ReaderDialog?>(null) }
-    var menu by remember { mutableStateOf(false) }
+    // Dialog, menu and pending picker bytes belong to this message: the
+    // composition survives a message switch (same `when` branch, new
+    // params), so an unkeyed dialog would act on the next message.
+    var dialog by remember(folderId, uid) { mutableStateOf<ReaderDialog?>(null) }
+    var menu by remember(folderId, uid) { mutableStateOf(false) }
     val allowRemote = prefs.loadRemoteImages || remoteOnce
 
     // Pending bytes for the save pickers (the picker result only has a Uri).
-    var pendingSave by remember { mutableStateOf<ByteArray?>(null) }
-    var pendingSaveAll by remember { mutableStateOf<List<SaveFile>>(emptyList()) }
+    var pendingSave by remember(folderId, uid) { mutableStateOf<ByteArray?>(null) }
+    var pendingSaveAll by remember(folderId, uid) { mutableStateOf<List<SaveFile>>(emptyList()) }
 
     fun bg(work: suspend () -> Unit) {
         scope.launch(Dispatchers.IO) {

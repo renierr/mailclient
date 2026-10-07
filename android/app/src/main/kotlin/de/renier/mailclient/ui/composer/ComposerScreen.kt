@@ -91,7 +91,9 @@ fun ComposerScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val account = remember(accountId) { state.accounts.firstOrNull { it.id == accountId } }
+    // Keyed on the accounts too: they load after the first composition,
+    // and a lookup that ran while the list was still empty must re-run.
+    val account = remember(accountId, state.accounts) { state.accounts.firstOrNull { it.id == accountId } }
     val accountEmail = account?.email.orEmpty()
 
     // The account's domain is locked (SPF / DKIM alignment); only the local
