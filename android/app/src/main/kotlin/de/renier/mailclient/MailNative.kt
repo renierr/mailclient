@@ -220,6 +220,11 @@ object MailNative {
     @JvmStatic external fun draftFiles(accountId: Long, uid: Int, dir: String): String
     @JvmStatic external fun deleteDraft(accountId: Long, uid: Int)
     @JvmStatic external fun answerDraft(folderId: Long, uid: Int, mode: String): String
+
+    // A forward's files: how many still need fetching, then the cached ones
+    // staged under [dir] as `{files: [{path,name}], missing, notice}`.
+    @JvmStatic external fun forwardMissing(folderId: Long, uid: Int): Int
+    @JvmStatic external fun forwardFiles(folderId: Long, uid: Int, dir: String): String
     @JvmStatic external fun blankDraft(): String
     @JvmStatic external fun imageDataUrl(path: String): String
     @JvmStatic external fun senderParts(address: String): String

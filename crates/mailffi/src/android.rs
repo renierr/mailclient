@@ -1996,6 +1996,51 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_answerDraft<'caller>
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `MailNative.forwardMissing(folderId, uid)`: how many of the original's
+/// files have no cached bytes yet — fetch them first when non-zero. Local read.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_forwardMissing<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+    uid: i32,
+) -> i32 {
+    unowned
+        .with_env(|_env| -> Result<i32> {
+            let db = crate::db::shared_db()?;
+            let n = mailcore::compose::forward_missing(db, folder_id, uid.max(0) as u32)
+                .map_err(anyhow::Error::msg)?;
+            Ok(i32::try_from(n).unwrap_or(i32::MAX))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.forwardFiles(folderId, uid, dir)`: the original's cached
+/// files staged under `dir` for a forward, `{files: [{path, name}], missing,
+/// notice}`. Local only, never fetches.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_forwardFiles<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+    uid: i32,
+    dir: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let db = crate::db::shared_db()?;
+            let files = mailcore::compose::stage_forward_files(
+                db,
+                folder_id,
+                uid.max(0) as u32,
+                std::path::Path::new(&string(env, &dir)?),
+            )
+            .map_err(anyhow::Error::msg)?;
+            Ok(env.new_string(serde_json::to_string(&files)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `MailNative.blankDraft()`: new-mail draft (just the signature), same
 /// shape as `answerDraft`.
 #[unsafe(no_mangle)]

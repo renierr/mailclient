@@ -59,6 +59,7 @@ import de.renier.mailclient.MailNotifier
 import de.renier.mailclient.R
 import de.renier.mailclient.ui.accounts.AccountSetupScreen
 import de.renier.mailclient.ui.accounts.AccountsScreen
+import de.renier.mailclient.ui.composer.ComposeMode
 import de.renier.mailclient.ui.composer.ComposerScreen
 import de.renier.mailclient.ui.composer.ComposerSeed
 import de.renier.mailclient.ui.contacts.ContactsScreen
@@ -180,6 +181,25 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
             } else {
                 go(Route.Composer(seed, accountId, folderId))
             }
+        }
+    }
+
+    // Reply, reply-all or forward. A forward keeps the original's files:
+    // any not cached yet are fetched first (like a reopened draft), and the
+    // core names whatever still could not be.
+    fun answer(accountId: Long, folderId: Long, uid: Int, mode: ComposeMode) {
+        val stageDir = File(context.cacheDir, "outgoing").absolutePath
+        scope.launch {
+            if (mode == ComposeMode.Forward) {
+                withContext(Dispatchers.IO) {
+                    val missing = runCatching {
+                        MailNative.ensureInit(context)
+                        MailNative.forwardMissing(folderId, uid)
+                    }.getOrDefault(0)
+                    if (missing > 0) ReaderFiles.downloadAll(state, accountId, folderId, uid)
+                }
+            }
+            startCompose { ComposerSeed.answer(folderId, uid, mode, stageDir) }
         }
     }
 
@@ -513,7 +533,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                             onShowSimilar = {
                                 if (layout == PaneLayout.Three) readerFullscreen = false else back()
                             },
-                            onCompose = { mode -> startCompose { ComposerSeed.answer(r.folderId, r.uid, mode) } },
+                            onCompose = { mode -> answer(r.accountId, r.folderId, r.uid, mode) },
                             closeIcon = layout == PaneLayout.Three,
                             fullscreen = fullscreen,
                             onToggleFullscreen = { readerFullscreen = !readerFullscreen },

@@ -8,6 +8,11 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.FlingBehavior
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.ScrollScope
+import androidx.compose.foundation.gestures.rememberScrollableState
+import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -50,9 +55,8 @@ data class PagePaint(
 // design (AGENTS.md reader rule): the WebView keeps its own scroller — one
 // sized to a whole newsletter would be one enormous surface — and [header]
 // overlays the top of the page, follows its scroll, and the document starts
-// with a spacer of the header's height. The header takes taps on its
-// buttons only; drags anywhere else are the page's own, so there is one
-// scroller and one fling.
+// with a spacer of the header's height. Drags on the header are handed to
+// the WebView, so there is one scroller and one fling.
 //
 // Belt and braces around the core's sanitizer: JavaScript, file and content
 // access off, the core's CSP (no network except allowed remote images), and
@@ -77,6 +81,32 @@ fun MailWebView(
     var scrollPx by remember { mutableIntStateOf(0) }
     var doc by remember { mutableStateOf<String?>(null) }
     val fitBelow = remember(html) { runCatching { MailNative.readerFitBelow(html).toInt() }.getOrDefault(0) }
+    val web = remember { WebHandle() }
+    // Header drags move the page: px by px while the finger is down (the
+    // fraction carried over so slow drags do not stall), then the
+    // WebView's own fling so it coasts exactly like a drag on the body.
+    val forward = rememberScrollableState { delta ->
+        val view = web.view ?: return@rememberScrollableState 0f
+        val want = -delta + web.rest
+        val px = want.toInt()
+        web.rest = want - px
+        val before = view.scrollY
+        view.scrollBy(0, px)
+        if (px != 0 && view.scrollY == before) {
+            web.rest = 0f
+            0f
+        } else {
+            delta
+        }
+    }
+    val fling = remember {
+        object : FlingBehavior {
+            override suspend fun ScrollScope.performFling(initialVelocity: Float): Float {
+                web.view?.flingScroll(0, -initialVelocity.toInt())
+                return 0f
+            }
+        }
+    }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val fit = fitWidths && fitBelow > 0 && maxWidth.value < fitBelow
@@ -99,6 +129,7 @@ fun MailWebView(
             modifier = Modifier.fillMaxSize(),
             factory = { context ->
                 WebView(context).apply {
+                    web.view = this
                     overScrollMode = View.OVER_SCROLL_NEVER
                     settings.apply {
                         javaScriptEnabled = false
@@ -159,21 +190,37 @@ fun MailWebView(
                     web.loadDataWithBaseURL(null, d, "text/html", "utf-8", null)
                 }
             },
-            onRelease = { it.destroy() },
+            onRelease = {
+                if (web.view === it) web.view = null
+                it.destroy()
+            },
         )
 
         // Once the header is off the top it stays there: nothing moves while
         // the rest of the mail scrolls. Measured at its full height, never
-        // squeezed into a short (landscape) view.
+        // squeezed into a short (landscape) view. A drag that starts on the
+        // header (its buttons, a long attachment list) scrolls the page; the
+        // drag cancels the tap, as in any scrolling column, so taps still work.
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .wrapContentHeight(Alignment.Top, unbounded = true)
                 .offset { IntOffset(0, -min(scrollPx, headerPx + 1)) }
+                .scrollable(
+                    state = forward,
+                    orientation = Orientation.Vertical,
+                    flingBehavior = fling,
+                )
                 .background(MaterialTheme.colorScheme.surface)
                 .onSizeChanged { headerPx = it.height },
         ) {
             header()
         }
     }
+}
+
+/** The live WebView for header drags, and the sub-pixel drag left over. */
+private class WebHandle {
+    var view: WebView? = null
+    var rest = 0f
 }

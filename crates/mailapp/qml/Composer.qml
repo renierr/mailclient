@@ -113,6 +113,8 @@ Dialog {
     property string replyNoticeAddr: ""
     // mailcore's sentence for it (`AnswerDraft.notice`).
     property string replyNotice: ""
+    // A forward's files that could not be downloaded (mailcore's sentence).
+    property string filesNotice: ""
 
     // Outgoing files picked via FileDialog: [{path, name}]. Paths (plain or
     // `file://` URLs) travel in the send payload; Rust reads the bytes at
@@ -246,6 +248,7 @@ Dialog {
         root.showReplyTo = false;
         root.replyNoticeAddr = "";
         root.replyNotice = "";
+        root.filesNotice = "";
         root.attachments = [];
         root.draftUid = -1;
     }
@@ -295,7 +298,14 @@ Dialog {
     function openForAnswer(uid, mode) {
         if (!root.readyForNew())
             return;
-        var draft = root.backend && uid >= 0 ? FeedJson.parse(root.backend.answer_draft_json(uid, mode), ({})) : ({});
+        root.openAnswerDraft(root.backend && uid >= 0 ? FeedJson.parse(root.backend.answer_draft_json(uid, mode), ({})) : ({}));
+    }
+
+    // A prepared answer draft; a forward's also carries the original's files
+    // (`attachments`) and `files_notice` for any left out.
+    function openAnswerDraft(draft) {
+        if (!root.readyForNew())
+            return;
         if (draft.body_html === undefined) {
             root.statusMessage(qsTr("This message is no longer available"));
             return;
@@ -309,6 +319,8 @@ Dialog {
         // Reply-To elsewhere than the sender: the banner says so out loud.
         root.replyNoticeAddr = draft.notice_addr || "";
         root.replyNotice = draft.notice || "";
+        root.attachments = draft.attachments || [];
+        root.filesNotice = draft.files_notice || "";
         root.setBody(draft.body_html);
         root.markClean();
         open();
@@ -694,6 +706,14 @@ Dialog {
         }
 
         // --- attachments ----------------------------------------------------
+        Label {
+            Layout.fillWidth: true
+            visible: root.filesNotice !== ""
+            wrapMode: Text.Wrap
+            color: Theme.warning
+            font.pixelSize: Theme.fontSmall
+            text: root.filesNotice
+        }
         ComposerAttachmentTray {
             Layout.fillWidth: true
             visible: root.attachments.length > 0

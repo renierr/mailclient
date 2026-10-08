@@ -407,6 +407,7 @@ the open Qt ↔ native differences are listed at the end.
 | Original/darkened colours, zoom | ✅ | ✅ | ✅ | Reader text size factor is `settings::reader_text_scale`: Qt scales the HTML document's base size by it (sizes a mail sets stay its own), native uses it as WebView text zoom with pinch zoom on top |
 | Fullscreen reader | ✅ | ✅ | ✅ | Toggle in the reader bar; hides the shell bars and the other panes, back leaves it first. Native also hides the Android system bars (swipe shows them briefly), so it gains room on a phone too |
 | Reply / Reply-all / Forward | ✅ | ✅ | ✅ | Recipients, subject, quote and signature from `mailcore::compose::answer` everywhere |
+| Forward keeps the attachments | ✅ | ❌ | ✅ | `mailcore::compose::forward` downloads files not cached yet, stages them for the composer and names any that could not be fetched. Flutter is retired |
 | Archive / Move / Delete / Star | ✅ | ✅ | ✅ | |
 | Prev/next message | ✅ keys | ❌ | ❌ | Qt: Up/Down step through the list and open the message; no button anywhere |
 

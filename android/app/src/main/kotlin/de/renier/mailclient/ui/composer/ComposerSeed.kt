@@ -36,6 +36,8 @@ data class ComposerSeed(
     // Answering mail whose replies go somewhere unexpected.
     val replyNotice: String = "",
     val replyNoticeAddr: String = "",
+    // A forward's files that could not be fetched: the core's sentence.
+    val filesNotice: String = "",
     // A send that failed after the composer closed comes back with
     // everything as it was sent: sender name, picked files, and why.
     val fromName: String? = null,
@@ -49,14 +51,24 @@ data class ComposerSeed(
         fun blank(): ComposerSeed =
             ComposerSeed(ComposeMode.Blank, bodyHtml = JSONObject(MailNative.blankDraft()).optString("body_html"))
 
-        /** Reply, reply-all or forward: recipients, subject, quote prepared by the core. */
-        fun answer(folderId: Long, uid: Int, mode: ComposeMode): ComposerSeed {
+        /**
+         * Reply, reply-all or forward: recipients, subject, quote prepared by
+         * the core. A forward also carries the original's files, staged under
+         * [stageDir] from the cache (fetch them first, `forwardMissing`).
+         */
+        fun answer(folderId: Long, uid: Int, mode: ComposeMode, stageDir: String): ComposerSeed {
             val wire = when (mode) {
                 ComposeMode.ReplyAll -> "reply_all"
                 ComposeMode.Forward -> "forward"
                 else -> "reply"
             }
             val d = JSONObject(MailNative.answerDraft(folderId, uid, wire))
+            val fwd = if (mode == ComposeMode.Forward) {
+                JSONObject(MailNative.forwardFiles(folderId, uid, stageDir))
+            } else {
+                null
+            }
+            val files = fwd?.optJSONArray("files")
             return ComposerSeed(
                 mode = mode,
                 to = d.optString("to"),
@@ -66,6 +78,10 @@ data class ComposerSeed(
                 // The core's sentence; shown while To still holds the address.
                 replyNotice = d.optString("notice"),
                 replyNoticeAddr = d.optString("notice_addr"),
+                filesNotice = fwd?.optString("notice").orEmpty(),
+                attachments = List(files?.length() ?: 0) { i ->
+                    files!!.getJSONObject(i).let { PickedFile(it.getString("path"), it.getString("name")) }
+                },
             )
         }
 

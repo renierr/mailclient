@@ -11,6 +11,7 @@ mod answer;
 mod drafts;
 pub mod editor;
 mod form;
+mod forward;
 mod from;
 mod reply;
 mod segments;
@@ -25,6 +26,7 @@ pub use drafts::{
     stage_draft_files, DraftSaved, StagedFile,
 };
 pub use form::ComposeForm;
+pub use forward::{forward_files, forward_missing, stage_forward_files, ForwardFiles};
 pub use from::{effective_from, sender_parts, SenderParts};
 pub use reply::{reply_address, ReplyAddress};
 pub use segments::{recipient_segment, replace_recipient_segment};

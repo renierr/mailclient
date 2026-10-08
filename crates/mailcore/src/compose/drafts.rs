@@ -203,7 +203,11 @@ pub fn stage_draft_files(db: &Db, message_id: i64, base: &Path) -> Result<Vec<St
 /// One cached attachment in a single-use 0700 dir under `base`. The file
 /// name keeps the original extension for MIME guessing; the dir per call
 /// avoids name collisions in a shared temp folder.
-fn stage_attachment(db: &Db, attachment_id: i64, base: &Path) -> Result<PathBuf, String> {
+pub(super) fn stage_attachment(
+    db: &Db,
+    attachment_id: i64,
+    base: &Path,
+) -> Result<PathBuf, String> {
     use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
 

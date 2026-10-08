@@ -497,6 +497,9 @@ fun ComposerScreen(
                         }
                     }
                 }
+                if (seed.filesNotice.isNotEmpty()) {
+                    ComposerNotice(seed.filesNotice)
+                }
                 AttachmentTray(picked) {
                     picked.remove(it)
                     dirty = true

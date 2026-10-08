@@ -5,8 +5,8 @@ use mailcore::compose::{self, ComposeForm};
 
 use crate::bridge::messages::file_url;
 use crate::bridge::qobject;
-use crate::bridge::qstring;
 use crate::bridge::worker::{spawn_job, JobDone, JobRefresh, BUSY_MESSAGE};
+use crate::bridge::{qstring, shared_db};
 use mailcore::sync::attachments::ensure_cached;
 
 // Thin adapter over `mailcore::compose`: parse the QML form, start the job,
@@ -108,6 +108,35 @@ impl qobject::Bridge {
         ))
     }
 
+    pub fn forward_missing(&self, uid: i32) -> i32 {
+        let Ok(db) = shared_db() else {
+            return 0;
+        };
+        compose::forward_missing(db, *self.current_folder_id(), uid.max(0) as u32)
+            .map_or(0, |n| i32::try_from(n).unwrap_or(i32::MAX))
+    }
+
+    pub fn forward_draft_json(&self, uid: i32) -> QString {
+        let Ok(db) = shared_db() else {
+            return qstring("{}");
+        };
+        let folder_id = *self.current_folder_id();
+        let uid = uid.max(0) as u32;
+        compose::stage_forward_files(db, folder_id, uid, &std::env::temp_dir())
+            .and_then(|files| forward_payload(db, folder_id, uid, files))
+            .map_or_else(|_| qstring("{}"), |j| qstring(&j))
+    }
+
+    pub fn forward_fetch(self: Pin<&mut Self>, uid: i32) -> QString {
+        let folder_id = *self.current_folder_id();
+        let uid = uid.max(0) as u32;
+        spawn_job(self, "Forward", move |db, _progress| async move {
+            let files = compose::forward_files(db, folder_id, uid, &std::env::temp_dir()).await?;
+            // Read-only: nothing in the feeds changed.
+            Ok((forward_payload(db, folder_id, uid, files)?, None))
+        })
+    }
+
     pub fn draft_form(self: Pin<&mut Self>, uid: i32) -> QString {
         let folder_id = *self.current_folder_id();
         spawn_job(self, "Open draft", move |db, _progress| async move {
@@ -162,4 +191,29 @@ impl qobject::Bridge {
             ))
         })
     }
+}
+
+/// The forward answer draft with the staged files merged in, the way the
+/// QML composer takes a draft (`attachments` as `file://` URLs).
+fn forward_payload(
+    db: &mailcore::Db,
+    folder_id: i64,
+    uid: u32,
+    files: compose::ForwardFiles,
+) -> Result<String, String> {
+    let draft =
+        compose::answer_draft_json(db, folder_id, uid, "forward").map_err(|e| e.to_string())?;
+    let mut draft: serde_json::Value = serde_json::from_str(&draft).map_err(|e| e.to_string())?;
+    draft["attachments"] = files
+        .files
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "path": file_url(std::path::Path::new(&f.path)),
+                "name": f.name,
+            })
+        })
+        .collect();
+    draft["files_notice"] = files.notice.into();
+    Ok(draft.to_string())
 }

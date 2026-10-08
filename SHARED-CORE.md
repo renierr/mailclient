@@ -36,6 +36,7 @@ still to promote") points here instead of keeping its own list.
 | Sender avatar letters and colour | `mailcore::badge` |
 | Where a reply goes, Reply-To differs | `mailcore::compose::reply_address` |
 | New, reply, reply-all and forward drafts | `mailcore::compose::answer` |
+| A forward's files: what still needs downloading, staging the rest, the left-out notice | `mailcore::compose::{forward_missing, stage_forward_files, forward_files}` |
 | Account setup guesses, ports, security choices, field check, edit form | `mailcore::store::account_form::{guess, default_port, port_after_security_change, SECURITY_CHOICES, check, load, defaults_json}` |
 | Attachment file names, Save, Save all, viewer copy | `mailcore::paths::safe_attachment_name`, `mailcore::store::messages::{save_attachment_to, save_all_attachments_to, write_attachment_copy}`; feed fields `display_name` / `file_name` |
 | Locked From domain: split for the field, joined for sending | `mailcore::compose::{sender_parts, effective_from}`; both fields refuse a typed `@` |

@@ -290,6 +290,22 @@ pub mod qobject {
         #[qinvokable]
         fn answer_draft_json(&self, uid: i32, mode: &QString) -> QString;
 
+        /// How many of a message's files a forward still has to download
+        /// (current folder). Zero: `forward_draft_json` has them all.
+        #[qinvokable]
+        fn forward_missing(&self, uid: i32) -> i32;
+
+        /// Forward draft as JSON: `answer_draft_json`'s shape plus the
+        /// original's cached files as `attachments` (`[{path, name}]`) and
+        /// `files_notice` naming any left out. Local, never downloads.
+        #[qinvokable]
+        fn forward_draft_json(&self, uid: i32) -> QString;
+
+        /// Job "Forward": download the original's files, then report
+        /// `forward_draft_json`'s payload as the job status.
+        #[qinvokable]
+        fn forward_fetch(self: Pin<&mut Self>, uid: i32) -> QString;
+
         /// New-mail draft (just the signature) as JSON, same shape as
         /// `answer_draft_json`.
         #[qinvokable]
