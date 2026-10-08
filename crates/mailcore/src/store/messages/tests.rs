@@ -421,3 +421,61 @@ fn changing_indexed_text_does_re_index() {
         1
     );
 }
+
+#[test]
+fn a_deferred_read_then_write_fails_where_immediate_succeeds() {
+    // Why `replace_attachments` opens an Immediate transaction and reads
+    // *before* it: a deferred transaction that has already read holds a
+    // snapshot, and the first write then has to upgrade it. A commit from any
+    // other connection in between makes that upgrade fail immediately with
+    // SQLITE_BUSY_SNAPSHOT, and the busy handler does not cover it -- the GUI
+    // thread and the net thread both own a connection, and the `--sync-once`
+    // CLI shares the file.
+    use rusqlite::TransactionBehavior;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("upgrade.sqlite");
+    let db = Db::open(&path).unwrap();
+    let mut other = rusqlite::Connection::open(&path).unwrap();
+    other.execute_batch("pragma busy_timeout = 5000;").unwrap();
+
+    // The competing write has to change a page the snapshot read: a statement
+    // writing nothing (`where 1 = 0`) or setting a column to itself lets the
+    // upgrade succeed, which quietly makes this test pass for the wrong reason.
+    let bump = "update schema_meta set value = 'A' where key = 'version'";
+    let read = "select value from schema_meta where key = 'version'";
+
+    // Deferred: the read lands inside the transaction, then the other
+    // connection commits, then the first write needs the upgrade.
+    {
+        let tx = other.unchecked_transaction().unwrap();
+        let seen: String = tx.query_row(read, [], |r| r.get(0)).unwrap();
+        assert_eq!(seen, "23");
+        db.conn().execute(bump, []).unwrap();
+        let err = tx.execute(bump, []);
+        let err = err.expect_err("a deferred read should not upgrade after a competing commit");
+        let stale = tx.query_row(read, [], |r| r.get::<_, String>(0)).unwrap();
+        // Still the value from before the commit: the snapshot really is held.
+        assert_eq!(
+            stale, seen,
+            "the snapshot was not held, so the race is not exercised"
+        );
+        let _ = err;
+        let _ = tx.rollback();
+    }
+
+    // Immediate: the write lock is taken when the transaction opens, so the
+    // same read-then-write sequence goes through once the other has committed.
+    {
+        let tx = rusqlite::Transaction::new_unchecked(&other, TransactionBehavior::Immediate)
+            .expect("immediate should start once the other writer committed");
+        let seen: String = tx.query_row(read, [], |r| r.get(0)).unwrap();
+        assert_eq!(seen, "A");
+        tx.execute(
+            "update schema_meta set value = 'B' where key = 'version'",
+            [],
+        )
+        .expect("an immediate transaction reads and then writes without a snapshot upgrade");
+        tx.commit().unwrap();
+    }
+}

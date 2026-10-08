@@ -47,8 +47,22 @@ pub fn add_attachment(db: &Db, message_id: i64, a: &NewAttachment) -> Result<i64
 /// metadata row got wrong, and that correction must update the row in
 /// place rather than orphan the ID the reader holds.
 pub fn replace_attachments(db: &Db, message_id: i64, files: &[NewAttachment]) -> Result<()> {
-    let tx = db.conn().unchecked_transaction()?;
+    // Read before the transaction opens. `unchecked_transaction()` is a
+    // deferred `BEGIN`, and a read taken *inside* it holds a snapshot that the
+    // first write then has to upgrade; if any other connection commits in
+    // between (the GUI thread and the net thread both have one, and the
+    // `--sync-once` CLI shares the file) that upgrade fails immediately with
+    // SQLITE_BUSY_SNAPSHOT, and the busy handler does not cover it. Symptom:
+    // attachment saves failing with "database is locked" under no
+    // user-visible cause.
     let mut existing = list_attachments(db, message_id)?;
+    // `Immediate`, not the deferred default: the write lock is taken when the
+    // transaction opens rather than when the first write lands, so a second
+    // writer queues on the busy handler instead of doing work and failing. It
+    // also keeps the fix independent of statement order inside the body -- a
+    // read added here later would otherwise reintroduce the upgrade.
+    let tx =
+        rusqlite::Transaction::new_unchecked(db.conn(), rusqlite::TransactionBehavior::Immediate)?;
     for file in files {
         let matched = existing.iter().position(|a| {
             a.filename == file.filename
