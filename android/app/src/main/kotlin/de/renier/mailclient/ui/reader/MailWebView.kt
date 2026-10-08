@@ -1,6 +1,7 @@
 package de.renier.mailclient.ui.reader
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.view.View
@@ -31,7 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.viewinterop.AndroidView
 import de.renier.mailclient.MailNative
@@ -74,7 +75,10 @@ fun MailWebView(
     onLongPressUrl: (String) -> Unit,
     header: @Composable () -> Unit,
 ) {
-    val density = LocalDensity.current
+    // The page's CSS pixel is the display's own density, not the shell's
+    // LocalDensity: that one carries the interface scale, which the WebView
+    // never sees, so a spacer sized by it falls short of the header.
+    val pagePx = LocalContext.current.resources.displayMetrics.density
     val tap by rememberUpdatedState(onTapUrl)
     val longPress by rememberUpdatedState(onLongPressUrl)
     var headerPx by remember { mutableIntStateOf(0) }
@@ -85,14 +89,17 @@ fun MailWebView(
     // Header drags move the page: px by px while the finger is down (the
     // fraction carried over so slow drags do not stall), then the
     // WebView's own fling so it coasts exactly like a drag on the body.
+    // Clamped to the page's own scroll range: an unclamped scrollTo moves
+    // the view (and the header with it) on a page that cannot scroll.
     val forward = rememberScrollableState { delta ->
         val view = web.view ?: return@rememberScrollableState 0f
         val want = -delta + web.rest
         val px = want.toInt()
         web.rest = want - px
         val before = view.scrollY
-        view.scrollBy(0, px)
-        if (px != 0 && view.scrollY == before) {
+        val target = (before + px).coerceIn(0, view.maxScrollY())
+        if (target != before) view.scrollTo(view.scrollX, target)
+        if (px != 0 && target == before) {
             web.rest = 0f
             0f
         } else {
@@ -110,7 +117,7 @@ fun MailWebView(
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val fit = fitWidths && fitBelow > 0 && maxWidth.value < fitBelow
-        val topSpace = ceil(headerPx / density.density).toInt()
+        val topSpace = ceil(headerPx / pagePx).toInt()
         // Rebuilt off the main thread (a mail with inline images is
         // megabytes), and debounced: a reload resets the scroll, so a header
         // still settling (details toggled) must cost one load, not several.
@@ -128,7 +135,7 @@ fun MailWebView(
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { context ->
-                WebView(context).apply {
+                ReaderWebView(context).apply {
                     web.view = this
                     overScrollMode = View.OVER_SCROLL_NEVER
                     settings.apply {
@@ -209,6 +216,9 @@ fun MailWebView(
                 .scrollable(
                     state = forward,
                     orientation = Orientation.Vertical,
+                    // The page draws its own edge; a stretch here would
+                    // distort the header alone.
+                    overscrollEffect = null,
                     flingBehavior = fling,
                 )
                 .background(MaterialTheme.colorScheme.surface)
@@ -221,6 +231,11 @@ fun MailWebView(
 
 /** The live WebView for header drags, and the sub-pixel drag left over. */
 private class WebHandle {
-    var view: WebView? = null
+    var view: ReaderWebView? = null
     var rest = 0f
+}
+
+/** A WebView that tells how far its page can scroll (the range is protected). */
+private class ReaderWebView(context: Context) : WebView(context) {
+    fun maxScrollY(): Int = (computeVerticalScrollRange() - computeVerticalScrollExtent()).coerceAtLeast(0)
 }
