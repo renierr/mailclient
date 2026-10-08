@@ -87,8 +87,16 @@ Item {
             root.pendingHtml = html === undefined ? "" : html;
             return;
         }
-        view.runJavaScript("document.getElementById('e').innerHTML = " + JSON.stringify(html === undefined ? "" : html)
-                           + ";");
+        // The caret starts in the text slot, the first empty top-level
+        // paragraph (`<p><br></p>`, mailcore's `compose::answer`), so a
+        // reply is typed above the quote — as the core editor page does.
+        var body = JSON.stringify(html === undefined ? "" : html);
+        var js = "var e = document.getElementById('e');" + "e.innerHTML = " + body + ";" + "e.focus();"
+                + "var n = e.firstElementChild;"
+                + "while (n && !(n.nodeName === 'P' && n.textContent.trim() === '' && !n.querySelector('img')))"
+                + " n = n.nextElementSibling;" + "var r = document.createRange();" + "r.setStart(n || e, 0);"
+                + "r.collapse(true);" + "getSelection().removeAllRanges();" + "getSelection().addRange(r);";
+        view.runJavaScript(js);
     }
 
     function focusEditor() {

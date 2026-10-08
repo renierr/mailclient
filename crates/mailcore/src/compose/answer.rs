@@ -102,9 +102,20 @@ pub struct AnswerDraft {
     pub body_html: String,
 }
 
-/// A new, empty mail: only the signature.
+/// The empty line the user types into. `<br>` gives it a line's height: an
+/// empty `<p></p>` collapses in a `contentEditable`, and the caret can only
+/// land in the paragraph next to it.
+pub(crate) const TEXT_SLOT: &str = "<p><br></p>";
+
+/// A new, empty mail: the text slot above the signature, or nothing (the
+/// editor's placeholder shows) without one.
 pub fn blank_draft(opts: &AnswerOptions) -> AnswerDraft {
     let (signature_html, signature_text) = signature(opts);
+    let body_html = if signature_html.is_empty() {
+        String::new()
+    } else {
+        format!("{TEXT_SLOT}{signature_html}")
+    };
     AnswerDraft {
         from: String::new(),
         to: String::new(),
@@ -113,7 +124,7 @@ pub fn blank_draft(opts: &AnswerOptions) -> AnswerDraft {
         notice_addr: String::new(),
         notice_sender: String::new(),
         notice: String::new(),
-        body_html: signature_html.clone(),
+        body_html,
         signature_html,
         signature_text,
         quote_html: String::new(),
@@ -145,7 +156,7 @@ pub fn answer_draft(src: &AnswerSource, mode: AnswerMode, opts: &AnswerOptions) 
             notice_addr: String::new(),
             notice_sender: String::new(),
             notice: String::new(),
-            body_html: format!("{signature_html}<p></p>{quote_html}"),
+            body_html: format!("{TEXT_SLOT}{signature_html}{quote_html}"),
             signature_html,
             signature_text,
             quote_html,
@@ -187,9 +198,9 @@ pub fn answer_draft(src: &AnswerSource, mode: AnswerMode, opts: &AnswerOptions) 
     };
     let quote_html = quote(&format!("On {}, {sender} wrote:", src.date), src);
     let body_html = if opts.reply_below_quote {
-        format!("{quote_html}<p></p>{signature_html}")
+        format!("{quote_html}{TEXT_SLOT}{signature_html}")
     } else {
-        format!("<p></p>{signature_html}{quote_html}")
+        format!("{TEXT_SLOT}{signature_html}{quote_html}")
     };
     AnswerDraft {
         notice_addr: if reply.differs {

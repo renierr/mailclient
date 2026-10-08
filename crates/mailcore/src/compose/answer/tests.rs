@@ -42,7 +42,7 @@ fn reply_quotes_html_in_a_blockquote_under_the_attribution() {
     assert!(!d.quote_first);
     assert_eq!(
         d.body_html,
-        format!("<p></p>{}{}", d.signature_html, d.quote_html)
+        format!("{TEXT_SLOT}{}{}", d.signature_html, d.quote_html)
     );
     assert_eq!(d.notice_addr, "");
 }
@@ -60,7 +60,7 @@ fn plain_mail_is_quoted_as_escaped_citations() {
         .quote_html
         .ends_with("<p>&gt; a &lt; b<br>&gt; line two</p>"));
     assert_eq!(d.signature_html, "");
-    assert_eq!(d.body_html, format!("<p></p>{}", d.quote_html));
+    assert_eq!(d.body_html, format!("{TEXT_SLOT}{}", d.quote_html));
 }
 
 #[test]
@@ -101,7 +101,7 @@ fn bottom_posting_puts_the_quote_first() {
     assert!(d.quote_first);
     assert_eq!(
         d.body_html,
-        format!("{}<p></p>{}", d.quote_html, d.signature_html)
+        format!("{}{TEXT_SLOT}{}", d.quote_html, d.signature_html)
     );
 }
 
@@ -117,7 +117,7 @@ fn forward_has_no_recipients_and_a_forward_header() {
     assert!(!d.quote_first);
     assert_eq!(
         d.body_html,
-        format!("{}<p></p>{}", d.signature_html, d.quote_html)
+        format!("{TEXT_SLOT}{}{}", d.signature_html, d.quote_html)
     );
 }
 
@@ -155,9 +155,11 @@ fn modes_parse_from_adapter_strings() {
 }
 
 #[test]
-fn blank_draft_is_the_signature_alone() {
+fn blank_draft_is_a_text_slot_above_the_signature() {
     let d = blank_draft(&opts());
-    assert_eq!(d.body_html, d.signature_html);
+    assert_eq!(d.body_html, format!("{TEXT_SLOT}{}", d.signature_html));
+    // Without a signature the editor's placeholder shows instead.
+    assert_eq!(blank_draft(&AnswerOptions::default()).body_html, "");
     assert_eq!(d.signature_text, "-- \n Me\nExample Ltd ");
     assert_eq!(d.to, "");
     assert_eq!(d.subject, "");

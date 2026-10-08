@@ -91,7 +91,8 @@ nonce CSP, the `window.mc` script) that native Android loads. Qt's
 `EditorFrame.qml` still assembles its own page in QML and polls
 `queryCommandState` itself. Drift: small — native's page has a CSP and a
 header spacer, and quote toggling and links go through `mc.quote` /
-`mc.link`. Fix: give the Qt bridge the core document (its colours and
+`mc.link`. Both start the caret in the text slot (first empty
+top-level `<p>`); Qt repeats that lookup in `setHtml`. Fix: give the Qt bridge the core document (its colours and
 scale as `EditorStyle`) and keep only the WebEngine wiring in QML; Qt polls
 `mc.state()` since it has no `MCHost`.
 

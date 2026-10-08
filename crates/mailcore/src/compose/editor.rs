@@ -19,7 +19,9 @@
 //! formatting tags left empty, so an unused toggle sends nothing.
 //!
 //! The toolkit drives the page through `window.mc` (`exec`, `quote`, `link`,
-//! `save`, `html`, `top`, `state`, `focus`). A host that can receive calls
+//! `save`, `html`, `top`, `state`, `focus`). The caret starts in the text
+//! slot (the first empty top-level paragraph, `answer::TEXT_SLOT`), so a
+//! reply is typed above the quote, not into its attribution line. A host that can receive calls
 //! from the page exposes `window.MCHost` with `changed()` (the user edited)
 //! and `state(json)` (formatting at the caret changed: `b`, `i`, `u`, `l`
 //! list, `q` quote); one that cannot polls `mc.state()` instead.
@@ -111,6 +113,8 @@ function edited(){if(host)host.changed();report();}
 var TAGS={bold:['B','STRONG'],italic:['I','EM'],underline:['U']};
 function holder(n,names){for(;n&&n!==e;n=n.parentNode){if(n.nodeType===1&&names.indexOf(n.nodeName)>=0)return n;}return null;}
 function place(n,o){var r=document.createRange();r.setStart(n,o);r.collapse(true);var s=getSelection();s.removeAllRanges();s.addRange(r);}
+function slot(){for(var n=e.firstElementChild;n;n=n.nextElementSibling){if(n.nodeName==='P'&&n.textContent.trim()===''&&!n.querySelector('img'))return n;}return null;}
+function start(){var n=slot();place(n||e,0);}
 function toggle(c){var r=sel(),names=TAGS[c];
 if(!inside(r)||!r.collapsed){document.execCommand(c,false,null);return;}
 var z=document.createTextNode('\u200B'),h=holder(r.startContainer,names);
@@ -122,6 +126,7 @@ place(z,1);}
 function clean(root){var w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT),t;
 while((t=w.nextNode())){if(t.data.indexOf('\u200B')>=0)t.data=t.data.replace(/\u200B/g,'');}
 root.querySelectorAll('b,strong,i,em,u').forEach(function(n){if(n.textContent===''&&!n.querySelector('img')&&n.parentNode)n.parentNode.removeChild(n);});}
+start();
 e.addEventListener('input',edited);
 document.addEventListener('selectionchange',report);
 window.mc={
@@ -135,7 +140,7 @@ save:function(){var r=sel();saved=inside(r)?r.cloneRange():null;},
 html:function(){var c=e.cloneNode(true);clean(c);return c.innerHTML;},
 top:function(px){spacer.style.height=px+'px';},
 state:state,
-focus:function(){e.focus();}
+focus:function(){e.focus();if(!inside(sel()))start();}
 };
 })();"#;
 

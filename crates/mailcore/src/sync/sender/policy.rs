@@ -171,5 +171,8 @@ mod tests {
         assert!(!needs_html_formatting(&sanitize_for_send(
             "<p></p><p>&gt; quoted<br>&gt; more</p>"
         )));
+        assert!(!needs_html_formatting(&sanitize_for_send(
+            "<p><br></p><p>&gt; quoted<br>&gt; more</p>"
+        )));
     }
 }
