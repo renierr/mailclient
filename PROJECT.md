@@ -403,6 +403,7 @@ the open Qt ↔ native differences are listed at the end.
 | Reply-To warning, link examine, headers view | ✅ | ✅ | ✅ | |
 | Attachments (open/save/save-all) | ✅ | ✅ | ✅ | Native via SAF + FileProvider. Inline images sync never kept show a notice with Download in both readers (`missing_inline_images`) |
 | Event card (ICS) | ✅ | ✅ | ✅ | |
+| Contact card (vCard) | ✅ | — | ✅ | `.vcf` attachments as a card (name + badge, title/org, e-mails, phones, address, URL; Open in Contacts / Save .vcf). Small `.vcf` bytes are kept at sync; an older uncached one shows a Download. Flutter is retired |
 | Remote-image block + show-once | ✅ | ✅ | ✅ | |
 | Original/darkened colours, zoom | ✅ | ✅ | ✅ | Reader text size factor is `settings::reader_text_scale`: Qt scales the HTML document's base size by it (sizes a mail sets stay its own), native uses it as WebView text zoom with pinch zoom on top |
 | Fullscreen reader | ✅ | ✅ | ✅ | Toggle in the reader bar; hides the shell bars and the other panes, back leaves it first. Native also hides the Android system bars (swipe shows them briefly), so it gains room on a phone too |

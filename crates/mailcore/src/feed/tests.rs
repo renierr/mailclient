@@ -849,6 +849,70 @@ END:VCALENDAR\r\n";
     assert_eq!(reader["event"]["save_name"], "invite.ics");
     assert!(reader["event"].get("start_iso").is_none());
     assert_eq!(reader["event"]["is_cancelled"], false);
+    assert_eq!(reader["attachments"][0]["in_card"], true);
+    assert_eq!(reader["contacts"], serde_json::json!([]));
+}
+
+#[test]
+fn message_json_includes_contact_cards() {
+    let (db, acc, f) = setup();
+    let msg_id = msg_store::upsert(&db, &msg_store::sample_new(acc, f, 102)).unwrap();
+    let vcf = b"BEGIN:VCARD
+VERSION:3.0
+FN:Jane Doe
+EMAIL;TYPE=work:jane@example.com
+TEL;TYPE=cell:+1 555 0100
+END:VCARD
+";
+    let file = |name: &str, mime: &str, data: Option<&[u8]>| crate::models::NewAttachment {
+        filename: Some(name.to_string()),
+        mime_type: Some(mime.to_string()),
+        content_id: None,
+        size: 100,
+        data: data.map(<[u8]>::to_vec),
+        is_inline: false,
+    };
+    let card_id =
+        msg_store::add_attachment(&db, msg_id, &file("jane.vcf", "text/x-vcard", Some(vcf)))
+            .unwrap();
+    let pending_id =
+        msg_store::add_attachment(&db, msg_id, &file("team.vcf", "text/vcard", None)).unwrap();
+    // A .vcf that holds no card stays a plain attachment.
+    let broken_id = msg_store::add_attachment(
+        &db,
+        msg_id,
+        &file("broken.vcf", "text/vcard", Some(b"not a card")),
+    )
+    .unwrap();
+
+    let reader: serde_json::Value =
+        serde_json::from_str(&message_json(&db, f, 102).unwrap()).unwrap();
+    let cards = reader["contacts"].as_array().unwrap();
+    assert_eq!(cards.len(), 2);
+    assert_eq!(cards[0]["name"], "Jane Doe");
+    assert_eq!(cards[0]["loaded"], true);
+    assert_eq!(cards[0]["attachment_id"], card_id);
+    assert_eq!(cards[0]["save_name"], "jane.vcf");
+    assert_eq!(cards[0]["emails"][0]["value"], "jane@example.com");
+    assert_eq!(cards[0]["emails"][0]["label"], "Work");
+    assert_eq!(cards[0]["phones"][0]["label"], "Mobile");
+    assert_eq!(cards[0]["initials"], "JE");
+    assert_eq!(cards[1]["name"], "team.vcf");
+    assert_eq!(cards[1]["loaded"], false);
+    assert_eq!(cards[1]["attachment_id"], pending_id);
+
+    let in_card = |id: i64| {
+        reader["attachments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == id)
+            .unwrap()["in_card"]
+            .clone()
+    };
+    assert_eq!(in_card(card_id), true);
+    assert_eq!(in_card(pending_id), true);
+    assert_eq!(in_card(broken_id), false);
 }
 
 #[test]

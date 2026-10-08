@@ -1,8 +1,9 @@
-//! RFC 5545 content lines: unfolding, the name/parameter/value split and
-//! text and parameter unescaping.
+//! Content lines shared by iCalendar (RFC 5545) and vCard (RFC 6350):
+//! unfolding, the name/parameter/value split and text and parameter
+//! unescaping.
 
 /// Unfold RFC 5545 lines: CRLF or LF followed by a space or tab is deleted.
-pub(super) fn unfold(input: &str) -> String {
+pub(crate) fn unfold(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
     while let Some(c) = chars.next() {
@@ -28,7 +29,7 @@ pub(super) fn unfold(input: &str) -> String {
 }
 
 /// Unescape RFC 5545 text value: `\,` -> `,`, `\;` -> `;`, `\n`/`\N` -> newline, `\\` -> `\`.
-pub(super) fn unescape_text(s: &str) -> String {
+pub(crate) fn unescape_text(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars();
     while let Some(c) = chars.next() {
@@ -75,15 +76,16 @@ fn param_value(raw: &str) -> String {
 }
 
 /// One content line: upper-cased name, parameters (upper-cased names,
-/// decoded values) and the raw value.
-pub(super) struct ContentLine<'a> {
-    pub(super) name: String,
-    pub(super) params: Vec<(String, String)>,
-    pub(super) value: &'a str,
+/// decoded values) and the raw value. A parameter without `=` (vCard 2.1's
+/// bare `TEL;CELL:` or `QUOTED-PRINTABLE`) is kept with an empty value.
+pub(crate) struct ContentLine<'a> {
+    pub(crate) name: String,
+    pub(crate) params: Vec<(String, String)>,
+    pub(crate) value: &'a str,
 }
 
 impl ContentLine<'_> {
-    pub(super) fn param(&self, name: &str) -> Option<&str> {
+    pub(crate) fn param(&self, name: &str) -> Option<&str> {
         self.params
             .iter()
             .find(|(n, _)| n == name)
@@ -93,7 +95,7 @@ impl ContentLine<'_> {
 
 /// Split a content line at the first `:` outside a double-quoted parameter
 /// value, and its name/parameter part at each such `;`.
-pub(super) fn parse_content_line(line: &str) -> Option<ContentLine<'_>> {
+pub(crate) fn parse_content_line(line: &str) -> Option<ContentLine<'_>> {
     let mut in_quotes = false;
     let mut segments: Vec<&str> = Vec::new();
     let mut seg_start = 0;
@@ -120,9 +122,10 @@ pub(super) fn parse_content_line(line: &str) -> Option<ContentLine<'_>> {
         return None;
     }
     let params = segments
-        .filter_map(|p| {
-            let (n, v) = p.split_once('=')?;
-            Some((n.trim().to_ascii_uppercase(), param_value(v)))
+        .filter(|p| !p.trim().is_empty())
+        .map(|p| match p.split_once('=') {
+            Some((n, v)) => (n.trim().to_ascii_uppercase(), param_value(v)),
+            None => (p.trim().to_ascii_uppercase(), String::new()),
         })
         .collect();
     Some(ContentLine {

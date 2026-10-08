@@ -353,6 +353,8 @@ fun ReaderScreen(
                     },
                     onOpenEvent = { openAttachment(it, "text/calendar") },
                     onSaveEvent = { id, name -> saveAttachment(id, name, "text/calendar") },
+                    onOpenContact = { openAttachment(it, "text/vcard") },
+                    onSaveContact = { id, name -> saveAttachment(id, name, "text/vcard") },
                     onClose = onClose,
                     closeIcon = closeIcon,
                     actions = {

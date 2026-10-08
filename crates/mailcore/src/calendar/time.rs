@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, TimeDelta, Utc};
 
-use super::line::ContentLine;
+use crate::content_line::ContentLine;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ParsedTime {

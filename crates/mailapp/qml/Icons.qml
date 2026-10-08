@@ -70,6 +70,7 @@ QtObject {
     readonly property string outbox: "\uef5f"
     readonly property string personAdd: "\ue7fe"
     readonly property string person: "\ue7ff"
+    readonly property string phone: "\ue0cd"
     readonly property string place: "\ue0c8"
     // `print` is reserved (the logging function); unused, kept for
     // completeness under a safe name.

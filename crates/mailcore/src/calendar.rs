@@ -8,7 +8,6 @@
 //! shown with the zone name instead of pretending it is local.
 
 mod format;
-mod line;
 mod time;
 
 use std::collections::HashMap;
@@ -16,8 +15,8 @@ use std::collections::HashMap;
 use chrono::{FixedOffset, TimeDelta};
 use serde::{Deserialize, Serialize};
 
+use crate::content_line::{parse_content_line, unescape_text, unfold, ContentLine};
 use format::format_date_range;
-use line::{parse_content_line, unescape_text, unfold, ContentLine};
 use time::{parse_duration_seconds, parse_utc_offset, read_time, ParsedTime, RawTime, ZoneBuilder};
 
 /// Parsed calendar event: exactly what the reader's event card shows.

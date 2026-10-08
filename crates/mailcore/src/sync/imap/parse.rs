@@ -171,7 +171,7 @@ pub(crate) fn extract_attachments(
         let content_id = part.content_id().map(str::to_string);
         let data: Option<Vec<u8>> = if with_bytes
             || is_inline_image(&content_id, &mime_type, len)
-            || is_calendar_part(part.attachment_name(), mime_type.as_deref(), len)
+            || is_preview_part(part.attachment_name(), mime_type.as_deref(), len)
         {
             match &part.body {
                 PartType::Binary(b) | PartType::InlineBinary(b) => Some(b.to_vec()),
@@ -232,21 +232,24 @@ fn is_inline_image(content_id: &Option<String>, mime: &Option<String>, len: usiz
         && len <= MAX_INLINE_IMAGE_BYTES
 }
 
-/// An iCalendar part (.ics / text/calendar) kept at sync time so the reader
-/// can render the calendar event preview card offline without on-demand download.
-fn is_calendar_part(filename: Option<&str>, mime: Option<&str>, len: usize) -> bool {
+/// An iCalendar (.ics / text/calendar) or vCard (.vcf / text/vcard) part
+/// kept at sync time so the reader can render its event or contact preview
+/// card offline without an on-demand download. vCards may carry a photo,
+/// hence the larger cap.
+fn is_preview_part(filename: Option<&str>, mime: Option<&str>, len: usize) -> bool {
     const MAX_CALENDAR_BYTES: usize = 64 * 1024;
-    if len > MAX_CALENDAR_BYTES {
-        return false;
-    }
+    const MAX_VCARD_BYTES: usize = 256 * 1024;
     let is_ics = filename.is_some_and(|f| f.to_ascii_lowercase().ends_with(".ics"));
     let is_cal_mime = mime.is_some_and(crate::mime::is_calendar_mime);
-    is_ics || is_cal_mime
+    if is_ics || is_cal_mime {
+        return len <= MAX_CALENDAR_BYTES;
+    }
+    crate::vcard::is_vcard_attachment(filename, mime) && len <= MAX_VCARD_BYTES
 }
 
 /// Store attachment rows for a freshly synced message: names and sizes,
 /// plus the bytes of inline images up to the per-message budget and small
-/// calendar parts for instant offline preview cards.
+/// calendar and contact parts for instant offline preview cards.
 pub(crate) fn store_attachment_meta(db: &Db, message_id: i64, files: Vec<NewAttachment>) {
     if files.is_empty() {
         return;
@@ -261,8 +264,8 @@ pub(crate) fn store_attachment_meta(db: &Db, message_id: i64, files: Vec<NewAtta
     }
     let mut budget = MAX_INLINE_BYTES_PER_MESSAGE;
     for f in &files {
-        let is_cal = f.data.as_ref().is_some_and(|d| {
-            is_calendar_part(f.filename.as_deref(), f.mime_type.as_deref(), d.len())
+        let is_preview = f.data.as_ref().is_some_and(|d| {
+            is_preview_part(f.filename.as_deref(), f.mime_type.as_deref(), d.len())
         });
         let keep_inline = f
             .data
@@ -271,7 +274,11 @@ pub(crate) fn store_attachment_meta(db: &Db, message_id: i64, files: Vec<NewAtta
         if let Some(d) = keep_inline {
             budget -= d.len();
         }
-        let keep = if is_cal { f.data.as_ref() } else { keep_inline };
+        let keep = if is_preview {
+            f.data.as_ref()
+        } else {
+            keep_inline
+        };
         let meta = NewAttachment {
             data: keep.cloned(),
             ..f.clone()
@@ -401,6 +408,20 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn preview_parts_are_calendars_and_small_vcards() {
+        assert!(is_preview_part(Some("invite.ics"), None, 1000));
+        assert!(!is_preview_part(Some("invite.ics"), None, 100 * 1024));
+        assert!(is_preview_part(Some("jane.vcf"), None, 100 * 1024));
+        assert!(is_preview_part(None, Some("text/x-vcard"), 1000));
+        assert!(!is_preview_part(Some("jane.vcf"), None, 300 * 1024));
+        assert!(!is_preview_part(
+            Some("a.pdf"),
+            Some("application/pdf"),
+            1000
+        ));
     }
 
     #[test]

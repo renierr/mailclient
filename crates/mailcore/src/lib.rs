@@ -7,6 +7,7 @@ pub mod badge;
 pub mod bulk;
 pub mod calendar;
 pub mod compose;
+mod content_line;
 pub mod db;
 pub mod error;
 pub mod export;
@@ -22,6 +23,7 @@ pub mod similar;
 pub mod store;
 pub mod sync;
 pub mod undo;
+pub mod vcard;
 
 pub mod auth;
 

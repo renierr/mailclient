@@ -135,18 +135,16 @@ Rectangle {
     }
 
     // Non-inline files from the Rust feed (bytes stay in SQLite until saved).
-    // The `.ics` the event card already opens and saves is left out, so one
-    // file never stacks two cards in the header (as in the Flutter reader).
+    // A file an event or contact card already opens and saves (`in_card`)
+    // is left out, so one file never stacks two cards in the header.
     readonly property var fileAttachments: {
         if (root.message === undefined || root.message === null || root.message.attachments === undefined)
             return [];
-        var eventId = (root.message.event && root.message.event.attachment_id !== undefined)
-                ? root.message.event.attachment_id : -1;
         var out = [];
         for (var i = 0; i < root.message.attachments.length; i++) {
             if (root.message.attachments[i].is_inline === true)
                 continue;
-            if (root.message.attachments[i].id === eventId)
+            if (root.message.attachments[i].in_card === true)
                 continue;
             out.push(root.message.attachments[i]);
         }
@@ -234,10 +232,11 @@ Rectangle {
 
     // Inline images sync never kept: fetch them from the server on request.
     // The finished job reloads the feed, and the body comes back with them.
-    function downloadInline() {
+    // Also fills a contact card whose `.vcf` is not cached (`note` says so).
+    function downloadInline(note) {
         if (!root.backend || !root.message)
             return;
-        root.statusMessage(qsTr("Downloading images…"));
+        root.statusMessage(note || qsTr("Downloading images…"));
         var r = root.backend.download_inline_images(root.message.uid);
         if (r !== "")
             root.statusMessage(r);
@@ -736,6 +735,29 @@ Rectangle {
                                              "file_name": root.message.event.save_name || ""
                                          });
                         }
+                    }
+                }
+
+                // --- contact cards (.vcf) ------------------------------------------
+                Repeater {
+                    model: (root.message && root.message.contacts) ? root.message.contacts : []
+
+                    delegate: ContactCard {
+                        required property var modelData
+
+                        Layout.fillWidth: true
+                        Layout.margins: Theme.md
+                        contact: modelData
+                        downloading: !!root.backend && root.backend.busy
+                        onOpenClicked: root.openOne({
+                                                        "id": modelData.attachment_id,
+                                                        "file_name": modelData.save_name || ""
+                                                    })
+                        onSaveClicked: root.saveOne({
+                                                        "id": modelData.attachment_id,
+                                                        "file_name": modelData.save_name || ""
+                                                    })
+                        onDownloadClicked: root.downloadInline(qsTr("Downloading contact card…"))
                     }
                 }
 

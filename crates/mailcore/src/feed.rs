@@ -519,15 +519,29 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
     } else {
         plain.clone()
     };
-    let files: Vec<serde_json::Value> = listed_attachments(db, m.id, m.body_html.as_deref())
+    let listed = listed_attachments(db, m.id, m.body_html.as_deref());
+    let event = find_calendar_event(db, &m);
+    let contacts = contact_cards(db, &listed);
+    // Files a preview card already opens and saves: the frontends leave
+    // them out of the attachment list so one file never shows twice.
+    let carded: Vec<i64> = event
         .iter()
-        .map(attachment_row)
+        .filter_map(|e| e.attachment_id)
+        .chain(contacts.iter().filter_map(|c| c.attachment_id))
         .collect();
+    let files: Vec<serde_json::Value> = listed
+        .iter()
+        .map(|a| {
+            let mut row = attachment_row(a);
+            row["in_card"] = carded.contains(&a.id).into();
+            row
+        })
+        .collect();
+    let contacts: Vec<serde_json::Value> = contacts.iter().map(contact_json).collect();
     let date = short_date(m.date.as_deref());
     let from = m.from_addr.as_deref().unwrap_or("?");
     let from_name = m.from_name.as_deref().unwrap_or("");
     let reply = crate::compose::reply_address(from, m.reply_to.as_deref().unwrap_or(""));
-    let event = find_calendar_event(db, &m);
     let mut out = json!({
         "uid": m.uid,
         "subject": m.subject.as_deref().unwrap_or("(no subject)"),
@@ -547,6 +561,7 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
         "html_colored": is_html && html::has_own_colors(&body_html),
         "body": legacy_body,
         "event": event,
+        "contacts": contacts,
     });
     sender_badge(from_name, from).extend(&mut out);
     Ok(serde_json::to_string(&out)?)
@@ -589,6 +604,38 @@ pub fn find_calendar_event(
     }
 
     None
+}
+
+/// Contact cards for the listed `.vcf` attachments, one per file (its
+/// first card). A file whose bytes are not cached yet gives a pending card
+/// ([`crate::vcard::ContactCard::pending`]); one that holds no vCard stays
+/// an ordinary attachment.
+fn contact_cards(db: &Db, listed: &[crate::models::Attachment]) -> Vec<crate::vcard::ContactCard> {
+    listed
+        .iter()
+        .filter(|a| {
+            crate::vcard::is_vcard_attachment(a.filename.as_deref(), a.mime_type.as_deref())
+        })
+        .filter_map(|att| {
+            let full = messages::get_attachment(db, att.id).ok()?;
+            match full.data.as_deref() {
+                Some(bytes) => {
+                    let mut card = crate::vcard::parse_vcard_bytes(bytes)?;
+                    card.set_attachment(att);
+                    Some(card)
+                }
+                None => Some(crate::vcard::ContactCard::pending(att)),
+            }
+        })
+        .collect()
+}
+
+/// A contact card plus the avatar badge for its name and first address.
+fn contact_json(card: &crate::vcard::ContactCard) -> serde_json::Value {
+    let mut row = serde_json::to_value(card).unwrap_or_default();
+    let email = card.emails.first().map_or("", |e| e.value.as_str());
+    sender_badge(&card.name, email).extend(&mut row);
+    row
 }
 
 /// Attachment metadata for one message (`[{id, filename, display_name,
