@@ -109,14 +109,11 @@ pub fn list(db: &Db) -> Result<Vec<Account>> {
 }
 
 /// Update connection fields of an existing account (vault key untouched).
-/// A different SMTP host or port forgets what was learned about DSN.
 pub fn update_connection(db: &Db, id: i64, a: &NewAccount) -> Result<()> {
     let ts = super::now();
-    // SET expressions see the row as it was, so the case compares old to new.
     let n = db.conn().execute(
         "update accounts set name = ?1, email_address = ?2, from_name = ?3, imap_host = ?4,
             imap_port = ?5, imap_security = ?6, imap_username = ?7,
-            smtp_dsn = case when smtp_host = ?8 and smtp_port = ?9 then smtp_dsn end,
             smtp_host = ?8, smtp_port = ?9, smtp_security = ?10,
             smtp_username = ?11, check_interval_secs = ?12, updated_at = ?13
          where id = ?14",
@@ -140,26 +137,6 @@ pub fn update_connection(db: &Db, id: i64, a: &NewAccount) -> Result<()> {
     if n == 0 {
         return Err(StoreError::NotFound(format!("account {id}")));
     }
-    Ok(())
-}
-
-/// Whether the account's SMTP server offered DSN when a delivery
-/// confirmation was last asked for; `None` until one was.
-pub fn smtp_dsn(db: &Db, id: i64) -> Option<bool> {
-    db.conn()
-        .query_row("select smtp_dsn from accounts where id = ?1", [id], |r| {
-            r.get::<_, Option<bool>>(0)
-        })
-        .ok()
-        .flatten()
-}
-
-/// Record what the SMTP server said about DSN on a submit.
-pub fn set_smtp_dsn(db: &Db, id: i64, offered: bool) -> Result<()> {
-    db.conn().execute(
-        "update accounts set smtp_dsn = ?1 where id = ?2",
-        params![offered, id],
-    )?;
     Ok(())
 }
 
@@ -209,21 +186,5 @@ mod tests {
         delete(&db, id).unwrap();
         assert!(list(&db).unwrap().is_empty());
         assert!(matches!(get(&db, id), Err(StoreError::NotFound(_))));
-    }
-
-    #[test]
-    fn dsn_support_is_kept_until_the_smtp_server_changes() {
-        let db = Db::open_in_memory().unwrap();
-        let id = create(&db, &sample()).unwrap();
-        assert_eq!(smtp_dsn(&db, id), None);
-        set_smtp_dsn(&db, id, false).unwrap();
-        assert_eq!(smtp_dsn(&db, id), Some(false));
-        let mut renamed = sample();
-        renamed.name = "Office".to_string();
-        update_connection(&db, id, &renamed).unwrap();
-        assert_eq!(smtp_dsn(&db, id), Some(false));
-        renamed.smtp_host = "mail.example.org".to_string();
-        update_connection(&db, id, &renamed).unwrap();
-        assert_eq!(smtp_dsn(&db, id), None);
     }
 }

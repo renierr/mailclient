@@ -142,8 +142,6 @@ fun ComposerScreen(
     var requestMdn by remember { mutableStateOf(seed.requestMdn ?: false) }
     var requestDsn by remember { mutableStateOf(seed.requestDsn ?: false) }
     var receiptsChosen by remember { mutableStateOf(seed.requestMdn != null) }
-    // The core's warning while delivery is on but the server lacked DSN.
-    var deliveryNote by remember { mutableStateOf("") }
     var suggestContacts by remember { mutableStateOf(true) }
     val working = sending || savingDraft || deletingDraft
     // Like Qt: nothing to send to, nothing to press. The core checks the
@@ -176,15 +174,10 @@ fun ComposerScreen(
             sendFormat = o.optString("compose_send_format", DEFAULT_SEND_FORMAT).ifEmpty { DEFAULT_SEND_FORMAT }
             suggestContacts = o.optBoolean("collect_sent_contacts", true)
         }
-        val receipts = withContext(Dispatchers.IO) {
-            runCatching { JSONObject(MailNative.receiptDefaults(accountId)) }.getOrNull()
-        }
-        if (receipts != null) {
-            deliveryNote = receipts.optString("delivery_note")
-            if (!receiptsChosen) {
-                requestMdn = receipts.optBoolean("read")
-                requestDsn = receipts.optBoolean("delivery")
-            }
+        val receipts = withContext(Dispatchers.IO) { runCatching { JSONObject(MailNative.receiptDefaults()) }.getOrNull() }
+        if (receipts != null && !receiptsChosen) {
+            requestMdn = receipts.optBoolean("read")
+            requestDsn = receipts.optBoolean("delivery")
         }
     }
 
@@ -531,7 +524,6 @@ fun ComposerScreen(
                         receiptsChosen = true
                     }
                 }
-                if (requestDsn && deliveryNote.isNotEmpty()) ComposerNotice(deliveryNote)
 
                 if (seed.serverAttachments.isNotEmpty()) {
                     ComposerNotice(

@@ -234,9 +234,9 @@ object MailNative {
     @JvmStatic external fun resendFiles(folderId: Long, uid: Int, dir: String): String
     @JvmStatic external fun blankDraft(): String
 
-    // Where a composer's receipt toggles start for the account: `{read,
-    // delivery, delivery_note}` (`compose::Receipts::defaults`).
-    @JvmStatic external fun receiptDefaults(accountId: Long): String
+    // Where a composer's receipt toggles start: `{read, delivery}` from the
+    // settings (`compose::Receipts`).
+    @JvmStatic external fun receiptDefaults(): String
     @JvmStatic external fun imageDataUrl(path: String): String
     @JvmStatic external fun senderParts(address: String): String
     @JvmStatic external fun effectiveFrom(local: String, accountEmail: String): String

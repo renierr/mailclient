@@ -22,39 +22,18 @@ pub struct Receipts {
     pub delivery: bool,
 }
 
-/// Where a composer's receipt toggles start for one account.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
-pub struct ReceiptDefaults {
-    pub read: bool,
-    pub delivery: bool,
-    /// Set when the account's SMTP server did not offer delivery
-    /// confirmations last time: the composer shows it while that toggle is
-    /// on. Asking again re-checks the server.
-    pub delivery_note: String,
-}
-
 impl Receipts {
-    /// The stored settings for `account_id`, where a new composer starts.
-    /// A server known not to offer DSN starts with delivery off.
-    pub fn defaults(db: &Db, account_id: i64) -> ReceiptDefaults {
-        let unsupported = crate::store::accounts::smtp_dsn(db, account_id) == Some(false);
-        ReceiptDefaults {
+    /// The stored settings, where a new composer starts.
+    pub fn defaults(db: &Db) -> Self {
+        Self {
             read: settings::get_bool(db, settings::REQUEST_MDN).unwrap_or(false),
-            delivery: !unsupported
-                && settings::get_bool(db, settings::REQUEST_DSN).unwrap_or(false),
-            delivery_note: if unsupported {
-                "This account's mail server did not offer delivery confirmations last time,                  so none may come."
-                    .to_string()
-            } else {
-                String::new()
-            },
+            delivery: settings::get_bool(db, settings::REQUEST_DSN).unwrap_or(false),
         }
     }
 
-    /// [`Self::defaults`] as `{read, delivery, delivery_note}` JSON for the
-    /// composers.
-    pub fn defaults_json(db: &Db, account_id: i64) -> String {
-        serde_json::to_string(&Self::defaults(db, account_id)).unwrap_or_else(|_| "{}".to_string())
+    /// [`Self::defaults`] as `{read, delivery}` JSON for the composers.
+    pub fn defaults_json(db: &Db) -> String {
+        serde_json::to_string(&Self::defaults(db)).unwrap_or_else(|_| "{}".to_string())
     }
 }
 
@@ -179,10 +158,10 @@ impl ComposeForm {
         }
     }
 
-    /// The receipts to request: the composer's choice, else the account's
-    /// defaults.
-    pub fn receipts(&self, db: &Db, account_id: i64) -> Receipts {
-        let defaults = Receipts::defaults(db, account_id);
+    /// The receipts to request: the composer's choice, else the stored
+    /// settings.
+    pub fn receipts(&self, db: &Db) -> Receipts {
+        let defaults = Receipts::defaults(db);
         Receipts {
             read: self.request_mdn.unwrap_or(defaults.read),
             delivery: self.request_dsn.unwrap_or(defaults.delivery),
@@ -266,28 +245,9 @@ mod tests {
     fn receipts_follow_the_form_else_the_settings() {
         let db = crate::db::Db::open_in_memory().unwrap();
         crate::store::settings::set(&db, crate::store::settings::REQUEST_DSN, "1").unwrap();
-        let acc = crate::store::accounts::create(
-            &db,
-            &crate::models::NewAccount {
-                name: "t".to_string(),
-                email_address: "me@example.com".to_string(),
-                from_name: String::new(),
-                imap_host: "i".to_string(),
-                imap_port: 993,
-                imap_security: "tls".to_string(),
-                imap_username: "u".to_string(),
-                smtp_host: "s".to_string(),
-                smtp_port: 587,
-                smtp_security: "starttls".to_string(),
-                smtp_username: "u".to_string(),
-                auth_vault_key: "k".to_string(),
-                check_interval_secs: 300,
-            },
-        )
-        .unwrap();
         let f = ComposeForm::parse(r#"{"to":"a@example.com"}"#).unwrap();
         assert_eq!(
-            f.receipts(&db, acc),
+            f.receipts(&db),
             Receipts {
                 read: false,
                 delivery: true
@@ -295,24 +255,15 @@ mod tests {
         );
         let f = ComposeForm::parse(r#"{"request_mdn":true,"request_dsn":false}"#).unwrap();
         assert_eq!(
-            f.receipts(&db, acc),
+            f.receipts(&db),
             Receipts {
                 read: true,
                 delivery: false
             }
         );
         assert_eq!(
-            Receipts::defaults_json(&db, acc),
-            r#"{"read":false,"delivery":true,"delivery_note":""}"#
+            Receipts::defaults_json(&db),
+            r#"{"read":false,"delivery":true}"#
         );
-
-        // A server that offered no DSN: delivery starts off, with a note,
-        // and an explicit request still goes through.
-        crate::store::accounts::set_smtp_dsn(&db, acc, false).unwrap();
-        let d = Receipts::defaults(&db, acc);
-        assert!(!d.delivery);
-        assert!(!d.delivery_note.is_empty());
-        let f = ComposeForm::parse(r#"{"request_dsn":true}"#).unwrap();
-        assert!(f.receipts(&db, acc).delivery);
     }
 }

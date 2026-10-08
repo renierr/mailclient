@@ -88,8 +88,6 @@ Dialog {
     signal saveDraftRequested(string payload)
 
     property string accountEmail: ""
-    // The account sending: receipt defaults depend on its SMTP server.
-    property int accountId: -1
     property string accountFromName: ""
     property string sendFormat: "auto"
     property var backend
@@ -127,8 +125,6 @@ Dialog {
     // starts from the settings, the toggles beside Send change just this one.
     property bool requestMdn: false
     property bool requestDsn: false
-    // mailcore's warning while delivery is on but the server lacked DSN.
-    property string deliveryNote: ""
 
     // Flaw F5: Cancel used to throw the draft away silently. Everything the
     // user types sets this, and closing then asks first.
@@ -260,10 +256,9 @@ Dialog {
         root.filesNotice = "";
         root.attachments = [];
         root.draftUid = -1;
-        var receipts = root.backend ? FeedJson.parse(root.backend.receipt_defaults_json(root.accountId), ({})) : ({});
+        var receipts = root.backend ? FeedJson.parse(root.backend.receipt_defaults_json(), ({})) : ({});
         root.requestMdn = receipts.read === true;
         root.requestDsn = receipts.delivery === true;
-        root.deliveryNote = receipts.delivery_note || "";
     }
 
     function setBody(html) {
@@ -718,15 +713,6 @@ Dialog {
                     text: root.replyNotice
                 }
             }
-        }
-
-        Label {
-            Layout.fillWidth: true
-            visible: root.requestDsn && root.deliveryNote !== ""
-            wrapMode: Text.Wrap
-            color: Theme.warning
-            font.pixelSize: Theme.fontSmall
-            text: root.deliveryNote
         }
 
         // --- attachments ----------------------------------------------------

@@ -1583,7 +1583,6 @@ ApplicationWindow {
     Composer {
         id: composer
         accountEmail: backend.current_account_email
-        accountId: backend.current_account_id
         accountFromName: backend.current_account_from_name
         sendFormat: appSettings.compose_send_format
         backend: backend
