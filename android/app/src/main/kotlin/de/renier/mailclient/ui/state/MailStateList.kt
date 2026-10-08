@@ -44,16 +44,20 @@ fun MailState.setAttachmentsOnly(only: Boolean) {
     recomputeShown()
 }
 
-fun MailState.setAfterDay(day: String) {
-    filterAfter = day
+/**
+ * Apply a typed custom date range after the core has read it
+ * (`list_filter::date_range_check`). Null when applied, else why not.
+ */
+fun MailState.setDateRange(after: String, before: String): String? {
+    val o = runCatching { JSONObject(MailNative.dateRangeCheck(after, before)) }
+        .getOrElse { return it.message ?: "Not a date range" }
+    val error = o.optString("error")
+    if (error.isNotEmpty()) return error
+    filterAfter = o.optString("after")
+    filterBefore = o.optString("before")
     refreshDateLabel()
     recomputeShown()
-}
-
-fun MailState.setBeforeDay(day: String) {
-    filterBefore = day
-    refreshDateLabel()
-    recomputeShown()
+    return null
 }
 
 /** A `today` / `week` / `month` / `older_month` preset from the core. */
@@ -79,6 +83,18 @@ fun MailState.clearListFilters() {
     clearDateFilter()
 }
 
+/** The load-older footer's words for the loaded folder (`feed::older_label`). */
+internal fun MailState.refreshOlderLabel() {
+    val (cached, server) = olderCounts
+    olderLabel = if (olderState.isEmpty()) {
+        ""
+    } else {
+        runCatching {
+            MailNative.olderLabel(cached.toLong(), server.toLong(), hasListFilter || rowFilterQuery.isNotEmpty())
+        }.getOrDefault("")
+    }
+}
+
 /** What the empty list says (`mailcore::search::empty_list_text`). */
 fun MailState.emptyListText(): String = runCatching {
     MailNative.emptyListText(
@@ -94,8 +110,7 @@ fun MailState.emptyListText(): String = runCatching {
 fun MailState.visibleRows(): List<MessageRow> = if (searchActive) shownHits else shownMessages
 
 fun MailState.selectionKey(m: MessageRow): String =
-    if (searchActive) "${if (m.folderId >= 0) m.folderId else folderId}:${m.uid}"
-    else m.uid.toString()
+    if (searchActive) "${rowFolderId(m)}:${m.uid}" else m.uid.toString()
 
 fun MailState.enterSelectionMode(withKey: String? = null) {
     selectionMode = true
@@ -163,11 +178,7 @@ fun MailState.deletePrompt(bulk: Boolean, folders: List<Folder?>): DeletePrompt 
 
 /** The folder a row lives in: hits carry their own, rows use the open one. */
 private fun MailState.rowFolder(m: MessageRow): Folder? {
-    val id = if (searchActive) {
-        if (m.folderId >= 0) m.folderId else folderId
-    } else {
-        folderId
-    }
+    val id = rowFolderId(m)
     return folders.firstOrNull { it.id == id }
 }
 
@@ -252,8 +263,8 @@ fun MailState.bulkPurge() = io {
 // One row's actions (the list's ⋮ menu). A search hit acts in the
 // folder it lives in, a list row in the open one.
 
-/** The folder [m] lives in. */
-fun MailState.rowFolderId(m: MessageRow): Long = rowFolder(m)?.id ?: folderId
+/** The id of the folder [m] lives in. */
+fun MailState.rowFolderId(m: MessageRow): Long = if (searchActive && m.folderId >= 0) m.folderId else folderId
 
 /** Deleting [m] alone: destroys or moves to Trash, and whether to ask. */
 fun MailState.rowDeletePrompt(m: MessageRow): DeletePrompt = deletePrompt(bulk = false, listOf(rowFolder(m)))

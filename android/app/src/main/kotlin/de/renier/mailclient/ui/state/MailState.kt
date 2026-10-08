@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import de.renier.mailclient.JobEvents
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.MailSchedule
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,9 +19,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicBoolean
 
-// Step 1 shell state: what the app shows and what it does, over the 0a–0e
-// JNI surface. Plain holder (no new dependencies — no ViewModel, no
+// Shell state: what the app shows and what it does, over the JNI surface.
+// Plain holder (no new dependencies — no ViewModel, no
 // navigation-compose), owned by MailShell's composition. Reads take explicit
 // ids and jobs only say *that* something changed, so this re-reads whatever
 // is showing — the same contract the Dart MailState keeps.
@@ -61,13 +63,15 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
         internal set
     var canLoadOlder by mutableStateOf(false)
         internal set
-    // The load-older footer's words ("Cached 200 (server not checked)",
-    // "Cached 200 of 350", "All 350 loaded") plus its raw state; hidden
-    // when the server holds nothing ("empty"), like the desktop footer.
+    // The load-older footer's raw state and its words from the core
+    // (`feed::older_label`); hidden when the server holds nothing
+    // ("empty"), like the desktop footer.
     var olderState by mutableStateOf("")
         internal set
     var olderLabel by mutableStateOf("")
         internal set
+    // Cached rows and the server's count (-1: never reported) behind it.
+    internal var olderCounts = 0 to -1
     var status by mutableStateOf("Starting…")
         internal set
     var statusError by mutableStateOf(false)
@@ -107,8 +111,10 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
         internal set
     // Server capabilities per account, from the "Capabilities" job (About).
     var capabilities by mutableStateOf<Map<Long, JSONObject>>(emptyMap())
+        internal set
     // Why the last refresh failed, per account; kept beside an older list.
     var capabilitiesError by mutableStateOf<Map<Long, String>>(emptyMap())
+        internal set
     // The account last asked: a failed job's event names no account.
     @Volatile
     internal var capabilitiesFor = -1L
@@ -135,7 +141,8 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
     // results, like Qt/Flutter); the Search job's finish re-runs the query.
     var serverSearchPending by mutableStateOf(false)
         internal set
-    internal var serverSearchFired = false
+    // Set from the search coroutine (IO), reset on Main.
+    internal val serverSearchFired = AtomicBoolean(false)
     // 1–2 letters (core plan "filter"): the open folder's rows filtered in
     // place, like Qt — still the folder view (count, sort, footer), not a
     // search. "" when no row filter is on.
@@ -207,6 +214,7 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
 
     /** A failed send for the shell to reopen. */
     var reopenSend by mutableStateOf<PendingSend?>(null)
+        private set
 
     fun consumeReopenSend() {
         reopenSend = null
@@ -252,6 +260,8 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
         scope.launch(Dispatchers.IO) {
             try {
                 work()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 fail(e.message ?: "failed")
             }

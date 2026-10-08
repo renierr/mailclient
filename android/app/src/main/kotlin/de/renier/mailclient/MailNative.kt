@@ -135,6 +135,8 @@ object MailNative {
     // download is already queued (`spawn` dedupe) — then wait for its
     // event instead of queueing again.
     @JvmStatic external fun downloadAttachments(accountId: Long, folderId: Long, uid: Int)
+    // That message's download is still queued or running (the event kind is shared).
+    @JvmStatic external fun attachmentsPending(folderId: Long, uid: Int): Boolean
 
     // The opener MIME for the stored row, same derivation as the feed's
     // `open_mime`. Read after a download: the magic check may have fixed
@@ -239,8 +241,12 @@ object MailNative {
     @JvmStatic external fun searchJson(accountId: Long, query: String, folder: String): String
     @JvmStatic external fun searchServer(accountId: Long, query: String, folder: String)
     @JvmStatic external fun searchPlan(query: String): String
-    @JvmStatic external fun searchFilterMatches(query: String, subject: String, from: String, fromName: String, snippet: String): String
-    @JvmStatic external fun dateFilterMatches(dateRaw: String, after: String, before: String): String
+    // The list filters over every loaded row at once: JSON array of kept indexes.
+    @JvmStatic external fun listFilterKeep(filterJson: String, rowsJson: String): String
+    // A typed custom date range, normalised or refused: {after, before, error}.
+    @JvmStatic external fun dateRangeCheck(after: String, before: String): String
+    // The load-older footer's words; server < 0 = never reported.
+    @JvmStatic external fun olderLabel(cached: Long, server: Long, filtered: Boolean): String
     @JvmStatic external fun datePresetRange(preset: String): String
     @JvmStatic external fun dateFilterLabel(after: String, before: String): String
     @JvmStatic external fun searchSyntaxHelp(): String

@@ -305,37 +305,32 @@ impl qobject::Bridge {
         qstring(&serde_json::to_string(&plan).unwrap_or_else(|_| "{}".to_string()))
     }
 
-    pub fn search_filter_matches(
-        &self,
-        query: &QString,
-        subject: &QString,
-        from: &QString,
-        from_name: &QString,
-        snippet: &QString,
-    ) -> bool {
-        mailcore::search::filter_matches(
-            &query.to_string(),
-            &subject.to_string(),
-            &from.to_string(),
-            &from_name.to_string(),
-            &snippet.to_string(),
-        )
+    pub fn list_filter_keep(&self, filter_json: &QString, rows_json: &QString) -> QString {
+        let kept = mailcore::search::list_filter::keep_json(
+            &filter_json.to_string(),
+            &rows_json.to_string(),
+        );
+        qstring(&kept.unwrap_or_else(|e| {
+            log::warn!("list filter: {e}");
+            "null".to_string()
+        }))
     }
 
-    pub fn date_filter_matches(
-        &self,
-        date_raw: &QString,
-        after: &QString,
-        before: &QString,
-    ) -> bool {
-        let raw = date_raw.to_string();
-        let after = after.to_string();
-        let before = before.to_string();
-        mailcore::search::date_passes(
-            (!raw.is_empty()).then_some(raw.as_str()),
-            (!after.is_empty()).then_some(after.as_str()),
-            (!before.is_empty()).then_some(before.as_str()),
-        )
+    pub fn date_range_check_json(&self, after: &QString, before: &QString) -> QString {
+        let r = mailcore::search::list_filter::date_range_check(
+            &after.to_string(),
+            &before.to_string(),
+        );
+        qstring(&serde_json::to_string(&r).unwrap_or_else(|_| "{}".to_string()))
+    }
+
+    pub fn older_label(&self, cached: i32, server: i32, filtered: bool) -> QString {
+        let server = u64::try_from(server).ok();
+        qstring(&feed::older_label(
+            u64::try_from(cached).unwrap_or(0),
+            server,
+            filtered,
+        ))
     }
 
     pub fn date_preset_range_json(&self, preset: &QString) -> QString {

@@ -10,9 +10,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -20,7 +17,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -37,6 +33,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.R
+import de.renier.mailclient.ui.common.DeleteConfirmDialog
+import de.renier.mailclient.ui.common.strings
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.state.refreshOutbox
 import de.renier.mailclient.ui.state.syncNow
@@ -60,11 +58,10 @@ private fun parse(json: String): List<OutboxEntry> {
     val arr = JSONArray(json)
     return (0 until arr.length()).mapNotNull { i ->
         val o = arr.optJSONObject(i) ?: return@mapNotNull null
-        val to = o.optJSONArray("envelope_to")
         OutboxEntry(
             id = o.optLong("id"),
             subject = o.optString("subject"),
-            to = (0 until (to?.length() ?: 0)).joinToString(", ") { to!!.optString(it) },
+            to = o.optJSONArray("envelope_to").strings().joinToString(", "),
             state = o.optString("state"),
             error = o.optString("last_error"),
             dismissable = o.optBoolean("dismissable"),
@@ -148,23 +145,15 @@ fun OutboxScreen(state: MailState) {
     }
 
     forget?.let { e ->
-        AlertDialog(
-            onDismissRequest = { forget = null },
-            title = { Text("Forget this entry?") },
-            text = { Text("“${e.subject}” is not sent and leaves the outbox. Send it again by hand if it is still needed.") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        forget = null
-                        dismiss(e)
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError,
-                    ),
-                ) { Text("Forget") }
+        DeleteConfirmDialog(
+            title = "Forget this entry?",
+            text = "“${e.subject}” is not sent and leaves the outbox. Send it again by hand if it is still needed.",
+            confirmLabel = "Forget",
+            onConfirm = {
+                forget = null
+                dismiss(e)
             },
-            dismissButton = { TextButton(onClick = { forget = null }) { Text("Cancel") } },
+            onDismiss = { forget = null },
         )
     }
 }

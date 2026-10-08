@@ -13,6 +13,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
@@ -64,7 +65,8 @@ fun ListBulkBar(
             BulkButton("Clear", R.drawable.ic_close, "Clear selection") {
                 state.exitSelectionMode()
             }
-            val permanent = state.selectionDeletePrompt.permanent
+            // The core's rule, asked again only when the selection changes.
+            val permanent = remember(state.selectedKeys, state.folders) { state.selectionDeletePrompt.permanent }
             BulkButton("Archive", R.drawable.ic_archive, "Archive") {
                 state.bulkArchive()
             }

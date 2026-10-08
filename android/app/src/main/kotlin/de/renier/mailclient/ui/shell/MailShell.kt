@@ -87,7 +87,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
-import java.io.File
 
 // The shell: manual back stack (no navigation dependency), search bar on
 // the mail panes and a plain back + title bar on every other page, Compose
@@ -115,6 +114,9 @@ private sealed interface Route {
     data object Contacts : Route
 }
 
+// Deepest route stack kept; older entries drop out, the root never does.
+private const val MAX_STACK = 8
+
 @Composable
 fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
     val context = LocalContext.current
@@ -135,8 +137,10 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
     LaunchedEffect(onReader) { if (!onReader) readerFullscreen = false }
     ImmersiveMode(fullscreen)
 
+    // Bounded, but the root stays: back must always reach the folders.
     fun go(r: Route) {
-        stack = (stack + r).takeLast(8)
+        val next = stack + r
+        stack = if (next.size <= MAX_STACK) next else listOf(next.first()) + next.takeLast(MAX_STACK - 1)
     }
 
     fun back() {
@@ -187,22 +191,31 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
         }
     }
 
+    // Fetch the message's files first when [missing] (the core's count)
+    // says some are not cached, then open the composer on [load].
+    fun composeAfterFetch(accountId: Long, folderId: Long, uid: Int, missing: () -> Int, load: () -> ComposerSeed) {
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                val n = runCatching {
+                    MailNative.ensureInit(context)
+                    missing()
+                }.getOrDefault(0)
+                if (n > 0) ReaderFiles.downloadAll(state, accountId, folderId, uid)
+            }
+            startCompose(load)
+        }
+    }
+
     // Reply, reply-all or forward. A forward keeps the original's files:
     // any not cached yet are fetched first (like a reopened draft), and the
     // core names whatever still could not be.
     fun answer(accountId: Long, folderId: Long, uid: Int, mode: ComposeMode) {
         val stageDir = context.cacheDir.absolutePath
-        scope.launch {
-            if (mode == ComposeMode.Forward) {
-                withContext(Dispatchers.IO) {
-                    val missing = runCatching {
-                        MailNative.ensureInit(context)
-                        MailNative.forwardMissing(folderId, uid)
-                    }.getOrDefault(0)
-                    if (missing > 0) ReaderFiles.downloadAll(state, accountId, folderId, uid)
-                }
-            }
-            startCompose { ComposerSeed.answer(folderId, uid, mode, stageDir) }
+        val load = { ComposerSeed.answer(folderId, uid, mode, stageDir) }
+        if (mode == ComposeMode.Forward) {
+            composeAfterFetch(accountId, folderId, uid, { MailNative.forwardMissing(folderId, uid) }, load)
+        } else {
+            startCompose(load)
         }
     }
 
@@ -212,16 +225,12 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
     fun openRow(accountId: Long, folderId: Long, uid: Int) {
         if (state.folders.firstOrNull { it.id == folderId }?.role == "drafts") {
             val stageDir = context.cacheDir.absolutePath
-            scope.launch {
-                withContext(Dispatchers.IO) {
-                    val missing = runCatching {
-                        MailNative.ensureInit(context)
-                        JSONObject(MailNative.draftForm(accountId, uid)).optInt("missing_files")
-                    }.getOrDefault(0)
-                    if (missing > 0) ReaderFiles.downloadAll(state, accountId, folderId, uid)
-                }
-                startCompose { ComposerSeed.draft(accountId, uid, stageDir) }
-            }
+            composeAfterFetch(
+                accountId,
+                folderId,
+                uid,
+                { JSONObject(MailNative.draftForm(accountId, uid)).optInt("missing_files") },
+            ) { ComposerSeed.draft(accountId, uid, stageDir) }
         } else {
             openReader(Route.Reader(accountId, folderId, uid))
         }
@@ -483,8 +492,8 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                                 Route.FolderManager -> "Manage folders"
                                 Route.Accounts -> "Accounts"
                                 is Route.Setup -> if (route.accountId >= 0) "Edit account" else "Add account"
-                            Route.Outbox -> "Outbox"
-                            Route.Contacts -> "Contacts"
+                                Route.Outbox -> "Outbox"
+                                Route.Contacts -> "Contacts"
                                 Route.Folders, Route.List, is Route.Reader, is Route.Composer, Route.Settings -> ""
                             },
                             onBack = ::back,
@@ -591,8 +600,8 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                         )
                     is Route.Reader -> reader(route)
                     Route.Settings -> SettingsScreen(state = state, onClose = ::back)
-                Route.Outbox -> OutboxScreen(state = state)
-                Route.Contacts -> ContactsScreen()
+                    Route.Outbox -> OutboxScreen(state = state)
+                    Route.Contacts -> ContactsScreen()
                     is Route.Composer ->
                         ComposerScreen(
                             state = state,

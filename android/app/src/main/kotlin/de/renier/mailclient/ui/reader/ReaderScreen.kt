@@ -1,7 +1,5 @@
 package de.renier.mailclient.ui.reader
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -57,7 +55,8 @@ import de.renier.mailclient.MailNative
 import de.renier.mailclient.R
 import de.renier.mailclient.ui.composer.ComposeMode
 import de.renier.mailclient.ui.common.CreateTypedDocument
-import de.renier.mailclient.ui.common.DeleteConfirmDialog
+import de.renier.mailclient.ui.common.MessageDeleteConfirm
+import de.renier.mailclient.ui.common.copyToClipboard
 import de.renier.mailclient.ui.common.rememberEmlSaver
 import de.renier.mailclient.ui.common.writeBytes
 import de.renier.mailclient.ui.folders.MoveToDialog
@@ -113,6 +112,9 @@ fun ReaderScreen(
     val fontScale = LocalConfiguration.current.fontScale
 
     var msg by remember(folderId, uid) { mutableStateOf<JSONObject?>(null) }
+    // Page width below which the mail's fixed widths are loosened (0: it
+    // has none), read off the main thread with the message.
+    var fitBelow by remember(folderId, uid) { mutableIntStateOf(0) }
     var headers by remember(folderId, uid) { mutableStateOf(JSONObject()) }
     var error by remember(folderId, uid) { mutableStateOf<String?>(null) }
     var reloadTick by remember { mutableIntStateOf(0) }
@@ -120,9 +122,9 @@ fun ReaderScreen(
     var remoteOnce by remember(folderId, uid) { mutableStateOf(false) }
     var originalColors by remember(folderId, uid) { mutableStateOf(false) }
     var downloadingInline by remember(folderId, uid) { mutableStateOf(false) }
-    // Dialog, menu and pending picker bytes belong to this message: the
-    // composition survives a message switch (same `when` branch, new
-    // params), so an unkeyed dialog would act on the next message.
+    // Dialog, menu and pending picker bytes belong to this message. The
+    // shell keys the reader by message today; the keys keep that true if
+    // it ever reuses the composition for the next one.
     var dialog by remember(folderId, uid) { mutableStateOf<ReaderDialog?>(null) }
     var menu by remember(folderId, uid) { mutableStateOf(false) }
     val allowRemote = prefs.loadRemoteImages || remoteOnce
@@ -168,17 +170,23 @@ fun ReaderScreen(
 
     LaunchedEffect(folderId, uid, reloadTick, allowRemote) {
         try {
-            val (m, h) = withContext(Dispatchers.IO) {
+            val (m, h, fit) = withContext(Dispatchers.IO) {
                 MailNative.ensureInit(context)
                 val m = JSONObject(MailNative.readerMessage(folderId, uid))
                 // Show-once keeps the remote images the sanitizer would drop.
                 if (allowRemote && m.optBoolean("is_html")) {
                     m.put("body_html", MailNative.readerMessageHtml(folderId, uid, true))
                 }
-                m to JSONObject(MailNative.readerHeaders(folderId, uid))
+                val fit = if (m.optBoolean("is_html")) {
+                    runCatching { MailNative.readerFitBelow(m.optString("body_html")).toInt() }.getOrDefault(0)
+                } else {
+                    0
+                }
+                Triple(m, JSONObject(MailNative.readerHeaders(folderId, uid)), fit)
             }
             msg = m
             headers = h
+            fitBelow = fit
         } catch (e: Exception) {
             // Gone from the cache (a sync dropped it): back to the list
             // rather than a spinner that never ends.
@@ -259,7 +267,12 @@ fun ReaderScreen(
         withContext(Dispatchers.Main) { dialog = ReaderDialog.Link(url, info) }
     }
 
-    LaunchedEffect(error) { if (error != null) { state.info(error!!); onClose() } }
+    LaunchedEffect(error) {
+        error?.let {
+            state.info(it)
+            onClose()
+        }
+    }
 
     val m = msg
     Scaffold(
@@ -301,7 +314,7 @@ fun ReaderScreen(
                 // In a dark theme the paint itself switches; in a light one
                 // only the layout does, so without fixed widths the toggle
                 // would visibly do nothing.
-                (dark || remember(m) { mailFitBelow(m) } > 0)
+                (dark || fitBelow > 0)
             val header: @Composable () -> Unit = {
                 ReaderHeader(
                     m = m,
@@ -448,6 +461,7 @@ fun ReaderScreen(
                     textZoom = (100 * prefs.scale * state.uiScale * fontScale).toInt(),
                     // "As sent" shows the original fixed widths too.
                     fitWidths = !originalColors,
+                    fitBelow = fitBelow,
                     onTapUrl = ::onTapUrl,
                     onLongPressUrl = ::onLongPressUrl,
                     header = header,
@@ -468,18 +482,20 @@ fun ReaderScreen(
     }
 
     when (val d = dialog) {
-        ReaderDialog.Delete -> DeleteConfirmDialog(
-            title = if (deletePermanent) "Delete permanently?" else "Move to Trash?",
-            text = if (deletePermanent) "“${m?.optString("subject")}” will be destroyed on the server. This cannot be undone."
-            else "“${m?.optString("subject")}” will be moved to Trash.",
-            confirmLabel = if (deletePermanent) "Delete permanently" else "Move to Trash",
-            onConfirm = { dialog = null; runDelete() },
+        ReaderDialog.Delete -> MessageDeleteConfirm(
+            subject = m?.optString("subject").orEmpty(),
+            count = 1,
+            permanent = deletePermanent,
+            onConfirm = {
+                dialog = null
+                runDelete()
+            },
             onDismiss = { dialog = null },
         )
-        ReaderDialog.Purge -> DeleteConfirmDialog(
-            title = "Delete permanently?",
-            text = "“${m?.optString("subject")}” will be destroyed on the server. This cannot be undone.",
-            confirmLabel = "Delete permanently",
+        ReaderDialog.Purge -> MessageDeleteConfirm(
+            subject = m?.optString("subject").orEmpty(),
+            count = 1,
+            permanent = true,
             onConfirm = {
                 dialog = null
                 bg {
@@ -512,8 +528,7 @@ fun ReaderScreen(
             url = d.url,
             info = d.info,
             onCopy = {
-                (context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager)
-                    ?.setPrimaryClip(ClipData.newPlainText("link", d.url))
+                copyToClipboard(context, "link", d.url)
                 dialog = null
                 state.info("Link copied")
             },
@@ -659,9 +674,3 @@ private fun pagePaint(colored: Boolean, dark: Boolean, keepOriginal: Boolean, th
     fun c(key: String, i: Int) = p?.optInt(key, theme[i]) ?: theme[i]
     return PagePaint(paint, c("paper", 0), c("ink", 1), c("link", 2), c("quote", 3), c("rule", 4))
 }
-
-// Page width below which the mail's fixed widths are loosened (`0`: the
-// mail has none). Same value the WebView computes, so the toggle only
-// shows where flipping it visibly changes the layout.
-private fun mailFitBelow(m: JSONObject): Int =
-    runCatching { MailNative.readerFitBelow(m.optString("body_html")).toInt() }.getOrDefault(0)

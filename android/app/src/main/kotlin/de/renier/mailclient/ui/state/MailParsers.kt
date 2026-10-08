@@ -38,7 +38,7 @@ internal fun parseFolders(json: String): List<Folder> {
             unread = o.optInt("unread", 0),
             count = o.optInt("count", 0),
             subscribed = o.optBoolean("subscribed", true),
-            alwaysVisible = o.optBoolean("always_visible", role != "custom"),
+            alwaysVisible = o.optBoolean("always_visible", true),
             deleteIsPermanent = o.optBoolean("delete_is_permanent", false),
         )
     }.filter { it.id >= 0 }

@@ -31,6 +31,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.R
+import de.renier.mailclient.ui.common.strings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -118,7 +119,7 @@ fun BackgroundStatus() {
                     bucket = BackgroundPower.standbyBucket(context)?.let { MailNative.limitingBucket(it) }.orEmpty(),
                     exact = BackgroundPower.exactAlarms(context),
                     last = lines.optString("last"),
-                    history = (0 until (history?.length() ?: 0)).map { history!!.optString(it) },
+                    history = history.strings(),
                 )
             }.getOrNull()
         }

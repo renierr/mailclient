@@ -16,8 +16,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -37,12 +35,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.CrashLog
 import de.renier.mailclient.MailNative
+import de.renier.mailclient.ui.common.DeleteConfirmDialog
 import de.renier.mailclient.ui.state.MailState
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.io.File
 
 private class Confirm(val title: String, val text: String, val action: String, val run: () -> String)
 
@@ -290,23 +289,15 @@ fun MaintenanceSection(state: MailState) {
     }
 
     confirm?.let { c ->
-        AlertDialog(
-            onDismissRequest = { confirm = null },
-            title = { Text(c.title) },
-            text = { Text(c.text) },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        confirm = null
-                        act(c.run)
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError,
-                    ),
-                ) { Text(c.action) }
+        DeleteConfirmDialog(
+            title = c.title,
+            text = c.text,
+            confirmLabel = c.action,
+            onConfirm = {
+                confirm = null
+                act(c.run)
             },
-            dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel") } },
+            onDismiss = { confirm = null },
         )
     }
 }

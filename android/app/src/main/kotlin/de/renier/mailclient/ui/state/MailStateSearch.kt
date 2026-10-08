@@ -1,18 +1,19 @@
 package de.renier.mailclient.ui.state
 
+import android.util.Log
 import de.renier.mailclient.MailNative
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 
 // Search, find-similar and the client-side row/filtered views for MailState.
-// Pure move from MailState.kt — call syntax is unchanged.
 
 fun MailState.setSearch(query: String) {
     exitSelectionMode()
-    serverSearchFired = false
+    serverSearchFired.set(false)
     serverSearchPending = false
     searchQuery = query
     runSearch()
@@ -21,7 +22,7 @@ fun MailState.setSearch(query: String) {
 fun MailState.toggleSearchScope() {
     searchFolderOnly = !searchFolderOnly
     // Fresh scope, fresh server top-up (Qt `folderScopeToggled`).
-    serverSearchFired = false
+    serverSearchFired.set(false)
     serverSearchPending = false
     if (similarTarget == null) runSearch()
 }
@@ -29,7 +30,7 @@ fun MailState.toggleSearchScope() {
 fun MailState.clearSearch() {
     searchJob?.cancel()
     exitSelectionMode()
-    serverSearchFired = false
+    serverSearchFired.set(false)
     serverSearchPending = false
     searchQuery = ""
     searchHits = emptyList()
@@ -72,7 +73,7 @@ internal fun MailState.loadSimilar(folder: Long, uid: Int, refresh: Boolean) = i
         }
         searchHits = hits
         searchActive = true
-        shownHits = hits.filter { rowShown(it) }
+        shownHits = keptRows(hits, "")
         similarTarget = folder to uid
         if (!refresh || similarLabel == null) {
             similarLabel = "Similar to: ${subject.ifEmpty { "this message" }}"
@@ -85,28 +86,45 @@ internal fun MailState.refreshDateLabel() {
         if (hasDateFilter) MailNative.dateFilterLabel(filterAfter, filterBefore) else ""
 }
 
-/** AND-combined quick filters over one row; never fetches. */
-private fun MailState.rowShown(m: MessageRow): Boolean {
-    if (filterUnread && !m.unread) return false
-    if (filterStarred && !m.starred) return false
-    if (filterAttachments && !m.hasAttachments) return false
-    if (hasDateFilter &&
-        MailNative.dateFilterMatches(m.dateRaw, filterAfter, filterBefore) != "true"
-    ) {
-        return false
+/**
+ * The [rows] the list filters keep: the quick filters AND-ed with the
+ * typed row filter [text], decided by the core over the whole set in one
+ * call (`mailcore::search::list_filter`). Never fetches. Main thread.
+ */
+internal fun MailState.keptRows(rows: List<MessageRow>, text: String): List<MessageRow> {
+    if (rows.isEmpty() || (!hasListFilter && text.isEmpty())) return rows
+    val filter = JSONObject()
+        .put("unread", filterUnread)
+        .put("starred", filterStarred)
+        .put("attachments", filterAttachments)
+        .put("after", filterAfter)
+        .put("before", filterBefore)
+        .put("text", text)
+    val arr = JSONArray()
+    for (m in rows) {
+        val o = JSONObject()
+            .put("date_raw", m.dateRaw)
+            .put("unread", m.unread)
+            .put("starred", m.starred)
+            .put("has_attachments", m.hasAttachments)
+        if (text.isNotEmpty()) {
+            o.put("subject", m.subject).put("from", m.from).put("from_name", m.fromName).put("snippet", m.snippet)
+        }
+        arr.put(o)
     }
-    return true
+    val kept = runCatching { JSONArray(MailNative.listFilterKeep(filter.toString(), arr.toString())) }
+        .getOrElse {
+            Log.w(MailState.TAG, "list filter failed", it)
+            return rows
+        }
+    return List(kept.length()) { rows[kept.getInt(it)] }
 }
-
-/** The typed row filter over one folder row (core match rule). */
-private fun MailState.rowFilterPasses(m: MessageRow): Boolean =
-    rowFilterQuery.isEmpty() ||
-        MailNative.searchFilterMatches(rowFilterQuery, m.subject, m.from, m.fromName, m.snippet) == "true"
 
 /** What the list paints; the backing rows stay untouched. */
 internal fun MailState.recomputeShown() {
-    shownMessages = messages.filter { rowShown(it) && rowFilterPasses(it) }
-    shownHits = searchHits.filter { rowShown(it) }
+    shownMessages = keptRows(messages, rowFilterQuery)
+    shownHits = keptRows(searchHits, "")
+    refreshOlderLabel()
     pruneSelection()
 }
 
@@ -128,8 +146,7 @@ internal fun MailState.runSearch() {
                 val found = parseMessages(MailNative.searchJson(accountId, plan.optString("query"), folderScope))
                 // Thin index results trigger one queued server backfill
                 // per query; its finish event re-runs this search.
-                if (!serverSearchFired && found.size < plan.optInt("hit_limit", 50)) {
-                    serverSearchFired = true
+                if (found.size < plan.optInt("hit_limit", 50) && serverSearchFired.compareAndSet(false, true)) {
                     delay(plan.optLong("debounce_ms", 0))
                     if (searchQuery == query) {
                         runCatching {
@@ -147,7 +164,6 @@ internal fun MailState.runSearch() {
             if (searchQuery != query) return@withContext
             searchActive = rows != null
             searchHits = rows.orEmpty()
-            shownHits = rows.orEmpty().filter { rowShown(it) }
             rowFilterQuery = filter
             recomputeShown()
         }

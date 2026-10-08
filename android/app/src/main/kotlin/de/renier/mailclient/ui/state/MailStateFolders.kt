@@ -21,13 +21,14 @@ fun MailState.refreshAll(syncAfter: Boolean = false, coldStart: Boolean = false)
     val parsed = JSONObject(MailNative.initialSelection())
     val accountId = parsed.optLong("account_id", -1)
     val landing = parsed.optLong("folder_id", -1)
+    val loaded = parseAccounts(MailNative.accountsJson())
     withContext(Dispatchers.Main) {
-        accounts = parseAccounts(MailNative.accountsJson())
+        accounts = loaded
         activeAccountId = accountId
         // loadFolders() below clears it when the tree has no such folder.
         folderId = landing
     }
-    MailShortcuts.update(appContext, accounts)
+    MailShortcuts.update(appContext, loaded)
     loadFolders()
     if (coldStart) {
         val view = runCatching { JSONObject(MailNative.settingsJson()).optString("start_view") }.getOrNull()
@@ -139,7 +140,7 @@ fun MailState.openFolder(id: Long) {
     // A folder-scoped search follows the folder: fresh scope, fresh
     // server top-up (Qt `updateSearch` on a folder change).
     if (searchActive && searchFolderOnly && similarTarget == null) {
-        serverSearchFired = false
+        serverSearchFired.set(false)
         serverSearchPending = false
         runSearch()
     }
@@ -167,11 +168,7 @@ internal fun MailState.reloadMessages() = io {
             val server = counts.optInt("server", -1)
             canLoadOlder = counts.optBoolean("can_load_older", false)
             olderState = older
-            olderLabel = when (older) {
-                "unchecked" -> "Cached $cached (server not checked)"
-                "partial" -> "Cached $cached of $server"
-                else -> "All $cached loaded"
-            }
+            olderCounts = cached to server
             recomputeShown()
         }
     }

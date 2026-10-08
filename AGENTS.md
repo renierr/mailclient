@@ -114,7 +114,7 @@ This file is normative for all coding agents (human or AI) working in this repo.
 
 How the Compose app is written. `android/README.md` covers the build and the JNI seam.
 
-- **Where code lives.** One feature directory per area under `ui/` (`shell/`, `folders/`, `list/`, `reader/`, `composer/`, `accounts/`, `contacts/`, `settings/`, `outbox/`); pieces used by more than one feature go in `ui/common/`, not copied. `ui/state/MailState.kt` holds what the shell shows; JNI calls go through `MailNative`, and screens subscribe to `JobEvents` (never `MailNative.setJobListener`) and close the subscription on dispose. A file past ~500 lines took a second job — split it by responsibility.
+- **Where code lives.** One feature directory per area under `ui/` (`shell/`, `folders/`, `list/`, `reader/`, `composer/`, `accounts/`, `contacts/`, `settings/`, `outbox/`); pieces used by more than one feature go in `ui/common/`, not copied. `ui/state/MailState.kt` holds what the shell shows; JNI calls go through `MailNative`, and screens subscribe to `JobEvents` (never `MailNative.setJobListener`) and close the subscription on dispose. A file past ~500 lines is a prompt to check for a second job, not a limit (see "File size" below): split by responsibility when there is one, otherwise leave it.
 - **No Kotlin twins of core logic.** A decision, format or rule the Qt side also needs is a `mailcore` function reached through a `MailNative` extern in `crates/mailffi/src/android.rs`. Kotlin keeps toolkit code: layout, navigation, gestures, theme, WebView hosting, SAF pickers, notifications.
 - **Layout keys on width and text scale**, never on device type: below 700dp one pane, below 1100dp folders + list (the reader takes the list's place), else three (`ui/shell/MailPanes.kt`). Labels sit *above* inputs on narrow layouts. No fixed content widths.
 - The composer and Settings are always full pages, on every width — never dialogs. Qt keeps them as resizable dialogs; that is a deliberate UI difference (§1).
@@ -139,9 +139,12 @@ Flutter gets bug fixes only (§1). These rules keep a fix consistent with the co
 A file that keeps growing is usually a module that has taken on a second
 responsibility. Treat these as prompts to look, not as hard gates:
 
-- **Past roughly 500 lines of non-test code**, split by responsibility rather
-  than by line count — the way `imap.rs` and `sender.rs` became directories of
-  focused modules. Name the parts after what they do, not `utils`/`helpers`.
+- **Past roughly 500 lines of non-test code**, check whether the file does
+  more than one thing. If it does, split it by responsibility — the way
+  `imap.rs` and `sender.rs` became directories of focused modules — and name
+  the parts after what they do, not `utils`/`helpers`. If it is one cohesive
+  job (a screen plus the private pieces only it uses, one protocol state
+  machine), it may stay long: line count alone is never a reason to split.
 - **Before splitting or relocating anything, check for non-test callers.**
   Code whose only callers are its own tests is dead: delete it and the tests
   with it, and retarget any coverage worth keeping at the live function. That

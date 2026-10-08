@@ -1,6 +1,7 @@
 package de.renier.mailclient.ui.composer
 
 import de.renier.mailclient.MailNative
+import de.renier.mailclient.ui.common.objects
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -79,9 +80,7 @@ data class ComposerSeed(
                 replyNotice = d.optString("notice"),
                 replyNoticeAddr = d.optString("notice_addr"),
                 filesNotice = fwd?.optString("notice").orEmpty(),
-                attachments = List(files?.length() ?: 0) { i ->
-                    files!!.getJSONObject(i).let { PickedFile(it.getString("path"), it.getString("name")) }
-                },
+                attachments = files.objects().map { PickedFile(it.getString("path"), it.getString("name")) },
             )
         }
 
@@ -98,11 +97,10 @@ data class ComposerSeed(
                 List(a.length()) { i -> a.getJSONObject(i).let { PickedFile(it.getString("path"), it.getString("name")) } }
             }.getOrNull()
             val files = f.optJSONArray("attachments")
-            val names = if (staged != null) emptyList() else buildList {
-                for (i in 0 until (files?.length() ?: 0)) {
-                    val a = files!!.optJSONObject(i) ?: continue
-                    if (!a.optBoolean("is_inline")) add(a.optString("filename"))
-                }
+            val names = if (staged != null) {
+                emptyList()
+            } else {
+                files.objects().filter { !it.optBoolean("is_inline") }.map { it.optString("filename") }
             }
             return ComposerSeed(
                 mode = ComposeMode.Draft,

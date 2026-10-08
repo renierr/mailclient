@@ -37,7 +37,7 @@ pub fn cached_attachment_bytes(attachment_id: i64) -> anyhow::Result<Option<Vec<
 /// trips for the same bytes. Finishing is reported as an `"Attachments"`
 /// event, after which [`cached_attachment_bytes`] answers.
 pub fn download_attachments(account_id: i64, folder_id: i64, uid: u32) -> anyhow::Result<()> {
-    let key = format!("attach:{folder_id}:{uid}");
+    let key = crate::net::attachments_key(folder_id, uid);
     spawn("Attachments", key, move |db, _progress| async move {
         let acc = resolve_account(db, account_id)?;
         let m = messages::get_by_uid(db, folder_id, uid).map_err(|e| e.to_string())?;

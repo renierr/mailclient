@@ -16,6 +16,8 @@
 //! two words of text); only the date keys also accept `after: 2026-01-01`,
 //! since a full date can never be a word the user meant as text.
 
+pub mod list_filter;
+
 /// The search syntax as both frontends show it (search field tooltip).
 pub const SYNTAX_HELP: &str = "All words must match, by word start (inv finds invoice)\n\
 \"exact phrase\"   -exclude\n\
@@ -357,6 +359,11 @@ pub fn plan(raw: &str) -> SearchPlan {
 pub fn date_passes(date_raw: Option<&str>, after: Option<&str>, before: Option<&str>) -> bool {
     let after = after.and_then(|s| normalise_date(s.trim()));
     let before = before.and_then(|s| normalise_date(s.trim()));
+    date_bounds_pass(date_raw, after.as_deref(), before.as_deref())
+}
+
+/// [`date_passes`] with bounds already normalised.
+fn date_bounds_pass(date_raw: Option<&str>, after: Option<&str>, before: Option<&str>) -> bool {
     if after.is_none() && before.is_none() {
         return true;
     }
@@ -365,12 +372,12 @@ pub fn date_passes(date_raw: Option<&str>, after: Option<&str>, before: Option<&
         return false;
     }
     if let Some(a) = after {
-        if raw < a.as_str() {
+        if raw < a {
             return false;
         }
     }
     if let Some(b) = before {
-        if raw >= b.as_str() {
+        if raw >= b {
             return false;
         }
     }

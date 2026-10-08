@@ -70,6 +70,8 @@ fun MailWebView(
     allowRemote: Boolean,
     textZoom: Int,
     fitWidths: Boolean,
+    // The core's page width below which fixed widths are loosened (0: none).
+    fitBelow: Int,
     onTapUrl: (String) -> Unit,
     // Long-press on a link: Qt's right-click Copy / Examine, for touch.
     onLongPressUrl: (String) -> Unit,
@@ -84,7 +86,6 @@ fun MailWebView(
     var headerPx by remember { mutableIntStateOf(0) }
     var scrollPx by remember { mutableIntStateOf(0) }
     var doc by remember { mutableStateOf<String?>(null) }
-    val fitBelow = remember(html) { runCatching { MailNative.readerFitBelow(html).toInt() }.getOrDefault(0) }
     val web = remember { WebHandle() }
     // Header drags move the page: px by px while the finger is down (the
     // fraction carried over so slow drags do not stall), then the

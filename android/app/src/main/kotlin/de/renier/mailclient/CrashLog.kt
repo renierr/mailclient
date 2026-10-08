@@ -87,15 +87,8 @@ object CrashLog {
             appendLine("thread: ${thread.name}")
             appendLine()
         }
-        val trace = buildString {
-            var e: Throwable? = error
-            while (e != null) {
-                append(e.stackTraceToString())
-                e = e.cause
-                if (e != null) appendLine("Caused by:")
-            }
-        }
-        file.writeText(header + trace)
+        // Already carries the "Caused by:" chain.
+        file.writeText(header + error.stackTraceToString())
         // Keep the directory bounded: the oldest beyond the cap go.
         runCatching {
             d.listFiles { f -> f.isFile && f.name.endsWith(".log") }

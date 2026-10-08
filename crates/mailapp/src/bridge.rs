@@ -337,28 +337,22 @@ pub mod qobject {
         #[qinvokable]
         fn search_plan_json(&self, query: &QString) -> QString;
 
-        /// The short-input filter over one list row
-        /// (`mailcore::search::filter_matches`).
+        /// The list filters over every row at once
+        /// (`mailcore::search::list_filter`): a filter object and the feed
+        /// rows as JSON in, a JSON array of the kept row indexes out.
         #[qinvokable]
-        fn search_filter_matches(
-            &self,
-            query: &QString,
-            subject: &QString,
-            from: &QString,
-            from_name: &QString,
-            snippet: &QString,
-        ) -> bool;
+        fn list_filter_keep(&self, filter_json: &QString, rows_json: &QString) -> QString;
 
-        /// Whether one list row's raw date passes an `after` (inclusive) /
-        /// `before` (exclusive) `YYYY-MM-DD` pair (`mailcore::search::date_passes`).
-        /// Empty bounds are unset.
+        /// A typed custom date range, normalised or refused, as JSON
+        /// (`mailcore::search::list_filter::date_range_check`):
+        /// `{"after","before","error"}`, `error` `""` when it applies.
         #[qinvokable]
-        fn date_filter_matches(
-            &self,
-            date_raw: &QString,
-            after: &QString,
-            before: &QString,
-        ) -> bool;
+        fn date_range_check_json(&self, after: &QString, before: &QString) -> QString;
+
+        /// The "Show older" footer's words (`mailcore::feed::older_label`);
+        /// `server < 0` = never reported.
+        #[qinvokable]
+        fn older_label(&self, cached: i32, server: i32, filtered: bool) -> QString;
 
         /// A named date preset (`today` | `week` | `month` | `older_month`) as
         /// JSON (`mailcore::search::date_preset_range`): `{"after":"","before":""}`.

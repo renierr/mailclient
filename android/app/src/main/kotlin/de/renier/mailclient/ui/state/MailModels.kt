@@ -2,11 +2,7 @@ package de.renier.mailclient.ui.state
 
 import de.renier.mailclient.ui.composer.ComposerSeed
 
-// Step 1 shell state: what the app shows and what it does, over the 0a–0e
-// JNI surface. Plain holder (no new dependencies — no ViewModel, no
-// navigation-compose), owned by MailShell's composition. Reads take explicit
-// ids and jobs only say *that* something changed, so this re-reads whatever
-// is showing — the same contract the Dart MailState keeps.
+// The plain rows MailState holds, decoded from the core's feeds (MailParsers).
 data class Account(
     val id: Long,
     val email: String,
@@ -57,7 +53,7 @@ data class MessageRow(
     val unread: Boolean,
     val starred: Boolean,
     val hasAttachments: Boolean,
-    // Raw UTC timestamp for the date quick-filter (`dateFilterMatches`);
+    // Raw UTC timestamp for the date quick-filter (`listFilterKeep`);
     // `date` above is display text.
     val dateRaw: String = "",
     // Core-decided avatar (mailcore::badge): initials + per-theme hex.

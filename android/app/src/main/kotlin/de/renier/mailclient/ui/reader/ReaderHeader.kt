@@ -18,10 +18,10 @@ import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.R
@@ -179,7 +179,7 @@ fun ReaderHeader(
             }
         }
 
-        val files = attachmentsOf(m)
+        val files = remember(m) { attachmentsOf(m) }
         if (files.isNotEmpty()) {
             ReaderCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {

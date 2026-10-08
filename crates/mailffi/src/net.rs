@@ -141,6 +141,22 @@ fn snapshot_of(set: &Inflight) -> BusySnapshot {
     }
 }
 
+/// Whether a job with dedupe `key` is queued or running. Asked by the
+/// Android adapter only.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn is_inflight(key: &str) -> bool {
+    inflight()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .jobs
+        .contains_key(key)
+}
+
+/// The dedupe key of one message's attachment download.
+pub(crate) fn attachments_key(folder_id: i64, uid: u32) -> String {
+    format!("attach:{folder_id}:{uid}")
+}
+
 fn remove_inflight(key: &str) {
     let mut set = inflight().lock().unwrap_or_else(|e| e.into_inner());
     if set.jobs.remove(key).is_some() {

@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -38,7 +37,6 @@ import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
@@ -60,6 +58,8 @@ import androidx.core.content.ContextCompat
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.MailNotifier
 import de.renier.mailclient.R
+import de.renier.mailclient.ui.common.UnsavedChangesDialog
+import de.renier.mailclient.ui.common.strings
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.state.refreshCapabilities
 import de.renier.mailclient.ui.state.settingsSaved
@@ -264,25 +264,18 @@ fun SettingsScreen(state: MailState, onClose: () -> Unit) {
     }
 
     if (confirmDiscard) {
-        AlertDialog(
-            onDismissRequest = { confirmDiscard = false },
-            title = { Text("Discard changes?") },
-            text = { Text("Your changes to the settings are not saved yet.") },
-            confirmButton = {
-                Button(onClick = {
-                    confirmDiscard = false
-                    save()
-                }) { Text("Save") }
+        UnsavedChangesDialog(
+            title = "Discard changes?",
+            text = "Your changes to the settings are not saved yet.",
+            onSave = {
+                confirmDiscard = false
+                save()
             },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = { confirmDiscard = false }) { Text("Cancel") }
-                    TextButton(onClick = {
-                        confirmDiscard = false
-                        onClose()
-                    }) { Text("Discard") }
-                }
+            onDiscard = {
+                confirmDiscard = false
+                onClose()
             },
+            onDismiss = { confirmDiscard = false },
         )
     }
 }
@@ -456,13 +449,10 @@ private fun AboutSection(state: MailState) {
                 modifier = Modifier.padding(vertical = 8.dp),
             )
         }
-        val list = caps.optJSONArray("capabilities")
+        val list = remember(caps) { caps.optJSONArray("capabilities").strings() }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            for (i in 0 until (list?.length() ?: 0)) {
-                AssistChip(
-                    onClick = {},
-                    label = { Text(list!!.optString(i), fontFamily = FontFamily.Monospace) },
-                )
+            for (cap in list) {
+                AssistChip(onClick = {}, label = { Text(cap, fontFamily = FontFamily.Monospace) })
             }
         }
     }

@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -36,11 +35,14 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.MailNative
+import de.renier.mailclient.ui.common.UnsavedChangesDialog
+import de.renier.mailclient.ui.common.stringMap
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.state.refreshAll
 import de.renier.mailclient.ui.state.selectAccount
 import de.renier.mailclient.ui.state.syncAccount
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -90,6 +92,9 @@ fun AccountSetupScreen(
     var testResult by remember { mutableStateOf<ConnTest?>(null) }
     var confirmDiscard by remember { mutableStateOf(false) }
     var baseline by remember { mutableStateOf("") }
+    // The inline check in flight: a newer keystroke cancels it, so an older
+    // answer can never land last.
+    var checkJob by remember { mutableStateOf<Job?>(null) }
 
     fun formJson(): String = JSONObject()
         .put("id", accountId)
@@ -157,16 +162,12 @@ fun AccountSetupScreen(
         testResult = null
         val form = formJson()
         val ed = editing
-        scope.launch(Dispatchers.IO) {
-            val check = JSONObject(MailNative.accountFormCheck(form, ed))
-            val errs = mutableMapOf<String, String>()
-            val warns = mutableMapOf<String, String>()
-            check.optJSONObject("errors")?.keys()?.forEach { k ->
-                errs[k] = check.optJSONObject("errors")?.optString(k) ?: ""
-            }
-            check.optJSONObject("warnings")?.keys()?.forEach { k ->
-                warns[k] = check.optJSONObject("warnings")?.optString(k) ?: ""
-            }
+        checkJob?.cancel()
+        checkJob = scope.launch(Dispatchers.IO) {
+            val check = runCatching { JSONObject(MailNative.accountFormCheck(form, ed)) }.getOrNull()
+                ?: return@launch
+            val errs = check.optJSONObject("errors").stringMap()
+            val warns = check.optJSONObject("warnings").stringMap()
             withContext(Dispatchers.Main) {
                 errors = errs
                 warnings = warns
@@ -177,7 +178,7 @@ fun AccountSetupScreen(
     fun guessFor(typed: String) {
         if (touchedHosts || editing) return
         scope.launch(Dispatchers.IO) {
-            val g = JSONObject(MailNative.accountGuess(typed))
+            val g = runCatching { JSONObject(MailNative.accountGuess(typed)) }.getOrNull() ?: return@launch
             if (g.length() == 0) return@launch
             withContext(Dispatchers.Main) {
                 if (!touchedHosts) {
@@ -200,14 +201,16 @@ fun AccountSetupScreen(
     fun securityChanged(protocol: String, next: String) {
         scope.launch(Dispatchers.IO) {
             if (protocol == "imap") {
-                val port = MailNative.accountPortForSecurity(protocol, imapSec, next, imapPort)
+                val port = runCatching { MailNative.accountPortForSecurity(protocol, imapSec, next, imapPort) }
+                    .getOrDefault(imapPort)
                 withContext(Dispatchers.Main) {
                     imapSec = next
                     imapPort = port
                     recheck()
                 }
             } else {
-                val port = MailNative.accountPortForSecurity(protocol, smtpSec, next, smtpPort)
+                val port = runCatching { MailNative.accountPortForSecurity(protocol, smtpSec, next, smtpPort) }
+                    .getOrDefault(smtpPort)
                 withContext(Dispatchers.Main) {
                     smtpSec = next
                     smtpPort = port
@@ -221,20 +224,10 @@ fun AccountSetupScreen(
         saveError = null
         saving = true
         val form = formJson()
-        val ed = editing
         scope.launch(Dispatchers.IO) {
-            val result = runCatching {
-                // Surface the core check first so the composer-style inline
-                // path and the save path agree.
-                val check = JSONObject(MailNative.accountFormCheck(form, ed))
-                val first = check.optJSONObject("errors")?.keys()?.asSequence()?.firstOrNull()
-                if (first != null) {
-                    throw IllegalArgumentException(
-                        check.optJSONObject("errors")?.optString(first) ?: "invalid form",
-                    )
-                }
-                MailNative.saveAccount(form)
-            }
+            // The core runs the same check the form shows inline and refuses
+            // with its first problem.
+            val result = runCatching { MailNative.saveAccount(form) }
             withContext(Dispatchers.Main) {
                 saving = false
                 result
@@ -403,19 +396,14 @@ fun AccountSetupScreen(
     }
 
     if (confirmDiscard) {
-        AlertDialog(
-            onDismissRequest = { confirmDiscard = false },
-            title = { Text("Discard changes?") },
-            text = { Text("The account form has unsaved changes.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmDiscard = false
-                    onClose()
-                }) { Text("Discard", color = MaterialTheme.colorScheme.error) }
+        UnsavedChangesDialog(
+            title = "Discard changes?",
+            text = "The account form has unsaved changes.",
+            onDiscard = {
+                confirmDiscard = false
+                onClose()
             },
-            dismissButton = {
-                TextButton(onClick = { confirmDiscard = false }) { Text("Keep editing") }
-            },
+            onDismiss = { confirmDiscard = false },
         )
     }
 }
@@ -425,9 +413,7 @@ fun AccountSetupScreen(
 private data class ConnTest(
     val ok: Boolean,
     val error: String,
-    val imapOk: Boolean,
     val imapError: String,
-    val smtpOk: Boolean,
     val smtpError: String,
 )
 
@@ -438,15 +424,14 @@ private fun parseConnTest(json: String): ConnTest {
     return ConnTest(
         ok = o.optBoolean("ok", false),
         error = o.optString("error", ""),
-        imapOk = imap.optBoolean("ok", false),
         imapError = imap.optString("error", ""),
-        smtpOk = smtp.optBoolean("ok", false),
         smtpError = smtp.optString("error", ""),
     )
 }
 
 @Composable
-private fun Section(title: String) {    Text(
+private fun Section(title: String) {
+    Text(
         title,
         style = MaterialTheme.typography.titleSmall,
         color = MaterialTheme.colorScheme.primary,

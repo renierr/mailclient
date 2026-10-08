@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -13,7 +14,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import de.renier.mailclient.R
 import de.renier.mailclient.ui.common.FormDialog
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.state.applyDatePreset
@@ -21,9 +24,8 @@ import de.renier.mailclient.ui.state.clearDateFilter
 import de.renier.mailclient.ui.state.clearListFilters
 import de.renier.mailclient.ui.state.hasDateFilter
 import de.renier.mailclient.ui.state.hasListFilter
-import de.renier.mailclient.ui.state.setAfterDay
 import de.renier.mailclient.ui.state.setAttachmentsOnly
-import de.renier.mailclient.ui.state.setBeforeDay
+import de.renier.mailclient.ui.state.setDateRange
 import de.renier.mailclient.ui.state.setSort
 import de.renier.mailclient.ui.state.setStarredOnly
 import de.renier.mailclient.ui.state.setUnreadOnly
@@ -34,17 +36,17 @@ import de.renier.mailclient.ui.state.setUnreadOnly
 @Composable
 fun SortMenu(state: MailState, onDismiss: () -> Unit) {
     DropdownMenu(expanded = true, onDismissRequest = onDismiss) {
-        sortEntry(state, "Date, newest first", "date", true, onDismiss)
-        sortEntry(state, "Date, oldest first", "date", false, onDismiss)
-        sortEntry(state, "From, A–Z", "from", false, onDismiss)
-        sortEntry(state, "From, Z–A", "from", true, onDismiss)
-        sortEntry(state, "Subject, A–Z", "subject", false, onDismiss)
-        sortEntry(state, "Subject, Z–A", "subject", true, onDismiss)
+        SortEntry(state, "Date, newest first", "date", true, onDismiss)
+        SortEntry(state, "Date, oldest first", "date", false, onDismiss)
+        SortEntry(state, "From, A–Z", "from", false, onDismiss)
+        SortEntry(state, "From, Z–A", "from", true, onDismiss)
+        SortEntry(state, "Subject, A–Z", "subject", false, onDismiss)
+        SortEntry(state, "Subject, Z–A", "subject", true, onDismiss)
     }
 }
 
 @Composable
-private fun sortEntry(
+private fun SortEntry(
     state: MailState,
     label: String,
     field: String,
@@ -52,13 +54,10 @@ private fun sortEntry(
     onDismiss: () -> Unit,
 ) {
     val active = state.sortField == field && state.sortDesc == descending
-    DropdownMenuItem(
-        text = { Text((if (active) "✓ " else "") + label) },
-        onClick = {
-            onDismiss()
-            if (!active) state.setSort(field, descending)
-        },
-    )
+    CheckedMenuItem(label, active) {
+        onDismiss()
+        if (!active) state.setSort(field, descending)
+    }
 }
 
 /** Short sort name for the header tooltip. */
@@ -74,9 +73,9 @@ fun sortShortLabel(state: MailState): String = when (state.sortField) {
 @Composable
 fun FilterMenu(state: MailState, onCustomRange: () -> Unit, onDismiss: () -> Unit) {
     DropdownMenu(expanded = true, onDismissRequest = onDismiss) {
-        filterToggle("Unread only", state.filterUnread, { state.setUnreadOnly(it) })
-        filterToggle("Starred only", state.filterStarred, { state.setStarredOnly(it) })
-        filterToggle("With attachments", state.filterAttachments, { state.setAttachmentsOnly(it) })
+        FilterToggle("Unread only", state.filterUnread, { state.setUnreadOnly(it) })
+        FilterToggle("Starred only", state.filterStarred, { state.setStarredOnly(it) })
+        FilterToggle("With attachments", state.filterAttachments, { state.setAttachmentsOnly(it) })
         HorizontalDivider()
         DropdownMenuItem(
             text = { Text("Today") },
@@ -130,35 +129,35 @@ fun FilterMenu(state: MailState, onCustomRange: () -> Unit, onDismiss: () -> Uni
 }
 
 @Composable
-private fun filterToggle(label: String, on: Boolean, set: (Boolean) -> Unit) {
+private fun FilterToggle(label: String, on: Boolean, set: (Boolean) -> Unit) {
+    CheckedMenuItem(label, on) { set(!on) }
+}
+
+// A menu entry with the shell overflow's trailing tick when it is on.
+@Composable
+private fun CheckedMenuItem(label: String, checked: Boolean, onClick: () -> Unit) {
     DropdownMenuItem(
-        text = { Text((if (on) "✓ " else "") + label) },
-        onClick = { set(!on) },
+        text = { Text(label) },
+        trailingIcon = if (checked) {
+            { Icon(painterResource(R.drawable.ic_check), contentDescription = "On") }
+        } else {
+            null
+        },
+        onClick = onClick,
     )
 }
 
 // Custom date range (Qt dateDialog): After inclusive / Before exclusive
-// YYYY-MM-DD. Rejects anything the core could not read as a day pair.
+// YYYY-MM-DD, read and checked by the core (lenient days, both empty
+// clears the date filter) — the same rule as the desktop dialog.
 @Composable
 fun DateRangeDialog(state: MailState, onDismiss: () -> Unit) {
     var after by remember { mutableStateOf(state.filterAfter) }
     var before by remember { mutableStateOf(state.filterBefore) }
     var error by remember { mutableStateOf<String?>(null) }
-    val day = Regex("""\d{4}-\d{2}-\d{2}""")
     fun apply() {
-        val bad = (after.isNotEmpty() && !day.matches(after)) ||
-            (before.isNotEmpty() && !day.matches(before))
-        if (after.isEmpty() && before.isEmpty() || bad) {
-            error = "Enter at least one date as YYYY-MM-DD."
-            return
-        }
-        if (after.isNotEmpty() && before.isNotEmpty() && after > before) {
-            error = "After must not be later than Before."
-            return
-        }
-        state.setAfterDay(after)
-        state.setBeforeDay(before)
-        onDismiss()
+        val problem = state.setDateRange(after, before)
+        if (problem == null) onDismiss() else error = problem
     }
     FormDialog(title = "Custom date range", confirmLabel = "Apply", onConfirm = ::apply, onDismiss = onDismiss) {
         OutlinedTextField(

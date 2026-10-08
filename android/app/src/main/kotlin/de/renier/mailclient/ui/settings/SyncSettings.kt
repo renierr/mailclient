@@ -14,6 +14,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -54,7 +55,7 @@ private fun TimeButton(label: String, value: String, fallback: String, onPick: (
         val json = MailNative.quietTime(text)
         if (json.isEmpty()) null else JSONObject(json).let { it.getInt("hour") to it.getInt("minute") }
     }.getOrNull()
-    val (hour, minute) = parts(value) ?: parts(fallback) ?: (0 to 0)
+    val (hour, minute) = remember(value, fallback) { parts(value) ?: parts(fallback) ?: (0 to 0) }
     val is24 = DateFormat.is24HourFormat(context)
     val shown = if (is24) {
         "%02d:%02d".format(hour, minute)

@@ -56,6 +56,25 @@ pub fn older_state(cached: u64, server: Option<u64>) -> OlderState {
     }
 }
 
+/// The "Show older" footer's words for `cached` local rows against the
+/// server's last count (`None`: never reported). `filtered`: list filters
+/// are on, which only ever cover the loaded rows. `""` for an empty folder,
+/// where the footer is hidden.
+#[must_use]
+pub fn older_label(cached: u64, server: Option<u64>, filtered: bool) -> String {
+    let base = match older_state(cached, server) {
+        OlderState::Empty => return String::new(),
+        OlderState::Unchecked => format!("Cached {cached} (server not checked)"),
+        OlderState::Partial => format!("Cached {cached} of {}", server.unwrap_or(cached)),
+        OlderState::Complete => format!("All {cached} messages loaded"),
+    };
+    if filtered {
+        format!("{base} · filters cover loaded mail only")
+    } else {
+        base
+    }
+}
+
 /// `[{id, name, role, unread, subscribed, count, delimiter, depth, leaf,
 /// always_visible, server_total, older, can_load_older,
 /// delete_is_permanent}]` ordered by path. `depth`/`leaf` derive from the

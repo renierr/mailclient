@@ -13,9 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -43,7 +41,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.R
+import de.renier.mailclient.ui.common.DeleteConfirmDialog
 import de.renier.mailclient.ui.common.FormDialog
+import de.renier.mailclient.ui.common.destructiveButtonColors
+import de.renier.mailclient.ui.common.strings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -94,10 +95,9 @@ private fun parseCandidates(json: String): List<Candidate> {
     val arr = JSONArray(json)
     return (0 until arr.length()).mapNotNull { i ->
         val o = arr.optJSONObject(i) ?: return@mapNotNull null
-        val reasons = o.optJSONArray("reasons")
         Candidate(
             contact = Contact.of(o.optJSONObject("contact") ?: return@mapNotNull null),
-            reasons = (0 until (reasons?.length() ?: 0)).map { reasons!!.optString(it) },
+            reasons = o.optJSONArray("reasons").strings(),
         )
     }
 }
@@ -288,10 +288,7 @@ private fun ReviewBar(
         Button(
             onClick = onRemoveSelected,
             enabled = selected.isNotEmpty(),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.error,
-                contentColor = MaterialTheme.colorScheme.onError,
-            ),
+            colors = destructiveButtonColors(),
         ) { Text("Remove selected (${selected.size})") }
     }
 }
@@ -376,21 +373,7 @@ private fun AliasDialog(contact: Contact, onSave: (String) -> Unit, onDismiss: (
 
 @Composable
 private fun ConfirmRemove(title: String, text: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = { Text(text) },
-        confirmButton = {
-            Button(
-                onClick = onConfirm,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
-                    contentColor = MaterialTheme.colorScheme.onError,
-                ),
-            ) { Text("Remove") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
+    DeleteConfirmDialog(title = title, text = text, confirmLabel = "Remove", onConfirm = onConfirm, onDismiss = onDismiss)
 }
 
 @Composable

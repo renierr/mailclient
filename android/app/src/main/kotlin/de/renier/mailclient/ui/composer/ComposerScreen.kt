@@ -20,9 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -34,7 +32,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -63,6 +60,8 @@ import de.renier.mailclient.MailNative
 import de.renier.mailclient.R
 import de.renier.mailclient.ui.common.DeleteConfirmDialog
 import de.renier.mailclient.ui.common.FormDialog
+import de.renier.mailclient.ui.common.UnsavedChangesDialog
+import de.renier.mailclient.ui.common.isShortScreen
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.state.PendingSend
 import kotlinx.coroutines.Dispatchers
@@ -109,6 +108,16 @@ fun ComposerScreen(
     fun tf(text: String) = TextFieldValue(text, TextRange(text.length))
     var fromLocal by remember { mutableStateOf(tf(parts?.first?.optString("local").orEmpty())) }
     var senderName by remember { mutableStateOf(tf(seed.fromName ?: account?.fromName.orEmpty())) }
+    // A cold-start Compose opens before the accounts load: fill the sender
+    // fields once they do, unless something was typed there meanwhile.
+    LaunchedEffect(parts) {
+        val local = parts?.first?.optString("local").orEmpty()
+        if (fromLocal.text.isEmpty() && local.isNotEmpty()) fromLocal = tf(local)
+    }
+    LaunchedEffect(account) {
+        val name = account?.fromName.orEmpty()
+        if (seed.fromName == null && senderName.text.isEmpty() && name.isNotEmpty()) senderName = tf(name)
+    }
     var to by remember { mutableStateOf(tf(seed.to)) }
     var cc by remember { mutableStateOf(tf(seed.cc)) }
     var bcc by remember { mutableStateOf(tf(seed.bcc)) }
@@ -122,13 +131,17 @@ fun ComposerScreen(
     var dirty by remember { mutableStateOf(seed.failure.isNotEmpty()) }
     var sending by remember { mutableStateOf(false) }
     var savingDraft by remember { mutableStateOf(false) }
+    var deletingDraft by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf(seed.failure.ifEmpty { null }) }
     var confirmClose by remember { mutableStateOf(false) }
     var confirmDeleteDraft by remember { mutableStateOf(false) }
     var linkDialog by remember { mutableStateOf(false) }
-    var sendFormat by remember { mutableStateOf("auto") }
+    var sendFormat by remember { mutableStateOf(DEFAULT_SEND_FORMAT) }
     var suggestContacts by remember { mutableStateOf(true) }
-    val working = sending || savingDraft
+    val working = sending || savingDraft || deletingDraft
+    // Like Qt: nothing to send to, nothing to press. The core checks the
+    // addresses themselves when Send runs.
+    val hasRecipient = to.text.isNotBlank() || cc.text.isNotBlank() || bcc.text.isNotBlank()
 
     // The body. The page loads [editorBody] once; leaving the source view
     // starts it again from the edited source. [edits] counts changes for
@@ -146,14 +159,14 @@ fun ComposerScreen(
     val document = remember(editorBody) {
         val c = listOf(scheme.surface, scheme.onSurface, scheme.onSurfaceVariant, scheme.primary, scheme.outlineVariant)
             .map { it.toArgb() and 0xFFFFFF }
-        MailNative.editorDocument(c[0], c[1], c[2], c[3], c[4], 16, "Write your message", editorBody)
+        MailNative.editorDocument(c[0], c[1], c[2], c[3], c[4], EDITOR_FONT_PX, "Write your message", editorBody)
     }
     val textZoom = (100 * LocalConfiguration.current.fontScale).toInt()
 
     LaunchedEffect(Unit) {
         val o = withContext(Dispatchers.IO) { runCatching { JSONObject(MailNative.settingsJson()) }.getOrNull() }
         if (o != null) {
-            sendFormat = o.optString("compose_send_format", "auto").ifEmpty { "auto" }
+            sendFormat = o.optString("compose_send_format", DEFAULT_SEND_FORMAT).ifEmpty { DEFAULT_SEND_FORMAT }
             suggestContacts = o.optBoolean("collect_sent_contacts", true)
         }
     }
@@ -162,7 +175,7 @@ fun ComposerScreen(
 
     // What Send will produce, from the core's rule, a moment after typing.
     LaunchedEffect(edits, sourceMode, sendFormat, editor.ready) {
-        delay(400)
+        delay(FORMAT_NOTE_DELAY_MS)
         val html = currentHtml() ?: return@LaunchedEffect
         formatNote = withContext(Dispatchers.IO) {
             runCatching { MailNative.composeFormatNote(sendFormat, html) }.getOrDefault("")
@@ -249,11 +262,7 @@ fun ComposerScreen(
     // here with the text intact. Only the SMTP submit is queued; the status
     // strip reports it.
     fun send() {
-        if (working) return
-        if (to.text.isBlank() && cc.text.isBlank() && bcc.text.isBlank()) {
-            error = "Add at least one recipient (To, Cc or Bcc)"
-            return
-        }
+        if (working || !hasRecipient) return
         submit(
             "Could not send",
             { sending = it },
@@ -273,11 +282,18 @@ fun ComposerScreen(
     }
 
     fun deleteDraft() {
+        if (working) return
+        deletingDraft = true
         scope.launch {
             val failure = withContext(Dispatchers.IO) {
                 runCatching { MailNative.deleteDraft(accountId, seed.draftUid) }.exceptionOrNull()
             }
-            if (failure == null) onClose() else error = failure.message ?: "Could not delete the draft"
+            if (failure == null) {
+                onClose()
+            } else {
+                deletingDraft = false
+                error = failure.message ?: "Could not delete the draft"
+            }
         }
     }
 
@@ -343,8 +359,6 @@ fun ComposerScreen(
                 Icon(painterResource(R.drawable.ic_save), "Save draft")
             }
         }
-        // Like Qt: nothing to send to, nothing to press.
-        val hasRecipient = to.text.isNotBlank() || cc.text.isNotBlank() || bcc.text.isNotBlank()
         IconButton(onClick = ::send, enabled = !working && hasRecipient) {
             if (sending) {
                 CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
@@ -384,7 +398,7 @@ fun ComposerScreen(
     // A short screen (phone in landscape) cannot spare a title bar and a
     // formatting bar above the keyboard: one 48dp row holds close, the
     // formatting buttons (scrolling sideways) and the actions.
-    val short = LocalConfiguration.current.screenHeightDp < SHORT_SCREEN_DP
+    val short = isShortScreen()
 
     Scaffold(
         contentWindowInsets = WindowInsets(0),
@@ -588,25 +602,19 @@ fun ComposerScreen(
         }
     }
     if (confirmClose) {
-        AlertDialog(
-            onDismissRequest = { confirmClose = false },
-            title = { Text("Unsent changes") },
-            text = { Text("Discard this message, or keep it as a draft first?") },
-            confirmButton = {
-                Button(onClick = {
-                    confirmClose = false
-                    saveDraft()
-                }) { Text("Save draft") }
+        UnsavedChangesDialog(
+            title = "Unsent changes",
+            text = "Discard this message, or keep it as a draft first?",
+            saveLabel = "Save draft",
+            onSave = {
+                confirmClose = false
+                saveDraft()
             },
-            dismissButton = {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = { confirmClose = false }) { Text("Cancel") }
-                    TextButton(onClick = {
-                        confirmClose = false
-                        onClose()
-                    }) { Text("Discard") }
-                }
+            onDiscard = {
+                confirmClose = false
+                onClose()
             },
+            onDismiss = { confirmClose = false },
         )
     }
     if (confirmDeleteDraft) {
@@ -623,5 +631,11 @@ fun ComposerScreen(
     }
 }
 
-// Below this window height the composer folds its two bars into one row.
-private const val SHORT_SCREEN_DP = 480
+// The editor page's base font size, in CSS px.
+private const val EDITOR_FONT_PX = 16
+
+// The send format until the settings load (`compose_send_format`).
+private const val DEFAULT_SEND_FORMAT = "auto"
+
+// How long typing pauses before the "sends as" note is recomputed.
+private const val FORMAT_NOTE_DELAY_MS = 400L

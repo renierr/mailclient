@@ -909,6 +909,27 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_downloadAttachments<
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `MailNative.attachmentsPending(folderId, uid)`: whether that message's
+/// attachment download is still queued or running. Downloads of different
+/// messages share the `Attachments` job kind, so a finish event alone does
+/// not say whose it was.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_attachmentsPending<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+    uid: i32,
+) -> bool {
+    unowned
+        .with_env(|_env| -> Result<bool> {
+            Ok(crate::net::is_inflight(&crate::net::attachments_key(
+                folder_id,
+                uid.max(0) as u32,
+            )))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `MailNative.attachmentOpenMime(attachmentId)`: the opener MIME for the
 /// stored row, same derivation as the feed's `open_mime`. Re-read this
 /// after a download rather than reusing the reader payload's copy: the
@@ -1239,6 +1260,26 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_folderCounts<'caller
                 "can_load_older": c.can_load_older,
             });
             Ok(env.new_string(serde_json::to_string(&json)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.olderLabel(cached, server, filtered)`: the "Show older"
+/// footer's words (`mailcore::feed::older_label`); `server < 0` = never
+/// reported.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_olderLabel<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    cached: i64,
+    server: i64,
+    filtered: bool,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let server = u64::try_from(server).ok();
+            let label = mailcore::feed::older_label(cached.max(0) as u64, server, filtered);
+            Ok(env.new_string(label)?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
@@ -2243,55 +2284,43 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_searchPlan<'caller>(
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-/// `MailNative.searchFilterMatches(query, subject, from, fromName, snippet)`:
-/// the short-input row filter — `"true"`/`"false"`.
+/// `MailNative.listFilterKeep(filterJson, rowsJson)`: the list filters over
+/// every loaded row at once (`mailcore::search::list_filter`) — a JSON
+/// array of the kept row indexes.
 #[unsafe(no_mangle)]
-#[allow(clippy::too_many_arguments)]
-pub extern "system" fn Java_de_renier_mailclient_MailNative_searchFilterMatches<'caller>(
+pub extern "system" fn Java_de_renier_mailclient_MailNative_listFilterKeep<'caller>(
     mut unowned: EnvUnowned<'caller>,
     _class: JClass<'caller>,
-    query: JString<'caller>,
-    subject: JString<'caller>,
-    from: JString<'caller>,
-    from_name: JString<'caller>,
-    snippet: JString<'caller>,
+    filter_json: JString<'caller>,
+    rows_json: JString<'caller>,
 ) -> JString<'caller> {
     unowned
         .with_env(|env| -> Result<JString<'caller>> {
-            Ok(env.new_string(
-                crate::api::search::search_filter_matches(
-                    string(env, &query)?,
-                    string(env, &subject)?,
-                    string(env, &from)?,
-                    string(env, &from_name)?,
-                    string(env, &snippet)?,
-                )
-                .to_string(),
-            )?)
+            let kept = mailcore::search::list_filter::keep_json(
+                &string(env, &filter_json)?,
+                &string(env, &rows_json)?,
+            )?;
+            Ok(env.new_string(kept)?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-/// `MailNative.dateFilterMatches(dateRaw, after, before)`: one row's raw date
-/// against an after-inclusive/before-exclusive `YYYY-MM-DD` pair.
+/// `MailNative.dateRangeCheck(after, before)`: a typed custom date range,
+/// normalised or refused — `{"after","before","error"}` (`error` `""` = ok).
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_de_renier_mailclient_MailNative_dateFilterMatches<'caller>(
+pub extern "system" fn Java_de_renier_mailclient_MailNative_dateRangeCheck<'caller>(
     mut unowned: EnvUnowned<'caller>,
     _class: JClass<'caller>,
-    date_raw: JString<'caller>,
     after: JString<'caller>,
     before: JString<'caller>,
 ) -> JString<'caller> {
     unowned
         .with_env(|env| -> Result<JString<'caller>> {
-            Ok(env.new_string(
-                crate::api::search::date_filter_matches(
-                    string(env, &date_raw)?,
-                    string(env, &after)?,
-                    string(env, &before)?,
-                )
-                .to_string(),
-            )?)
+            let r = mailcore::search::list_filter::date_range_check(
+                &string(env, &after)?,
+                &string(env, &before)?,
+            );
+            Ok(env.new_string(serde_json::to_string(&r)?)?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }

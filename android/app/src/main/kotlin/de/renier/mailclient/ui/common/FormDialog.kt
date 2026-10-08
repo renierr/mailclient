@@ -18,17 +18,11 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import de.renier.mailclient.R
-
-// Below this height (in the interface scale's dp) a dialog plus keyboard
-// does not fit: Flutter's MailDialog.prefersPage.
-private const val SHORT_SCREEN_DP = 480
 
 /**
  * A small form (a field or two): a dialog where it fits, a full page with
@@ -45,9 +39,7 @@ fun FormDialog(
     onDismiss: () -> Unit,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val metrics = LocalContext.current.resources.displayMetrics
-    val shortScreen = metrics.heightPixels / LocalDensity.current.density < SHORT_SCREEN_DP
-    if (!shortScreen) {
+    if (!isShortScreen()) {
         AlertDialog(
             onDismissRequest = onDismiss,
             title = { Text(title) },

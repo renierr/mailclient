@@ -60,6 +60,9 @@ still to promote") points here instead of keeping its own list.
 | On-demand attachment download ("make sure the bytes are cached") | `mailcore::sync::attachments::{ensure_cached, download}`; was a private helper in `mailapp` and an inline copy in `mailffi` |
 | Calendar invite parsing: RFC 5545 VEVENT extraction, line unfolding, unescaping, date formatting, .ics save name | `mailcore::calendar` (`parse_ics`, `parse_ics_bytes`, `CalendarEvent` incl. `save_name`); `feed::message_json` supplies `"event"` directly; frontends are UI only |
 | List date quick-filter: after (inclusive) / before (exclusive) day bounds, presets, chip label | `mailcore::search::{date_passes, date_preset_range, date_filter_label}`; feeds carry `date_raw`; frontends only pick dates and show the label |
+| List filters over the loaded rows: unread / starred / attachments / date AND-ed with the short typed filter, the whole row set in one call | `mailcore::search::list_filter::{ListFilter, keep_json}`; Qt `list_filter_keep`, native `MailNative.listFilterKeep`; replaced QML `matchesQuick` and Kotlin `rowShown` (each a per-row bridge call) |
+| Custom date range: lenient days, both empty clears, Before must follow After, the error words | `mailcore::search::list_filter::date_range_check`; Qt `date_range_check_json`, native `MailNative.dateRangeCheck` |
+| "Show older" footer words ("Cached N of M", "· filters cover loaded mail only") | `mailcore::feed::older_label`; Qt `older_label`, native `MailNative.olderLabel` |
 | Delete confirmation: does it destroy (any target), ask first (destroys, bulk, or `confirm_delete`) | `mailcore::undo::delete_prompt` (`DeletePrompt`); Qt `delete_prompt_json`, native `MailNative.deletePrompt`; frontends pass each target folder's `delete_is_permanent` |
 | Is the open message still listed (cached, not waiting out an undoable move) | `mailcore::store::messages::is_listed`; native closes its reader on it (`MailNative.messageListed`), Qt drops its preview from the reloaded rows |
 | Composer "sends as" line | `mailcore::compose::editor::send_format_note`; Qt `send_format_note`, native from the editor page |
@@ -88,13 +91,21 @@ scale as `EditorStyle`) and keep only the WebEngine wiring in QML; Qt polls
 
 ### 8. Small UI-flavoured twins
 
-Each small, each written in both frontends: custom date-range validation
-(Qt accepts 1-digit parts and both-empty, Kotlin not), contact cleanup
-reason wording (`Contacts.qml` / `ContactsScreen.kt`), when the colours
-toggle shows (Kotlin-only decision), the undo result text (`mailapp` and
-`mailffi` adapters), and the server-capabilities job (`mailapp` carries the
-error in the payload, `mailffi` fails the job). Drift: yes for the date
-range. Fix: one `mailcore` function or feed field each.
+Each small, each written in both frontends: contact cleanup reason wording
+(`Contacts.qml` / `ContactsScreen.kt`), when the colours toggle shows
+(Kotlin-only decision), the undo result text (`mailapp` and `mailffi`
+adapters), and the server-capabilities job (`mailapp` carries the error in
+the payload, `mailffi` fails the job). Fix: one `mailcore` function or feed
+field each.
+
+### 9. Forward and reopened-draft file prefetch
+
+Qt runs both as one job (`"Forward"`, `"Open draft"` in
+`mailapp/src/bridge/composer.rs`): download the original's missing files,
+then build the composer. Native assembles the same sequence in the shell
+(`composeAfterFetch` in `MailShell.kt`: the core's missing count, a
+download it waits out, then the seed). Drift: none in behaviour. Fix: a
+`mailffi` job per case, like Qt's, so the shell only opens the result.
 
 ### 2. Sync-on-resume gap
 
@@ -127,5 +138,11 @@ still be fixed.
 
 ## Deliberate frontend-only logic
 
-None listed yet. Add an entry with the reason when something shared stays
-in one frontend on purpose.
+Add an entry with the reason when something shared stays in one frontend
+on purpose.
+
+- **Send button enabled while any recipient field holds text** (QML
+  `hasRecipients`, Kotlin `hasRecipient`). Re-evaluated on every keystroke,
+  so a bridge call per character buys nothing; the core still refuses a
+  message without a real recipient when Send runs
+  (`ComposeForm::require_recipient`).

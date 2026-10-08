@@ -1,6 +1,7 @@
 package de.renier.mailclient
 
 import android.content.Context
+import android.util.Log
 import java.util.concurrent.CopyOnWriteArrayList
 
 // Process-lifetime fan-out for job events. The JNI side holds exactly one
@@ -27,7 +28,9 @@ object JobEvents {
             MailNative.setJobListener(
                 object : JobCallbacks {
                     override fun onJobEvent(json: String) {
-                        for (s in subscribers) runCatching { s(json) }
+                        for (s in subscribers) {
+                            runCatching { s(json) }.onFailure { Log.w("mailclient", "job event subscriber failed", it) }
+                        }
                     }
                 },
             )

@@ -363,24 +363,25 @@ Rectangle {
         return on ? "✓ " : "";
     }
 
-    // Quick filters alone (unread/starred/attachments/date): used for search
-    // hits too, which the FTS query already matched, so the substring
-    // filter must not run on them a second time.
-    function matchesQuick(m) {
-        if (root.filterUnread && !m.unread)
-            return false;
-        if (root.filterStarred && !m.starred)
-            return false;
-        if (root.filterAttachments && m.has_attachments !== true)
-            return false;
-        if (root.hasDateFilter) {
-            if (!root.backend)
-                return true;
-            var raw = m.date_raw || "";
-            if (!root.backend.date_filter_matches(raw, root.filterAfter, root.filterBefore))
-                return false;
-        }
-        return true;
+    // The rows the list filters keep: the quick filters AND-ed with the
+    // short typed filter, decided by mailcore over the whole set in one call
+    // (`search::list_filter`). Search hits pass no text: the FTS query
+    // already matched them.
+    function keptRows(rows, text) {
+        if ((!root.hasQuickFilter && text === "") || !root.backend)
+            return rows;
+        var filter = {
+            unread: root.filterUnread,
+            starred: root.filterStarred,
+            attachments: root.filterAttachments,
+            after: root.filterAfter,
+            before: root.filterBefore,
+            text: text
+        };
+        var kept = JSON.parse(root.backend.list_filter_keep(JSON.stringify(filter), JSON.stringify(rows)));
+        if (!kept)
+            return rows;
+        return kept.map(i => rows[i]);
     }
 
     // The words for the active date filter, phrased once by mailcore.
@@ -398,16 +399,6 @@ Rectangle {
         var r = JSON.parse(root.backend.date_preset_range_json(preset));
         root.filterAfter = r.after || "";
         root.filterBefore = r.before || "";
-    }
-
-    // Visible rows after applying the search filter.
-    function matches(m) {
-        if (!root.matchesQuick(m))
-            return false;
-        if (root.filterText === "" || !root.backend)
-            return true;
-        return root.backend.search_filter_matches(root.filterText, m.subject || "", m.from || "", m.from_name || "",
-                                                  m.snippet || "");
     }
 
     // Only the roles a row actually draws. `sender` is the sent display
@@ -460,21 +451,17 @@ Rectangle {
             // The feed arrives grouped by folder for the section headers
             // (mailcore `feed::search_json`): folders in the order of their
             // newest hit, newest first inside each.
-            var hits = root.searchRows || [];
+            var hits = root.keptRows(root.searchRows || [], "");
             for (var i = 0; i < hits.length; i++) {
-                if (!root.matchesQuick(hits[i]))
-                    continue;
                 hits[i].key = hits[i].folder_id + ":" + hits[i].uid;
                 rows.push(root.displayRow(hits[i]));
             }
             ModelSync.sync(filtered, rows, "key");
             return;
         }
-        var src = root.messages || [];
-        for (var j = 0; j < src.length; j++) {
-            if (root.matches(src[j]))
-                rows.push(root.displayRow(src[j]));
-        }
+        var src = root.keptRows(root.messages || [], root.filterText);
+        for (var j = 0; j < src.length; j++)
+            rows.push(root.displayRow(src[j]));
         // In place: clearing the model destroyed and rebuilt every delegate on
         // every click, including the one whose mouse handler was still running.
         // The row shuffle scrolls the view as a side effect; it must not
@@ -1156,17 +1143,11 @@ Rectangle {
                     Layout.fillWidth: true
                     Layout.alignment: Qt.AlignVCenter
                     elide: Text.ElideRight
+                    // mailcore's words (`feed::older_label`), as on Android.
                     text: {
-                        if (root.folderName === "")
+                        if (root.folderName === "" || !root.backend)
                             return "";
-                        var s;
-                        if (root.olderState === "unchecked")
-                            s = qsTr("Cached %1 (server not checked)").arg(root.totalCount);
-                        else if (root.olderState === "partial")
-                            s = qsTr("Cached %1 of %2").arg(root.totalCount).arg(root.serverTotal);
-                        else
-                            return qsTr("All %1 messages loaded").arg(root.totalCount);
-                        return root.hasAnyFilter ? qsTr("%1 · filters cover loaded mail only").arg(s) : s;
+                        return root.backend.older_label(root.totalCount, root.serverTotal, root.hasAnyFilter);
                     }
                     color: Theme.textMuted
                     font.pixelSize: Theme.fontSmall
@@ -1404,10 +1385,6 @@ Rectangle {
             dateDialog.open();
         }
 
-        function validDay(s) {
-            return /^\d{4}-\d{1,2}-\d{1,2}$/.test(s.trim());
-        }
-
         footer: RowLayout {
             spacing: Theme.sm
             Item {
@@ -1425,18 +1402,16 @@ Rectangle {
                 text: qsTr("Apply")
                 intent: "primary"
                 onClicked: {
-                    var a = afterField.text.trim();
-                    var b = beforeField.text.trim();
-                    if (a !== "" && !dateDialog.validDay(a)) {
-                        dateDialog.errorText = qsTr("After is not a date (YYYY-MM-DD)");
+                    if (!root.backend)
+                        return;
+                    // Read and checked by mailcore, the same rule as Android.
+                    var r = JSON.parse(root.backend.date_range_check_json(afterField.text, beforeField.text));
+                    if (r.error) {
+                        dateDialog.errorText = r.error;
                         return;
                     }
-                    if (b !== "" && !dateDialog.validDay(b)) {
-                        dateDialog.errorText = qsTr("Before is not a date (YYYY-MM-DD)");
-                        return;
-                    }
-                    root.filterAfter = a;
-                    root.filterBefore = b;
+                    root.filterAfter = r.after;
+                    root.filterBefore = r.before;
                     dateDialog.close();
                 }
             }

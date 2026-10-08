@@ -793,6 +793,17 @@ fn show_older_follows_cache_and_server_counts() {
     assert_eq!(older_state(25, Some(25)), OlderState::Complete);
     assert!(OlderState::Unchecked.can_load() && OlderState::Partial.can_load());
     assert!(!OlderState::Empty.can_load() && !OlderState::Complete.can_load());
+    assert_eq!(
+        older_label(10, None, false),
+        "Cached 10 (server not checked)"
+    );
+    assert_eq!(older_label(10, Some(25), false), "Cached 10 of 25");
+    assert_eq!(older_label(25, Some(25), false), "All 25 messages loaded");
+    assert_eq!(older_label(0, Some(0), true), "");
+    assert_eq!(
+        older_label(10, Some(25), true),
+        "Cached 10 of 25 · filters cover loaded mail only"
+    );
 
     let (db, acc, _inbox) = setup();
     let all: serde_json::Value = serde_json::from_str(&folders_json(&db, acc).unwrap()).unwrap();
