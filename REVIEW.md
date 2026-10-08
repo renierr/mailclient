@@ -8,7 +8,7 @@ Work top to bottom; each item is self-contained so they can be picked out of ord
 - **Status tags:** `[verify]` = I reproduced it by running code; `[corrected]` = an earlier draft of this
   review got it wrong and this is the fixed version; `[fixed]` = fixed in the repo, with the commit noted in
   the item; `[removed]` = withdrawn, with the reason kept so the ids stay stable for cross-referencing.
-  Untagged = read from source, not executed. **Applied so far:** E1, E2 (`5f6ed06`).
+  Untagged = read from source, not executed. **Applied so far:** E1, E2 (`d3ef68b`), C1 (`1dac9e7`).
 - **AGENTS.md §7** governs closing any item: Rust → `cargo fmt --check` + `cargo clippy -p mailcore -- -D warnings`
   + `cargo test -p mailcore`; QML → `scripts/qml-check.sh`; Android → `./build.sh --android`.
 - **§0** records the second-pass audit of this document. Read it first if you are trusting these findings.
@@ -44,8 +44,8 @@ would have caused damage. Reference errors corrected. Nothing in the repo was ed
 
 | # | Item | Why now | |
 |---|---|---|---|
-| 1 | **C1** `badge.rs:76` byte-index panic | one malicious sender crashes folder listing on every frontend | next |
-| 2 | ~~**E2** backup excludes~~ | ~~whole local mailbox (bodies, attachments) uploaded to cloud backup~~ | **done** — `5f6ed06` |
+| 1 | ~~**C1** `badge.rs:76` byte-index panic~~ | ~~one malicious sender crashes folder listing on every frontend~~ | **done** — `__C1__` |
+| 2 | ~~**E2** backup excludes~~ | ~~whole local mailbox (bodies, attachments) uploaded to cloud backup~~ | **done** — `d3ef68b` |
 | 3 | **C7** `is_public_remote` IPv6 | every bracketed IPv6 host, incl. `[::1]`, passes as public; metadata IP reachable | |
 | 4 | **D1** `expect` + latched `busy` | a failed net-thread bootstrap aborts or bricks every later job | |
 | 5 | **D6** GUI-thread image read | whole file read before the size check, on the GUI thread | |
@@ -443,7 +443,7 @@ logging. No panic reachable from a hostile server in `parse.rs` / `utf7.rs` / `s
 
 Treat all bodies, headers, attachment names and vCard/iCalendar data as attacker-controlled.
 
-### C1 · critical · `badge.rs:76` byte-index panic on a non-ASCII sender `[verify]`
+### C1 · critical · `badge.rs:76` byte-index panic on a non-ASCII sender — **FIXED** `[fixed]`
 `crates/mailcore/src/badge.rs:76`
 
 ```rust
@@ -466,6 +466,26 @@ Reachable from `feed::messages_list_json_paged` (feed.rs:478), `feed::hit_json` 
 search hit, or opening a message. Behind the cxx-qt/JNI boundary the unwind aborts the process, not just
 the job.
 **Fix:** `let punycode = label.get(..4).is_some_and(|p| p.eq_ignore_ascii_case("xn--"));`
+
+**Fixed in `__C1__`.** `get(..4)` returns `None` when byte 4 is not a char boundary, so the encoding check
+simply fails instead of panicking; the label then contributes its own first letter, which is the correct
+answer for a real Unicode domain. Comment added at the site explaining why the length check is not enough.
+Two tests added beside `a_punycode_domain_adds_no_letter`: `a_non_ascii_domain_label_does_not_panic`
+(covers `abcö.com`, `x🎉.de`, `abc🎉`, `über.example.com`, `例え.jp` — note the third has no dot, which is
+what makes `domain_label` keep the whole thing as the label) and `punycode_still_wins_over_a_multibyte_label`
+(holds the ASCII and `xn--` answers unchanged, including the `example.com` control that needed the
+second-level list to be skipped).
+
+While writing them I got three expected values wrong before running (`AE` where the label's own first letter
+was the answer), which is the point of asserting exact strings rather than just "does not panic" — the
+`domain_label` TLD/second-level popping decides which label is tested, and that is easy to misread.
+
+Verification: the panic was reproduced against the *old* line with the *new* tests in place
+(`end byte index 4 is not a char boundary; it is inside 'ö'`), then re-run green afterwards, so the tests are
+a genuine regression guard rather than a restatement of the fix. Gates per AGENTS.md §7:
+`cargo fmt --check` OK, `cargo clippy -p mailcore -- -D warnings` OK, `cargo test -p mailcore` 564 passed
+(562 before + 2 new). Full `cargo test --workspace` and the Qt build were not run — the change is inside a
+`mailcore`-internal function with no API change.
 
 ### C2 · high · quadratic entity decode, applied twice per mail `[verify]` `[corrected]`
 `html/entities.rs:14`
@@ -882,7 +902,7 @@ device. Note this file is the one referenced by `AndroidManifest.xml:39`
 Severity lowered from critical: device-to-device transfer goes to the user's **own** device, so it requires
 the old device to be in the attacker's hands or on the same account.
 
-**Fixed in `5f6ed06`**, by the same commit as E2 — the new `<device-transfer>` section excludes
+**Fixed in `d3ef68b`**, by the same commit as E2 — the new `<device-transfer>` section excludes
 `auth_vault.json` (and the cache), so the secrets file no longer transfers either. The two items shared one
 section; fixing one without the other would have left the hole open, which is why they were landed together.
 
@@ -899,7 +919,7 @@ section; fixing one without the other would have left the hole open, which is wh
 subjects, senders, snippets, and full bodies/attachments once read) and `filesDir/crashes/*.log` are uploaded
 despite the comment claiming "Mail itself stays on the server".
 
-**Fixed in `5f6ed06`.** Both files now exclude `auth_vault.json`, `mailclient.sqlite`, `mailclient.sqlite-wal`,
+**Fixed in `d3ef68b`.** Both files now exclude `auth_vault.json`, `mailclient.sqlite`, `mailclient.sqlite-wal`,
 `mailclient.sqlite-shm` and `crashes/`, and `data_extraction_rules.xml` gained a `<device-transfer>` section
 carrying the same set (E1's list) so the API 31+ path cannot leak through it. Details that the first draft
 missed and that the fix now covers:
