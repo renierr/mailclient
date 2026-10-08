@@ -141,6 +141,15 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         )
         .unwrap_or(0);
 
+    if current > SCHEMA_VERSION {
+        // An older binary opening a database a newer one already migrated.
+        // Stamping it down to this build's version would make the newer build
+        // re-apply its migrations over a schema it no longer recognises, so
+        // refuse before touching anything, and say why.
+        return Err(crate::error::StoreError::InvalidInput(format!(
+            "database schema version {current} is newer than this build supports ({SCHEMA_VERSION})"
+        )));
+    }
     if current == 0 {
         conn.execute_batch(SCHEMA_FULL)?;
         conn.execute(
@@ -515,6 +524,7 @@ fn migrate_folder_paths_utf7(conn: &Connection) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::Db;
 
     #[test]
     fn v14_migration_drops_only_generated_html() {
@@ -998,5 +1008,69 @@ b<c",
         assert_ne!(updated, "t");
         assert_eq!(row(2).1, "starttls");
         assert_eq!(row(3), ("tls".into(), "tls".into(), "t".into()));
+    }
+
+    #[test]
+    fn a_stamp_newer_than_this_build_is_refused_not_rewound() {
+        // An older binary looking at a database a newer one already migrated
+        // used to have its stamp silently rewritten down to SCHEMA_VERSION,
+        // after which this build re-applied its own migrations on top of a
+        // schema it does not recognise.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("newer.sqlite");
+
+        Db::open(&path).unwrap();
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute(
+                "update schema_meta set value = ?1 where key = 'version'",
+                [(SCHEMA_VERSION + 5).to_string()],
+            )
+            .unwrap();
+        }
+
+        let err = ensure_schema(&Connection::open(&path).unwrap())
+            .expect_err("a newer stamp must be refused");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("newer than this build"),
+            "the error should say why: {msg}"
+        );
+        // And the stamp is untouched afterwards, so the newer build can still
+        // open it.
+        let conn = Connection::open(&path).unwrap();
+        let v: String = conn
+            .query_row(
+                "select value from schema_meta where key = 'version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(v, (SCHEMA_VERSION + 5).to_string());
+    }
+
+    #[test]
+    fn an_older_stamp_still_upgrades() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("older.sqlite");
+        Db::open(&path).unwrap();
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute(
+                "update schema_meta set value = ?1 where key = 'version'",
+                [(SCHEMA_VERSION - 1).to_string()],
+            )
+            .unwrap();
+        }
+        ensure_schema(&Connection::open(&path).unwrap()).expect("an older stamp upgrades");
+        let conn = Connection::open(&path).unwrap();
+        let v: String = conn
+            .query_row(
+                "select value from schema_meta where key = 'version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION.to_string());
     }
 }

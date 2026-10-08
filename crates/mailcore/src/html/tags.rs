@@ -132,7 +132,18 @@ pub(super) fn parse_tag(bytes: &[u8], start: usize) -> (Option<Tag>, usize) {
     if i < bytes.len() && bytes[i] == b'!' {
         // <!-- ... -->
         if bytes.get(i + 1) == Some(&b'-') && bytes.get(i + 2) == Some(&b'-') {
-            if let Some(end) = find_sub(bytes, b"-->", i + 3) {
+            // `<!-->` and `<!--->`: HTML closes an empty comment abruptly at
+            // the `>` rather than at the `-->` this looks for, so starting the
+            // search past it consumed the rest of the document. Anything that
+            // survives a mail gateway can do it, and it hides the whole body.
+            let from = i + 3;
+            if bytes.get(from) == Some(&b'>') {
+                return (None, from + 1);
+            }
+            if bytes.get(from) == Some(&b'-') && bytes.get(from + 1) == Some(&b'>') {
+                return (None, from + 2);
+            }
+            if let Some(end) = find_sub(bytes, b"-->", from) {
                 return (None, end + 3);
             }
             return (None, bytes.len());
@@ -143,8 +154,12 @@ pub(super) fn parse_tag(bytes: &[u8], start: usize) -> (Option<Tag>, usize) {
         return (None, bytes.len());
     }
     if i < bytes.len() && bytes[i] == b'?' {
-        if let Some(end) = find_sub(bytes, b"?>", i) {
-            return (None, end + 2);
+        // HTML has no processing instructions: `<?` opens a bogus comment
+        // that ends at the first `>`, which also ends `<?xml … ?>` in the
+        // right place. Looking for `?>` instead dropped every byte after an
+        // unterminated `<?`, or up to an unrelated `?>` further down.
+        if let Some(end) = find_byte(bytes, b'>', i + 1) {
+            return (None, end + 1);
         }
         return (None, bytes.len());
     }

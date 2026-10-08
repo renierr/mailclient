@@ -362,8 +362,8 @@ fn ampersands_without_a_closing_semicolon_decode_in_linear_time() {
 #[test]
 fn entities_on_the_scan_boundary_still_decode() {
     // The window is 23 bytes past the `&`, so the longest entity that still
-    // decodes is 24 bytes in total; one more byte stays literal. Both cases
-    // would decode if the window were a byte wider, so this pins the bound.
+    // decodes is 24 bytes in total; one more byte stays literal. The first
+    // fails if the window shrinks, the second if it widens.
     let inside = "&#000000000000000000065;";
     assert_eq!(inside.len(), 24);
     assert_eq!(decode_entities(inside), "A");
@@ -582,4 +582,50 @@ fn links_split_for_the_examine_dialog() {
         (empty.scheme, empty.host, empty.path),
         (String::new(), String::new(), String::new())
     );
+}
+
+#[test]
+fn an_abrupt_close_of_a_comment_does_not_eat_the_document() {
+    // <!-->  and <!---> close at the `>`, the way HTML does. The old search
+    // for "-->" started past it, found nothing, and consumed the rest.
+    for (html, kept) in [
+        (
+            "<!--><p>everything after is gone</p>",
+            "everything after is gone",
+        ),
+        ("<!---><p>dash forms too</p>", "dash forms too"),
+        ("<!-- --><p>normal</p>", "normal"),
+    ] {
+        let s = sanitize(html, false);
+        assert!(s.html.contains(kept), "{html} lost the body");
+    }
+}
+
+#[test]
+fn an_unterminated_processing_instruction_stops_at_the_next_gt() {
+    // Looking only for ?> dropped every byte after an unterminated <?.
+    let s = sanitize("<p>ok</p><?x ><p>rest</p>", false);
+    assert!(s.html.contains("ok"), "the first paragraph should survive");
+    assert!(
+        s.html.contains("rest"),
+        "the second paragraph should survive"
+    );
+    // An XML declaration ends at its own `?>`.
+    let s = sanitize("<?xml version=\"1.0\"?><p>after</p>", false);
+    assert!(
+        s.html.contains("after"),
+        "a real PI should not eat the body"
+    );
+    // And a `?>` further down does not stretch it: `<?x >` ends at its `>`.
+    let s = sanitize("<?x ><p>kept</p><p>what?></p>", false);
+    assert!(s.html.contains("kept"), "{s:?}");
+}
+
+#[test]
+fn a_comment_without_an_end_still_drops_the_rest() {
+    // An unterminated <!-- keeps the old behaviour: no closing token means
+    // there is no safe place to resume, so everything after it is dropped.
+    let s = sanitize("<p>before</p><!-- never closed <p>after</p>", false);
+    assert!(s.html.contains("before"));
+    assert!(!s.html.contains("after"));
 }

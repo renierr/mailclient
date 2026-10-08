@@ -325,9 +325,10 @@ mod tests {
     }
 
     #[test]
-    fn a_file_that_grows_past_the_limit_is_still_refused() {
-        // Belt and braces: the capped read must not let a file that grew
-        // between the `stat` and the open overrun the limit.
+    fn a_small_image_still_inlines_after_the_size_check() {
+        // The `stat`-then-capped-read path must not refuse an ordinary image.
+        // (The cap against a file that grows between the two is not tested:
+        // that needs a race this test cannot stage.)
         let dir = tempfile::tempdir().unwrap();
         let png = dir.path().join("grows.png");
         std::fs::write(&png, vec![0u8; 64]).unwrap();

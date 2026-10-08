@@ -92,8 +92,8 @@ impl SmtpSender {
 
     /// Login check without sending: connect, EHLO, TLS, AUTH, NOOP. Used by
     /// the setup-form connection test with its own short timeout, so a dead
-    /// server fails the test instead of stalling it (sends keep the transport
-    /// default).
+    /// server fails the test instead of stalling it (sends use the longer
+    /// [`SUBMIT_TIMEOUT`]).
     pub fn test_connection(&self, password: &str) -> Result<()> {
         let transport = self.transport_with_timeout(password, Some(Duration::from_secs(15)))?;
         match transport.test_connection() {

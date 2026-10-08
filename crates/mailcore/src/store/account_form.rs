@@ -228,22 +228,6 @@ pub struct ConnectionTestSetup {
     smtp_password: String,
 }
 
-/// Probe the form's servers: IMAP login, then SMTP login.
-///
-/// Passwords come from the form; on an edit a blank field falls back to the
-/// vault, and a blank SMTP password means "same as IMAP" — exactly like
-/// [`save`]. Convenience over [`prepare_connection_test`] +
-/// [`run_connection_test`].
-///
-/// The blocking SMTP probe runs on the caller's thread (same as
-/// `push_flags_blocking`): call off the UI thread.
-pub async fn test_connection(db: &Db, form: &str) -> ConnectionTest {
-    match prepare_connection_test(db, form) {
-        Ok(setup) => run_connection_test(setup).await,
-        Err(e) => ConnectionTest::failed(&e),
-    }
-}
-
 /// Run a prepared [`ConnectionTestSetup`]: IMAP login, then SMTP login.
 /// Owns only `Send` data, so this future is `Send` (FRB pool-safe).
 pub async fn run_connection_test(setup: ConnectionTestSetup) -> ConnectionTest {
@@ -278,6 +262,10 @@ pub async fn run_connection_test(setup: ConnectionTestSetup) -> ConnectionTest {
 /// Parse the form into a transient account plus resolved passwords, with the
 /// same defaults and validation [`save`] uses. Sync and fast (no network):
 /// the setup UIs prepare on the calling thread and only the run moves.
+///
+/// Passwords come from the form; on an edit a blank field falls back to the
+/// vault, and a blank SMTP password means "same as IMAP" — exactly like
+/// [`save`].
 pub fn prepare_connection_test(
     db: &Db,
     form: &str,
@@ -588,22 +576,27 @@ mod tests {
         assert!(accounts::list(&db).unwrap().is_empty());
     }
 
-    #[tokio::test]
-    async fn connection_test_refuses_garbage_before_touching_the_network() {
+    #[test]
+    fn prepare_test_refuses_garbage_before_touching_the_network() {
+        // Retargeted from the removed `test_connection` wrapper, whose only
+        // callers were these two tests. The live path both frontends use is
+        // `prepare_connection_test` (+ `run_connection_test`), and this is the
+        // same early return: no account is built, so nothing can dial.
         let db = Db::open_in_memory().unwrap();
-        let r = test_connection(&db, "not json").await;
-        assert!(!r.ok);
-        assert_eq!(r.error, "invalid account form");
+        assert_eq!(
+            prepare_connection_test(&db, "not json").unwrap_err(),
+            "invalid account form"
+        );
     }
 
-    #[tokio::test]
-    async fn connection_test_reports_form_problems_without_dialing() {
+    #[test]
+    fn prepare_test_reports_form_problems_without_dialing() {
+        // The inline check's message before any connection is attempted.
         let db = Db::open_in_memory().unwrap();
-        // The inline check's message, with no connection attempted.
-        let r = test_connection(&db, &form(r#","password":"""#)).await;
-        assert!(!r.ok);
-        assert_eq!(r.error, "Enter the password");
-        assert!(r.imap.error.is_empty() && r.smtp.error.is_empty());
+        assert_eq!(
+            prepare_connection_test(&db, &form(r#","password":"""#)).unwrap_err(),
+            "Enter the password"
+        );
     }
 
     #[test]

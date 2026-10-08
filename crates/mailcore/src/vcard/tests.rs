@@ -167,3 +167,15 @@ fn recognises_vcard_attachments() {
     ));
     assert!(!is_vcard_attachment(None, None));
 }
+
+#[test]
+fn a_phone_kind_is_capitalised_without_slicing_bytes() {
+    // `s[..1]` was safe only because the kind is always one of the ASCII
+    // labels `label` maps to, so no input can reach a multi-byte first
+    // character today. This keeps the capitalising path itself covered.
+    let card = "BEGIN:VCARD\nVERSION:3.0\nTEL;CELL:+1 555 0100\nEND:VCARD";
+    let parsed = parse_vcard(card).expect("a minimal card parses");
+    let f = &parsed.phones[0];
+    assert_eq!(f.label.as_deref(), Some("Mobile"));
+    assert_eq!(f.value, "+1 555 0100");
+}

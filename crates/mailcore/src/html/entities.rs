@@ -8,7 +8,7 @@
 /// what keeps the decode linear: it used to be a filter applied *after*
 /// `s[i..].find(';')`, which scans to the end of the string before the
 /// throwaway check, so any text full of ampersands without a following `;`
-/// cost O(remaining) per `&` — 512 KB of that is ~9 s of CPU on every open.
+/// cost O(remaining) per `&` — 512 KB of that took ~10 s of CPU per decode.
 const ENTITY_SCAN: usize = 23;
 
 /// Decode character entities for URL decisions and text output.

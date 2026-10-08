@@ -104,11 +104,6 @@ pub fn set_flags_by_uid(
     Ok(())
 }
 
-/// Run one statement across a set of UIDs, returning rows affected.
-///
-/// `sql_head` is the statement up to (and including) the `and` that precedes
-/// the UID list; this appends `uid in (?, ?, …)` with one placeholder per
-/// deduplicated UID. `leading` holds the parameters `sql_head` already refers
 /// Chunk size for the `uid in (?,?,…)` list.
 ///
 /// SQLite caps the bound parameters per statement at 32,766 by default
@@ -119,7 +114,14 @@ pub fn set_flags_by_uid(
 /// this lives in [`execute_over_uids`] rather than at the call sites.
 const UID_CHUNK: usize = 900;
 
-/// to, in `?1..?n` order — the UID bindings follow them.
+/// Run one statement across a set of UIDs, returning rows affected.
+///
+/// `sql_head` is the statement up to (and including) the `and` that precedes
+/// the UID list; this appends `uid in (?, ?, …)` with one placeholder per
+/// deduplicated UID, [`UID_CHUNK`] UIDs per statement. `leading` holds the
+/// parameters `sql_head` already refers to, in `?1..?n` order — the UID
+/// bindings follow them. More than one chunk runs in a transaction (unless
+/// the caller already has one open), so a failure part-way applies nothing.
 ///
 /// An empty UID set is 0 rows, not an empty `in ()`, which is a syntax error.
 fn execute_over_uids(
@@ -134,6 +136,15 @@ fn execute_over_uids(
     if clean.is_empty() {
         return Ok(0);
     }
+    let conn = db.conn();
+    let tx = if clean.len() > UID_CHUNK && conn.is_autocommit() {
+        Some(rusqlite::Transaction::new_unchecked(
+            conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?)
+    } else {
+        None
+    };
     let mut touched = 0;
     for chunk in clean.chunks(UID_CHUNK) {
         let placeholders = vec!["?"; chunk.len()].join(",");
@@ -141,7 +152,10 @@ fn execute_over_uids(
         let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(leading.len() + chunk.len());
         params.extend_from_slice(leading);
         params.extend(chunk.iter().map(|u| u as &dyn rusqlite::ToSql));
-        touched += db.conn().execute(&sql, params.as_slice())? as u64;
+        touched += conn.execute(&sql, params.as_slice())? as u64;
+    }
+    if let Some(tx) = tx {
+        tx.commit()?;
     }
     Ok(touched)
 }

@@ -366,7 +366,13 @@ fn label(cl: &ContentLine<'_>, phone: bool) -> Option<String> {
         (Some(p), None) => Some(p.to_string()),
         (None, Some(k)) => {
             let mut s = k.to_string();
-            s[..1].make_ascii_uppercase();
+            // `get_mut(..1)`, not `[..1]`: the kind is always an ASCII label
+            // today, but a future caller handing it one that starts with a
+            // multi-byte character would panic on the byte index — the same
+            // class of bug as `badge.rs`'s punycode check.
+            if let Some(c) = s.get_mut(..1) {
+                c.make_ascii_uppercase();
+            }
             Some(s)
         }
         (None, None) => None,

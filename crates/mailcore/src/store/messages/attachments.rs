@@ -47,22 +47,20 @@ pub fn add_attachment(db: &Db, message_id: i64, a: &NewAttachment) -> Result<i64
 /// metadata row got wrong, and that correction must update the row in
 /// place rather than orphan the ID the reader holds.
 pub fn replace_attachments(db: &Db, message_id: i64, files: &[NewAttachment]) -> Result<()> {
-    // Read before the transaction opens. `unchecked_transaction()` is a
-    // deferred `BEGIN`, and a read taken *inside* it holds a snapshot that the
-    // first write then has to upgrade; if any other connection commits in
-    // between (the GUI thread and the net thread both have one, and the
-    // `--sync-once` CLI shares the file) that upgrade fails immediately with
-    // SQLITE_BUSY_SNAPSHOT, and the busy handler does not cover it. Symptom:
-    // attachment saves failing with "database is locked" under no
-    // user-visible cause.
-    let mut existing = list_attachments(db, message_id)?;
-    // `Immediate`, not the deferred default: the write lock is taken when the
-    // transaction opens rather than when the first write lands, so a second
-    // writer queues on the busy handler instead of doing work and failing. It
-    // also keeps the fix independent of statement order inside the body -- a
-    // read added here later would otherwise reintroduce the upgrade.
+    // `Immediate`, not the deferred `unchecked_transaction()`: a deferred
+    // `BEGIN` followed by a read holds a snapshot the first write has to
+    // upgrade, and a commit from another connection in between (the GUI and
+    // net threads each have one, and the `--sync-once` CLI shares the file)
+    // fails that upgrade with SQLITE_BUSY_SNAPSHOT, which the busy handler
+    // does not retry. Taking the write lock up front makes a second writer
+    // queue instead.
+    //
+    // The read stays *inside*: done before the `BEGIN`, two writers for the
+    // same message could both see the old rows and insert duplicates, or
+    // update a row the other had just deleted.
     let tx =
         rusqlite::Transaction::new_unchecked(db.conn(), rusqlite::TransactionBehavior::Immediate)?;
+    let mut existing = list_attachments(db, message_id)?;
     for file in files {
         let matched = existing.iter().position(|a| {
             a.filename == file.filename
@@ -185,14 +183,24 @@ pub fn get_attachment(db: &Db, id: i64) -> Result<Attachment> {
 /// Whether one attachment already has bytes (inline BLOB or legacy file).
 /// Drives on-demand downloads: `false` means the next save must fetch first.
 pub fn attachment_has_data(db: &Db, id: i64) -> Result<bool> {
-    let n: i64 = db.conn().query_row(
-        "select case when (data is not null and length(data) > 0)
-            or storage_path is not null then 1 else 0 end
-         from attachments where id = ?1",
-        [id],
-        |row| row.get(0),
-    )?;
-    Ok(n != 0)
+    // Optional, not a bare `query_row`: with no row the raw
+    // `Query returned no rows` used to reach the caller, so a missing
+    // attachment showed up in the reader as a database error instead of
+    // "attachment not found".
+    let n: Option<i64> = db
+        .conn()
+        .query_row(
+            "select case when (data is not null and length(data) > 0)
+                or storage_path is not null then 1 else 0 end
+             from attachments where id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    // `Err`, not `Ok(false)`: `false` tells a caller the bytes are not cached
+    // yet, and it would start a download for an attachment that does not exist.
+    n.map(|v| v != 0)
+        .ok_or_else(|| StoreError::NotFound(format!("attachment {id}")))
 }
 
 /// Refresh only the `has_attachments` flag (used after an on-demand
@@ -220,13 +228,4 @@ pub fn save_attachment_to_path(db: &Db, id: i64, dest_path: &std::path::Path) ->
             "attachment {id} has no stored data"
         )))
     }
-}
-
-/// Delete all attachments of a message (used before re-storing on resync).
-pub fn delete_attachments_for_message(db: &Db, message_id: i64) -> Result<()> {
-    db.conn().execute(
-        "delete from attachments where message_id = ?1",
-        [message_id],
-    )?;
-    Ok(())
 }

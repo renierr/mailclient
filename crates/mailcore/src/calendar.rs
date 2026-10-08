@@ -204,8 +204,9 @@ fn parse(ics_data: &str) -> Option<Parsed> {
                 }
                 if stack.len() >= MAX_DEPTH {
                     // Deeper than any real calendar. Refusing is better than
-                    // parsing it: the cost is quadratic in the depth, and the
-                    // caller only wanted to know whether there is an event.
+                    // parsing it: each level costs memory and time on the feed
+                    // thread, and the caller only wanted to know whether there
+                    // is an event.
                     return None;
                 }
                 stack.push(comp);

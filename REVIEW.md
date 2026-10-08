@@ -11,6 +11,8 @@ Work top to bottom; each item is self-contained so they can be picked out of ord
   Untagged = read from source, not executed. **Applied so far:** E1, E2 (`d3ef68b`), C1 (`1dac9e7`),
   C7 (`11137f4`), D1 (`74d3a4d`), D6 part 1 (`c3d90fb`), B1 (`bb9edb6`), C2 (`946e971`),
   A2 (`5e07cab`), A4 (`f4ff35e`), C15 (`9698314`). See §Applied for what each did and what it did not.
+  **Applied together in one later commit** (the one that added this line): A7, A11, A13, A17 (dead attachment delete only), C8, C9, C14, plus
+  follow-up corrections to A2, A4, B1, C2, C15 and D6 from a validation pass over those six commits.
 - **AGENTS.md §7** governs closing any item: Rust → `cargo fmt --check` + `cargo clippy -p mailcore -- -D warnings`
   + `cargo test -p mailcore`; QML → `scripts/qml-check.sh`; Android → `./build.sh --android`.
 - **§0** records the second-pass audit of this document. Read it first if you are trusting these findings.
@@ -71,12 +73,19 @@ the "not fixed" column before assuming a finding is closed.
 | **C1** | `1dac9e7` | `label.get(..4)` instead of `len() >= 4 && label[..4]`, so a non-ASCII sender address cannot panic the badge | — |
 | **C7** | `11137f4` | All IPv6 URLs, `169.254/16` (metadata), `100.64/10`, `0/8`, `198.18/15`, `240/4` and numeric `inet_aton` shorthands are blocked; a trailing root dot no longer hides `.local` or an address | Hex (`0x7f000001`) and octal forms still fall through to the hostname branch — deliberate, widening "digits and dots only" to "looks numeric" would false-positive on real hostnames |
 | **D1** | `74d3a4d` | Runtime built inside the spawned thread (no GUI-thread abort); `busy` latched only after a job is queued; a dead net reported distinctly from busy | The `queued` `Err` tail branch still only logs, since with a live thread holding its receiver the send cannot fail |
-| **D6 part 1** | `c3d90fb` | `image_data_url` stats before reading, so a huge file is refused without loading it; the error reports the real size | **The rest of D6 is still open.** The keyring D-Bus round trip, draft/forward staging (temp writes + a `read_dir` walk) and the maintenance `cleanup_temp`/stats all still run on the GUI thread. Moving any of them needs an async QML contract (a signal path instead of a returned status string) — an API decision in both frontends, not a local fix |
-| **B1** | `bb9edb6` | 30 s timeout on the submit transport and the DSN connection | `spawn_blocking` was **not** done: a single-threaded runtime still has that job occupying its only worker slot, so moving it would not unblock the queue. The timeout is the fix |
-| **C2** | `946e971` | Bounded scan for the closing `;`; 11.5 s → 12.4 ms on the same 512 KB input | — |
-| **A2** | `5e07cab` | Read moved before the transaction, and the transaction is `IMMEDIATE` | The test is a mechanism test, not a regression guard: it cannot fail if the production ordering is reverted, because the interleaving is inside the function |
-| **A4** | `f4ff35e` | `uid in (?)` chunked at 900, inside `execute_over_uids` so all three callers are covered | Caller leading bindings became a borrowed slice — the old `Vec<Box<dyn ToSql>>` could not be repeated per chunk |
-| **C15** | `9698314` | Component-stack depth capped at 32; deeper input is refused | **Reason corrected: not quadratic.** Measured linear (8× depth → ~8× time, 4.1 s for 13 MB), so it is a memory/CPU bound, not a blowup. The first draft and the second reviewer both said "quadratic/hang" and both were wrong |
+| **D6 part 1** | `c3d90fb` | `image_data_url` stats before reading, so a huge file is refused without loading it; the error reports the real size | **The rest of D6 is still open.** The keyring D-Bus round trip, draft/forward staging (temp writes + a `read_dir` walk) and the maintenance `cleanup_temp`/stats all still run on the GUI thread. Moving any of them needs an async QML contract (a signal path instead of a returned status string) — an API decision in both frontends, not a local fix. *Follow-up:* the second test was named `a_file_that_grows_past_the_limit_is_still_refused` but only inlined a 64-byte image; renamed to what it does. The grow-between-stat-and-read cap has no test — it needs a race the test cannot stage |
+| **B1** | `bb9edb6` | 30 s timeout on the submit transport and the DSN connection | `spawn_blocking` was **not** done: the net thread runs one job at a time (`rx.recv()` then `rt.block_on(job)` in `bridge/worker.rs`), so the next job waits for this one whether the SMTP call blocks the runtime or a blocking-pool thread. The timeout is the fix. 30 s is half lettre's own 60 s default and applies per read/write, so a server that scans a large mail for long after `DATA` could now time out. *Follow-up:* the stale "sends keep the transport default" doc line on `test_connection` now names `SUBMIT_TIMEOUT` |
+| **C2** | `946e971` | Bounded scan for the closing `;`; 11.5 s → 12.4 ms on the same 512 KB input | The 9.32 s in the item's table and the 11.49 s here are two separate runs of the same input. *Follow-up:* the code comment said "~9 s", and the boundary test's comment wrongly claimed both cases fail if the window widens (only the 25-byte one does; the 24-byte one guards narrowing) |
+| **A2** | `5e07cab` | Transaction is `IMMEDIATE` | **Corrected in the follow-up:** `5e07cab` also moved the read *before* the `BEGIN`, which opened a new race — two writers for the same message could both see the old rows and insert duplicates, or update a row the other had just deleted. With `IMMEDIATE` the read needs no upgrade, so it is back inside the transaction. The test is a mechanism test, not a regression guard (the interleaving is inside the function); it now asserts the error really is `SQLITE_BUSY_SNAPSHOT` (517) instead of discarding it, and compares against `SCHEMA_VERSION` instead of a hard-coded `"23"` |
+| **A4** | `f4ff35e` | `uid in (?)` chunked at 900, inside `execute_over_uids` so all three callers are covered | Caller leading bindings became a borrowed slice — the old `Vec<Box<dyn ToSql>>` could not be repeated per chunk. *Follow-up:* `UID_CHUNK` had been inserted mid-sentence into `execute_over_uids`'s doc comment, splitting it across both items — restored. More than one chunk now runs in an `IMMEDIATE` transaction (skipped when the caller already has one open), so a failing chunk no longer leaves the earlier ones applied |
+| **A7** | follow-up | `attachment_has_data` uses `.optional()` and returns `NotFound` for a missing row, never `Ok(false)` (which would start a download) | — |
+| **A11** | follow-up | `ensure_schema` refuses a stamp newer than `SCHEMA_VERSION` before touching anything, instead of rewinding it | Refusing means an older build cannot open the file at all; that is the intended trade |
+| **A13** | follow-up | Dead `account_form::test_connection` deleted; its two tests retargeted at `prepare_connection_test`, the live path; its password-fallback doc moved there | — |
+| **A17** (one bullet) | follow-up | Dead `delete_attachments_for_message` and its test lines deleted | The other three A17 bullets are open |
+| **C8** | follow-up | `<!-->` and `<!--->` close at their `>` | — |
+| **C9** | follow-up | `<?` ends at the first `>`, as HTML parses it; `<?xml … ?>` ends at the same place | — |
+| **C14** | follow-up | `s.get_mut(..1)` instead of `s[..1]` in the vCard label | — |
+| **C15** | `9698314` | Component-stack depth capped at 32; deeper input is refused | **Reason corrected: not quadratic.** Measured linear (8× depth → ~8× time, 4.1 s for 13 MB), so it is a memory/CPU bound, not a blowup. The first draft and the second reviewer both said "quadratic/hang" and both were wrong. *Follow-up:* the comment at the cap check still said "quadratic in the depth" — corrected |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
 
@@ -121,7 +130,9 @@ connection commits in between (GUI thread + net thread in `mailapp`; the FRB poo
 `--sync-once` CLI that `queue.rs:20` documents as sharing the file) the write upgrade fails immediately —
 `busy_timeout` does not cover snapshot-upgrade. `[verify]` two connections, deferred tx + prior read →
 `database is locked`; a write-only deferred tx succeeds.
-**Fix:** `TransactionBehavior::Immediate`, or read `existing` before `BEGIN`.
+**Fix:** `TransactionBehavior::Immediate`, with the read inside it. *(Corrected: "or read `existing` before
+`BEGIN`" was wrong — it trades the upgrade failure for a lost-update race between two writers of the same
+message. `5e07cab` did both; the read is back inside the transaction in the follow-up commit.)*
 
 ### A3 · medium · failed migration steps still stamp success `[verify]` — confirmed
 `db/migrations.rs:303-310` (+ `:190-198`, `:225-228`, `:246-249`, `:259-262`, `:293-296`)
@@ -181,7 +192,7 @@ A locked DB, a corrupt row or an I/O error is misreported as `NotFound`, so call
 uses `.optional()?`. Severity lowered slightly: only affects the send queue, and the retry is bounded.
 **Fix:** `.optional()?.ok_or_else(|| StoreError::NotFound(…))`.
 
-### A7 · medium · `attachment_has_data` leaks a raw no-rows error `[verify]` `[corrected]`
+### A7 · medium · `attachment_has_data` leaks a raw no-rows error — **FIXED** `[fixed]`
 `store/messages/attachments.rs:173-182` — `[verify]` `attachment_has_data(db, 4242)` returns
 `database error: Query returned no rows`; `crates/mailffi/src/api/attachments.rs:27` and
 `crates/mailcore/src/compose/forward.rs:105` surface that string to the user where "attachment not found"
@@ -218,7 +229,7 @@ none. So `set_pending_open` cannot use it until those keys are added to `default
 with no default). **`set_sort` can be converted today.**
 **Fix for `set_pending_open`:** wrap the two `set` calls in one `unchecked_transaction()`.
 
-### A11 · low · a *newer* version stamp is silently rewound `[verify]` — confirmed
+### A11 · low · a *newer* version stamp is silently rewound — **FIXED** (refuses) `[fixed]`
 `db/migrations.rs:327-332` — `[verify]` a DB stamped `99` opens "successfully" and is rewritten to the current
 version; the newer build then re-applies its own migrations over this build's schema.
 **Fix:** log loudly (or refuse) when `current > SCHEMA_VERSION`.
@@ -233,7 +244,7 @@ failure wipes the credentials of an account that is still configured and working
 the row first and only write secrets once it succeeds, or (b) re-save the previous secrets on the failure
 path. (a) is the smaller change.
 
-### A13 · low · dead `async fn` holding `&Db` across `.await` — confirmed
+### A13 · low · dead `async fn` holding `&Db` across `.await` — **FIXED** (deleted) `[fixed]`
 `store/account_form.rs:240-245` — the future is `!Send` (`&Db` is `!Send`). Both adapters deliberately avoid it
 (`crates/mailffi/src/api/accounts.rs:75-96` documents "split-phase so the future stays `Send`"), leaving this
 wrapper with only its own tests as callers and the FRB pool unavailable to it.
@@ -263,8 +274,8 @@ was meant to prevent. No action.
 ### A17 · low · duplication and dead code
 - `store/contacts.rs:380-396`, `:399-413`, `:472-487` — three copies of the same query + row mapping.
 - `store/settings.rs:314-329` vs `:487-502` — `get_delay_secs` / `get_sync_interval` are one function twice.
-- `store/messages/attachments.rs:212-218` `delete_attachments_for_message` — **verified** no non-test callers.
-  Dead per AGENTS.md; delete it and its test.
+- ~~`store/messages/attachments.rs:212-218` `delete_attachments_for_message` — **verified** no non-test callers.
+  Dead per AGENTS.md; delete it and its test.~~ **Deleted**.
 - `undo.rs:171-176` — `messages::get_by_uid` in a loop over a whole selection: N+1 over `get_by_uid`.
 
 ### A18 · low · column-order drift between `schema.sql` and an upgraded DB `[verify]`
@@ -291,9 +302,9 @@ inline. `.timeout(None)` is not "the default" — it disables both the connect t
 timeouts, so the doc comment "sends keep the transport default" is wrong. The `mailclient-net`
 current-thread runtime then blocks forever on a half-open SMTP socket and every queued IMAP job stops until
 restart. The DSN path has no timeout at all.
-**Fix:** `.timeout(Some(secs(30)))` everywhere. `spawn_blocking` alone does **not** fix this — the single-threaded
-runtime still has that job occupying its only worker slot, so the queue stays blocked. The timeout is the fix;
-moving off the runtime only reduces the blast radius.
+**Fix:** `.timeout(Some(secs(30)))` everywhere. `spawn_blocking` alone does **not** fix this — the net thread
+runs queued jobs one at a time (`rt.block_on` per job), so the next job waits regardless of which thread the
+SMTP call blocks. The timeout is the fix; moving off the runtime only reduces the blast radius.
 
 ### B2 · medium · `COMMAND_TIMEOUT` bounds each *read*, not the command `[corrected]`
 `sync/imap/session.rs:122-128` (and `session/idle.rs:150-155`, `read_greeting`)
@@ -641,15 +652,17 @@ host parsing was reproduced against the new lists in a scratch program: `[::1]` 
 Gates per AGENTS.md §7: `cargo fmt --check` OK, `cargo clippy -p mailcore -- -D warnings` OK,
 `cargo test -p mailcore` 570 passed (564 before + 6 new).
 
-### C8 · low · a bogus comment/PI with no closing token swallows the rest — confirmed
+### C8 · low · a bogus comment/PI with no closing token swallows the rest — **FIXED** `[fixed]`
 `html/tags.rs:132-139` — for `<!-->` the search starts *past* the closing `>`, finds nothing, and consumes
 the rest of the document; `<!--->` likewise. Input `<!--><p>everything after this is gone</p>`.
 **Fix:** if `bytes[i+3] == b'>'` close the comment at `i+4`; likewise for `<!--->`.
 
-### C9 · low · a PI with no `?>` swallows the rest — confirmed
+### C9 · low · a PI with no `?>` swallows the rest — **FIXED** `[fixed]`
 `html/tags.rs:145-150` — returns `(None, bytes.len())` when `find_sub(bytes, b"?>", i)` finds nothing. HTML
 ends a bogus comment at the first `>`. Input `<p>ok</p><?x ><p>rest</p>` → `rest` never appears.
 **Fix:** end at the first `>` as HTML does, and only treat `<?xml … ?>` as a PI.
+*(Done as "always the first `>`": that already ends `<?xml … ?>` correctly, and a `?>` search first would let
+an unterminated `<?` stretch to an unrelated `?>` further down.)*
 
 ### C10 · low · inline-image expansion escapes `MAX_OUT_BYTES` — confirmed
 `html/inline.rs:120-160` — `MAX_INLINE_BYTES_PER_MESSAGE` is 6 MB of raw bytes, and each `cid:` hit appends
@@ -676,7 +689,7 @@ sender with a large history and no matches walks the whole set on the feed threa
 different specific type." Collapsing or changing it would reverse that decision. If anything, add a comment
 noting the two arms are intentionally identical. No action.
 
-### C14 · low · fragile fixed-width slice in vcard `[corrected]`
+### C14 · low · fragile fixed-width slice in vcard — **FIXED** `[fixed]`
 `vcard.rs:369` — `s[..1].make_ascii_uppercase();` is safe only because `s` is always one of
 `"mobile" | "fax" | "pager"` today. Same class as C1.
 **Fix (the one-liner form fails clippy):** `Option::map` with `str::make_ascii_uppercase` (which takes
@@ -688,7 +701,7 @@ noting the two arms are intentionally identical. No action.
 `stack.iter().rposition(|c| *c == comp)` (`:200`), a full scan per `END`. A 25 MB `.ics` of
 nested `BEGIN:X`/`END:X` is therefore **O(n²)** on top of the memory blowup, so a 25 MB file effectively
 hangs rather than merely allocating. This is the amplifier behind C4 and the reason C4 is not just a
-memory issue.
+memory issue. *(Superseded — see the correction below: it is linear, so C4 stays a memory/CPU issue.)*
 **Fix:** cap `stack.len()` (e.g. 64) and bail out past it.
 
 **Fixed in `9698314`** — depth capped at 32, deeper input refused rather than parsed.

@@ -11,9 +11,8 @@ mod flags;
 
 pub use attachment_files::{save_all_attachments_to, save_attachment_to, write_attachment_copy};
 pub use attachments::{
-    add_attachment, attachment_has_data, delete_attachments_for_message, get_attachment,
-    inline_images, list_attachments, replace_attachments, save_attachment_to_path,
-    set_has_attachments,
+    add_attachment, attachment_has_data, get_attachment, inline_images, list_attachments,
+    replace_attachments, save_attachment_to_path, set_has_attachments,
 };
 pub use flags::{
     clear_flags_dirty, delete_many_by_uids, list_flags_dirty, set_flags, set_flags_by_uid,

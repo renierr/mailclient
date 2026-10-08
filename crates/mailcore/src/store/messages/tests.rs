@@ -197,9 +197,6 @@ fn attachment_blob_roundtrips_and_saves_to_disk() {
     let n = save_attachment_to_path(&db, aid, &dest).unwrap();
     assert_eq!(n, 16);
     assert_eq!(std::fs::read(&dest).unwrap(), b"hello attachment");
-    // Resync replacement clears stale files.
-    delete_attachments_for_message(&db, id).unwrap();
-    assert!(list_attachments(&db, id).unwrap().is_empty());
 }
 
 #[test]
@@ -436,7 +433,7 @@ fn a_deferred_read_then_write_fails_where_immediate_succeeds() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("upgrade.sqlite");
     let db = Db::open(&path).unwrap();
-    let mut other = rusqlite::Connection::open(&path).unwrap();
+    let other = rusqlite::Connection::open(&path).unwrap();
     other.execute_batch("pragma busy_timeout = 5000;").unwrap();
 
     // The competing write has to change a page the snapshot read: a statement
@@ -450,17 +447,26 @@ fn a_deferred_read_then_write_fails_where_immediate_succeeds() {
     {
         let tx = other.unchecked_transaction().unwrap();
         let seen: String = tx.query_row(read, [], |r| r.get(0)).unwrap();
-        assert_eq!(seen, "23");
+        assert_eq!(seen, crate::db::migrations::SCHEMA_VERSION.to_string());
         db.conn().execute(bump, []).unwrap();
-        let err = tx.execute(bump, []);
-        let err = err.expect_err("a deferred read should not upgrade after a competing commit");
+        let err = tx
+            .execute(bump, [])
+            .expect_err("a deferred read should not upgrade after a competing commit");
+        // SQLITE_BUSY_SNAPSHOT specifically: a plain SQLITE_BUSY would mean the
+        // busy handler gave up, which is a different failure.
+        assert!(
+            matches!(
+                &err,
+                rusqlite::Error::SqliteFailure(e, _) if e.extended_code == 517
+            ),
+            "expected SQLITE_BUSY_SNAPSHOT (517), got {err:?}"
+        );
         let stale = tx.query_row(read, [], |r| r.get::<_, String>(0)).unwrap();
         // Still the value from before the commit: the snapshot really is held.
         assert_eq!(
             stale, seen,
             "the snapshot was not held, so the race is not exercised"
         );
-        let _ = err;
         let _ = tx.rollback();
     }
 
@@ -502,4 +508,39 @@ fn a_uid_list_past_the_sqlite_variable_limit_still_applies() {
     assert_eq!(list_flags_dirty(&db, acc).unwrap().len(), 5);
     // And the chunk loop still reports real row counts, not a per-chunk total.
     assert_eq!(delete_many_by_uids(&db, f, &all).unwrap(), 5);
+    // The multi-chunk transaction was committed, not left open.
+    assert!(db.conn().is_autocommit());
+}
+
+#[test]
+fn a_missing_attachment_is_not_found_not_a_database_error() {
+    // `query_row` without `.optional()` leaked the raw `Query returned no
+    // rows`, which the reader shows as a database error. It must not report
+    // `Ok(false)` either: `false` means "not cached yet" and a caller would
+    // start a download for an attachment that does not exist.
+    use crate::models::NewAttachment;
+    let (db, acc, f) = setup();
+    let id = upsert(&db, &sample_new(acc, f, 71)).unwrap();
+    let aid = add_attachment(
+        &db,
+        id,
+        &NewAttachment {
+            filename: Some("real.txt".to_string()),
+            mime_type: Some("text/plain".to_string()),
+            content_id: None,
+            size: 4,
+            data: Some(b"data".to_vec()),
+            is_inline: false,
+        },
+    )
+    .unwrap();
+    assert!(attachment_has_data(&db, aid).unwrap());
+    // One that simply is not there.
+    let err = attachment_has_data(&db, aid + 9_999).unwrap_err();
+    assert!(
+        matches!(err, StoreError::NotFound(_)),
+        "a missing attachment should be NotFound, got {err:?}"
+    );
+    // And it never says "database" to a reader, whatever else happens.
+    assert!(!err.to_string().contains("database"), "{err}");
 }
