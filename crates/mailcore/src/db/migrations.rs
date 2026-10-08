@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 22;
+pub const SCHEMA_VERSION: u32 = 23;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -314,6 +314,14 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "create index if not exists idx_messages_account_msgid
                 on messages (account_id, message_id_header);",
+        )?;
+    }
+    if current < 23 {
+        // v23: `send_queue.request_dsn` — a delivery confirmation is an SMTP
+        // parameter, not part of the stored MIME, so a retried row needs it.
+        add_columns(
+            conn,
+            &["alter table send_queue add column request_dsn integer not null default 0;"],
         )?;
     }
     if current != SCHEMA_VERSION {

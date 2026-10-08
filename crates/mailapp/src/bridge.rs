@@ -326,6 +326,11 @@ pub mod qobject {
         #[qinvokable]
         fn blank_draft_json(&self) -> QString;
 
+        /// Where a composer's receipt toggles start, from the settings:
+        /// `{read, delivery}` (`compose::Receipts`).
+        #[qinvokable]
+        fn receipt_defaults_json(&self) -> QString;
+
         /// FTS search over subject/from/body (`[{uid, folder_id, folder,
         /// subject, from, date, snippet, unread, starred, has_attachments}]`,
         /// FTS rank order). `folder` scopes to one folder path (empty = whole
@@ -707,6 +712,7 @@ pub mod qobject {
         #[qproperty(QString, signature_text)]
         #[qproperty(bool, reply_below_quote)]
         #[qproperty(bool, request_mdn)]
+        #[qproperty(bool, request_dsn)]
         #[qproperty(f32, ui_scale)]
         #[namespace = "mailclient"]
         type SettingsBridge = super::SettingsBridgeRust;
@@ -1025,6 +1031,7 @@ pub struct SettingsBridgeRust {
     signature_text: QString,
     reply_below_quote: bool,
     request_mdn: bool,
+    request_dsn: bool,
     ui_scale: f32,
 }
 
@@ -1051,6 +1058,7 @@ impl Default for SettingsBridgeRust {
             signature_text: qstring(""),
             reply_below_quote: false,
             request_mdn: false,
+            request_dsn: false,
             ui_scale: 1.0,
         }
     }

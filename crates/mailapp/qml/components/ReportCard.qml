@@ -4,11 +4,12 @@ import QtQuick.Layouts
 
 import Mailclient
 
-// Delivery report card for a bounce (mailcore::report via the feed's
-// `report`): outcome, what it means, each recipient with the reason in plain
-// words and the server's own text, the original's subject, and "Edit &
-// resend" when the sent original is cached. A report whose status part is
-// not cached yet (`loaded` false) offers the download that fills it in.
+// Report card for a delivery report or a read receipt (mailcore::report
+// via the feed's `report`): outcome, what it means, each recipient with the
+// reason in plain words and the server's own text, the original's subject,
+// "Open sent mail" when the original is cached and "Edit & resend" for a
+// failed delivery. A report whose part is not cached yet (`loaded` false)
+// offers the download that fills it in.
 Rectangle {
     id: root
 
@@ -16,18 +17,32 @@ Rectangle {
     property bool downloading: false
     signal resendClicked
     signal downloadClicked
+    signal openOriginalClicked(string path, int uid)
 
     readonly property bool loaded: !!root.report && root.report.loaded === true
     readonly property string outcome: root.report ? root.report.outcome : ""
-    readonly property color tone: root.loaded ? root.toneFor(root.outcome) : Theme.accent
+    readonly property string toneName: root.loaded && root.report.tone ? root.report.tone : "neutral"
+    readonly property color tone: root.toneFor(root.toneName)
+    readonly property bool hasOriginal: !!root.report && !!root.report.original_folder_path
+                                        && root.report.original_uid !== undefined && root.report.original_uid !== null
 
-    // `outcome` / `action` from mailcore::report to a theme colour.
-    function toneFor(action) {
-        if (action === "failed")
+    readonly property string icon: {
+        if (root.report && root.report.kind === "read")
+            return Icons.markRead;
+        if (!root.loaded || root.toneName === "negative")
+            return Icons.error;
+        return root.toneName === "warning" ? Icons.schedule : Icons.checkCircle;
+    }
+
+    // mailcore's `tone` to a theme colour.
+    function toneFor(tone) {
+        if (tone === "negative")
             return Theme.danger;
-        if (action === "delayed")
+        if (tone === "warning")
             return Theme.warning;
-        return Theme.success;
+        if (tone === "positive")
+            return Theme.success;
+        return Theme.accent;
     }
 
     radius: Theme.radius
@@ -51,8 +66,7 @@ Rectangle {
 
             Label {
                 Layout.alignment: Qt.AlignTop
-                text: !root.loaded || root.outcome === "failed" ? Icons.error : root.outcome === "delayed"
-                                                                                ? Icons.schedule : Icons.checkCircle
+                text: root.icon
                 font.family: Icons.fontFamily
                 font.pixelSize: Math.round(26 * Theme.uiScale)
                 color: root.tone
@@ -122,7 +136,7 @@ Rectangle {
 
                     Label {
                         text: recipient.modelData.action_label
-                        color: root.toneFor(recipient.modelData.action)
+                        color: root.toneFor(recipient.modelData.tone)
                         font.pixelSize: Theme.fontSmall
                     }
                 }
@@ -152,7 +166,7 @@ Rectangle {
 
         Flow {
             Layout.fillWidth: true
-            visible: (!!root.report && root.report.can_resend) || !root.loaded
+            visible: (!!root.report && root.report.can_resend) || !root.loaded || root.hasOriginal
             spacing: Theme.sm
             layoutDirection: Qt.RightToLeft
 
@@ -160,6 +174,12 @@ Rectangle {
                 visible: !!root.report && root.report.can_resend
                 text: qsTr("Edit && resend…")
                 onClicked: root.resendClicked()
+            }
+
+            AppButton {
+                visible: root.hasOriginal
+                text: qsTr("Open sent mail")
+                onClicked: root.openOriginalClicked(root.report.original_folder_path, root.report.original_uid)
             }
 
             AppButton {

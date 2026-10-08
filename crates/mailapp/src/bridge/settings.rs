@@ -151,6 +151,10 @@ impl qobject::SettingsBridge {
                 mailcore::store::settings::get_bool(db, mailcore::store::settings::REQUEST_MDN)
                     .unwrap_or(false),
             );
+            self.as_mut().set_request_dsn(
+                mailcore::store::settings::get_bool(db, mailcore::store::settings::REQUEST_DSN)
+                    .unwrap_or(false),
+            );
             self.as_mut()
                 .set_ui_scale(mailcore::store::settings::get_ui_scale(db));
         }
@@ -201,6 +205,7 @@ impl qobject::SettingsBridge {
         let signature_text = self.signature_text().to_string();
         let reply_below_quote = *self.reply_below_quote();
         let request_mdn = *self.request_mdn();
+        let request_dsn = *self.request_dsn();
         let ui_scale = *self.ui_scale();
         note(
             "sent-copy",
@@ -348,6 +353,14 @@ impl qobject::SettingsBridge {
                 db,
                 mailcore::store::settings::REQUEST_MDN,
                 request_mdn,
+            ),
+        );
+        note(
+            "delivery confirmation request",
+            mailcore::store::settings::set_bool(
+                db,
+                mailcore::store::settings::REQUEST_DSN,
+                request_dsn,
             ),
         );
         note(

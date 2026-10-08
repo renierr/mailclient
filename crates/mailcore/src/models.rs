@@ -290,6 +290,9 @@ pub struct QueuedSend {
     pub envelope_to: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// Submit with DSN `NOTIFY=SUCCESS,FAILURE,DELAY`: a delivery
+    /// confirmation was asked for.
+    pub request_dsn: bool,
 }
 
 #[cfg(test)]

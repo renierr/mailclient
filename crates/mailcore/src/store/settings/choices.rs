@@ -62,6 +62,7 @@ const TABLE: &[(&str, Kind, &[&str])] = &[
     (SIGNATURE_TEXT, Kind::Text, &[]),
     (REPLY_BELOW_QUOTE, Kind::Flag, &[]),
     (REQUEST_MDN, Kind::Flag, &[]),
+    (REQUEST_DSN, Kind::Flag, &[]),
     (UI_SCALE, Kind::Real, &["1", "1.1", "1.25", "1.5"]),
     (NOTIFICATIONS_ENABLED, Kind::Flag, &[]),
     (

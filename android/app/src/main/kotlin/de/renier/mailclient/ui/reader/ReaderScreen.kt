@@ -101,6 +101,8 @@ fun ReaderScreen(
     onCompose: (ComposeMode) -> Unit,
     // "Edit & resend" on a bounce's report card: the sent original's ids.
     onResend: (Long, Int) -> Unit,
+    // "Open sent mail" on a report or read receipt: the original's ids.
+    onOpenOriginal: (Long, Int) -> Unit,
     // Beside the list (three panes) the way out closes, not goes back.
     closeIcon: Boolean = false,
     // The reader alone on screen, system bars hidden; the shell owns it.
@@ -360,6 +362,7 @@ fun ReaderScreen(
                     onOpenAttachedMail = { openAttachment(it, "message/rfc822") },
                     onSaveAttachedMail = { id, name -> saveAttachment(id, name, "message/rfc822") },
                     onResend = onResend,
+                    onOpenOriginal = onOpenOriginal,
                     onClose = onClose,
                     closeIcon = closeIcon,
                     actions = {

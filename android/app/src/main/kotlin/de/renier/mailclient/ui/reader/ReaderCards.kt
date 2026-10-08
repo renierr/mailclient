@@ -116,26 +116,29 @@ internal fun EventCard(event: JSONObject, onOpen: (Long) -> Unit, onSave: (Long,
     }
 }
 
-// A bounce (mailcore::report via the feed's `report`): outcome, what it
-// means, each recipient with the reason in plain words and the server's
-// own text, and "Edit & resend" when the sent original is cached.
+// A delivery report or read receipt (mailcore::report via the feed's
+// `report`): outcome, what it means, each recipient with the reason in
+// plain words and the server's own text, "Open sent mail" when the
+// original is cached and "Edit & resend" for a failed delivery.
 @Composable
 internal fun ReportCard(
     report: JSONObject,
     downloading: Boolean,
     onDownload: () -> Unit,
     onResend: (folderId: Long, uid: Int) -> Unit,
+    onOpenOriginal: (folderId: Long, uid: Int) -> Unit,
 ) {
     val loaded = report.optBoolean("loaded")
-    val outcome = report.optString("outcome")
-    val tone = toneColor(if (loaded) outcome else "neutral")
-    ReaderCard(alert = loaded && outcome == "failed") {
+    val toneName = if (loaded) report.optString("tone", "neutral") else "neutral"
+    val tone = toneColor(toneName)
+    ReaderCard(alert = toneName == "negative") {
         SelectionContainer {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val icon = when {
-                        !loaded || outcome == "failed" -> R.drawable.ic_error
-                        outcome == "delayed" -> R.drawable.ic_schedule
+                        report.optString("kind") == "read" -> R.drawable.ic_mark_email_read
+                        !loaded || toneName == "negative" -> R.drawable.ic_error
+                        toneName == "warning" -> R.drawable.ic_schedule
                         else -> R.drawable.ic_check
                     }
                     Icon(painterResource(icon), null, tint = tone, modifier = Modifier.size(20.dp))
@@ -171,7 +174,7 @@ internal fun ReportCard(
                             Text(
                                 r.optString("action_label"),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = toneColor(r.optString("action")),
+                                color = toneColor(r.optString("tone")),
                                 modifier = Modifier.padding(start = 8.dp),
                             )
                         }
@@ -181,10 +184,16 @@ internal fun ReportCard(
                 }
             }
         }
-        val canResend = report.optBoolean("can_resend") && !report.isNull("original_uid")
-        if (canResend || !loaded) {
+        val hasOriginal = !report.isNull("original_uid") && !report.isNull("original_folder_id")
+        val canResend = report.optBoolean("can_resend") && hasOriginal
+        if (canResend || hasOriginal || !loaded) {
             CardActions {
                 if (!loaded) DownloadButton(downloading, onDownload)
+                if (hasOriginal) {
+                    TextButton(onClick = {
+                        onOpenOriginal(report.optLong("original_folder_id"), report.optInt("original_uid"))
+                    }) { Text("Open sent mail") }
+                }
                 if (canResend) {
                     TextButton(onClick = {
                         onResend(report.optLong("original_folder_id"), report.optInt("original_uid"))

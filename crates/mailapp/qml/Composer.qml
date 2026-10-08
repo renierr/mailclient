@@ -121,6 +121,11 @@ Dialog {
     // send time, so no binary crosses the QML bridge.
     property var attachments: []
 
+    // Receipts this mail asks for (compose::Receipts): each composition
+    // starts from the settings, the toggles beside Send change just this one.
+    property bool requestMdn: false
+    property bool requestDsn: false
+
     // Flaw F5: Cancel used to throw the draft away silently. Everything the
     // user types sets this, and closing then asks first.
     property bool dirty: false
@@ -251,6 +256,9 @@ Dialog {
         root.filesNotice = "";
         root.attachments = [];
         root.draftUid = -1;
+        var receipts = root.backend ? FeedJson.parse(root.backend.receipt_defaults_json(), ({})) : ({});
+        root.requestMdn = receipts.read === true;
+        root.requestDsn = receipts.delivery === true;
     }
 
     function setBody(html) {
@@ -442,7 +450,9 @@ Dialog {
                                   body: html,
                                   body_html: html,
                                   attachments: paths,
-                                  draft_uid: root.draftUid
+                                  draft_uid: root.draftUid,
+                                  request_mdn: root.requestMdn,
+                                  request_dsn: root.requestDsn
                               });
     }
 
@@ -790,6 +800,22 @@ Dialog {
             }
             Item {
                 Layout.fillWidth: true
+            }
+            IconButton {
+                text: Icons.markRead
+                iconFont: true
+                active: root.requestMdn
+                tooltip: root.requestMdn ? qsTr("Read receipt requested — the recipient's mail app may confirm opening")
+                                         : qsTr("Request a read receipt")
+                onClicked: root.requestMdn = !root.requestMdn
+            }
+            IconButton {
+                text: Icons.doneAll
+                iconFont: true
+                active: root.requestDsn
+                tooltip: root.requestDsn ? qsTr("Delivery confirmation requested — the receiving server reports delivery")
+                                         : qsTr("Request a delivery confirmation")
+                onClicked: root.requestDsn = !root.requestDsn
             }
             // Server drafts get an explicit delete: closing (Discard) only
             // ever abandons local edits, it never destroys the server copy.

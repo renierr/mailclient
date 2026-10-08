@@ -247,6 +247,7 @@ fn is_preview_part(filename: Option<&str>, mime: Option<&str>, len: usize) -> bo
     let is_card = crate::vcard::is_vcard_attachment(filename, mime)
         || crate::report::is_status_part(mime)
         || crate::report::is_headers_part(mime)
+        || crate::report::is_disposition_part(mime)
         || crate::attached::is_message_attachment(filename, mime);
     is_card && len <= MAX_CARD_BYTES
 }

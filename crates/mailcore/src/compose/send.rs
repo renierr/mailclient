@@ -88,13 +88,13 @@ pub fn prepare_send(db: &Db, account_id: i64, form: ComposeForm) -> Result<Prepa
     let acc = resolve_account(db, account_id)?;
     let format = SendFormat::parse(&settings::get_send_format(db));
     let include_plain = settings::get_bool(db, settings::COMPOSE_INCLUDE_PLAIN).unwrap_or(true);
-    let request_mdn = settings::get_bool(db, settings::REQUEST_MDN).unwrap_or(false);
+    let receipts = form.receipts(db);
     let policy = SendPolicy::Unrestricted;
     let (queue_id, raw) = SmtpSender::new(&acc)
         .enqueue_send(
             db,
             acc.id,
-            &form.as_request(&acc, format, include_plain, request_mdn, &policy),
+            &form.as_request(&acc, format, include_plain, receipts, &policy),
         )
         .map_err(|e| e.to_string())?;
     let ComposeForm {
@@ -147,18 +147,27 @@ pub async fn deliver(
             return Err(e);
         }
     };
-    if let Err(e) = SmtpSender::new(&acc).submit_claimed(db, sent.queue_id, &secrets.smtp_password)
-    {
-        let e = format!("send failed: {e}");
-        sent.fail(db, &e);
-        return Err(e);
-    }
+    let submitted =
+        match SmtpSender::new(&acc).submit_claimed(db, sent.queue_id, &secrets.smtp_password) {
+            Ok(s) => s,
+            Err(e) => {
+                let e = format!("send failed: {e}");
+                sent.fail(db, &e);
+                return Err(e);
+            }
+        };
     if account_settings::get_bool(db, acc.id, settings::COLLECT_SENT_CONTACTS) {
         collect_recipients(db, &sent.to, &sent.cc, &sent.bcc);
     }
     on_accepted();
 
     let mut notes = Vec::new();
+    if submitted.dsn_unsupported {
+        notes.push(
+            "sent, but the mail server does not offer delivery confirmations, so none will come"
+                .to_string(),
+        );
+    }
     // Over the pooled session: connecting again would pay another TCP + TLS +
     // LOGIN while the user waits on mail that is already gone.
     if let Err(e) = save_sent_copy(db, &acc, &sent.raw).await {

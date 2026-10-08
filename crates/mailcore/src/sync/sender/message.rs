@@ -56,9 +56,13 @@ pub struct SendRequest<'a> {
     /// IMAP password for filing the Sent copy (if `sent_copy_enabled`).
     /// `None` skips the copy with a warning; the send still succeeds.
     pub imap_password: Option<&'a str>,
-    /// Ask for a read receipt (`Disposition-Notification-To`, RFC 3798).
+    /// Ask for a read receipt (`Disposition-Notification-To`, RFC 8098).
     /// Recipients may ignore it; it only asks.
     pub request_mdn: bool,
+    /// Ask the receiving servers for a delivery confirmation (SMTP DSN,
+    /// RFC 3461). Kept with the outbox row, since it is an SMTP parameter
+    /// and not part of the MIME.
+    pub request_dsn: bool,
 }
 /// Split composer input into `(plain, Option<html>)` for the send format.
 ///

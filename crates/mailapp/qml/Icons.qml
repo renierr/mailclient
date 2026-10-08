@@ -40,6 +40,7 @@ QtObject {
     readonly property string darkMode: "\ue51c"
     readonly property string invertColors: "\ue891"
     readonly property string done: "\ue876"
+    readonly property string doneAll: "\ue877"
     readonly property string drafts: "\ue151"
     readonly property string driveFileMove: "\ue675"
     readonly property string edit: "\ue3c9"

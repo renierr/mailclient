@@ -163,6 +163,13 @@ impl qobject::Bridge {
         mailcore::compose::blank_draft_json(db).map_or_else(|_| qstring("{}"), |j| qstring(&j))
     }
 
+    pub fn receipt_defaults_json(&self) -> QString {
+        let Ok(db) = shared_db() else {
+            return qstring("{}");
+        };
+        qstring(&mailcore::compose::Receipts::defaults_json(db))
+    }
+
     /// FTS search for the toolbar (up to 50 hits, newest first). `folder`
     /// scopes to one folder path (empty = whole account). Local SQLite
     /// read, no network — safe to call per keystroke.

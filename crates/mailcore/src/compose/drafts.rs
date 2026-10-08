@@ -12,7 +12,7 @@ use crate::sync::sender::{format_draft, SendFormat, SendPolicy};
 use crate::Db;
 use std::path::{Path, PathBuf};
 
-use super::ComposeForm;
+use super::{ComposeForm, Receipts};
 
 /// The account's Drafts folder, if it has one.
 pub fn drafts_folder(db: &Db, account_id: i64) -> Option<Folder> {
@@ -121,7 +121,13 @@ pub async fn save_draft(
     let policy = SendPolicy::Unrestricted;
     let raw = format_draft(
         &acc,
-        &form.as_request(&acc, SendFormat::Multipart, true, false, &policy),
+        &form.as_request(
+            &acc,
+            SendFormat::Multipart,
+            true,
+            Receipts::default(),
+            &policy,
+        ),
     )
     .map_err(|e| e.to_string())?;
 

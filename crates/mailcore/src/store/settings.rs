@@ -67,6 +67,10 @@ pub const REPLY_BELOW_QUOTE: &str = "reply_below_quote";
 /// Request a read receipt (`Disposition-Notification-To`, default: off).
 /// Recipients may ignore it; it only asks.
 pub const REQUEST_MDN: &str = "request_mdn";
+/// Request a delivery confirmation (SMTP DSN `NOTIFY=SUCCESS`, default:
+/// off). Only servers that offer DSN pass it on; the composer can override
+/// it per mail, like [`REQUEST_MDN`].
+pub const REQUEST_DSN: &str = "request_dsn";
 /// Interface scale factor (`1` = 100%, default). Snapped to the supported
 /// steps `1` | `1.1` | `1.25` | `1.5`; unknown values fall back to `1`.
 pub const UI_SCALE: &str = "ui_scale";
@@ -125,6 +129,7 @@ pub fn defaults(key: &str) -> Option<&'static str> {
         SIGNATURE_TEXT => Some(""),
         REPLY_BELOW_QUOTE => Some("0"),
         REQUEST_MDN => Some("0"),
+        REQUEST_DSN => Some("0"),
         UI_SCALE => Some("1"),
         NOTIFICATIONS_ENABLED => Some("1"),
         BACKGROUND_SCHEDULER => Some("workmanager"),
@@ -774,6 +779,7 @@ mod tests {
         assert!(!get_bool(&db, SIGNATURE_ENABLED).unwrap());
         assert!(!get_bool(&db, REPLY_BELOW_QUOTE).unwrap());
         assert!(!get_bool(&db, REQUEST_MDN).unwrap());
+        assert!(!get_bool(&db, REQUEST_DSN).unwrap());
         set(&db, LIST_DENSITY, "weird").unwrap();
         assert_eq!(get_density(&db), "comfortable");
         set_sync_interval(&db, 15).unwrap();

@@ -1037,6 +1037,45 @@ fn part(name: Option<&str>, mime: &str, data: Option<&[u8]>) -> crate::models::N
 }
 
 #[test]
+fn read_receipt_shows_a_card_that_finds_the_sent_mail() {
+    let (db, acc, inbox) = setup();
+    let sent = folders::upsert(&db, acc, "Sent", "/", FolderRole::Sent).unwrap();
+    let mut original = msg_store::sample_new(acc, sent, 50);
+    original.message_id_header = Some("asked@example.com".to_string());
+    original.subject = Some("Contract".to_string());
+    msg_store::upsert(&db, &original).unwrap();
+
+    let receipt_id = msg_store::upsert(&db, &msg_store::sample_new(acc, inbox, 51)).unwrap();
+    let mdn = b"Reporting-UA: pc.example.org; SomeMailer 2.0
+Final-Recipient: rfc822; jane@example.org
+Original-Message-ID: <asked@example.com>
+Disposition: manual-action/MDN-sent-manually; displayed
+";
+    msg_store::add_attachment(
+        &db,
+        receipt_id,
+        &part(None, "message/disposition-notification", Some(mdn)),
+    )
+    .unwrap();
+
+    let reader: serde_json::Value =
+        serde_json::from_str(&message_json(&db, inbox, 51).unwrap()).unwrap();
+    let report = &reader["report"];
+    assert_eq!(report["kind"], "read");
+    assert_eq!(report["outcome"], "displayed");
+    assert_eq!(report["tone"], "positive");
+    assert_eq!(report["title"], "Read");
+    assert_eq!(report["recipients"][0]["address"], "jane@example.org");
+    assert_eq!(report["recipients"][0]["action_label"], "Read");
+    assert_eq!(report["original_subject"], "Contract");
+    assert_eq!(report["original_folder_id"], sent);
+    assert_eq!(report["original_folder_path"], "Sent");
+    assert_eq!(report["original_uid"], 50);
+    assert_eq!(report["can_resend"], false);
+    assert_eq!(reader["attachments"][0]["in_card"], true);
+}
+
+#[test]
 fn bounce_shows_a_report_card_and_resends_the_sent_original() {
     let (db, acc, inbox) = setup();
     let sent = folders::upsert(&db, acc, "Sent", "/", FolderRole::Sent).unwrap();

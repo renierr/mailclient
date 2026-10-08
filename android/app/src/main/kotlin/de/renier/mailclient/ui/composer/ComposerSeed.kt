@@ -45,6 +45,9 @@ data class ComposerSeed(
     val fromName: String? = null,
     val attachments: List<PickedFile> = emptyList(),
     val failure: String = "",
+    // Receipts the failed send asked for; null starts from the settings.
+    val requestMdn: Boolean? = null,
+    val requestDsn: Boolean? = null,
 ) {
     companion object {
         // Blocking JNI reads (local SQLite only): call off the main thread.

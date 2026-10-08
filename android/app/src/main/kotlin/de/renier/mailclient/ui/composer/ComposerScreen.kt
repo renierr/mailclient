@@ -137,6 +137,11 @@ fun ComposerScreen(
     var confirmDeleteDraft by remember { mutableStateOf(false) }
     var linkDialog by remember { mutableStateOf(false) }
     var sendFormat by remember { mutableStateOf(DEFAULT_SEND_FORMAT) }
+    // Receipts this mail asks for: from the settings (compose::Receipts)
+    // unless a failed send brought its own back or the user already chose.
+    var requestMdn by remember { mutableStateOf(seed.requestMdn ?: false) }
+    var requestDsn by remember { mutableStateOf(seed.requestDsn ?: false) }
+    var receiptsChosen by remember { mutableStateOf(seed.requestMdn != null) }
     var suggestContacts by remember { mutableStateOf(true) }
     val working = sending || savingDraft || deletingDraft
     // Like Qt: nothing to send to, nothing to press. The core checks the
@@ -168,6 +173,11 @@ fun ComposerScreen(
         if (o != null) {
             sendFormat = o.optString("compose_send_format", DEFAULT_SEND_FORMAT).ifEmpty { DEFAULT_SEND_FORMAT }
             suggestContacts = o.optBoolean("collect_sent_contacts", true)
+        }
+        val receipts = withContext(Dispatchers.IO) { runCatching { JSONObject(MailNative.receiptDefaults()) }.getOrNull() }
+        if (receipts != null && !receiptsChosen) {
+            requestMdn = receipts.optBoolean("read")
+            requestDsn = receipts.optBoolean("delivery")
         }
     }
 
@@ -208,6 +218,8 @@ fun ComposerScreen(
             .put("body_html", html)
             .put("attachments", JSONArray(picked.map { it.path }))
             .put("draft_uid", seed.draftUid)
+            .put("request_mdn", requestMdn)
+            .put("request_dsn", requestDsn)
             .toString()
 
     // Everything as it is about to be sent, for reopening after a late
@@ -223,6 +235,8 @@ fun ComposerScreen(
         bodyHtml = html,
         attachments = picked.toList(),
         failure = "",
+        requestMdn = requestMdn,
+        requestDsn = requestDsn,
     )
 
     // Reading the page back is asynchronous, so Send and Save draft finish
@@ -498,6 +512,17 @@ fun ComposerScreen(
                 }
                 ComposerHeaderRow("Subject") {
                     ComposerTextField(subject, { edit(subject, it) { v -> subject = v } })
+                }
+                // This mail only; a new one starts from the settings again.
+                FlowRow(modifier = Modifier.padding(top = 4.dp)) {
+                    ComposerToggle("Read receipt", requestMdn) {
+                        requestMdn = !requestMdn
+                        receiptsChosen = true
+                    }
+                    ComposerToggle("Delivery confirmation", requestDsn) {
+                        requestDsn = !requestDsn
+                        receiptsChosen = true
+                    }
                 }
 
                 if (seed.serverAttachments.isNotEmpty()) {

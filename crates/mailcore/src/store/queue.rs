@@ -32,6 +32,7 @@ fn days_ago(days: i64) -> String {
 /// born `sending`, i.e. already claimed by the caller: a flush in another
 /// process must not grab it between this insert and the caller's own submit.
 /// A crash before that submit leaves it for [`requeue_interrupted`].
+/// `request_dsn` asks the servers for a delivery confirmation on submit.
 pub fn enqueue_mime(
     db: &Db,
     account_id: i64,
@@ -39,18 +40,20 @@ pub fn enqueue_mime(
     raw_mime: &[u8],
     envelope_from: &str,
     envelope_to: &[String],
+    request_dsn: bool,
 ) -> Result<i64> {
     let ts = now();
     db.conn().execute(
         "insert into send_queue (account_id, message_id, status, retries,
-            raw_mime, envelope_from, envelope_to, created_at, updated_at)
-         values (?1, ?2, 'sending', 0, ?3, ?4, ?5, ?6, ?6)",
+            raw_mime, envelope_from, envelope_to, request_dsn, created_at, updated_at)
+         values (?1, ?2, 'sending', 0, ?3, ?4, ?5, ?6, ?7, ?7)",
         params![
             account_id,
             message_id,
             raw_mime,
             envelope_from,
             serde_json::to_string(envelope_to)?,
+            request_dsn,
             ts,
         ],
     )?;
@@ -72,11 +75,12 @@ fn row_to_queued(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueuedSend> {
         envelope_to: json_vec(&to_raw).unwrap_or_default(),
         created_at: row.get(9)?,
         updated_at: row.get(10)?,
+        request_dsn: row.get(11)?,
     })
 }
 
 const COLS: &str = "id, account_id, message_id, status, last_error, retries,
-    raw_mime, envelope_from, envelope_to, created_at, updated_at";
+    raw_mime, envelope_from, envelope_to, created_at, updated_at, request_dsn";
 
 /// All pending (queued/failed/sending) entries, oldest first.
 pub fn list_pending(db: &Db) -> Result<Vec<QueuedSend>> {
@@ -270,7 +274,7 @@ mod tests {
     }
 
     fn enqueue(db: &Db, acc: i64) -> i64 {
-        enqueue_mime(db, acc, None, RAW, "a@x.y", &["b@x.y".to_string()]).unwrap()
+        enqueue_mime(db, acc, None, RAW, "a@x.y", &["b@x.y".to_string()], false).unwrap()
     }
 
     /// Backdate a row so it looks orphaned by a crash long ago.
@@ -307,6 +311,9 @@ mod tests {
         assert_eq!(row.raw_mime.as_deref(), Some(RAW));
         assert_eq!(row.envelope_from.as_deref(), Some("a@x.y"));
         assert_eq!(row.envelope_to, vec!["b@x.y".to_string()]);
+        assert!(!row.request_dsn);
+        let dsn = enqueue_mime(&db, acc, None, RAW, "a@x.y", &["b@x.y".to_string()], true).unwrap();
+        assert!(get(&db, dsn).unwrap().request_dsn);
         // Owned by the enqueuer: a concurrent flush must not see it.
         assert!(list_submittable(&db, acc).unwrap().is_empty());
         assert!(!claim(&db, id).unwrap());

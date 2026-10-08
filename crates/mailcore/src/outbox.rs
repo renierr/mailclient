@@ -269,6 +269,7 @@ mod tests {
             raw.as_bytes(),
             "me@example.com",
             &["you@example.com".to_string()],
+            false,
         )
         .unwrap()
     }

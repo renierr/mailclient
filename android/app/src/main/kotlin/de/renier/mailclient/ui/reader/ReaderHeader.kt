@@ -79,6 +79,8 @@ fun ReaderHeader(
     onSaveAttachedMail: (Long, String) -> Unit,
     // "Edit & resend" on a bounce: the sent original's folder and uid.
     onResend: (Long, Int) -> Unit,
+    // "Open sent mail" on a report or receipt: the original's folder and uid.
+    onOpenOriginal: (Long, Int) -> Unit,
     // Back in front of the subject, like Flutter: the one-pane reader and
     // the two-pane reader show the arrow, three panes the close icon.
     // Null hides it.
@@ -169,7 +171,7 @@ fun ReaderHeader(
 
         m.optJSONObject("event")?.let { EventCard(it, onOpenEvent, onSaveEvent) }
 
-        m.optJSONObject("report")?.let { ReportCard(it, downloadingInline, onDownloadInline, onResend) }
+        m.optJSONObject("report")?.let { ReportCard(it, downloadingInline, onDownloadInline, onResend, onOpenOriginal) }
 
         m.optJSONArray("contacts")?.let { cards ->
             for (i in 0 until cards.length()) {

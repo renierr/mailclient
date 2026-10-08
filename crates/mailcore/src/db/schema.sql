@@ -193,6 +193,8 @@ create table if not exists send_queue (
     raw_mime      blob,
     envelope_from text,
     envelope_to   text not null default '[]',
+    -- Ask for a delivery confirmation (SMTP DSN) when submitting.
+    request_dsn   integer not null default 0,
     created_at    text not null,
     updated_at    text not null
 );

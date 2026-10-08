@@ -46,6 +46,8 @@ Rectangle {
     signal forwardRequested
     // "Edit & resend" on a bounce's delivery report card.
     signal resendRequested
+    // A report card's "Open sent mail": the original by folder path and uid.
+    signal openOriginalRequested(string path, int uid)
     signal starRequested
     signal archiveRequested
     signal moveRequested
@@ -748,7 +750,8 @@ Rectangle {
                     report: root.message ? root.message.report : null
                     downloading: !!root.backend && root.backend.busy
                     onResendClicked: root.resendRequested()
-                    onDownloadClicked: root.downloadInline(qsTr("Downloading delivery report…"))
+                    onOpenOriginalClicked: (path, uid) => root.openOriginalRequested(path, uid)
+                    onDownloadClicked: root.downloadInline(qsTr("Downloading report…"))
                 }
 
                 // --- contact cards (.vcf) ------------------------------------------

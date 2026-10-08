@@ -571,6 +571,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                             onResend = { origFolderId, origUid ->
                                 resend(r.accountId, r.folderId, r.uid, origFolderId, origUid)
                             },
+                            onOpenOriginal = { origFolderId, origUid -> openRow(r.accountId, origFolderId, origUid) },
                             closeIcon = layout == PaneLayout.Three,
                             fullscreen = fullscreen,
                             onToggleFullscreen = { readerFullscreen = !readerFullscreen },

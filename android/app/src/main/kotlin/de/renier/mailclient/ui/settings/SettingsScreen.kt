@@ -350,7 +350,19 @@ private fun ComposingSection(d: SettingsDraft) {
         minLines = 3,
         modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
     )
-    SettingSwitch("Request read receipt", d.flag("request_mdn"), { d.setFlag("request_mdn", it) })
+    SettingSwitch(
+        "Request read receipt",
+        d.flag("request_mdn"),
+        { d.setFlag("request_mdn", it) },
+        help = "The recipient's mail app may confirm opening. It only asks.",
+    )
+    SettingSwitch(
+        "Request delivery confirmation",
+        d.flag("request_dsn"),
+        { d.setFlag("request_dsn", it) },
+        help = "The receiving server reports once the mail is in the mailbox, where every server supports it. " +
+            "Both start each new mail; the composer can switch them per mail.",
+    )
 }
 
 @Composable

@@ -52,6 +52,7 @@ AppDialog {
     property string localSigText
     property bool localReplyBelow
     property bool localRequestMdn
+    property bool localRequestDsn
     property string localSortField
     property bool localSortDesc
 
@@ -458,6 +459,7 @@ AppDialog {
         root.localSigText = settingsBridge.signature_text;
         root.localReplyBelow = settingsBridge.reply_below_quote;
         root.localRequestMdn = settingsBridge.request_mdn;
+        root.localRequestDsn = settingsBridge.request_dsn;
         root.localSortField = root.backend ? root.backend.sort_field : root.defaultOf("message_sort_field");
         root.localSortDesc = root.backend ? root.backend.sort_descending : root.defaultOf("message_sort_desc");
         root.loadCapsAccounts();
@@ -866,6 +868,19 @@ AppDialog {
                     HintLabel {
                         text: qsTr(
                                   "Adds a receipt-request header to sent mail. Recipients may ignore it; it only asks.")
+                    }
+                    AppCheckBox {
+                        Layout.fillWidth: true
+                        checked: root.localRequestDsn
+                        text: qsTr("Request a delivery confirmation")
+                        onToggled: root.localRequestDsn = checked
+                    }
+                    HintLabel {
+                        text: qsTr(
+                                  "Asks the receiving server to report once the mail is in the mailbox. Only works where every server on the way supports it.")
+                    }
+                    HintLabel {
+                        text: qsTr("Both are where a new mail starts; the composer can switch them per mail.")
                     }
                 }
             }
@@ -1335,6 +1350,7 @@ AppDialog {
         settingsBridge.signature_text = root.localSigText;
         settingsBridge.reply_below_quote = root.localReplyBelow;
         settingsBridge.request_mdn = root.localRequestMdn;
+        settingsBridge.request_dsn = root.localRequestDsn;
         var saveError = settingsBridge.save();
         var accountError = root.saveAccountDrafts();
         // Sort lives on Bridge (shared with the list header menu).

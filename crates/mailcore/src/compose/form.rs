@@ -3,8 +3,39 @@
 //! Send and Save-draft take the same shape from the UI and differ only in
 //! what they do with it, so it is parsed once here.
 
+use serde::Serialize;
+
 use crate::models::Account;
+use crate::store::settings;
 use crate::sync::sender::{SendFormat, SendPolicy, SendRequest};
+use crate::Db;
+
+/// Which receipts a mail asks for. The composer's two toggles start from
+/// [`Receipts::defaults`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Receipts {
+    /// Read receipt: `Disposition-Notification-To` (RFC 8098). The
+    /// recipient's mail app decides whether to answer.
+    pub read: bool,
+    /// Delivery confirmation: SMTP DSN `NOTIFY=SUCCESS` (RFC 3461). The
+    /// receiving server reports once the mail is in the mailbox.
+    pub delivery: bool,
+}
+
+impl Receipts {
+    /// The stored settings, where a new composer starts.
+    pub fn defaults(db: &Db) -> Self {
+        Self {
+            read: settings::get_bool(db, settings::REQUEST_MDN).unwrap_or(false),
+            delivery: settings::get_bool(db, settings::REQUEST_DSN).unwrap_or(false),
+        }
+    }
+
+    /// [`Self::defaults`] as `{read, delivery}` JSON for the composers.
+    pub fn defaults_json(db: &Db) -> String {
+        serde_json::to_string(&Self::defaults(db)).unwrap_or_else(|_| "{}".to_string())
+    }
+}
 
 /// A composer form, owned, so it can be moved onto the network thread.
 #[derive(Default, Debug, Clone)]
@@ -28,11 +59,15 @@ pub struct ComposeForm {
     /// UID of the draft this was opened from, `-1` for a fresh message.
     /// A successful send or save removes it.
     pub draft_uid: i32,
+    /// Ask for a read receipt; `None` means the stored setting.
+    pub request_mdn: Option<bool>,
+    /// Ask for a delivery confirmation; `None` means the stored setting.
+    pub request_dsn: Option<bool>,
 }
 
 impl ComposeForm {
     /// Parse `{to, cc?, bcc?, from?, from_name?, reply_to?, subject, body,
-    /// body_html?, attachments?, draft_uid?}`.
+    /// body_html?, attachments?, draft_uid?, request_mdn?, request_dsn?}`.
     pub fn parse(json: &str) -> Result<Self, String> {
         let v: serde_json::Value =
             serde_json::from_str(json).map_err(|_| "invalid message form".to_string())?;
@@ -83,6 +118,8 @@ impl ComposeForm {
                 .and_then(|x| x.as_i64())
                 .unwrap_or(-1)
                 .clamp(-1, i32::MAX as i64) as i32,
+            request_mdn: v.get("request_mdn").and_then(|x| x.as_bool()),
+            request_dsn: v.get("request_dsn").and_then(|x| x.as_bool()),
         })
     }
 
@@ -96,7 +133,7 @@ impl ComposeForm {
         account: &'a Account,
         format: SendFormat,
         include_plain: bool,
-        request_mdn: bool,
+        receipts: Receipts,
         policy: &'a SendPolicy,
     ) -> SendRequest<'a> {
         let some = |s: &'a str| (!s.is_empty()).then_some(s);
@@ -116,7 +153,18 @@ impl ComposeForm {
             policy,
             password: "",
             imap_password: None,
-            request_mdn,
+            request_mdn: receipts.read,
+            request_dsn: receipts.delivery,
+        }
+    }
+
+    /// The receipts to request: the composer's choice, else the stored
+    /// settings.
+    pub fn receipts(&self, db: &Db) -> Receipts {
+        let defaults = Receipts::defaults(db);
+        Receipts {
+            read: self.request_mdn.unwrap_or(defaults.read),
+            delivery: self.request_dsn.unwrap_or(defaults.delivery),
         }
     }
 
@@ -135,7 +183,7 @@ impl ComposeForm {
 
 #[cfg(test)]
 mod tests {
-    use super::ComposeForm;
+    use super::{ComposeForm, Receipts};
     use crate::sync::sender::support::test_account;
     use crate::sync::sender::{SendFormat, SendPolicy};
 
@@ -182,14 +230,40 @@ mod tests {
         acc.from_name = " Account Name ".to_string();
         let policy = SendPolicy::Unrestricted;
         let f = ComposeForm::parse(r#"{"to":"a@example.com"}"#).unwrap();
-        let req = f.as_request(&acc, SendFormat::Auto, true, false, &policy);
+        let req = f.as_request(&acc, SendFormat::Auto, true, Receipts::default(), &policy);
         assert_eq!(req.from, None);
         assert_eq!(req.reply_to, None);
         assert_eq!(req.body_html, None);
         assert_eq!(req.from_name, Some("Account Name"));
 
         let f = ComposeForm::parse(r#"{"to":"a@example.com","from_name":"Typed"}"#).unwrap();
-        let req = f.as_request(&acc, SendFormat::Auto, true, false, &policy);
+        let req = f.as_request(&acc, SendFormat::Auto, true, Receipts::default(), &policy);
         assert_eq!(req.from_name, Some("Typed"));
+    }
+
+    #[test]
+    fn receipts_follow_the_form_else_the_settings() {
+        let db = crate::db::Db::open_in_memory().unwrap();
+        crate::store::settings::set(&db, crate::store::settings::REQUEST_DSN, "1").unwrap();
+        let f = ComposeForm::parse(r#"{"to":"a@example.com"}"#).unwrap();
+        assert_eq!(
+            f.receipts(&db),
+            Receipts {
+                read: false,
+                delivery: true
+            }
+        );
+        let f = ComposeForm::parse(r#"{"request_mdn":true,"request_dsn":false}"#).unwrap();
+        assert_eq!(
+            f.receipts(&db),
+            Receipts {
+                read: true,
+                delivery: false
+            }
+        );
+        assert_eq!(
+            Receipts::defaults_json(&db),
+            r#"{"read":false,"delivery":true}"#
+        );
     }
 }

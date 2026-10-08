@@ -1,5 +1,6 @@
-//! Delivery status notifications (bounces, RFC 3464) for the reader's
-//! delivery report card, and the sent original a bounce reports on.
+//! Delivery status notifications (bounces and delivery confirmations, RFC
+//! 3464) and read receipts (MDN, RFC 8098) for the reader's report card,
+//! and the sent original a report is about.
 //!
 //! A bounce is a `multipart/report` whose `message/delivery-status` part
 //! holds one block of per-message fields and one block per recipient
@@ -8,6 +9,11 @@
 //! original's headers, whose Message-ID finds the copy in Sent so the user
 //! can edit and resend it. Enhanced status codes (RFC 3463) are explained
 //! in plain words; the server's own text stays alongside.
+//!
+//! A read receipt has a `message/disposition-notification` part instead:
+//! who it is from (`Final-Recipient`), what happened to the mail
+//! (`Disposition`: displayed, deleted, …) and the `Original-Message-ID`.
+//! Only receipts that arrive are read here; the app never sends one.
 
 use serde::Serialize;
 
@@ -23,6 +29,8 @@ pub struct ReportRecipient {
     pub action: String,
     /// `action` for display: `Failed`, `Delayed`, `Delivered`, …
     pub action_label: String,
+    /// `positive`, `negative`, `warning` or `neutral`: how to colour it.
+    pub tone: String,
     /// Enhanced status code (`5.1.1`), from `Status` or the diagnostic.
     pub status: Option<String>,
     /// The status code in plain words with the code
@@ -35,9 +43,14 @@ pub struct ReportRecipient {
 /// What the reader's delivery report card shows.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct DeliveryReport {
-    /// `failed`, `delayed` or `delivered`: the worst action reported.
+    /// `delivery` (a DSN) or `read` (a read receipt).
+    pub kind: String,
+    /// `failed`, `delayed` or `delivered`: the worst action reported. For
+    /// a read receipt the disposition: `displayed`, `deleted`, `processed`.
     pub outcome: String,
-    /// `Delivery failed`, `Delivery delayed` or `Delivered`.
+    /// `positive`, `negative`, `warning` or `neutral`, from the outcome.
+    pub tone: String,
+    /// `Delivery failed`, `Delivered`, `Read`, `Deleted unread`, …
     pub title: String,
     /// One sentence on what the outcome means for the user.
     pub detail: String,
@@ -46,8 +59,11 @@ pub struct DeliveryReport {
     pub reporting_mta: Option<String>,
     /// Subject of the mail the report is about, when its headers came along.
     pub original_subject: Option<String>,
-    /// That mail's cached copy (normally in Sent), for "Edit & resend".
+    /// That mail's cached copy (normally in Sent), for "Edit & resend" and
+    /// "Open sent mail".
     pub original_folder_id: Option<i64>,
+    /// The copy's folder path (Qt selects folders by path).
+    pub original_folder_path: Option<String>,
     pub original_uid: Option<u32>,
     /// A failed delivery whose original is cached: the card offers resend.
     pub can_resend: bool,
@@ -79,6 +95,14 @@ pub fn is_status_part(mime: Option<&str>) -> bool {
     matches!(
         mime.map(|m| m.trim().to_ascii_lowercase()).as_deref(),
         Some("message/delivery-status" | "message/global-delivery-status")
+    )
+}
+
+/// Whether `mime` is a read receipt's machine-readable part.
+pub fn is_disposition_part(mime: Option<&str>) -> bool {
+    matches!(
+        mime.map(|m| m.trim().to_ascii_lowercase()).as_deref(),
+        Some("message/disposition-notification" | "message/global-disposition-notification")
     )
 }
 
@@ -127,6 +151,7 @@ pub fn parse_dsn(text: &str) -> Option<Dsn> {
         dsn.recipients.push(ReportRecipient {
             address,
             action_label: action_label(&action),
+            tone: action_tone(&action).to_string(),
             action,
             reason: status
                 .as_deref()
@@ -136,6 +161,89 @@ pub fn parse_dsn(text: &str) -> Option<Dsn> {
         });
     }
     (!dsn.recipients.is_empty()).then_some(dsn)
+}
+
+/// The parsed `message/disposition-notification` body.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Mdn {
+    /// Whose mail app sent the receipt.
+    pub recipient: String,
+    /// `displayed`, `deleted`, `processed`, `dispatched`, …
+    pub disposition: String,
+    pub original_message_id: Option<String>,
+    pub reporting_ua: Option<String>,
+}
+
+/// Parse a `message/disposition-notification` body. `None` without a
+/// recipient or a disposition.
+pub fn parse_mdn(text: &str) -> Option<Mdn> {
+    let fields: Vec<(String, String)> = blocks(text).into_iter().flatten().collect();
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    };
+    let recipient = field("Final-Recipient")
+        .or_else(|| field("Original-Recipient"))
+        .map(typed_value)
+        .filter(|r| !r.is_empty())?;
+    // `manual-action/MDN-sent-manually; displayed/error` → `displayed`.
+    let disposition = field("Disposition")?
+        .rsplit(';')
+        .next()?
+        .split(['/', ' '])
+        .find(|t| !t.is_empty())?
+        .to_ascii_lowercase();
+    Some(Mdn {
+        recipient,
+        disposition,
+        original_message_id: field("Original-Message-ID")
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty()),
+        reporting_ua: field("Reporting-UA")
+            .map(|v| v.split(';').next().unwrap_or(v).trim().to_string())
+            .filter(|v| !v.is_empty()),
+    })
+}
+
+/// A disposition as `(label, tone, title, detail)` for the card.
+fn disposition_text(disposition: &str) -> (&'static str, &'static str, &'static str, &'static str) {
+    match disposition {
+        "displayed" => (
+            "Read",
+            "positive",
+            "Read",
+            "The recipient's mail app reports that your message was opened.",
+        ),
+        "deleted" => (
+            "Deleted unread",
+            "neutral",
+            "Deleted unread",
+            "The recipient's mail app reports that your message was deleted without being opened.",
+        ),
+        "processed" | "dispatched" => (
+            "Received",
+            "neutral",
+            "Received",
+            "The recipient's mail app received your message; that does not mean it was opened.",
+        ),
+        _ => (
+            "Receipt declined",
+            "neutral",
+            "Receipt declined",
+            "The recipient's mail app answered without saying whether the message was opened.",
+        ),
+    }
+}
+
+fn action_tone(action: &str) -> &'static str {
+    match action {
+        "failed" => "negative",
+        "delayed" => "warning",
+        "delivered" | "relayed" | "expanded" => "positive",
+        _ => "neutral",
+    }
 }
 
 fn action_label(action: &str) -> String {
@@ -248,17 +356,22 @@ pub fn explain_status(code: &str) -> Option<&'static str> {
 }
 
 /// The report card for `message`, from its listed attachments: `None` for
-/// anything but a delivery report.
+/// anything but a delivery report or a read receipt.
 pub fn delivery_report(
     db: &Db,
     message: &Message,
     listed: &[Attachment],
 ) -> Option<DeliveryReport> {
-    let status = listed
+    let mdn_part = listed
         .iter()
-        .find(|a| is_status_part(a.mime_type.as_deref()))?;
+        .find(|a| is_disposition_part(a.mime_type.as_deref()));
+    let status = match mdn_part {
+        Some(part) => part,
+        None => listed
+            .iter()
+            .find(|a| is_status_part(a.mime_type.as_deref()))?,
+    };
     let mut covered = vec![status.id];
-    let dsn = cached_text(db, status.id).and_then(|t| parse_dsn(&t));
     let headers = listed
         .iter()
         .find(|a| is_headers_part(a.mime_type.as_deref()));
@@ -274,16 +387,29 @@ pub fn delivery_report(
         })
         .and_then(|a| cached_bytes(db, a.id))
         .and_then(|b| OriginalHeaders::parse(&b));
+    let text = cached_text(db, status.id);
+    if mdn_part.is_some() {
+        return Some(read_receipt(
+            db,
+            message,
+            text.as_deref().and_then(parse_mdn),
+            original_headers,
+            covered,
+        ));
+    }
 
-    let Some(dsn) = dsn else {
+    let Some(dsn) = text.as_deref().and_then(parse_dsn) else {
         return Some(DeliveryReport {
+            kind: "delivery".to_string(),
             outcome: "failed".to_string(),
+            tone: "neutral".to_string(),
             title: "Delivery report".to_string(),
             detail: "The report is not downloaded yet.".to_string(),
             recipients: Vec::new(),
             reporting_mta: None,
             original_subject: original_headers.and_then(|h| h.subject),
             original_folder_id: None,
+            original_folder_path: None,
             original_uid: None,
             can_resend: false,
             loaded: false,
@@ -294,12 +420,7 @@ pub fn delivery_report(
     let original = original_headers
         .as_ref()
         .and_then(|h| h.message_id.as_deref())
-        .and_then(|mid| {
-            messages::find_by_message_id(db, message.account_id, mid)
-                .ok()
-                .flatten()
-        })
-        .filter(|o| o.id != message.id);
+        .and_then(|mid| find_original(db, message, mid));
     let outcome = outcome(&dsn.recipients);
     let (title, detail) = match outcome {
         "failed" => (
@@ -310,23 +431,122 @@ pub fn delivery_report(
             "Delivery delayed",
             "The server is still trying to deliver it; there is no need to resend yet.",
         ),
-        _ => ("Delivered", "The message was delivered."),
+        _ => (
+            "Delivered",
+            "The receiving server put the message into the mailbox. That does not mean it was read.",
+        ),
     };
-    Some(DeliveryReport {
+    let mut report = DeliveryReport {
+        kind: "delivery".to_string(),
         outcome: outcome.to_string(),
+        tone: action_tone(outcome).to_string(),
         title: title.to_string(),
         detail: detail.to_string(),
         can_resend: outcome == "failed" && original.is_some(),
-        original_subject: original_headers
-            .and_then(|h| h.subject)
-            .or_else(|| original.as_ref().and_then(|o| o.subject.clone())),
-        original_folder_id: original.as_ref().map(|o| o.folder_id),
-        original_uid: original.as_ref().map(|o| o.uid),
+        original_subject: original_headers.and_then(|h| h.subject),
+        original_folder_id: None,
+        original_folder_path: None,
+        original_uid: None,
         recipients: dsn.recipients,
         reporting_mta: dsn.reporting_mta,
         loaded: true,
         covered,
-    })
+    };
+    report.set_original(db, original);
+    Some(report)
+}
+
+/// The card for a read receipt; `mdn` is `None` while its part is not
+/// cached.
+fn read_receipt(
+    db: &Db,
+    message: &Message,
+    mdn: Option<Mdn>,
+    original_headers: Option<OriginalHeaders>,
+    covered: Vec<i64>,
+) -> DeliveryReport {
+    let original_subject = original_headers.as_ref().and_then(|h| h.subject.clone());
+    let Some(mdn) = mdn else {
+        return DeliveryReport {
+            kind: "read".to_string(),
+            outcome: String::new(),
+            tone: "neutral".to_string(),
+            title: "Read receipt".to_string(),
+            detail: "The receipt is not downloaded yet.".to_string(),
+            recipients: Vec::new(),
+            reporting_mta: None,
+            original_subject,
+            original_folder_id: None,
+            original_folder_path: None,
+            original_uid: None,
+            can_resend: false,
+            loaded: false,
+            covered,
+        };
+    };
+    let original = mdn
+        .original_message_id
+        .as_deref()
+        .or_else(|| {
+            original_headers
+                .as_ref()
+                .and_then(|h| h.message_id.as_deref())
+        })
+        .and_then(|mid| find_original(db, message, mid));
+    let (label, tone, title, detail) = disposition_text(&mdn.disposition);
+    let mut report = DeliveryReport {
+        kind: "read".to_string(),
+        tone: tone.to_string(),
+        title: title.to_string(),
+        detail: detail.to_string(),
+        recipients: vec![ReportRecipient {
+            address: mdn.recipient,
+            action: mdn.disposition.clone(),
+            action_label: label.to_string(),
+            tone: tone.to_string(),
+            status: None,
+            reason: None,
+            diagnostic: None,
+        }],
+        outcome: mdn.disposition,
+        reporting_mta: mdn.reporting_ua,
+        original_subject,
+        original_folder_id: None,
+        original_folder_path: None,
+        original_uid: None,
+        can_resend: false,
+        loaded: true,
+        covered,
+    };
+    report.set_original(db, original);
+    report
+}
+
+impl DeliveryReport {
+    /// Point the card at the cached original; its subject fills in when
+    /// the report carried none.
+    fn set_original(&mut self, db: &Db, original: Option<Message>) {
+        let Some(o) = original else {
+            return;
+        };
+        if self.original_subject.is_none() {
+            self.original_subject = o.subject.clone();
+        }
+        self.original_folder_path = crate::store::folders::get(db, o.folder_id)
+            .ok()
+            .map(|f| f.path);
+        self.original_folder_id = Some(o.folder_id);
+        self.original_uid = Some(o.uid);
+    }
+}
+
+/// The mail with Message-ID `mid` in the report's account, other than the
+/// report itself.
+fn find_original(db: &Db, report: &Message, mid: &str) -> Option<Message> {
+    messages::find_by_message_id(db, report.account_id, mid)
+        .ok()
+        .flatten()
+        .filter(|o| o.id != report.id)
 }
 
 /// The bounce at `(folder_id, uid)` with its cached sent original, for an

@@ -161,6 +161,7 @@ async fn main() -> Result<(), String> {
                     password: &smtp_pass,
                     imap_password: Some(&imap_pass),
                     request_mdn: false,
+                    request_dsn: false,
                 },
             )
             .await

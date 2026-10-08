@@ -25,6 +25,7 @@ use super::{
         parse_reply_to, sender_domain_is_aligned, strict_mailboxes, to_group_name, valid_mailboxes,
     },
     attachments::load_outgoing_attachments,
+    dsn::{send_with_dsn, Connect},
     message::{assemble_message, resolve_bodies, split_inline_images, SendRequest},
     policy::effective_format,
 };
@@ -49,6 +50,14 @@ pub fn endpoint_for(account: &Account) -> SmtpEndpoint {
         plaintext: crate::store::account_form::is_plaintext(&account.smtp_security),
     }
 }
+/// What a successful submit learned on the way.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Submitted {
+    /// A delivery confirmation was asked for, but the server does not
+    /// offer DSN: the mail went without it and no confirmation will come.
+    pub dsn_unsupported: bool,
+}
+
 /// SMTP sender bound to one account's settings.
 pub struct SmtpSender {
     endpoint: SmtpEndpoint,
@@ -89,6 +98,19 @@ impl SmtpSender {
         password: &str,
         timeout: Option<Duration>,
     ) -> Result<SmtpTransport> {
+        let c = self.connect_params(password)?;
+        Ok(SmtpTransport::builder_dangerous(c.host)
+            .port(c.port)
+            .hello_name(c.hello)
+            .credentials(c.credentials)
+            .timeout(timeout)
+            .tls(c.tls)
+            .build())
+    }
+
+    /// Host, port, EHLO name, TLS mode and login for this account: the
+    /// pooled transport and the DSN connection are built from the same.
+    fn connect_params(&self, password: &str) -> Result<Connect> {
         let (host, port) = {
             let mut parts = self.endpoint.addr.rsplitn(2, ':');
             let port: u16 = parts.next().unwrap_or("465").parse().map_err(|_| {
@@ -98,28 +120,26 @@ impl SmtpSender {
         };
         let tls_params = TlsParameters::new(host.clone())
             .map_err(|e| StoreError::InvalidInput(format!("tls setup failed: {e}")))?;
-        let mut builder = SmtpTransport::relay(&host)?;
         // EHLO with the sender domain instead of the bare machine hostname:
         // a dotless `EHLO omarchy` trips HELO-based spam heuristics, while
         // the (unavoidable) client IP is logged by the server either way.
-        if let Some(domain) = self.from.rsplit('@').next().filter(|d| d.contains('.')) {
-            builder = builder.hello_name(ClientId::Domain(domain.to_string()));
-        }
-        builder = builder
-            .port(port)
-            .credentials(Credentials::new(
-                self.username.clone(),
-                password.to_string(),
-            ))
-            .timeout(timeout)
-            .tls(if self.endpoint.plaintext {
+        let hello = match self.from.rsplit('@').next().filter(|d| d.contains('.')) {
+            Some(domain) => ClientId::Domain(domain.to_string()),
+            None => ClientId::default(),
+        };
+        Ok(Connect {
+            host,
+            port,
+            hello,
+            tls: if self.endpoint.plaintext {
                 Tls::None
             } else if self.endpoint.implicit_tls {
                 Tls::Wrapper(tls_params)
             } else {
                 Tls::Required(tls_params)
-            });
-        Ok(builder.build())
+            },
+            credentials: Credentials::new(self.username.clone(), password.to_string()),
+        })
     }
 }
 impl MailSender for SmtpSender {
@@ -233,7 +253,15 @@ impl SmtpSender {
             req.request_mdn,
         )?;
         let raw = email.formatted();
-        let queue_id = queue::enqueue_mime(db, account_id, None, &raw, from_addr, &rcpts)?;
+        let queue_id = queue::enqueue_mime(
+            db,
+            account_id,
+            None,
+            &raw,
+            from_addr,
+            &rcpts,
+            req.request_dsn,
+        )?;
         Ok((queue_id, raw))
     }
 
@@ -271,7 +299,7 @@ impl SmtpSender {
     /// [`queue::claim`]. Crash-safe: MIME is already on disk and the row stays
     /// `sending` through the SMTP round-trip, so a crash leaves it for
     /// [`queue::requeue_interrupted`] to retry with the same bytes.
-    pub fn submit_claimed(&self, db: &Db, queue_id: i64, password: &str) -> Result<()> {
+    pub fn submit_claimed(&self, db: &Db, queue_id: i64, password: &str) -> Result<Submitted> {
         let row = queue::get(db, queue_id)?;
         let raw = row
             .raw_mime
@@ -290,15 +318,15 @@ impl SmtpSender {
                 "queued send has no envelope recipients".into(),
             ));
         }
-        match self.submit_raw(from, &row.envelope_to, raw, password) {
-            Ok(()) => {
+        match self.submit_raw(from, &row.envelope_to, raw, password, row.request_dsn) {
+            Ok(submitted) => {
                 // The server accepted it, so it IS sent. A bookkeeping failure
                 // (the row vanished with its account mid-send) must not turn
                 // that into "send failed" and invite a duplicate resend.
                 if let Err(e) = queue::mark_sent(db, queue_id) {
                     log::warn!("smtp: sent, but outbox entry {queue_id} not updated: {e}");
                 }
-                Ok(())
+                Ok(submitted)
             }
             Err(e) => {
                 let _ = queue::mark_failed(db, queue_id, &e.to_string());
@@ -340,7 +368,7 @@ impl SmtpSender {
                 }
             }
             match self.submit_claimed(db, row.id, password) {
-                Ok(()) => {
+                Ok(_) => {
                     sent += 1;
                     if account_settings::get_bool(db, account_id, settings::COLLECT_SENT_CONTACTS) {
                         // Envelope only: the display names lived in the
@@ -372,7 +400,14 @@ impl SmtpSender {
         }
     }
 
-    fn submit_raw(&self, from: &str, to: &[String], raw: &[u8], password: &str) -> Result<()> {
+    fn submit_raw(
+        &self,
+        from: &str,
+        to: &[String],
+        raw: &[u8],
+        password: &str,
+        request_dsn: bool,
+    ) -> Result<Submitted> {
         let from_addr: Address = from.parse()?;
         let rcpts: Vec<Address> = to
             .iter()
@@ -380,12 +415,22 @@ impl SmtpSender {
             .collect::<std::result::Result<_, _>>()?;
         let envelope = Envelope::new(Some(from_addr), rcpts)
             .map_err(|e| StoreError::InvalidInput(format!("smtp envelope: {e}")))?;
+        if request_dsn {
+            let dsn = send_with_dsn(&self.connect_params(password)?, &envelope, raw)?;
+            log::info!(
+                "smtp: sent to {to:?} via {} (delivery confirmation: {dsn})",
+                self.endpoint.addr
+            );
+            return Ok(Submitted {
+                dsn_unsupported: !dsn,
+            });
+        }
         let response = self.transport(password)?.send_raw(&envelope, raw)?;
         log::info!(
             "smtp: sent to {to:?} via {}: {response:?}",
             self.endpoint.addr
         );
-        Ok(())
+        Ok(Submitted::default())
     }
 
     /// Where the Sent copy belongs, or `None` when the setting is off.
@@ -564,6 +609,7 @@ mod tests {
             password: "",
             imap_password: None,
             request_mdn: false,
+            request_dsn: false,
         };
         // A bad address fails here — before any network and before a row.
         let bad_cc = vec!["bob@".to_string()];

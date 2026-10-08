@@ -18,7 +18,7 @@ use crate::db::shared_db;
 pub fn settings_json() -> anyhow::Result<String> {
     let db = shared_db()?;
     let flag = |k: &str| s::get_bool(db, k).unwrap_or(false);
-    Ok(serde_json::json!({
+    let mut out = serde_json::json!({
         s::SENT_COPY_ENABLED: flag(s::SENT_COPY_ENABLED),
         s::LOAD_REMOTE_IMAGES: flag(s::LOAD_REMOTE_IMAGES),
         s::COMPOSE_SEND_FORMAT: s::get_send_format(db),
@@ -40,12 +40,16 @@ pub fn settings_json() -> anyhow::Result<String> {
         s::SIGNATURE_ENABLED: flag(s::SIGNATURE_ENABLED),
         s::SIGNATURE_TEXT: s::get_signature_text(db),
         s::REPLY_BELOW_QUOTE: flag(s::REPLY_BELOW_QUOTE),
-        s::REQUEST_MDN: flag(s::REQUEST_MDN),
         s::UI_SCALE: s::get_ui_scale(db),
         s::MESSAGE_SORT_FIELD: s::get_sort_field(db),
         s::MESSAGE_SORT_DESC: s::get_sort_descending(db),
-    })
-    .to_string())
+    });
+    // Added after the literal: one more key exceeds `json!`'s macro
+    // recursion limit.
+    for key in [s::REQUEST_MDN, s::REQUEST_DSN] {
+        out[key] = flag(key).into();
+    }
+    Ok(out.to_string())
 }
 
 /// Every preference's default and offered values as JSON

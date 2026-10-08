@@ -2141,6 +2141,21 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_blankDraft<'caller>(
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `MailNative.receiptDefaults()`: `{read, delivery}`, where a composer's
+/// receipt toggles start (`compose::Receipts::defaults`).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_receiptDefaults<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let db = crate::db::shared_db()?;
+            Ok(env.new_string(mailcore::compose::Receipts::defaults_json(db))?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `MailNative.imageDataUrl(path)`: an image file as a `data:` URL for
 /// inline display. Throws for non-images and oversize files.
 #[unsafe(no_mangle)]

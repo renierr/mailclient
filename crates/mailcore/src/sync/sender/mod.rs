@@ -10,11 +10,13 @@
 //!
 //! Layout: `policy` (send policy + format), `message` (request + MIME
 //! assembly, pure), `addresses` (recipient parsing), `attachments`
-//! (outgoing files), `client` ([`SmtpSender`] submission + queue).
+//! (outgoing files), `client` ([`SmtpSender`] submission + queue), `dsn`
+//! (delivery confirmations over lettre's low-level connection).
 
 mod addresses;
 mod attachments;
 mod client;
+mod dsn;
 mod inline;
 mod message;
 mod policy;
@@ -28,7 +30,7 @@ pub use addresses::{
 pub use attachments::{
     guess_mime, load_outgoing_attachments, MAX_SEND_ATTACHMENT_BYTES, MAX_SEND_ATTACHMENT_COUNT,
 };
-pub use client::{endpoint_for, SmtpEndpoint, SmtpSender};
+pub use client::{endpoint_for, SmtpEndpoint, SmtpSender, Submitted};
 pub use inline::{extract_data_images, image_data_url, is_inline_image_file, InlinePart};
 pub(crate) use message::mime_body;
 pub use message::{format_draft, resolve_bodies, SendRequest};

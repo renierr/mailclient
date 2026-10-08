@@ -1437,6 +1437,9 @@ ApplicationWindow {
             onReplyAllRequested: composer.openForAnswer(root.currentUid, "reply_all")
             onForwardRequested: root.forwardMessage(root.currentUid)
             onResendRequested: root.resendMessage(root.currentUid)
+            // Same landing as a search hit: switch folder without a sync job,
+            // then open.
+            onOpenOriginalRequested: (path, uid) => root.jumpToSearchResult(path, uid)
             onFindSimilarRequested: root.findSimilar("", root.currentUid)
             onStarRequested: root.toggleStar(root.currentUid)
             onArchiveRequested: root.archiveMessage(root.currentUid)

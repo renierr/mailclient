@@ -86,6 +86,7 @@ fn outcome_is_the_worst_action() {
         address: "a@example.com".into(),
         action: action.into(),
         action_label: String::new(),
+        tone: String::new(),
         status: None,
         reason: None,
         diagnostic: None,
@@ -99,4 +100,59 @@ fn original_headers_without_a_trailing_blank_line() {
     let h = OriginalHeaders::parse(b"Message-ID: <orig@example.com>\r\nSubject: Hello").unwrap();
     assert_eq!(h.message_id.as_deref(), Some("orig@example.com"));
     assert_eq!(h.subject.as_deref(), Some("Hello"));
+}
+
+#[test]
+fn parses_read_receipts() {
+    let mdn = parse_mdn(
+        "Reporting-UA: pc.example.org; SomeMailer 2.0
+Original-Recipient: rfc822;jane@example.org
+Final-Recipient: rfc822; jane@example.org
+Original-Message-ID: <asked@example.com>
+Disposition: automatic-action/MDN-sent-automatically;
+  deleted
+",
+    )
+    .expect("mdn");
+    assert_eq!(mdn.recipient, "jane@example.org");
+    assert_eq!(mdn.disposition, "deleted");
+    assert_eq!(
+        mdn.original_message_id.as_deref(),
+        Some("<asked@example.com>")
+    );
+    assert_eq!(mdn.reporting_ua.as_deref(), Some("pc.example.org"));
+    assert_eq!(disposition_text(&mdn.disposition).0, "Deleted unread");
+
+    let modified = parse_mdn(
+        "Final-Recipient: rfc822;a@example.org
+Disposition: manual-action/MDN-sent-manually; displayed/error
+",
+    )
+    .unwrap();
+    assert_eq!(modified.disposition, "displayed");
+    assert_eq!(
+        parse_mdn(
+            "Final-Recipient: rfc822;a@example.org
+"
+        ),
+        None
+    );
+    assert_eq!(
+        parse_mdn(
+            "Disposition: x; displayed
+"
+        ),
+        None
+    );
+}
+
+#[test]
+fn tones_follow_the_action() {
+    assert_eq!(action_tone("failed"), "negative");
+    assert_eq!(action_tone("delayed"), "warning");
+    assert_eq!(action_tone("delivered"), "positive");
+    assert!(is_disposition_part(Some(
+        "Message/Disposition-Notification"
+    )));
+    assert!(!is_disposition_part(Some("message/delivery-status")));
 }

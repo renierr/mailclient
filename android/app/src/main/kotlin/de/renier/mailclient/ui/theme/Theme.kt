@@ -58,17 +58,16 @@ private val DarkSuccess = Color(0xFF6CC88F)
 private val LightWarning = Color(0xFF9A5B00)
 private val DarkWarning = Color(0xFFF0B35A)
 
-// Colour for a core-given tone or outcome on the reader cards:
-// `positive`/`delivered` green, `negative`/`failed` error, `delayed` amber,
-// anything else the primary colour.
+// Colour for a core-given tone on the reader cards: `positive` green,
+// `negative` error, `warning` amber, anything else the primary colour.
 @Composable
 fun toneColor(tone: String): Color {
     val scheme = MaterialTheme.colorScheme
     val dark = scheme.background.luminance() < 0.5f
     return when (tone) {
-        "positive", "delivered" -> if (dark) DarkSuccess else LightSuccess
-        "negative", "failed" -> scheme.error
-        "delayed" -> if (dark) DarkWarning else LightWarning
+        "positive" -> if (dark) DarkSuccess else LightSuccess
+        "negative" -> scheme.error
+        "warning" -> if (dark) DarkWarning else LightWarning
         else -> scheme.primary
     }
 }
