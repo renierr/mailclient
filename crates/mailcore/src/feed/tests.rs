@@ -751,9 +751,11 @@ fn answer_draft_json_reads_the_stored_message_and_settings() {
         serde_json::from_str(&crate::compose::answer_draft_json(&db, f, 5, "reply_all").unwrap())
             .unwrap();
     assert_eq!(d["to"], "alice@example.com");
-    assert_eq!(d["cc"], "bob@example.com");
-    // Bob is on the account's domain but no envelope header says we are him.
-    assert_eq!(d["from"], "");
+    // The fallback From is excluded from Cc like any own address.
+    assert_eq!(d["cc"], "");
+    // No envelope headers survive here, so the lone same-domain To
+    // (catch-all fallback) is taken as the alias we were reached at.
+    assert_eq!(d["from"], "bob@example.com");
     assert_eq!(d["subject"], "Re: Hello");
     assert_eq!(d["signature_text"], "-- \nBob");
     let quote = d["quote_html"].as_str().unwrap();

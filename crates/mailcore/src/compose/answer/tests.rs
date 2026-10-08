@@ -246,10 +246,41 @@ fn a_colleague_in_to_is_not_taken_when_the_envelope_says_otherwise() {
 }
 
 #[test]
-fn without_envelope_headers_the_account_sends() {
-    // To alone cannot tell an alias from a colleague on the same domain.
+fn without_envelope_headers_a_single_same_domain_to_is_the_alias() {
+    // Catch-all providers that keep no envelope headers: the lone
+    // same-domain recipient is the address the sender used.
     let src = AnswerSource {
         to: vec!["sales@example.org".into()],
+        ..html_mail()
+    };
+    assert_eq!(
+        answer_draft(&src, AnswerMode::Reply, &opts()).from,
+        "sales@example.org"
+    );
+}
+
+#[test]
+fn without_envelope_headers_several_same_domain_recipients_keep_the_account() {
+    let src = AnswerSource {
+        to: vec!["sales@example.org".into(), "info@example.org".into()],
+        ..html_mail()
+    };
+    assert_eq!(answer_draft(&src, AnswerMode::Reply, &opts()).from, "");
+    let cc = AnswerSource {
+        to: vec!["sales@example.org".into()],
+        cc: vec!["colleague@example.org".into()],
+        ..html_mail()
+    };
+    assert_eq!(answer_draft(&cc, AnswerMode::Reply, &opts()).from, "");
+}
+
+#[test]
+fn an_envelope_naming_only_the_account_beats_a_same_domain_to() {
+    // BCC on a colleague's mail: delivery is authoritative, To must not win.
+    let src = AnswerSource {
+        to: vec!["colleague@example.org".into()],
+        cc: Vec::new(),
+        envelope_to: vec!["me@example.org".into()],
         ..html_mail()
     };
     assert_eq!(answer_draft(&src, AnswerMode::Reply, &opts()).from, "");

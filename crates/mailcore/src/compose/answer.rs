@@ -376,21 +376,46 @@ fn reply_all_cc(src: &AnswerSource, target: &str, ours: &[&str]) -> String {
 }
 
 /// The address on the account's domain that `src` was delivered to, for
-/// the reply to come from; `""` keeps the account address. Only the
-/// envelope counts (`X-Original-To` names the alias that the mailbox's
+/// the reply to come from; `""` keeps the account address. The envelope
+/// counts first (`X-Original-To` names the alias that the mailbox's
 /// `Delivered-To` hides): To and Cc also name colleagues and lists on a
-/// shared domain, and answering as one of them must never happen by default.
+/// shared domain. When the provider keeps no envelope headers at all (some
+/// stacks rewrite to an internal mailbox instead), a single same-domain
+/// address across To/Cc is taken as the alias — with several candidates, or
+/// when the envelope names only the account itself, nothing is presumed.
+/// A catch-all account relies on this fallback; a BCC on a colleague's mail
+/// whose envelope survives stays protected by it.
 fn reply_from(src: &AnswerSource, own: &str) -> String {
     let domain = sender_parts(own).domain.to_lowercase();
     let own = own.to_lowercase();
     if domain.is_empty() {
         return String::new();
     }
-    src.envelope_to
+    let is_alias = |a: &str| a.len() > domain.len() && a.ends_with(&domain) && *a != own;
+    if let Some(hit) = src
+        .envelope_to
         .iter()
         .map(|a| bare(a).to_lowercase())
-        .find(|a| a.len() > domain.len() && a.ends_with(&domain) && *a != own)
-        .unwrap_or_default()
+        .find(|a| is_alias(a))
+    {
+        return hit;
+    }
+    if !src.envelope_to.is_empty() {
+        return String::new();
+    }
+    let mut found = String::new();
+    for addr in src.to.iter().chain(&src.cc) {
+        let a = bare(addr).to_lowercase();
+        if !is_alias(&a) {
+            continue;
+        }
+        if found.is_empty() {
+            found = a;
+        } else if found != a {
+            return String::new();
+        }
+    }
+    found
 }
 
 /// When `src` is mail we sent ourselves (no Reply-To elsewhere), the

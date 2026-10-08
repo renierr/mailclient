@@ -111,8 +111,9 @@ Milestone 7 detail — what works and what does not:
   by `mailcore::compose::answer`, the quoted original carried beside the text
   box as HTML, collapsible and removable, drafts edit/save/delete, contact autocomplete, discard confirm,
   editable From local part with the account domain locked (a reply
-  presets the alias the mail was delivered to, per `X-Original-To` /
-  `Delivered-To`), sender name
+   presets the alias the mail was delivered to (per `X-Original-To` /
+   `Delivered-To`, else the lone same-domain recipient for catch-all
+   accounts), sender name
   prefilled from the account, real file picker for outgoing attachments,
   re-entry and double-send protection while SMTP submission or draft saving
   is pending), settings screen (all keys incl. sort, signature, intervals,
