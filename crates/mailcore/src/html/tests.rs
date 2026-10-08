@@ -383,6 +383,137 @@ fn private_hosts_stay_blocked_with_query_or_fragment() {
 }
 
 #[test]
+fn ipv6_hosts_are_not_mistaken_for_public_ones() {
+    // `host.split(':').next()` used to cut every bracketed literal down to
+    // "[", which passed every literal check, so all of these looked public.
+    for url in [
+        "http://[::1]/x.png",
+        "http://[::1]:8080/x.png",
+        "http://[::]/x.png",
+        "http://[0:0:0:0:0:0:0:1]:80/x.png",
+        "http://[fc00::1]/x.png",
+        "http://[fd12:3456::1]/x.png",
+        "http://[fe80::1]/x.png",
+        "http://[fe80::1%25eth0]/x.png",
+        "http://[ff02::1]/x.png",
+        "http://[::ffff:127.0.0.1]/x.png",
+        "http://[::ffff:169.254.169.254]/x.png",
+        "http://[::10.0.0.1]/x.png",
+        "http://::1/x.png",
+        "http://user@[::1]/x.png",
+    ] {
+        assert!(!super::urls::is_public_remote(url), "{url}");
+    }
+}
+
+#[test]
+fn link_local_and_cgnat_and_zero_addresses_stay_blocked() {
+    for url in [
+        // 169.254.169.254 is the cloud metadata endpoint.
+        "http://169.254.169.254/latest/meta-data/",
+        "http://169.254.0.1/x.png",
+        "http://100.64.0.1/x.png",
+        "http://100.127.255.255/x.png",
+        "http://0.0.0.0/x.png",
+        "http://0.1.2.3/x.png",
+        "http://172.16.0.1/x.png",
+        "http://172.20.5.5/x.png",
+        "http://172.31.255.255/x.png",
+        "http://192.0.0.8/x.png",
+        "http://198.18.0.1/x.png",
+        "http://240.0.0.1/x.png",
+        "http://255.255.255.255/x.png",
+    ] {
+        assert!(!super::urls::is_public_remote(url), "{url}");
+    }
+    // Just outside the blocked ranges.
+    assert!(super::urls::is_public_remote("http://100.63.255.255/x.png"));
+    assert!(super::urls::is_public_remote("http://100.128.0.0/x.png"));
+    assert!(super::urls::is_public_remote("http://172.15.0.1/x.png"));
+    assert!(super::urls::is_public_remote("http://172.32.0.1/x.png"));
+    assert!(super::urls::is_public_remote("http://169.253.0.1/x.png"));
+    assert!(super::urls::is_public_remote("http://169.255.0.1/x.png"));
+    assert!(super::urls::is_public_remote(
+        "http://239.255.255.255/x.png"
+    ));
+}
+
+#[test]
+fn numeric_ip_shorthand_stays_blocked() {
+    // inet_aton forms a browser resolves even though they are not dotted
+    // quads, so blocking the literal range means blocking these too.
+    for url in [
+        "http://127.1/x.png",
+        "http://127.0.1/x.png",
+        "http://10.1/x.png",
+        "http://192.168.1/x.png",
+        "http://2130706433/x.png",
+        "http://2852039166/latest/meta-data/",
+        "http://0/x.png",
+        "http://1/x.png",
+        "http://4294967295/x.png",
+    ] {
+        assert!(!super::urls::is_public_remote(url), "{url}");
+    }
+    assert!(super::urls::is_public_remote("http://1096476673/x.png"));
+}
+
+#[test]
+fn hostnames_and_public_hosts_stay_allowed() {
+    for url in [
+        "https://example.com/x.png",
+        "http://example.com:8443/x.png",
+        "https://user@example.com/x.png",
+        "https://sub.domain.example.co.uk/x.png",
+        "https://example.com./x.png",
+        "https://example.local.example.com/x.png",
+        "https://2001-db8.example.com/x.png",
+        "http://172.example.com/x.png",
+        // A path that merely mentions a blocked name is not a host.
+        "http://notlocal.example.com/localhost/x.png",
+        "https://example.com:443/a?b=c#d",
+    ] {
+        assert!(super::urls::is_public_remote(url), "{url}");
+    }
+}
+
+#[test]
+fn private_host_names_stay_blocked() {
+    for url in [
+        "http://localhost/x.png",
+        "http://localhost.evil.example.com/x.png",
+        "http://foo.local/x.png",
+        "http://foo.local.",
+        "http://LOCALHOST/x.png",
+        "http://LOCALHOST.local./x.png",
+        // The root dot must not hide the address or a private name.
+        "http://127.0.0.1./x.png",
+        "http://192.168.1.1./x.png",
+    ] {
+        assert!(!super::urls::is_public_remote(url), "{url}");
+    }
+}
+
+#[test]
+fn blocked_hosts_never_reach_the_reader_html() {
+    for host in [
+        "169.254.169.254",
+        "[::1]",
+        "::1",
+        "127.1",
+        "2130706433",
+        "[fc00::1]",
+        "100.64.0.1",
+        "localhost",
+    ] {
+        let html = format!("<img src=\"http://{host}/x.png\">");
+        let s = super::sanitize(&html, true);
+        assert!(!s.html.contains(host), "{host} survived sanitizing");
+        assert!(s.had_remote, "{host} should still count as remote");
+    }
+}
+
+#[test]
 fn links_split_for_the_examine_dialog() {
     let i = link_info("https://user@example.com:443/a/b?x=1");
     assert_eq!(
