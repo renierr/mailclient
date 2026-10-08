@@ -39,7 +39,7 @@ pub(super) fn send_with_dsn(
     };
     let mut conn = SmtpConnection::connect(
         (connect.host.as_str(), connect.port),
-        None,
+        Some(super::client::SUBMIT_TIMEOUT),
         &connect.hello,
         wrapper,
         None,

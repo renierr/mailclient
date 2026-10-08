@@ -65,6 +65,16 @@ pub struct SmtpSender {
     from: String,
 }
 
+/// Socket timeout for a submit, and for the delivery-report connection.
+///
+/// lettre's `None` is not "the default": it disables the connect timeout *and*
+/// the read/write timeouts, so a half-open or silently black-holing SMTP host
+/// blocked the one `mailclient-net` thread forever — and with it every queued
+/// IMAP job, sync and download. The setup form keeps its own shorter
+/// `test_connection` timeout so a typo in the host fails the test quickly
+/// rather than after this long.
+pub(super) const SUBMIT_TIMEOUT: Duration = Duration::from_secs(30);
+
 impl SmtpSender {
     /// Build from account settings (password supplied per-send).
     #[must_use]
@@ -77,13 +87,13 @@ impl SmtpSender {
     }
 
     fn transport(&self, password: &str) -> Result<SmtpTransport> {
-        self.transport_with_timeout(password, None)
+        self.transport_with_timeout(password, Some(SUBMIT_TIMEOUT))
     }
 
     /// Login check without sending: connect, EHLO, TLS, AUTH, NOOP. Used by
     /// the setup-form connection test with its own short timeout, so a dead
-    /// server fails the test instead of stalling it (sends keep the
-    /// transport default).
+    /// server fails the test instead of stalling it (sends keep the transport
+    /// default).
     pub fn test_connection(&self, password: &str) -> Result<()> {
         let transport = self.transport_with_timeout(password, Some(Duration::from_secs(15)))?;
         match transport.test_connection() {
