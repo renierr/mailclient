@@ -73,7 +73,12 @@ fn initials(name: &str, address: &str) -> String {
         let label = domain_label(domain);
         // A punycode label (`xn--...`) would always give "X"; the ASCII
         // form says nothing about the real name, so show no domain letter.
-        let punycode = label.len() >= 4 && label[..4].eq_ignore_ascii_case("xn--");
+        // `get(..4)` rather than a length check plus `[..4]`: a label's 4th
+        // byte can sit inside a multi-byte character, and slicing there
+        // panics (every sender address is attacker-chosen).
+        let punycode = label
+            .get(..4)
+            .is_some_and(|p| p.eq_ignore_ascii_case("xn--"));
         if let Some(c) = first_alnum(label).filter(|_| !punycode) {
             out.push(c);
         }
@@ -253,5 +258,30 @@ mod tests {
     fn a_punycode_domain_adds_no_letter() {
         assert_eq!(initials("Anna", "anna@xn--bcher-kva.example"), "A");
         assert_eq!(initials("Anna", "anna@mail.xn--bcher-kva.de"), "A");
+    }
+
+    #[test]
+    fn a_non_ascii_domain_label_does_not_panic() {
+        // `domain_label` pops the TLD, so the label that reaches the
+        // punycode check is the one below — whose 4th byte is inside or
+        // past a multi-byte character. The old `label.len() >= 4 &&
+        // label[..4]` panicked here on any sender address carrying a
+        // multi-byte character early in the domain.
+        assert_eq!(sender_badge("Anna", "a@abcö.com").initials, "AA");
+        assert_eq!(sender_badge("Anna", "a@x🎉.de").initials, "AX");
+        assert_eq!(sender_badge("Anna", "a@abc🎉").initials, "AA");
+        assert_eq!(sender_badge("Anna", "a@über.example.com").initials, "AE");
+        assert_eq!(sender_badge("Anna", "a@例え.jp").initials, "A例");
+    }
+
+    #[test]
+    fn punycode_still_wins_over_a_multibyte_label() {
+        // `get(..4)` must not change the answer for any label, ASCII or
+        // not, and a label that is genuinely `xn--` stays letterless.
+        assert_eq!(initials("Anna", "anna@xn--bcher-kva.example"), "A");
+        assert_eq!(initials("Anna", "anna@mail.xn--bcher-kva.de"), "A");
+        assert_eq!(initials("Anna", "a@abö.com"), "AA");
+        assert_eq!(initials("Anna", "a@abc.com"), "AA");
+        assert_eq!(initials("Anna", "a@example.com"), "AE");
     }
 }
