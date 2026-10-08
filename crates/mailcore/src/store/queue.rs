@@ -1,6 +1,6 @@
 //! Outbox (`send_queue`) for reliable sending.
 
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 
 use crate::db::Db;
 use crate::error::{Result, StoreError};
@@ -124,7 +124,8 @@ pub fn get(db: &Db, id: i64) -> Result<QueuedSend> {
             [id],
             row_to_queued,
         )
-        .map_err(|_| StoreError::NotFound(format!("queue entry {id}")))
+        .optional()?
+        .ok_or_else(|| StoreError::NotFound(format!("queue entry {id}")))
 }
 
 /// Atomically take ownership of an unclaimed row (`queued`/`failed` to

@@ -114,14 +114,6 @@ then build the composer. Native assembles the same sequence in the shell
 download it waits out, then the seed). Drift: none in behaviour. Fix: a
 `mailffi` job per case, like Qt's, so the shell only opens the result.
 
-### 2. Sync-on-resume gap
-
-"Resume syncs unless a sync was asked for within the last minute" lives in
-Kotlin (`MailState.RESUME_SYNC_GAP_MS`) and in Flutter's retired
-`shouldSyncOnResume`. Qt has no resume sync, so among the active frontends
-it is not duplicated today. Fix only if Qt gains a resume/focus sync: then
-a `mailcore` predicate taking the seconds since the last request.
-
 ## Flutter-only (retired, not pursued)
 
 Flutter is retired, so Dart copies of core logic stay as they are. Listed

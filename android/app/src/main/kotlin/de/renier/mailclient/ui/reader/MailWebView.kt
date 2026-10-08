@@ -1,11 +1,11 @@
 package de.renier.mailclient.ui.reader
 
-import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
@@ -62,7 +62,6 @@ data class PagePaint(
 // Belt and braces around the core's sanitizer: JavaScript, file and content
 // access off, the core's CSP (no network except allowed remote images), and
 // every navigation stopped and handed to [onTapUrl].
-@SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun MailWebView(
     html: String,
@@ -145,6 +144,9 @@ fun MailWebView(
                         allowContentAccess = false
                         mediaPlaybackRequiresUserGesture = true
                         setGeolocationEnabled(false)
+                        // Mail is sanitized with no network except explicit remote
+                        // images; never upgrade or mix cleartext into the page.
+                        mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                         // Honour the core's `width=device-width` viewport;
                         // without these newsletters render as a tiny
                         // ~980px overview.

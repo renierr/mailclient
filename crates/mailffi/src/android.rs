@@ -579,7 +579,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_deletePrompt<'caller
     unowned
         .with_env(|env| -> Result<JString<'caller>> {
             let permanent: Vec<Option<bool>> =
-                serde_json::from_str(&string(env, &permanent_json)?).unwrap_or_default();
+                serde_json::from_str(&string(env, &permanent_json)?)?;
             let p = mailcore::undo::delete_prompt(confirm_pref, bulk, &permanent);
             Ok(env.new_string(serde_json::to_string(&p)?)?)
         })

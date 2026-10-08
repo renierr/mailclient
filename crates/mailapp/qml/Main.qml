@@ -17,8 +17,8 @@ ApplicationWindow {
     // Never open larger than the screen actually offers: at 150% scaling a
     // 1320x860 logical window is ~1980x1290 physical, which does not fit a
     // 1080p laptop and pushes the reader pane off the edge.
-    width: Math.min(1320, Screen.desktopAvailableWidth - 80)
-    height: Math.min(860, Screen.desktopAvailableHeight - 80)
+    width: Math.max(380, Math.min(1320, Screen.desktopAvailableWidth - 80))
+    height: Math.max(460, Math.min(860, Screen.desktopAvailableHeight - 80))
     minimumWidth: 380
     minimumHeight: 460
     title: qsTr("Mailclient")

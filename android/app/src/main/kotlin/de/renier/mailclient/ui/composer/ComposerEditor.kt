@@ -6,6 +6,7 @@ import android.os.Looper
 import android.view.View
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -202,8 +203,13 @@ fun ComposerEditor(
                     allowContentAccess = false
                     blockNetworkLoads = true
                     setGeolocationEnabled(false)
+                    mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                     useWideViewPort = true
                 }
+                // `MCHost` is the only bridge into the page. Safe because the
+                // document is `mailcore::compose::editor::document` over
+                // `sanitize_for_send` (script dropped) with a nonce CSP, and
+                // file/network loads are blocked above.
                 addJavascriptInterface(
                     EditorHost(
                         onChanged = {
