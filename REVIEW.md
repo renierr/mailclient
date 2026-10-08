@@ -8,7 +8,7 @@ Work top to bottom; each item is self-contained so they can be picked out of ord
 - **Status tags:** `[verify]` = I reproduced it by running code; `[corrected]` = an earlier draft of this
   review got it wrong and this is the fixed version; `[fixed]` = fixed in the repo, with the commit noted in
   the item; `[removed]` = withdrawn, with the reason kept so the ids stay stable for cross-referencing.
-  Untagged = read from source, not executed. **Applied so far:** E1, E2 (`d3ef68b`), C1 (`1dac9e7`), C7 (`11137f4`).
+  Untagged = read from source, not executed. **Applied so far:** E1, E2 (`d3ef68b`), C1 (`1dac9e7`), C7 (`11137f4`), D1 (`74d3a4d`).
 - **AGENTS.md §7** governs closing any item: Rust → `cargo fmt --check` + `cargo clippy -p mailcore -- -D warnings`
   + `cargo test -p mailcore`; QML → `scripts/qml-check.sh`; Android → `./build.sh --android`.
 - **§0** records the second-pass audit of this document. Read it first if you are trusting these findings.
@@ -44,10 +44,10 @@ would have caused damage. Reference errors corrected. Nothing in the repo was ed
 
 | # | Item | Why now | |
 |---|---|---|---|
-| 1 | ~~**C1** `badge.rs:76` byte-index panic~~ | ~~one malicious sender crashes folder listing on every frontend~~ | **done** — `__C1__` |
+| 1 | ~~**C1** `badge.rs:76` byte-index panic~~ | ~~one malicious sender crashes folder listing on every frontend~~ | **done** — `1dac9e7` |
 | 2 | ~~**E2** backup excludes~~ | ~~whole local mailbox (bodies, attachments) uploaded to cloud backup~~ | **done** — `d3ef68b` |
 | 3 | ~~**C7** `is_public_remote` IPv6~~ | ~~every bracketed IPv6 host, incl. `[::1]`, passes as public; metadata IP reachable~~ | **done** — `11137f4` |
-| 4 | **D1** `expect` + latched `busy` | a failed net-thread bootstrap aborts or bricks every later job | |
+| 4 | ~~**D1** `expect` + latched `busy`~~ | ~~a failed net-thread bootstrap aborts or bricks every later job~~ | **done** — `74d3a4d` |
 | 5 | **D6** GUI-thread image read | whole file read before the size check, on the GUI thread | |
 | 6 | **B1** SMTP has no timeout | one dead SMTP host hangs the net thread forever | |
 | 7 | **C2** quadratic entity decode | ~9 s CPU per crafted mail, on both `sanitize` and `html_to_text` | |
@@ -467,7 +467,7 @@ search hit, or opening a message. Behind the cxx-qt/JNI boundary the unwind abor
 the job.
 **Fix:** `let punycode = label.get(..4).is_some_and(|p| p.eq_ignore_ascii_case("xn--"));`
 
-**Fixed in `__C1__`.** `get(..4)` returns `None` when byte 4 is not a char boundary, so the encoding check
+**Fixed in `1dac9e7`.** `get(..4)` returns `None` when byte 4 is not a char boundary, so the encoding check
 simply fails instead of panicking; the label then contributes its own first letter, which is the correct
 answer for a real Unicode domain. Comment added at the site explaining why the length check is not enough.
 Two tests added beside `a_punycode_domain_adds_no_letter`: `a_non_ascii_domain_label_does_not_panic`
@@ -688,8 +688,8 @@ memory issue.
 
 ## D. Qt frontend — `crates/mailapp/`
 
-### D1 · high · net-thread bootstrap `expect`s, and a latched `busy` `[corrected]`
-`crates/mailapp/src/bridge/worker.rs:143-172`
+### D1 · high · net-thread bootstrap `expect`s, and a latched `busy` — **FIXED** `[fixed]`
+`crates/mailapp/src/bridge/worker.rs` (net-thread bootstrap)
 
 ```rust
 let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime for mailclient-net");
@@ -706,6 +706,27 @@ clears it inside the `qt.queue` completion callback (`worker.rs:227`). If that c
 stays latched and **every later job is refused** with the busy message until restart.
 **Fix:** initialise the runtime eagerly at startup and return an error to QML instead of `expect`; clear
 `busy` in the shutdown/failure path at `worker.rs:235`.
+
+**Fixed in `74d3a4d`**, differently from the fix the first draft proposed:
+- The runtime build moved **inside** the spawned thread rather than staying on the caller's thread.
+  "Initialise eagerly at startup" was wrong for the abort itself: `main.rs` cannot build a runtime
+  before `main`, and pre-building a runtime just to hand it to a thread is not possible in tokio, so the
+  only way to keep the build off the GUI thread was to let the thread do it. `net_tx()` is now `net()`,
+  returning `Result<&Sender, &'static str>` out of a `Net` enum (`Ready` / `Failed`).
+- **`busy` is latched only after a job is actually queued.** The new `entry_gate(busy, net)`
+  (`worker.rs:230`) holds the whole decision and hands back either the queue or the message to show.
+  This is the real fix for the wedge: `Failed` now refuses *before* `set_busy(true)`, so a job that can
+  never run can no longer leave the latch stuck.
+- A dead net thread is reported as `network is unavailable: cannot start the net thread: …`, never as
+  `BUSY_MESSAGE`. The two need different reactions ("restart" vs "try in a moment") and conflating them
+  was half the bug. Busy still outranks a missing thread, because from the user's chair that is the more
+  likely read.
+- Sticky on failure, documented in `net`: both causes (OS refusing a thread, runtime refusing to build)
+  are permanent for the process, and retrying on every click would spawn a thread each time in the
+  pathological case.
+- The `queued` `Err` branch at the end of `spawn_job` is unchanged and still only logs: with a live
+  thread that owns its receiver the send cannot fail, so the only way to reach it is the QObject being
+  gone at shutdown, which is what its comment already says.
 
 ### D2 · medium · unchecked narrowing on a destructive bulk path — confirmed
 `crates/mailapp/src/bridge/messages/bulk.rs` (uid guard is in `crates/mailapp/src/bridge/messages.rs:40`)
