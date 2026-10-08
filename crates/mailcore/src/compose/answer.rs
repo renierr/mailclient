@@ -12,6 +12,7 @@
 
 use serde::Serialize;
 
+use super::from::sender_parts;
 use super::reply::{bare, reply_address, ReplyAddress};
 use crate::db::Db;
 use crate::error::{Result, StoreError};
@@ -49,6 +50,10 @@ pub struct AnswerSource {
     pub from_name: String,
     pub to: Vec<String>,
     pub cc: Vec<String>,
+    /// Envelope recipients the receiving server recorded (`X-Original-To`,
+    /// `Delivered-To`, `Envelope-To`): who the mail reached when To and Cc
+    /// do not say, e.g. a Bcc.
+    pub envelope_to: Vec<String>,
     pub reply_to: String,
     pub subject: String,
     /// Human date for the attribution line (`2026-09-12 13:50`).
@@ -72,6 +77,9 @@ pub struct AnswerOptions {
 /// The prepared draft. Recipients are comma-joined like the To field.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AnswerDraft {
+    /// The address to send as; `""` keeps the account's. A reply answers
+    /// from the address on the account's domain the mail was sent to.
+    pub from: String,
     pub to: String,
     pub cc: String,
     pub subject: String,
@@ -98,6 +106,7 @@ pub struct AnswerDraft {
 pub fn blank_draft(opts: &AnswerOptions) -> AnswerDraft {
     let (signature_html, signature_text) = signature(opts);
     AnswerDraft {
+        from: String::new(),
         to: String::new(),
         cc: String::new(),
         subject: String::new(),
@@ -129,6 +138,7 @@ pub fn answer_draft(src: &AnswerSource, mode: AnswerMode, opts: &AnswerOptions) 
         );
         let quote_html = quote(&header, src);
         return AnswerDraft {
+            from: String::new(),
             to: String::new(),
             cc: String::new(),
             subject: prefixed(&src.subject, "Fwd:", &["fwd:", "fw:", "wg:"]),
@@ -144,6 +154,7 @@ pub fn answer_draft(src: &AnswerSource, mode: AnswerMode, opts: &AnswerOptions) 
     }
 
     let own = opts.own_address.trim();
+    let mut from = String::new();
     let (reply, cc) = match own_mail_recipients(src, own) {
         // Our own mail (Sent): answer the people it went to, not ourselves.
         Some(to) => {
@@ -164,9 +175,10 @@ pub fn answer_draft(src: &AnswerSource, mode: AnswerMode, opts: &AnswerOptions) 
             )
         }
         None => {
+            from = reply_from(src, own);
             let reply = reply_address(&src.from, &src.reply_to);
             let cc = if mode == AnswerMode::ReplyAll {
-                reply_all_cc(src, &reply.target, own)
+                reply_all_cc(src, &reply.target, &[own, &from])
             } else {
                 String::new()
             };
@@ -198,6 +210,7 @@ pub fn answer_draft(src: &AnswerSource, mode: AnswerMode, opts: &AnswerOptions) 
         } else {
             String::new()
         },
+        from,
         to: reply.target,
         cc,
         subject: prefixed(&src.subject, "Re:", &["re:", "aw:"]),
@@ -232,6 +245,10 @@ pub fn answer_draft_json(db: &Db, folder_id: i64, uid: u32, mode: &str) -> Resul
         from_name: m.from_name.unwrap_or_default(),
         to: m.to_addrs,
         cc: m.cc_addrs,
+        envelope_to: ["X-Original-To", "Delivered-To", "Envelope-To"]
+            .iter()
+            .flat_map(|h| crate::feed::header_values(m.raw_headers.as_deref(), h))
+            .collect(),
         reply_to: m.reply_to.unwrap_or_default(),
         subject: m.subject.unwrap_or_default(),
         date: crate::feed::full_local_date(m.date.as_deref()),
@@ -262,6 +279,8 @@ pub fn resend_draft(db: &Db, folder_id: i64, uid: u32) -> Result<AnswerDraft> {
         bounce.failed.join(", ")
     };
     Ok(AnswerDraft {
+        // Sent again as it was sent the first time.
+        from: m.from_addr.clone().unwrap_or_default(),
         to,
         cc: String::new(),
         subject: m.subject.clone().unwrap_or_default(),
@@ -333,15 +352,34 @@ fn quote(header: &str, src: &AnswerSource) -> String {
 }
 
 /// The sender (when Reply-To sends the reply elsewhere) and everyone the
-/// original went to, except us and the reply target, once each.
-fn reply_all_cc(src: &AnswerSource, target: &str, own: &str) -> String {
-    let mut seen = vec![bare(target).to_lowercase(), own.trim().to_lowercase()];
+/// original went to, except our addresses and the reply target, once each.
+fn reply_all_cc(src: &AnswerSource, target: &str, ours: &[&str]) -> String {
+    let mut seen = vec![bare(target).to_lowercase()];
+    seen.extend(ours.iter().map(|a| a.trim().to_lowercase()));
     let all: Vec<String> = std::iter::once(&src.from)
         .chain(&src.to)
         .chain(&src.cc)
         .cloned()
         .collect();
     unique_addrs(&all, &mut seen).join(", ")
+}
+
+/// The address on the account's domain that `src` was delivered to, for
+/// the reply to come from; `""` keeps the account address. Only the
+/// envelope counts (`X-Original-To` names the alias that the mailbox's
+/// `Delivered-To` hides): To and Cc also name colleagues and lists on a
+/// shared domain, and answering as one of them must never happen by default.
+fn reply_from(src: &AnswerSource, own: &str) -> String {
+    let domain = sender_parts(own).domain.to_lowercase();
+    let own = own.to_lowercase();
+    if domain.is_empty() {
+        return String::new();
+    }
+    src.envelope_to
+        .iter()
+        .map(|a| bare(a).to_lowercase())
+        .find(|a| a.len() > domain.len() && a.ends_with(&domain) && *a != own)
+        .unwrap_or_default()
 }
 
 /// When `src` is mail we sent ourselves (no Reply-To elsewhere), the

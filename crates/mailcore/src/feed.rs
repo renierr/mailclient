@@ -789,6 +789,39 @@ fn rfc_header(raw: &Option<String>, wanted: &str) -> Option<String> {
     value
 }
 
+/// Every address in every occurrence of the address header `wanted`
+/// (`Delivered-To` repeats once per hop), unfolded and comma-split.
+pub(crate) fn header_values(raw: Option<&str>, wanted: &str) -> Vec<String> {
+    let Some(raw) = raw else {
+        return Vec::new();
+    };
+    let mut values: Vec<String> = Vec::new();
+    let mut open = false;
+    for line in raw.lines() {
+        if line.starts_with(' ') || line.starts_with('\t') {
+            if let (true, Some(v)) = (open, values.last_mut()) {
+                v.push(' ');
+                v.push_str(line.trim());
+            }
+            continue;
+        }
+        open = false;
+        if let Some((name, v)) = line.split_once(':') {
+            if name.trim().eq_ignore_ascii_case(wanted) {
+                values.push(v.trim().to_string());
+                open = true;
+            }
+        }
+    }
+    values
+        .iter()
+        .flat_map(|v| v.split(','))
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .map(String::from)
+        .collect()
+}
+
 /// Account-wide FTS search rows for the search UI: `[{uid, folder_id,
 /// folder, subject, from, date, snippet, unread, starred,
 /// has_attachments}]`, newest first (like the Date view of a folder list;

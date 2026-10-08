@@ -78,6 +78,8 @@ data class ComposerSeed(
             val files = fwd?.optJSONArray("files")
             return ComposerSeed(
                 mode = mode,
+                // A reply answers from the alias the mail was delivered to.
+                fromAddr = d.optString("from"),
                 to = d.optString("to"),
                 cc = d.optString("cc"),
                 subject = d.optString("subject"),

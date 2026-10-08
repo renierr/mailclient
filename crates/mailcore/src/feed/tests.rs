@@ -752,6 +752,8 @@ fn answer_draft_json_reads_the_stored_message_and_settings() {
             .unwrap();
     assert_eq!(d["to"], "alice@example.com");
     assert_eq!(d["cc"], "bob@example.com");
+    // Bob is on the account's domain but no envelope header says we are him.
+    assert_eq!(d["from"], "");
     assert_eq!(d["subject"], "Re: Hello");
     assert_eq!(d["signature_text"], "-- \nBob");
     let quote = d["quote_html"].as_str().unwrap();
@@ -1228,4 +1230,30 @@ fn attached_mails_become_cards() {
     assert_eq!(in_card(loaded), true);
     assert_eq!(in_card(pending), true);
     assert_eq!(in_card(junk), false);
+}
+
+#[test]
+fn header_values_collects_every_occurrence() {
+    let raw = "Delivered-To: a@example.org\r\nSubject: x\r\ndelivered-to: b@example.org,\r\n c@example.org\r\n";
+    assert_eq!(
+        header_values(Some(raw), "Delivered-To"),
+        ["a@example.org", "b@example.org", "c@example.org"]
+    );
+    assert!(header_values(None, "Delivered-To").is_empty());
+}
+
+#[test]
+fn answer_draft_json_answers_from_the_delivered_alias() {
+    let (db, acc, f) = setup();
+    let mut m = msg_store::sample_new(acc, f, 6);
+    m.to_addrs = vec!["Sales <sales@example.com>".to_string()];
+    m.raw_headers = Some(
+        "Delivered-To: a@example.com\r\nX-Original-To: sales@example.com\r\nTo: Sales <sales@example.com>\r\n"
+            .to_string(),
+    );
+    msg_store::upsert(&db, &m).unwrap();
+    let d: serde_json::Value =
+        serde_json::from_str(&crate::compose::answer_draft_json(&db, f, 6, "reply").unwrap())
+            .unwrap();
+    assert_eq!(d["from"], "sales@example.com");
 }

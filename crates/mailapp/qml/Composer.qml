@@ -325,6 +325,9 @@ Dialog {
         }
         root.sourceMode = false;
         root.resetHeaders();
+        // A reply answers from the alias the mail was delivered to.
+        if (draft.from)
+            fromLocal.text = root.senderParts(draft.from).local || "";
         toField.text = draft.to || "";
         ccField.text = draft.cc || "";
         root.showCc = ccField.text !== "";

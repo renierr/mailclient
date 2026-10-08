@@ -210,3 +210,58 @@ fn own_mail_with_a_foreign_reply_to_follows_the_reply_to() {
     let d = answer_draft(&src, AnswerMode::Reply, &opts());
     assert_eq!(d.to, "list@example.org");
 }
+
+#[test]
+fn reply_comes_from_the_alias_the_envelope_names() {
+    // The mailbox is Delivered-To; X-Original-To keeps the alias.
+    let src = AnswerSource {
+        to: vec!["Sales <sales@example.org>".into(), "bob@example.com".into()],
+        cc: Vec::new(),
+        envelope_to: vec!["sales@example.org".into(), "me@example.org".into()],
+        ..html_mail()
+    };
+    let d = answer_draft(&src, AnswerMode::ReplyAll, &opts());
+    assert_eq!(d.from, "sales@example.org");
+    // Answering as that address does not copy it in as well.
+    assert_eq!(d.cc, "bob@example.com");
+}
+
+#[test]
+fn a_colleague_in_to_is_not_taken_when_the_envelope_says_otherwise() {
+    // Bcc'd on a shared domain: To names someone else, delivery names us.
+    let src = AnswerSource {
+        to: vec!["colleague@example.org".into()],
+        cc: Vec::new(),
+        envelope_to: vec!["me@example.org".into()],
+        ..html_mail()
+    };
+    assert_eq!(answer_draft(&src, AnswerMode::Reply, &opts()).from, "");
+    let other = AnswerSource {
+        envelope_to: vec!["someone@sub.example.org".into()],
+        ..src
+    };
+    assert_eq!(answer_draft(&other, AnswerMode::Reply, &opts()).from, "");
+}
+
+#[test]
+fn without_envelope_headers_the_account_sends() {
+    // To alone cannot tell an alias from a colleague on the same domain.
+    let src = AnswerSource {
+        to: vec!["sales@example.org".into()],
+        ..html_mail()
+    };
+    assert_eq!(answer_draft(&src, AnswerMode::Reply, &opts()).from, "");
+}
+
+#[test]
+fn forward_and_own_mail_keep_the_account_sender() {
+    let src = AnswerSource {
+        envelope_to: vec!["sales@example.org".into()],
+        ..html_mail()
+    };
+    assert_eq!(answer_draft(&src, AnswerMode::Forward, &opts()).from, "");
+    assert_eq!(
+        answer_draft(&sent_mail(), AnswerMode::Reply, &opts()).from,
+        ""
+    );
+}
