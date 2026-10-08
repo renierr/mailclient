@@ -11,10 +11,12 @@ import androidx.compose.runtime.setValue
 import de.renier.mailclient.ui.MailApp
 
 // The one activity of the native Android frontend: every screen, the reader
-// included, is a pane of the Compose shell. Notification taps land here
-// (MailNotifier ACTION_OPEN) and the shell opens the message they name.
+// included, is a pane of the Compose shell. Notification taps and launcher
+// shortcuts land here (MailNotifier ACTION_OPEN) and the shell opens what
+// their payload names.
 class MainActivity : ComponentActivity() {
-    // A notification tap, consumed by the shell once its lists are up.
+    // A notification tap or launcher shortcut, consumed by the shell once
+    // its lists are up.
     private var openPayload by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {

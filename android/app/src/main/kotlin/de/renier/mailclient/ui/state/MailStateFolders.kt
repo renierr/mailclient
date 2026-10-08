@@ -1,6 +1,7 @@
 package de.renier.mailclient.ui.state
 
 import de.renier.mailclient.MailNative
+import de.renier.mailclient.MailShortcuts
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -26,6 +27,7 @@ fun MailState.refreshAll(syncAfter: Boolean = false, coldStart: Boolean = false)
         // loadFolders() below clears it when the tree has no such folder.
         folderId = landing
     }
+    MailShortcuts.update(appContext, accounts)
     loadFolders()
     if (coldStart) {
         val view = runCatching { JSONObject(MailNative.settingsJson()).optString("start_view") }.getOrNull()
@@ -85,6 +87,9 @@ internal fun MailState.loadFolders() = io {
     }
     val tree = parseFolders(MailNative.foldersJson(id))
     withContext(Dispatchers.Main) {
+        // Another account was selected meanwhile (a shortcut or notification
+        // tap racing the cold-start load): its own load paints.
+        if (activeAccountId != id) return@withContext
         folders = tree
         if (folderId >= 0 && tree.none { it.id == folderId }) {
             folderId = -1

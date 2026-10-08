@@ -33,6 +33,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -56,6 +57,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.MailNotifier
+import de.renier.mailclient.MailShortcuts
 import de.renier.mailclient.R
 import de.renier.mailclient.ui.accounts.AccountSetupScreen
 import de.renier.mailclient.ui.accounts.AccountsScreen
@@ -80,6 +82,7 @@ import de.renier.mailclient.ui.state.syncNow
 import de.renier.mailclient.ui.state.toggleSearchScope
 import de.renier.mailclient.ui.state.undo
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -282,9 +285,21 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
     }
 
     // Notification tap: land on the folder, open the message in the reader.
+    // Launcher shortcut (MailShortcuts): an account's inbox, or Compose from
+    // the active account. A cold start first waits for the account list.
     LaunchedEffect(openPayload) {
-        val parts = openPayload?.split(":") ?: return@LaunchedEffect
-        if (parts.size == 4 && parts[0] == "mail") {
+        val payload = openPayload ?: return@LaunchedEffect
+        withTimeoutOrNull(10_000) { snapshotFlow { state.accounts }.first { it.isNotEmpty() } }
+        val parts = payload.split(":")
+        if (payload == MailShortcuts.COMPOSE) {
+            if (stack.last() !is Route.Composer) startCompose { ComposerSeed.blank() }
+        } else if (payload.startsWith(MailShortcuts.INBOX_PREFIX)) {
+            val account = payload.removePrefix(MailShortcuts.INBOX_PREFIX).toLongOrNull()
+            if (account != null && state.accounts.any { it.id == account }) {
+                state.selectAccount(account)
+                stack = mailStack()
+            }
+        } else if (parts.size == 4 && parts[0] == "mail") {
             val account = parts[1].toLongOrNull()
             val folder = parts[2].toLongOrNull()
             val uid = parts[3].toIntOrNull()

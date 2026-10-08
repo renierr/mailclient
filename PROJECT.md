@@ -460,6 +460,7 @@ the open Qt ↔ native differences are listed at the end.
 | Clear notifications on resume; no alert while open | — | ✅ | ✅ | Open app: a background check refreshes the list instead of alerting |
 | Background status (permissions, battery, run history, heartbeat warning, test notification) | — | ✅ | ✅ | Run lines, standby-bucket name and heartbeat wording from `mailcore::sync::background::describe` on native; Flutter still words them in Dart (SHARED-CORE.md) |
 | Grouped notifications + Mark read buttons | — | ✅ | ✅ | Same native path (`MailAlarm`, `MailPushService`) |
+| Launcher shortcuts (long-press the app icon: Compose, each account's inbox) | — (`mailapp --open` serves widgets/notifications) | — | ✅ | `MailShortcuts.kt`, rebuilt on every account-list load; icons are the core's avatar initials/colour; a home-screen copy of a removed account's inbox is disabled. Taps reuse the notification-open path (`compose`, `inbox:<id>` payloads) |
 
 ### Open Qt ↔ native gaps
 
