@@ -1,7 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Auto Backup covers the app-private directory, including auth_vault.json
-     with the IMAP/SMTP secrets. Mail itself stays on the server and
-     re-syncs; secrets must never leave the device inside a cloud backup. -->
+<!-- Auto Backup sweeps the whole app-private `file` domain, which here holds
+     the mail cache, the secrets vault and the crash reports. None of it may
+     leave the device in a cloud backup:
+       - mailclient.sqlite* is the cached mailbox (subjects, senders, snippets,
+         and full bodies once read) plus the account list and the vault key;
+         it re-syncs from the server, and a copy restored without its key could
+         not decrypt anything anyway;
+       - auth_vault.json is the plaintext IMAP/SMTP secrets;
+       - crashes/ holds diagnostics that may carry host names.
+     Only the scheduling preferences (shared_pref domain, not listed here) stay
+     backed up, so background checks come back configured after a restore.
+
+     Use domain="file", not "database": the DB is opened at an explicit path
+     under filesDir (MailNative.kt init -> mailcore::use_data_dir), not via
+     getDatabasePath(), so SQLite never registers it in the `database` domain.
+     Keep the -wal and -shm siblings: the DB runs in WAL mode, and pages that
+     have not been checkpointed live there. -->
 <full-backup-content>
     <exclude domain="file" path="auth_vault.json" />
+    <exclude domain="file" path="mailclient.sqlite" />
+    <exclude domain="file" path="mailclient.sqlite-wal" />
+    <exclude domain="file" path="mailclient.sqlite-shm" />
+    <exclude domain="file" path="crashes" />
 </full-backup-content>

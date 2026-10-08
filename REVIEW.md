@@ -6,8 +6,9 @@ Work top to bottom; each item is self-contained so they can be picked out of ord
 - **Severity:** `critical` (crash / data loss / secret exposure), `high` (wrong results, hangs, timeouts),
   `medium` (latent or narrow), `low` (polish / hygiene).
 - **Status tags:** `[verify]` = I reproduced it by running code; `[corrected]` = an earlier draft of this
-  review got it wrong and this is the fixed version; `[removed]` = withdrawn, with the reason kept so the
-  ids stay stable for cross-referencing. Untagged = read from source, not executed.
+  review got it wrong and this is the fixed version; `[fixed]` = fixed in the repo, with the commit noted in
+  the item; `[removed]` = withdrawn, with the reason kept so the ids stay stable for cross-referencing.
+  Untagged = read from source, not executed. **Applied so far:** E1, E2 (`5f6ed06`).
 - **AGENTS.md §7** governs closing any item: Rust → `cargo fmt --check` + `cargo clippy -p mailcore -- -D warnings`
   + `cargo test -p mailcore`; QML → `scripts/qml-check.sh`; Android → `./build.sh --android`.
 - **§0** records the second-pass audit of this document. Read it first if you are trusting these findings.
@@ -41,18 +42,18 @@ would have caused damage. Reference errors corrected. Nothing in the repo was ed
 
 ### Corrected fix order
 
-| # | Item | Why now |
-|---|------|---------|
-| 1 | **C1** `badge.rs:76` byte-index panic | one malicious sender crashes folder listing on every frontend |
-| 2 | **E2** backup excludes | whole local mailbox (bodies, attachments) uploaded to cloud backup |
-| 3 | **C7** `is_public_remote` IPv6 | every bracketed IPv6 host, incl. `[::1]`, passes as public; metadata IP reachable |
-| 4 | **D1** `expect` + latched `busy` | a failed net-thread bootstrap aborts or bricks every later job |
-| 5 | **D6** GUI-thread image read | whole file read before the size check, on the GUI thread |
-| 6 | **B1** SMTP has no timeout | one dead SMTP host hangs the net thread forever |
-| 7 | **C2** quadratic entity decode | ~9 s CPU per crafted mail, on both `sanitize` and `html_to_text` |
-| 8 | **A2** deferred-tx upgrade race | intermittent "database is locked" on attachment save |
-| 9 | **A4** unbounded `uid in (?,…)` | bulk action on >32 766 UIDs fails; self-heals but the action is lost |
-| 10 | **C15** calendar `rposition` | quadratic `END` lookup turns a 25 MB `.ics` into a hang |
+| # | Item | Why now | |
+|---|---|---|---|
+| 1 | **C1** `badge.rs:76` byte-index panic | one malicious sender crashes folder listing on every frontend | next |
+| 2 | ~~**E2** backup excludes~~ | ~~whole local mailbox (bodies, attachments) uploaded to cloud backup~~ | **done** — `5f6ed06` |
+| 3 | **C7** `is_public_remote` IPv6 | every bracketed IPv6 host, incl. `[::1]`, passes as public; metadata IP reachable | |
+| 4 | **D1** `expect` + latched `busy` | a failed net-thread bootstrap aborts or bricks every later job | |
+| 5 | **D6** GUI-thread image read | whole file read before the size check, on the GUI thread | |
+| 6 | **B1** SMTP has no timeout | one dead SMTP host hangs the net thread forever | |
+| 7 | **C2** quadratic entity decode | ~9 s CPU per crafted mail, on both `sanitize` and `html_to_text` | |
+| 8 | **A2** deferred-tx upgrade race | intermittent "database is locked" on attachment save | |
+| 9 | **A4** unbounded `uid in (?,…)` | bulk action on >32 766 UIDs fails; self-heals but the action is lost | |
+| 10 | **C15** calendar `rposition` | quadratic `END` lookup turns a 25 MB `.ics` into a hang | |
 
 ---
 
@@ -864,7 +865,7 @@ emits elsewhere are deferred with `Qt.callLater`.
 
 ## E. Native Android + FFI — `crates/mailffi/src/`, `android/`
 
-### E1 · medium · `auth_vault.json` is not excluded from device-to-device transfer `[corrected]`
+### E1 · medium · `auth_vault.json` is not excluded from device-to-device transfer — **FIXED** `[fixed]`
 `android/app/src/main/res/xml/data_extraction_rules.xml:4-8`
 
 ```xml
@@ -880,10 +881,13 @@ device. Note this file is the one referenced by `AndroidManifest.xml:39`
 (`android:dataExtractionRules`) and governs **both** cloud backup and device transfer on API 31+.
 Severity lowered from critical: device-to-device transfer goes to the user's **own** device, so it requires
 the old device to be in the attacker's hands or on the same account.
-**Fix:** add `<device-transfer><exclude domain="file" path="auth_vault.json" /></device-transfer>`.
 
-### E2 · high · the whole local mailbox is in cloud backup — confirmed, fix expanded
-`android/app/src/main/res/xml/backup_rules.xml:4` and `data_extraction_rules.xml:3`, referenced from
+**Fixed in `5f6ed06`**, by the same commit as E2 — the new `<device-transfer>` section excludes
+`auth_vault.json` (and the cache), so the secrets file no longer transfers either. The two items shared one
+section; fixing one without the other would have left the hole open, which is why they were landed together.
+
+### E2 · high · the whole local mailbox is in cloud backup — **FIXED** `[fixed]`
+`android/app/src/main/res/xml/backup_rules.xml` and `data_extraction_rules.xml`, referenced from
 `AndroidManifest.xml:38-39`
 
 ```xml
@@ -894,10 +898,33 @@ the old device to be in the attacker's hands or on the same account.
 `fullBackupContent` with no `<include>` means "everything except these", so `mailclient.sqlite` (cached
 subjects, senders, snippets, and full bodies/attachments once read) and `filesDir/crashes/*.log` are uploaded
 despite the comment claiming "Mail itself stays on the server".
-**Fix:** exclude `mailclient.sqlite` (+ `-wal`/`-shm`) and `crashes/` **in both files**, since API 31+ reads
-`data_extraction_rules.xml` and older versions read `backup_rules.xml`; or set `android:allowBackup="false"`.
-*(Withdraws first-draft table row 2's claim that passwords leave via cloud backup — the vault is excluded
-from `<cloud-backup>`; E1 is the device-transfer half.)*
+
+**Fixed in `5f6ed06`.** Both files now exclude `auth_vault.json`, `mailclient.sqlite`, `mailclient.sqlite-wal`,
+`mailclient.sqlite-shm` and `crashes/`, and `data_extraction_rules.xml` gained a `<device-transfer>` section
+carrying the same set (E1's list) so the API 31+ path cannot leak through it. Details that the first draft
+missed and that the fix now covers:
+
+- **WAL mode matters.** `db/mod.rs:61` sets `pragma journal_mode = WAL`, so un-checkpointed pages live in
+  `mailclient.sqlite-wal`/`-shm`. Excluding only the `.sqlite` would still upload the bulk of the cache.
+- **`domain="file"`, not `"database"`.** The DB is opened at an explicit path under `filesDir`
+  (`MailNative.kt:22` → `mailcore::use_data_dir`), never via `getDatabasePath()`, so SQLite does not
+  register it in the `database` domain. A future reader switching the domain back would silently un-exclude it.
+- **What backup still preserves:** the three scheduling preference files
+  (`mailclient_alarm`/`mailclient_worker`/`mailclient_push`, `shared_pref` domain), so background checks come
+  back configured after a restore. Accounts live in the excluded DB and are re-entered — which is also why
+  excluding it is the *correct* behaviour rather than only the private one: a DB restored without its vault key
+  could not decrypt anything. Draft staging dirs are in `cacheDir`, which auto backup never covered.
+
+**Verification:** XML well-formed (`xmllint`/`ET.parse`) and both files compiled with
+`aapt2 compile --dir res` (exit 0), with the flat files dumped to confirm every exclude is present in both
+`<cloud-backup>` and `<device-transfer>`. The full `./build.sh --android` was **not** run (skipped on request
+as too slow); a resource-only change cannot affect compiled code, and aapt2 is the tool that validates it.
+
+**Follow-up decision, not a defect:** with the cache and secrets excluded, backup no longer carries the
+account list. If that restore path is not wanted either, `android:allowBackup="false"` is the equivalent and
+is safer by default for any *future* file added to `filesDir` — an exclude list protects only the paths listed
+today. Left as-is for now because the project's own comment states the intent as "mail stays on the server",
+which is what this now enforces.
 
 ### E3 · medium · `MailNative.init()` opens SQLite and migrates on the UI thread — confirmed
 `ui/shell/MailShell.kt:291-294` → `ensureInit` → `init()` → `use_data_dir()` + `shared_db()` →
