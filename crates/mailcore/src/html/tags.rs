@@ -92,6 +92,11 @@ pub(super) fn is_table_tag(tag: &str) -> bool {
 /// skips the tag and keeps what is inside it.
 ///
 /// `head` stays, so the `<style>`/`<meta>` block it wraps still goes away.
+///
+/// Void elements (`input`, `embed`) must not be listed either: they have no
+/// end tag, so the drop would never close and swallow the rest of the mail
+/// (CSS checkbox hacks put a bare `<input>` near the top). Not being in
+/// `allowed_tag` already drops them.
 pub(super) fn drop_content_tag(tag: &str) -> bool {
     matches!(
         tag,
@@ -99,9 +104,7 @@ pub(super) fn drop_content_tag(tag: &str) -> bool {
             | "style"
             | "iframe"
             | "object"
-            | "embed"
             | "form"
-            | "input"
             | "button"
             | "select"
             | "textarea"

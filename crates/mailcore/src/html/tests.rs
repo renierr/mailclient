@@ -220,6 +220,22 @@ fn no_auto_fetch_vectors_survive_sanitizing() {
 }
 
 #[test]
+fn void_input_and_embed_do_not_swallow_the_rest() {
+    let s = sanitize(
+        "<input type=\"checkbox\" checked><p>after input</p>\
+         <embed src=\"https://evil.example.net/x.swf\"><p>after embed</p>\
+         <form><input name=\"q\"><p>in form</p></form><p>after form</p>",
+        true,
+    );
+    for kept in ["after input", "after embed", "after form"] {
+        assert!(s.html.contains(kept), "lost content: {kept} in {}", s.html);
+    }
+    assert!(!s.html.contains("<input"));
+    assert!(!s.html.contains("in form"));
+    assert!(!s.html.contains("evil.example.net"));
+}
+
+#[test]
 fn link_vectors_keep_link_drop_beacon() {
     // `ping` (hyperlink auditing beacon) is stripped; the link itself stays
     // clickable. `javascript:`/`data:` hrefs lose the URL, keep the text.
