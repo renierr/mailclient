@@ -86,6 +86,7 @@ fun MaintenanceSection(state: MailState) {
 
     // A consistent snapshot into the app cache, then copied where the user
     // picked: the core writes paths, the picker hands out a content Uri.
+    // One left behind by a killed process goes in MailApplication's sweep.
     val exportPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/vnd.sqlite3"),
     ) { uri ->

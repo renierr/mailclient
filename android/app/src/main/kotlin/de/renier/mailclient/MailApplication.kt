@@ -1,6 +1,8 @@
 package de.renier.mailclient
 
 import android.app.Application
+import java.io.File
+import kotlin.concurrent.thread
 
 // Installs the crash capture before any activity, service or receiver
 // runs: every one of them starts with Application.onCreate in the same
@@ -11,5 +13,19 @@ class MailApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         CrashLog.install(this)
+        sweepCache()
+    }
+
+    // Leftovers nothing in a fresh process can still be using: the old
+    // `outgoing/` staging folder (picks and drafts now stage in the core's
+    // prefixed dirs, pruned by the core) and a database export cut short
+    // by the process dying before its temp copy was deleted.
+    private fun sweepCache() {
+        val cache = cacheDir
+        thread(name = "cache-sweep", isDaemon = true) {
+            runCatching { File(cache, "outgoing").deleteRecursively() }
+            cache.listFiles { f -> f.isFile && f.name.startsWith("export-") && f.name.endsWith(".sqlite") }
+                ?.forEach { runCatching { it.delete() } }
+        }
     }
 }

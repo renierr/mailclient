@@ -2892,6 +2892,24 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_cleanupTempFilesJson
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `MailNative.pickStageDir(base)`: a fresh staging dir under `base` for a
+/// file attached in the composer (stale ones pruned first) — its path.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_pickStageDir<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    base: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let base = string(env, &base)?;
+            let dir = mailcore::paths::pick_stage_dir(std::path::Path::new(&base))
+                .map_err(anyhow::Error::from)?;
+            Ok(env.new_string(dir.to_string_lossy())?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `MailNative.trimLocalCache()`: trim the local cache to the newest rows —
 /// how many went, back as a string.
 #[unsafe(no_mangle)]

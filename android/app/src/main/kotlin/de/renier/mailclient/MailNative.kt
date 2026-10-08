@@ -270,6 +270,7 @@ object MailNative {
     @JvmStatic external fun dismissOutbox(accountId: Long, id: Long)
     @JvmStatic external fun storageStatsJson(dbPath: String, tempDir: String): String
     @JvmStatic external fun cleanupTempFilesJson(tempDir: String): String
+    @JvmStatic external fun pickStageDir(base: String): String
     @JvmStatic external fun trimLocalCache(): String
     @JvmStatic external fun trimStatus(removed: Long): String
     @JvmStatic external fun evictCachedAttachmentsJson(): String

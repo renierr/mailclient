@@ -293,6 +293,44 @@ pub fn prune_stale_draft_dirs(base: &std::path::Path) {
     }
 }
 
+/// A fresh, private (0700) [`DRAFT_TEMP_PREFIX`] dir under `base` for
+/// files on their way into a message, so the stale-dir prune and the
+/// temp cleanup find it later. Names already taken (a pid reused by a
+/// later process) are skipped, never shared.
+pub fn new_stage_dir(base: &std::path::Path) -> std::io::Result<PathBuf> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
+    std::fs::create_dir_all(base)?;
+    loop {
+        let unique = NEXT_DIR.fetch_add(1, Ordering::Relaxed);
+        let dir = base.join(format!(
+            "{DRAFT_TEMP_PREFIX}{}-{unique}",
+            std::process::id()
+        ));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => {
+                #[cfg(unix)]
+                std::fs::set_permissions(
+                    &dir,
+                    std::os::unix::fs::PermissionsExt::from_mode(0o700),
+                )?;
+                return Ok(dir);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// [`new_stage_dir`] for a file the user just attached in the composer,
+/// pruning stale staging dirs first. Android copies each picked
+/// `content://` file in here, since the core sends from paths.
+pub fn pick_stage_dir(base: &std::path::Path) -> std::io::Result<PathBuf> {
+    prune_stale_draft_dirs(base);
+    new_stage_dir(base)
+}
+
 fn prune_older_than(
     dir: &std::path::Path,
     max_age: std::time::Duration,
@@ -555,6 +593,61 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         prune_temp_copies(&dir.path().join("gone"), None);
         prune_stale_draft_dirs(&dir.path().join("gone"));
+    }
+
+    #[test]
+    fn stage_dirs_are_fresh_prefixed_and_found_by_the_prune() {
+        let base = tempfile::tempdir().unwrap();
+        let nested = base.path().join("not-yet");
+        let a = new_stage_dir(&nested).unwrap();
+        let b = new_stage_dir(&nested).unwrap();
+        assert_ne!(a, b);
+        for d in [&a, &b] {
+            assert!(d.is_dir());
+            let name = d.file_name().unwrap().to_string_lossy().into_owned();
+            assert!(name.starts_with(DRAFT_TEMP_PREFIX));
+        }
+    }
+
+    #[test]
+    fn stage_dir_skips_a_name_already_taken() {
+        let base = tempfile::tempdir().unwrap();
+        let first = new_stage_dir(base.path()).unwrap();
+        // The next names this process would hand out, already on disk (a
+        // dead process with the same pid left them).
+        let next: u64 = first
+            .to_string_lossy()
+            .rsplit('-')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        for n in next + 1..next + 4 {
+            let taken = base
+                .path()
+                .join(format!("{DRAFT_TEMP_PREFIX}{}-{n}", std::process::id()));
+            let _ = std::fs::create_dir(taken);
+        }
+        let fresh = new_stage_dir(base.path()).unwrap();
+        assert_eq!(std::fs::read_dir(&fresh).unwrap().count(), 0);
+        assert_ne!(fresh, first);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pick_stage_dir_prunes_stale_staging_first() {
+        let base = tempfile::tempdir().unwrap();
+        let stale = new_stage_dir(base.path()).unwrap();
+        std::fs::write(stale.join("old.pdf"), b"x").unwrap();
+        // A dir cannot be opened for writing; futimens needs ownership only.
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(7 * 24 * 3600);
+        std::fs::File::open(&stale)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let fresh = pick_stage_dir(base.path()).unwrap();
+        assert!(!stale.exists());
+        assert!(fresh.is_dir());
     }
 
     #[test]

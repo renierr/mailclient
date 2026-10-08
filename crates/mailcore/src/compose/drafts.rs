@@ -209,21 +209,10 @@ pub(super) fn stage_attachment(
     base: &Path,
 ) -> Result<PathBuf, String> {
     use std::io::Write;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
-    static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
     let attachment = messages::get_attachment(db, attachment_id).map_err(|e| e.to_string())?;
-    let unique = NEXT_DIR.fetch_add(1, Ordering::Relaxed);
-    let dir = base.join(format!(
-        "{}{}-{unique}",
-        crate::paths::DRAFT_TEMP_PREFIX,
-        std::process::id()
-    ));
-    std::fs::create_dir_all(base).map_err(|e| format!("cannot create temp folder: {e}"))?;
-    std::fs::create_dir(&dir).map_err(|e| format!("cannot create temp folder: {e}"))?;
-    #[cfg(unix)]
-    std::fs::set_permissions(&dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))
-        .map_err(|e| format!("cannot secure temp folder: {e}"))?;
+    let dir =
+        crate::paths::new_stage_dir(base).map_err(|e| format!("cannot create temp folder: {e}"))?;
     let name = format!(
         "{}-{}-{}",
         attachment.message_id,

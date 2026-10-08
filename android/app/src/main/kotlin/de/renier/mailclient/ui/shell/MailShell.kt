@@ -191,7 +191,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
     // any not cached yet are fetched first (like a reopened draft), and the
     // core names whatever still could not be.
     fun answer(accountId: Long, folderId: Long, uid: Int, mode: ComposeMode) {
-        val stageDir = File(context.cacheDir, "outgoing").absolutePath
+        val stageDir = context.cacheDir.absolutePath
         scope.launch {
             if (mode == ComposeMode.Forward) {
                 withContext(Dispatchers.IO) {
@@ -211,7 +211,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
     // draft" job does the same), so the reopened draft keeps them.
     fun openRow(accountId: Long, folderId: Long, uid: Int) {
         if (state.folders.firstOrNull { it.id == folderId }?.role == "drafts") {
-            val stageDir = File(context.cacheDir, "outgoing").absolutePath
+            val stageDir = context.cacheDir.absolutePath
             scope.launch {
                 withContext(Dispatchers.IO) {
                     val missing = runCatching {
