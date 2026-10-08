@@ -109,13 +109,23 @@ pub fn set_flags_by_uid(
 /// `sql_head` is the statement up to (and including) the `and` that precedes
 /// the UID list; this appends `uid in (?, ?, …)` with one placeholder per
 /// deduplicated UID. `leading` holds the parameters `sql_head` already refers
+/// Chunk size for the `uid in (?,?,…)` list.
+///
+/// SQLite caps the bound parameters per statement at 32,766 by default
+/// (`SQLITE_MAX_VARIABLE_NUMBER`), and the leading folder/account bindings
+/// already use some of them, so one statement with more than ~32,700 UIDs
+/// fails outright. A folder-wide selection, or a bulk archive of a large
+/// folder, reaches that. Chunking here covers every caller, which is why
+/// this lives in [`execute_over_uids`] rather than at the call sites.
+const UID_CHUNK: usize = 900;
+
 /// to, in `?1..?n` order — the UID bindings follow them.
 ///
 /// An empty UID set is 0 rows, not an empty `in ()`, which is a syntax error.
 fn execute_over_uids(
     db: &Db,
     sql_head: &str,
-    mut leading: Vec<Box<dyn rusqlite::ToSql>>,
+    leading: &[&dyn rusqlite::ToSql],
     uids: &[u32],
 ) -> Result<u64> {
     let mut clean: Vec<i64> = uids.iter().map(|u| i64::from(*u)).collect();
@@ -124,30 +134,28 @@ fn execute_over_uids(
     if clean.is_empty() {
         return Ok(0);
     }
-    let placeholders = vec!["?"; clean.len()].join(",");
-    let sql = format!("{sql_head} uid in ({placeholders})");
-    leading.reserve(clean.len());
-    for u in clean {
-        leading.push(Box::new(u));
+    let mut touched = 0;
+    for chunk in clean.chunks(UID_CHUNK) {
+        let placeholders = vec!["?"; chunk.len()].join(",");
+        let sql = format!("{sql_head} uid in ({placeholders})");
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(leading.len() + chunk.len());
+        params.extend_from_slice(leading);
+        params.extend(chunk.iter().map(|u| u as &dyn rusqlite::ToSql));
+        touched += db.conn().execute(&sql, params.as_slice())? as u64;
     }
-    let refs: Vec<&dyn rusqlite::ToSql> = leading.iter().map(|b| b.as_ref()).collect();
-    let n = db.conn().execute(&sql, refs.as_slice())?;
-    Ok(n as u64)
+    Ok(touched)
 }
 
 /// Bulk mark read/unread for one folder (local-only, queued via
 /// `flags_dirty` like the single-click path). Only the read flag moves —
 /// starred state is preserved. Returns rows touched.
 pub fn set_read_many_by_uids(db: &Db, folder_id: i64, uids: &[u32], read: bool) -> Result<u64> {
+    let now = now();
     execute_over_uids(
         db,
         "update messages set is_read = ?1, flags_dirty = 1, updated_at = ?2
          where folder_id = ?3 and",
-        vec![
-            Box::new(i64::from(read)),
-            Box::new(now()),
-            Box::new(folder_id),
-        ],
+        &[&i64::from(read), &now, &folder_id],
         uids,
     )
 }
@@ -155,15 +163,12 @@ pub fn set_read_many_by_uids(db: &Db, folder_id: i64, uids: &[u32], read: bool) 
 /// Bulk star/unstar for one folder (local-only, queued). Only the starred
 /// flag moves — read state is preserved. Returns rows touched.
 pub fn set_star_many_by_uids(db: &Db, folder_id: i64, uids: &[u32], starred: bool) -> Result<u64> {
+    let now = now();
     execute_over_uids(
         db,
         "update messages set is_starred = ?1, flags_dirty = 1, updated_at = ?2
          where folder_id = ?3 and",
-        vec![
-            Box::new(i64::from(starred)),
-            Box::new(now()),
-            Box::new(folder_id),
-        ],
+        &[&i64::from(starred), &now, &folder_id],
         uids,
     )
 }
@@ -173,7 +178,7 @@ pub fn delete_many_by_uids(db: &Db, folder_id: i64, uids: &[u32]) -> Result<u64>
     execute_over_uids(
         db,
         "delete from messages where folder_id = ?1 and",
-        vec![Box::new(folder_id)],
+        &[&folder_id],
         uids,
     )
 }

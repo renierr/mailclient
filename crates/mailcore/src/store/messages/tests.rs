@@ -479,3 +479,27 @@ fn a_deferred_read_then_write_fails_where_immediate_succeeds() {
         tx.commit().unwrap();
     }
 }
+
+#[test]
+fn a_uid_list_past_the_sqlite_variable_limit_still_applies() {
+    // SQLite caps bound parameters at 32,766 per statement and the leading
+    // folder / updated_at bindings already use some, so one statement carrying
+    // a whole large folder's `in (?)` list failed outright -- a folder-wide
+    // bulk read, archive, or a `push_due_moves` group is enough to reach it.
+    // The rows sit on the chunk boundary (UID_CHUNK is 900), so a boundary
+    // bug in the loop drops one of them.
+    let (db, acc, f) = setup();
+    let uids: [u32; 5] = [1, 900, 901, 32_766, 40_000];
+    for uid in uids {
+        upsert(&db, &sample_new(acc, f, uid)).unwrap();
+    }
+    let all: Vec<u32> = (1..=40_000).collect();
+    // One statement would be 40,003 parameters here.
+    assert_eq!(set_read_many_by_uids(&db, f, &all, true).unwrap(), 5);
+    assert_eq!(count_unread(&db, f).unwrap(), 0);
+    assert_eq!(set_star_many_by_uids(&db, f, &all, true).unwrap(), 5);
+    // Both bulk paths still queue for the server push.
+    assert_eq!(list_flags_dirty(&db, acc).unwrap().len(), 5);
+    // And the chunk loop still reports real row counts, not a per-chunk total.
+    assert_eq!(delete_many_by_uids(&db, f, &all).unwrap(), 5);
+}
