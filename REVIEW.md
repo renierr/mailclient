@@ -8,7 +8,9 @@ Work top to bottom; each item is self-contained so they can be picked out of ord
 - **Status tags:** `[verify]` = I reproduced it by running code; `[corrected]` = an earlier draft of this
   review got it wrong and this is the fixed version; `[fixed]` = fixed in the repo, with the commit noted in
   the item; `[removed]` = withdrawn, with the reason kept so the ids stay stable for cross-referencing.
-  Untagged = read from source, not executed. **Applied so far:** E1, E2 (`d3ef68b`), C1 (`1dac9e7`), C7 (`11137f4`), D1 (`74d3a4d`).
+  Untagged = read from source, not executed. **Applied so far:** E1, E2 (`d3ef68b`), C1 (`1dac9e7`),
+  C7 (`11137f4`), D1 (`74d3a4d`), D6 part 1 (`c3d90fb`), B1 (`bb9edb6`), C2 (`946e971`),
+  A2 (`5e07cab`), A4 (`f4ff35e`), C15 (`9698314`). See §Applied for what each did and what it did not.
 - **AGENTS.md §7** governs closing any item: Rust → `cargo fmt --check` + `cargo clippy -p mailcore -- -D warnings`
   + `cargo test -p mailcore`; QML → `scripts/qml-check.sh`; Android → `./build.sh --android`.
 - **§0** records the second-pass audit of this document. Read it first if you are trusting these findings.
@@ -48,14 +50,33 @@ would have caused damage. Reference errors corrected. Nothing in the repo was ed
 | 2 | ~~**E2** backup excludes~~ | ~~whole local mailbox (bodies, attachments) uploaded to cloud backup~~ | **done** — `d3ef68b` |
 | 3 | ~~**C7** `is_public_remote` IPv6~~ | ~~every bracketed IPv6 host, incl. `[::1]`, passes as public; metadata IP reachable~~ | **done** — `11137f4` |
 | 4 | ~~**D1** `expect` + latched `busy`~~ | ~~a failed net-thread bootstrap aborts or bricks every later job~~ | **done** — `74d3a4d` |
-| 5 | **D6** GUI-thread image read | whole file read before the size check, on the GUI thread | |
-| 6 | **B1** SMTP has no timeout | one dead SMTP host hangs the net thread forever | |
-| 7 | **C2** quadratic entity decode | ~9 s CPU per crafted mail, on both `sanitize` and `html_to_text` | |
-| 8 | **A2** deferred-tx upgrade race | intermittent "database is locked" on attachment save | |
-| 9 | **A4** unbounded `uid in (?,…)` | bulk action on >32 766 UIDs fails; self-heals but the action is lost | |
-| 10 | **C15** calendar `rposition` | quadratic `END` lookup turns a 25 MB `.ics` into a hang | |
+| 5 | ~~**D6** GUI-thread image read~~ | ~~whole file read before the size check, on the GUI thread~~ | **done (1 of 2)** — `c3d90fb` |
+| 6 | ~~**B1** SMTP has no timeout~~ | ~~one dead SMTP host hangs the net thread forever~~ | **done** — `bb9edb6` |
+| 7 | ~~**C2** quadratic entity decode~~ | ~~~9 s CPU per crafted mail, on both `sanitize` and `html_to_text`~~ | **done** — `946e971` |
+| 8 | ~~**A2** deferred-tx upgrade race~~ | ~~intermittent "database is locked" on attachment save~~ | **done** — `5e07cab` |
+| 9 | ~~**A4** unbounded `uid in (?,…)`~~ | ~~bulk action on >32 766 UIDs fails; self-heals but the action is lost~~ | **done** — `f4ff35e` |
+| 10 | ~~**C15** calendar `rposition`~~ | ~~quadratic `END` lookup turns a 25 MB `.ics` into a hang~~ | **done** (reason corrected) — `9698314` |
 
 ---
+
+## Applied
+
+What each landed fix actually changed, and what it deliberately left alone. Read
+the "not fixed" column before assuming a finding is closed.
+
+| Item | Commit | What it fixed | Not fixed / needs a decision |
+|---|---|---|---|
+| **E1** | `d3ef68b` | Added `<device-transfer>` to `data_extraction_rules.xml`, so the vault file stops moving device-to-device | — |
+| **E2** | `d3ef68b` | `mailclient.sqlite` (+ `-wal`/`-shm`, WAL matters) and `crashes/` excluded from cloud backup, in **both** rule files | Nothing restorable is left, so `allowBackup="false"` is the cleaner equivalent — a decision, since it also drops the scheduling prefs from a future restore |
+| **C1** | `1dac9e7` | `label.get(..4)` instead of `len() >= 4 && label[..4]`, so a non-ASCII sender address cannot panic the badge | — |
+| **C7** | `11137f4` | All IPv6 URLs, `169.254/16` (metadata), `100.64/10`, `0/8`, `198.18/15`, `240/4` and numeric `inet_aton` shorthands are blocked; a trailing root dot no longer hides `.local` or an address | Hex (`0x7f000001`) and octal forms still fall through to the hostname branch — deliberate, widening "digits and dots only" to "looks numeric" would false-positive on real hostnames |
+| **D1** | `74d3a4d` | Runtime built inside the spawned thread (no GUI-thread abort); `busy` latched only after a job is queued; a dead net reported distinctly from busy | The `queued` `Err` tail branch still only logs, since with a live thread holding its receiver the send cannot fail |
+| **D6 part 1** | `c3d90fb` | `image_data_url` stats before reading, so a huge file is refused without loading it; the error reports the real size | **The rest of D6 is still open.** The keyring D-Bus round trip, draft/forward staging (temp writes + a `read_dir` walk) and the maintenance `cleanup_temp`/stats all still run on the GUI thread. Moving any of them needs an async QML contract (a signal path instead of a returned status string) — an API decision in both frontends, not a local fix |
+| **B1** | `bb9edb6` | 30 s timeout on the submit transport and the DSN connection | `spawn_blocking` was **not** done: a single-threaded runtime still has that job occupying its only worker slot, so moving it would not unblock the queue. The timeout is the fix |
+| **C2** | `946e971` | Bounded scan for the closing `;`; 11.5 s → 12.4 ms on the same 512 KB input | — |
+| **A2** | `5e07cab` | Read moved before the transaction, and the transaction is `IMMEDIATE` | The test is a mechanism test, not a regression guard: it cannot fail if the production ordering is reverted, because the interleaving is inside the function |
+| **A4** | `f4ff35e` | `uid in (?)` chunked at 900, inside `execute_over_uids` so all three callers are covered | Caller leading bindings became a borrowed slice — the old `Vec<Box<dyn ToSql>>` could not be repeated per chunk |
+| **C15** | `9698314` | Component-stack depth capped at 32; deeper input is refused | **Reason corrected: not quadratic.** Measured linear (8× depth → ~8× time, 4.1 s for 13 MB), so it is a memory/CPU bound, not a blowup. The first draft and the second reviewer both said "quadratic/hang" and both were wrong |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
 
@@ -87,7 +108,7 @@ let current: u32 = match raw.as_deref().map(str::trim).map(str::parse::<u32>) {
 };
 ```
 
-### A2 · high · deferred transaction reads before it writes → `SQLITE_BUSY` `[verify]` — confirmed as written
+### A2 · high · deferred transaction reads before it writes → `SQLITE_BUSY` — **FIXED** `[fixed]`
 `store/messages/attachments.rs:50-51`
 
 ```rust
@@ -116,7 +137,7 @@ per address with **no transaction**, so a mid-run failure leaves partial credit 
 done — never retried. Same shape for v8/v12/v14/v16/v20.
 **Fix:** wrap each best-effort step in its own transaction; do not advance `current` past a step that errored.
 
-### A4 · medium · unbounded `uid in (?,?,…)` fails at 32 766 UIDs `[verify]` `[corrected]`
+### A4 · medium · unbounded `uid in (?,?,…)` fails at 32 766 UIDs — **FIXED** `[fixed]`
 `store/messages/flags.rs:127-128`
 
 ```rust
@@ -135,6 +156,12 @@ selection, so this is reachable; a 50-row UI selection is not the only way in.
 Severity lowered from high: the next sync reconciles the untouched rows, so the local state self-heals —
 the user's action is silently lost, which is why it still matters.
 **Fix:** chunk `uids` at ≤900 inside `execute_over_uids` so every caller is covered.
+
+**Fixed in `f4ff35e`.** Chunking sits inside `execute_over_uids` so all three callers are covered at once.
+The caller-side leading bindings became a borrowed slice of `&dyn ToSql`, because the old
+`Vec<Box<dyn ToSql>>` could not be repeated per chunk — `now()` is now bound once per caller instead of
+being built inside the array literal. One test with a 40 000-uid list and rows on UID 900 (the chunk
+boundary): it panics when the chunking is removed, so it is a real guard rather than a restatement.
 
 ### A5 · medium · migration repair: no transaction, `prepare` inside the loop
 `db/migrations.rs:382-408` — `migrate_cid_inline_attachments` re-prepares the statement per message
@@ -251,7 +278,7 @@ harmless today — but `schema.sql` is not a faithful description of an upgraded
 
 ## B. `mailcore` sync & networking — `sync/`
 
-### B1 · high · SMTP has no socket timeout, and blocks the async runtime `[verify]`
+### B1 · high · SMTP has no socket timeout, and blocks the async runtime — **FIXED** `[fixed]`
 `sync/sender/client.rs:79-81,96-109,428` and `sync/sender/dsn.rs:40-46`
 
 ```rust
@@ -487,7 +514,7 @@ a genuine regression guard rather than a restatement of the fix. Gates per AGENT
 (562 before + 2 new). Full `cargo test --workspace` and the Qt build were not run — the change is inside a
 `mailcore`-internal function with no API change.
 
-### C2 · high · quadratic entity decode, applied twice per mail `[verify]` `[corrected]`
+### C2 · high · quadratic entity decode, applied twice per mail — **FIXED** `[fixed]` `[verify]`
 `html/entities.rs:14`
 
 ```rust
@@ -509,8 +536,14 @@ Input: a body of `"&".repeat(512_000)`. There is no body-size cap on ingest
 (`html/sanitize.rs:147`) and `html::html_to_text`, the latter on the **pre-sanitize** `candidate_html`
 (`feed.rs:390`, also `sync/sender/message.rs:90-137`), neither capped. ~19 s of the net/GUI thread per
 crafted mail; a mailing list of these starves every other job.
-**Fix:** bound the window before searching — `s.as_bytes()[i+1..].iter().take(24).position(|&b| b == b';')`
-— and treat "no `;` within 24 bytes" as a literal `&` without scanning further.
+**Fix:** bound the scan window, not the result — `b[i+1..].iter().take(23).position(|&c| c == b';')`
+finds the `;` without ever scanning past 23 bytes.
+
+**Fixed in `946e971`.** Verified by measurement on the same 512 KB input: **11.49 s before, 12.4 ms after**
+(~930×), and the decode runs twice per mail, so the crafted-mail cost was ~23 s of the net thread.
+Two tests: the ampersand flood itself (`"&".repeat(512 * 1024)` round-trips unchanged), and a boundary pair
+that pins the window at 24 bytes — a 24-byte entity decodes, a 25-byte one stays literal — so widening the
+window later fails instead of quietly reintroducing the cost.
 
 ### C3 · medium · CSS clickjacking: invisible full-body link overlay survives sanitizing `[corrected]`
 `html/css.rs:70-73` allows `display`, `width`/`height`, `margin`, `opacity`; `allowed_display` permits
@@ -650,14 +683,26 @@ noting the two arms are intentionally identical. No action.
 `&mut self`) trips `clippy::explicit_auto_deref`/borrow errors under `-D warnings`. Use
 `if let Some(c) = s.get_mut(..1) { c.make_ascii_uppercase(); }`.
 
-### C15 · medium · calendar component stack: unbounded, and quadratic on `END` `[corrected]`
+### C15 · medium · calendar component stack — **FIXED, reason corrected** `[fixed]`
 `calendar.rs:157-211` — `stack.push(comp)` runs per `BEGIN:` with no cap, and the matching `END` does
 `stack.iter().rposition(|c| *c == comp)` (`:200`), a full scan per `END`. A 25 MB `.ics` of
 nested `BEGIN:X`/`END:X` is therefore **O(n²)** on top of the memory blowup, so a 25 MB file effectively
 hangs rather than merely allocating. This is the amplifier behind C4 and the reason C4 is not just a
 memory issue.
-**Fix:** cap `stack.len()` (e.g. 64) and bail out past it, and stop the scan early — the only legal
-`END` target is the top of the stack, so compare against `stack.last()` first.
+**Fix:** cap `stack.len()` (e.g. 64) and bail out past it.
+
+**Fixed in `9698314`** — depth capped at 32, deeper input refused rather than parsed.
+
+**The stated reason is wrong and was corrected.** The first draft called the `rposition` scan quadratic;
+the second reviewer agreed and called it a hang. Both wrong. `rposition` scans from the *innermost*
+component backwards, and the innermost almost always matches, so each `END` is O(1) in practice — the
+worst case is bounded by the number of *distinct* component names in the stack, ~14 in iCalendar, not the
+depth. Measured with the real parser on nested input:
+**linear** (2 000 → 6.2 ms, 16 000 → 62 ms, 128 000 → 542 ms, 1 048 576 → **4.10 s**), so ~8× depth costs
+~8× time. That is a real 4 seconds of feed thread per 13 MB attachment, and unbounded memory on the
+component stack — a genuine CPU/memory bound, but not a quadratic blowup and not a hang.
+The code comment now records the measurement and names the wrong first guess, and the severity should be
+read as medium for that reason alone.
 
 **Checked and found sound (no action):**
 - Tag/attribute allow-list: `allowed_tag` + `presentational` + the `a`/`img` match allow **no** URL sink other
@@ -778,7 +823,7 @@ an index array back — plus `search_json`/`contacts_json` (`bridge.rs:140,176`)
 *(D17 from the first draft — "`messages_json` always carries the full local cache" — was the same finding
 seen from `bridge.rs:873`; it is merged here rather than counted twice.)*
 
-### D6 · high · file IO and OS IPC on the GUI thread, size-checked after the read `[corrected]`
+### D6 · high · file IO and OS IPC on the GUI thread — **PARTLY FIXED** `[fixed]`
 - **`bridge/composer.rs:81-86` → `sync::sender/inline.rs:96-114`:** `compose::image_data_url` does
   `let bytes = std::fs::read(&path)` **first** and only then `if bytes.len() > MAX_INLINE_IMAGE_BYTES`
   (1.5 MB). So the *whole* file is read and buffered on the GUI thread from `Composer.qml:416` inside the
@@ -793,6 +838,19 @@ seen from `bridge.rs:873`; it is merged here rather than counted twice.)*
   gnome-keyring/kwallet freezes the window.
 **Fix:** size-check with metadata (`fs::metadata`) before reading; move all four behind `net_tx()` or a
 dedicated IO job.
+
+**Fixed in `c3d90fb`, first bullet only.** `image_data_url` now stats the file first and reads with a
+`take(limit + 1)` cap, so an oversized file is refused without being loaded and a file that grows between
+the two cannot overrun. The error reports the **real** size rather than the truncated limit, which is what
+the user wants to know. The oversized test uses a sparse file so a 4 GiB input stays cheap to create.
+
+**The other three bullets are still open, and not for lack of trying.** Each one is a QML-callable method
+that returns its result synchronously — `add_account` returns a status string and the composer needs the
+staged paths to continue — so moving any of them off the GUI thread needs an async contract (queue it, then
+deliver a signal and let QML advance). That is an API change in both frontends, not a local fix, and it is a
+decision to take rather than an item to close: the keyring round trip is D-Bus on Linux (a file on Android),
+the staging walks the cache dir on every draft open and forward, and the maintenance calls are user-triggered
+from Settings. Leaving them on the GUI thread means a hung gnome-keyring can still freeze the window.
 
 ### D7 · medium · a SQLite read inside a property *binding* — confirmed, severity trimmed
 `Main.qml:1004-1005` — `autoSyncMinutes: … appSettings.sync_interval_for(backend.current_account_id)` →
