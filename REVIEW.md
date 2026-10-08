@@ -5,48 +5,88 @@ Work top to bottom; each item is self-contained so they can be picked out of ord
 
 - **Severity:** `critical` (crash / data loss / secret exposure), `high` (wrong results, hangs, timeouts),
   `medium` (latent or narrow), `low` (polish / hygiene).
-- **Status:** all items pending unless marked. `[verify]` = reproduced or confirmed by reading the code;
-  no marker = read from source but not executed. Nothing here was changed in the repo — this file is
-  the only added file.
-- **AGENTS.md §7** still governs: a Rust fix means `cargo fmt --check` + `cargo clippy -p mailcore -- -D warnings`
-  + `cargo test -p mailcore`; QML means `scripts/qml-check.sh`; Android means `./build.sh --android`.
+- **Status tags:** `[verify]` = I reproduced it by running code; `[corrected]` = an earlier draft of this
+  review got it wrong and this is the fixed version; `[removed]` = withdrawn, with the reason kept so the
+  ids stay stable for cross-referencing. Untagged = read from source, not executed.
+- **AGENTS.md §7** governs closing any item: Rust → `cargo fmt --check` + `cargo clippy -p mailcore -- -D warnings`
+  + `cargo test -p mailcore`; QML → `scripts/qml-check.sh`; Android → `./build.sh --android`.
+- **§0** records the second-pass audit of this document. Read it first if you are trusting these findings.
 
-## Suggested fix order
+---
 
-| # | Item | Why first |
-|---|------|-----------|
+## 0. Audit of this review (second pass)
+
+A second reviewer challenged 10 items and several severity ratings. I re-read the code for each. Outcome:
+6 items withdrawn, 4 rewritten, 8 severities changed, 9 suggested fixes replaced because the original
+would have caused damage. Reference errors corrected. Nothing in the repo was edited.
+
+**Withdrawn outright (not bugs):**
+
+| Item | Why |
+|---|---|
+| A16 | Pre-v12 every stored path was raw server form, so decoding was correct. The proposed guard (`encode == path`) is true for pre-v12 data too, so the rename still happens. |
+| B8 | `messages::delete_by_folder` runs at `engine/sync.rs:81`, **before** `local_uids` is read at `:141`. After a validity change the set is empty, so step 3's `older_existing` is empty and the stale modseq is never used. |
+| B11 | `session.uid_move(&clean, dest_path).await?` at `engine/mutate.rs:107` returns **before** `delete_many_by_uids`, so rows are never deleted after a failed move. Replaced by B11' (the two real bugs next to it). |
+| B14 | `checkin()` does `drop(pool); … s.disconnect()` (`pool.rs:101-112`) — the lock is released first, and `disconnect()` is only `session = None`. The `Drop` impl never holds the lock. |
+| C13 | `mime.rs:293-311`: the comment above the dead branch says "A ZIP-subtype sniff (docx/xlsx/…) is more specific than a plain ZIP or generic header, but **never overrules a different specific type**". Returning `None` both times is the documented decision. |
+| E24 | `ui/folders/FolderIcon.kt` is not in `SHARED-CORE.md` at all, so there was no violated exemption. |
+
+**Severity raised (the critique understated these):** C2, C6, C7, C15, D1, D6.
+**Severity lowered (I overstated these):** A1, A4, E1, D10, B17, B19.
+**Fixes replaced because the original was harmful:** A1, A7, A10, A12, A15, B2, C7, C14.
+**Merged:** D17 into D5 (same thing), B6 into D8 (same thing).
+**Fixed reference errors:** `MessagesView.qml` does not exist (those helpers live in `MessageView.qml` and
+`Composer.qml`); `store/undo.rs` → `undo.rs`; `bridge/bulk.rs` → `bridge/messages/bulk.rs`;
+`net.rs:280-287` → `net.rs:288-294`; `contacts_json` is at `bridge.rs:140`; methodology "D3/C3" → "D3/E6".
+
+### Corrected fix order
+
+| # | Item | Why now |
+|---|------|---------|
 | 1 | **C1** `badge.rs:76` byte-index panic | one malicious sender crashes folder listing on every frontend |
-| 2 | **E1/E2** Android backup rules | plaintext passwords + whole mailbox leave the device in cloud backup |
-| 3 | **A1** unparseable `schema_meta` version bricks `Db::open` | unrecoverable startup brick |
-| 4 | **A4** unbounded `uid in (?,…)` | bulk actions on >32 764 UIDs permanently fail |
-| 5 | **B1** SMTP has no socket timeout | one dead SMTP host hangs the whole net thread forever |
-| 6 | **C2** quadratic entity decode | ~9 s CPU per crafted mail, blocks every job |
-| 7 | **A2** deferred-tx upgrade race | intermittent "database is locked" on attachment save |
-| 8 | **D5/D6** GUI-thread DB + file IO | whole-cache JSON + keyring D-Bus on the GUI thread |
-| 9 | **C3** transparent full-body link overlay | in-page click theft |
-| 10 | **D10** two `ScrollView` width bugs | wrapping/content clipped, long status text unreadable |
+| 2 | **E2** backup excludes | whole local mailbox (bodies, attachments) uploaded to cloud backup |
+| 3 | **C7** `is_public_remote` IPv6 | every bracketed IPv6 host, incl. `[::1]`, passes as public; metadata IP reachable |
+| 4 | **D1** `expect` + latched `busy` | a failed net-thread bootstrap aborts or bricks every later job |
+| 5 | **D6** GUI-thread image read | whole file read before the size check, on the GUI thread |
+| 6 | **B1** SMTP has no timeout | one dead SMTP host hangs the net thread forever |
+| 7 | **C2** quadratic entity decode | ~9 s CPU per crafted mail, on both `sanitize` and `html_to_text` |
+| 8 | **A2** deferred-tx upgrade race | intermittent "database is locked" on attachment save |
+| 9 | **A4** unbounded `uid in (?,…)` | bulk action on >32 766 UIDs fails; self-heals but the action is lost |
+| 10 | **C15** calendar `rposition` | quadratic `END` lookup turns a 25 MB `.ics` into a hang |
 
 ---
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
 
-### A1 · critical · version stamp collapse bricks open forever `[verify]`
-`db/migrations.rs:144-151`
+### A1 · medium · version stamp collapse bricks open forever `[verify]` `[corrected]`
+`db/migrations.rs:132-151`
 
 ```rust
-let current: u32 = conn.query_row(…).unwrap_or(0);   // inner: parse::<u32>().unwrap_or(0)
+let current: u32 = conn.query_row(…, |row| { let v: String = row.get(0)?; Ok(v.parse::<u32>().unwrap_or(0)) }).unwrap_or(0);
 if current == 0 {
     conn.execute_batch(SCHEMA_FULL)?;
-    conn.execute("insert into schema_meta (key, value) values ('version', ?1)", …)?;  // PK clash
-}
+    conn.execute("insert into schema_meta (key, value) values ('version', ?1)", …)?;   // PK clash
 ```
-Any *existing* row whose `value` fails to parse (`''`, `'0'`, `' 23'`, `'v23'`, `'-1'`, `'999999999999'`)
-collapses to `0`, so an existing DB takes the fresh-install path and the plain `INSERT` hits the primary
-key. One truncated page and the app never starts again; every later open repeats it. A *missing* row is
-handled correctly.
-**Fix:** `insert … on conflict (key) do update set value = excluded.value`.
+A **present but unparseable** `schema_meta.value` collapses to `0`, so an existing DB takes the
+fresh-install path and the plain `INSERT` hits the primary key. `[verify]` `''`, `'0'`, `' 23'`, `'v23'`,
+`'-1'` and `'999999999999'` all yield `UNIQUE constraint failed: schema_meta.key`, on every later open.
+A **missing** row is handled correctly.
+Severity lowered from critical: it needs a hand edit or corruption of that one value, not ordinary use.
 
-### A2 · high · deferred transaction reads before it writes → `SQLITE_BUSY` `[verify]`
+**Fix (the obvious upsert is wrong):** an upsert would stamp the current version onto a database of
+unknown version and silently skip the migrations it still needs. Distinguish the two cases instead —
+read the row as `Option`:
+
+```rust
+let raw: Option<String> = conn.query_row("select value from schema_meta where key = 'version'", [], |r| r.get(0)).optional()?;
+let current: u32 = match raw.as_deref().map(str::trim).map(str::parse::<u32>) {
+    None => 0,                                        // no row: fresh install
+    Some(Ok(v)) => v,
+    Some(Err(_)) => return Err(… "corrupt schema_meta version, refusing to migrate"),  // present but unreadable
+};
+```
+
+### A2 · high · deferred transaction reads before it writes → `SQLITE_BUSY` `[verify]` — confirmed as written
 `store/messages/attachments.rs:50-51`
 
 ```rust
@@ -57,11 +97,11 @@ let mut existing = list_attachments(db, message_id)?;   // read snapshot taken h
 `unchecked_transaction()` is a deferred `BEGIN`; the read already holds a snapshot, so if any other
 connection commits in between (GUI thread + net thread in `mailapp`; the FRB pool in `mailffi`; the
 `--sync-once` CLI that `queue.rs:20` documents as sharing the file) the write upgrade fails immediately —
-`busy_timeout` does not cover snapshot-upgrade. Verified: two connections, deferred tx + prior read →
+`busy_timeout` does not cover snapshot-upgrade. `[verify]` two connections, deferred tx + prior read →
 `database is locked`; a write-only deferred tx succeeds.
 **Fix:** `TransactionBehavior::Immediate`, or read `existing` before `BEGIN`.
 
-### A3 · medium · failed migration steps still stamp success `[verify]`
+### A3 · medium · failed migration steps still stamp success `[verify]` — confirmed
 `db/migrations.rs:303-310` (+ `:190-198`, `:225-228`, `:246-249`, `:259-262`, `:293-296`)
 
 ```rust
@@ -75,20 +115,25 @@ per address with **no transaction**, so a mid-run failure leaves partial credit 
 done — never retried. Same shape for v8/v12/v14/v16/v20.
 **Fix:** wrap each best-effort step in its own transaction; do not advance `current` past a step that errored.
 
-### A4 · high · unbounded `uid in (?,?,…)` fails at 32 764 UIDs `[verify]`
+### A4 · medium · unbounded `uid in (?,?,…)` fails at 32 766 UIDs `[verify]` `[corrected]`
 `store/messages/flags.rs:127-128`
 
 ```rust
 let placeholders = vec!["?"; clean.len()].join(",");
 let sql = format!("{sql_head} uid in ({placeholders})");
 ```
-`db error: too many SQL variables` at the 32 764th UID (3 leading params against SQLite's 32 766).
-Reachable via `bulk.rs:44-56` (`bulk::set_read`/`set_starred`, folder-wide selection) and
-`sync/imap/engine/mutate.rs:108,124` (`move_uids_to`, `purge_uids`) which receive an **unchunked** group
-from `push_due_moves`. Symptom: one bulk delete of >32 k mail permanently fails locally — it burns all
-`MAX_PENDING_ATTEMPTS`, the rows are dropped, and every message re-appears.
-`sync/imap/engine/sync.rs:136` chunks correctly with `FETCH_CHUNK`; these paths do not.
-**Fix:** chunk `uids` at ≤900 per statement inside `execute_over_uids`.
+`[verify]` SQLite's `SQLITE_MAX_VARIABLE_NUMBER` is 32,766; `execute_over_uids` passes
+`sql_head`'s leading params too, so the real threshold is a little lower and path-dependent (I measured
+32,764 on the delete path). The **correct** claim: any selection over ~30 k UIDs fails, and `execute_over_uids`
+has no chunking while `engine/sync.rs:136` does chunk.
+
+Entry points that reach it: `bridge/messages/bulk.rs` `flag_hits`/`queue_hits` → `bulk::set_read`/`set_starred`
+→ `store/messages/flags.rs:89`, and `sync/imap/engine/mutate.rs:108,124` (`move_uids_to`, `purge_uids`),
+which get an **unchunked** group from `push_due_moves`. There is no cap on search hits or on a select-all
+selection, so this is reachable; a 50-row UI selection is not the only way in.
+Severity lowered from high: the next sync reconciles the untouched rows, so the local state self-heals —
+the user's action is silently lost, which is why it still matters.
+**Fix:** chunk `uids` at ≤900 inside `execute_over_uids` so every caller is covered.
 
 ### A5 · medium · migration repair: no transaction, `prepare` inside the loop
 `db/migrations.rs:382-408` — `migrate_cid_inline_attachments` re-prepares the statement per message
@@ -96,90 +141,103 @@ from `push_due_moves`. Symptom: one bulk delete of >32 k mail permanently fails 
 (per A3) is never re-run.
 **Fix:** prepare once outside the loop; run in one `unchecked_transaction()`.
 
-### A6 · medium · every error becomes "not found"
+### A6 · medium · every error becomes "not found" `[corrected]`
 `store/queue.rs:120-128`
 
 ```rust
 .query_row(&format!("select {COLS} from send_queue where id = ?1"), [id], row_to_queued)
 .map_err(|_| StoreError::NotFound(format!("queue entry {id}")))
 ```
-A locked DB, a corrupt row or an I/O error is misreported as `NotFound`, so callers keep retrying a
-permanently broken row. Every other store uses `.optional()?`.
+A locked DB, a corrupt row or an I/O error is misreported as `NotFound`, so callers cannot distinguish
+"row is gone" from "the database failed" and keep retrying a permanently broken row. Every other store
+uses `.optional()?`. Severity lowered slightly: only affects the send queue, and the retry is bounded.
 **Fix:** `.optional()?.ok_or_else(|| StoreError::NotFound(…))`.
 
-### A7 · medium · `attachment_has_data` leaks a raw no-rows error `[verify]`
-`store/messages/attachments.rs:173-182` — `attachment_has_data(db, 4242)` returns
+### A7 · medium · `attachment_has_data` leaks a raw no-rows error `[verify]` `[corrected]`
+`store/messages/attachments.rs:173-182` — `[verify]` `attachment_has_data(db, 4242)` returns
 `database error: Query returned no rows`; `crates/mailffi/src/api/attachments.rs:27` and
 `crates/mailcore/src/compose/forward.rs:105` surface that string to the user where "attachment not found"
 was meant.
-**Fix:** `.optional()?.map_or(Ok(false), |n| Ok(n != 0))`.
+**Fix (do *not* return false):** a `false` here tells the caller the attachment is not cached yet, so it
+would start a download for an attachment that does not exist. Use
+`.optional()?.ok_or_else(|| StoreError::NotFound(format!("attachment {id}")))`.
 
-### A8 · medium · `unwrap_or_default()` hides column corruption `[verify]`
+### A8 · medium · `unwrap_or_default()` hides column corruption `[verify]` — confirmed, severity trimmed
 `store/messages.rs:47-49,60` and `store/queue.rs:75`
 
 ```rust
 to_addrs: json_vec(&to).unwrap_or_default(),
 ```
-Writing `to_addrs = 'not json'` then reading back yields `to_addrs=[]` with no log line. Worse in
-`queue.rs` (`envelope_to: json_vec(&to_raw).unwrap_or_default()`): a corrupt envelope row is presented as
+`[verify]` writing `to_addrs = 'not json'` then reading back yields `to_addrs=[]` with no log line. In
+`queue.rs` (`envelope_to: json_vec(&to_raw).unwrap_or_default()`) a corrupt envelope row is presented as
 having zero recipients and is claimed/submitted as such. Same at `contacts.rs:543`
 (`serde_json::to_value(c).unwrap_or_default()` silently drops a contact from `contacts_json`) and `choices.rs:81`.
+Reachable only via a hand-edited or corrupt DB, hence medium rather than high.
 **Fix:** `warn!` on parse failure; treat an unparseable `envelope_to` as a hard error.
 
-### A9 · low · "transactional" deletes that are not
-`store/contacts.rs:449-463` — `delete_many` is documented/aliased as transactional but issues one
-implicit transaction per address; a mid-list failure leaves a partial delete. Same in
-`pending_moves::record_failure`/`remove` (`:159-178`) and `bulk::set_read` (`bulk.rs:44-48`).
+### A9 · low · "transactional" deletes that are not — confirmed as written
+`store/contacts.rs:449-463` — `delete_many` is documented/aliased as transactional but issues one implicit
+transaction per address; a mid-list failure leaves a partial delete. Same in `pending_moves::record_failure`/
+`remove` (`:159-178`) and `bridge/messages/bulk.rs` `set_read` (`store/messages/bulk.rs:44-48`).
 **Fix:** wrap in `unchecked_transaction()` or collapse to `where address in (?,…)`.
 
-### A10 · low · multi-statement mutations outside the tx helper
-`store/settings.rs:266-268` (`set_pending_open` calls `set` twice), `:394-395` (`set_sort` twice), while
-`set_many` (`:175-202`) does it in one transaction. A crash between leaves a jump request with an account
-but no folder.
-**Fix:** route these through `set_many`.
+### A10 · low · multi-statement mutations outside the tx helper `[corrected]`
+`store/settings.rs:266-268` (`set_pending_open` calls `set` twice), `:394-395` (`set_sort` calls `set` twice),
+while `set_many` (`:175-202`) does it in one transaction.
+**Fix (partly blocked):** `set_many` rejects any key without an entry in `defaults()`
+(`settings.rs:176-180`), and `PENDING_OPEN_ACCOUNT_ID`/`PENDING_OPEN_FOLDER` (`settings.rs:106,108`) have
+none. So `set_pending_open` cannot use it until those keys are added to `defaults()` (they are take-once,
+with no default). **`set_sort` can be converted today.**
+**Fix for `set_pending_open`:** wrap the two `set` calls in one `unchecked_transaction()`.
 
-### A11 · low · a *newer* version stamp is silently rewound `[verify]`
-`db/migrations.rs:327-332` — a DB stamped `99` opens "successfully" and is rewritten to the current version.
-The newer build later re-applies its own migrations over this build's schema.
+### A11 · low · a *newer* version stamp is silently rewound `[verify]` — confirmed
+`db/migrations.rs:327-332` — `[verify]` a DB stamped `99` opens "successfully" and is rewritten to the current
+version; the newer build then re-applies its own migrations over this build's schema.
 **Fix:** log loudly (or refuse) when `current > SCHEMA_VERSION`.
 
-### A12 · medium · `save_edit` has no keyring compensation
-`store/account_form.rs:404-409` — `secrets.save(...)` lands **before** `accounts::update_connection(...)`.
-`create_new` (`:429-434`) deletes the orphaned vault entry on failure; `save_edit` does not, so a failed row
-update leaves *new* passwords next to *old* host/user — an account that cannot connect, with no way for the
-user to tell which half is stale.
-**Fix:** delete the vault entry on `update_connection` failure (or update the row first).
+### A12 · medium · `save_edit` has no keyring compensation `[corrected]`
+`store/account_form.rs:404-409` — `secrets.save(...)` lands **before** `accounts::update_connection(...)`,
+whereas `create_new` (`:429-434`) deletes the orphaned vault entry when the row update fails. A failed
+`save_edit` therefore leaves *new* passwords next to *old* host/user: an account that cannot connect, with
+no way for the user to tell which half is stale.
+**Fix (the obvious delete is wrong):** the vault key belongs to the **existing** account, so deleting it on
+failure wipes the credentials of an account that is still configured and working. Instead either (a) update
+the row first and only write secrets once it succeeds, or (b) re-save the previous secrets on the failure
+path. (a) is the smaller change.
 
-### A13 · low · dead `async fn` holding `&Db` across `.await`
+### A13 · low · dead `async fn` holding `&Db` across `.await` — confirmed
 `store/account_form.rs:240-245` — the future is `!Send` (`&Db` is `!Send`). Both adapters deliberately avoid it
 (`crates/mailffi/src/api/accounts.rs:75-96` documents "split-phase so the future stays `Send`"), leaving this
 wrapper with only its own tests as callers and the FRB pool unavailable to it.
 **Fix:** delete it, or drop the `db` parameter.
 
-### A14 · low · silent truncation casts
+### A14 · low · silent truncation casts — confirmed
 `store/accounts.rs:17,20`, `store/folders.rs:18-21`, `store/messages.rs:42,61`, `store/queue.rs:72` —
 `row.get::<_, i64>(5)? as u16` / `as u32` / `as u64` on every port / uid / count. A port stored as 70000
-reads back as 4464; a negative `size` reads back as 1.8e19. Only reachable via a hand-edited DB, but silent.
+reads back as 4464; a negative `size` reads back as 1.8e19.
 **Fix:** `u16::try_from(v).unwrap_or_default()` or a checked conversion with a warning.
 
-### A15 · medium · full-table scan + full Rust sort on every keystroke
-`store/contacts.rs:399-413` — `suggest(db, prefix, 10)` reads *every* contact and fuzzy-scores in memory;
-`idx_contacts_seen` is only used by the empty-query branch (`:382`). `cleanup_candidates` (`:472-487`) is the
-same. At a few thousand contacts this is a visible per-keystroke stall in the composer.
-**Fix:** prefilter with `like` in SQL, or memoize the contact list between keystrokes.
+### A15 · medium · full-table scan + full Rust sort on every keystroke `[corrected]`
+`store/contacts.rs:399-415` — `suggest(db, prefix, 10)` reads **every** contact and fuzzy-scores it in
+memory via `match_score` (`contacts.rs:341`); `idx_contacts_seen` is only used by the empty-query branch
+(`:382`). `cleanup_candidates` (`:472-487`) is the same.
+**Fix (a `LIKE` prefilter is wrong):** `match_score`/`score_field` is a subsequence/prefix scorer, so
+`like '%q%'` would drop legitimate matches (query `abc` against contact `aXbXc`). Either build the pattern
+from the query itself (`like '%a%b%c%'`, preserving subsequence semantics) or memoize the contact list
+between keystrokes.
 
-### A16 · low · v12's folder selector can rename an already-correct path *(suspected)*
-`db/migrations.rs:470-476` — `where path like '%&%-%'` then `decode_modified_utf7`; since `sync/imap/utf7.rs:31-33`
-maps `&-` → `&`, an already-decoded mailbox literally named `Foo&-Bar` decodes to `Foo&Bar ≠ path` and the
-"leftover UTF-7 detection" renames a correct folder to a wrong one. Pre-v12 DBs, one-shot.
-**Fix:** guard with `encode_modified_utf7(&decoded) == path` before renaming.
+### A16 · `[removed]` — not a bug
+`db/migrations.rs:470-476`'s `where path like '%&%-%'` + `decode_modified_utf7` is correct: before v12 every
+stored path was raw server form, so decoding it is the right operation. The suggested guard
+(`encode_modified_utf7(&decoded) == path`) holds for pre-v12 data too, so it would not prevent the rename it
+was meant to prevent. No action.
 
 ### A17 · low · duplication and dead code
 - `store/contacts.rs:380-396`, `:399-413`, `:472-487` — three copies of the same query + row mapping.
 - `store/settings.rs:314-329` vs `:487-502` — `get_delay_secs` / `get_sync_interval` are one function twice.
 - `store/messages/attachments.rs:212-218` `delete_attachments_for_message` — **verified** no non-test callers.
   Dead per AGENTS.md; delete it and its test.
-- `store/undo.rs:171-176` — `messages::get_by_uid` in a loop over a whole selection: N+1 over `get_by_uid`.
+- `undo.rs:171-176` — `messages::get_by_uid` in a loop over a whole selection: N+1 over `get_by_uid`.
 
 ### A18 · low · column-order drift between `schema.sql` and an upgraded DB `[verify]`
 `ALTER TABLE ADD COLUMN` always appends, so an upgraded DB puts `accounts.from_name`, `folders.server_total`,
@@ -203,12 +261,13 @@ let mut conn = SmtpConnection::connect((host, port), None, &hello, wrapper, None
 lettre 0.11 with `smtp-transport`/`pool` is the **blocking** transport; `send_raw` does connect+TLS+AUTH+DATA
 inline. `.timeout(None)` is not "the default" — it disables both the connect timeout and the read/write
 timeouts, so the doc comment "sends keep the transport default" is wrong. The `mailclient-net`
-current-thread runtime blocks forever on a half-open SMTP socket and every queued IMAP job stops until
+current-thread runtime then blocks forever on a half-open SMTP socket and every queued IMAP job stops until
 restart. The DSN path has no timeout at all.
-**Fix:** `.timeout(Some(secs(30)))` everywhere, and move the blocking submit off the runtime (`spawn_blocking`
-or a dedicated SMTP thread).
+**Fix:** `.timeout(Some(secs(30)))` everywhere. `spawn_blocking` alone does **not** fix this — the single-threaded
+runtime still has that job occupying its only worker slot, so the queue stays blocked. The timeout is the fix;
+moving off the runtime only reduces the blast radius.
 
-### B2 · medium · `COMMAND_TIMEOUT` bounds each *read*, not the command
+### B2 · medium · `COMMAND_TIMEOUT` bounds each *read*, not the command `[corrected]`
 `sync/imap/session.rs:122-128` (and `session/idle.rs:150-155`, `read_greeting`)
 
 ```rust
@@ -216,7 +275,10 @@ loop { let event = tokio::time::timeout(COMMAND_TIMEOUT, self.stream.next(&mut s
 ```
 Each iteration gets a fresh 30 s. A server that sends any untagged noise at <30 s intervals (`* OK Still
 here`, a quota notice, or a hostile drip) keeps the loop alive indefinitely while the tagged reply never arrives.
-**Fix:** `let deadline = Instant::now() + COMMAND_TIMEOUT` once before the loop.
+**Fix (a single 30 s deadline is wrong):** one `Instant::now() + COMMAND_TIMEOUT` for the whole command would
+fail large legitimate `FETCH BODY.PEEK[]` responses that take longer than 30 s to dribble in. Use a
+command-scoped deadline derived from the command's expected size, or keep the per-read timeout and add a
+separate, longer overall cap (e.g. `COMMAND_TIMEOUT` idle, plus an absolute bound per command kind).
 
 ### B3 · medium · no error classification; a dead session is reused
 `sync/imap/session.rs:151-156,163-171`, `session/mailbox.rs:63-77,162-181`, `sync/headless.rs:285`
@@ -232,10 +294,7 @@ force a reconnect.
 
 ### B4 · medium · unbounded accumulation of one command's response
 `sync/imap/session.rs:139-141` + `sync/imap/types.rs:18,44` — `uid_fetch_messages` asks for `FETCH_CHUNK = 100`
-full `BODY.PEEK[]` bodies in one command with no byte budget. The 25 MiB cap (`MAX_ATTACHMENT_BYTES`) applies
-*after* parsing, i.e. after the whole response is resident. One 100-message chunk of newsletters is gigabytes
-in RAM; a hostile or merely enthusiastic server OOMs the process.
-**Fix:** budget per command (abort past e.g. 64 MiB) and/or smaller chunks plus `BODY.PEEK[]<0.N>` partials.
+full `BODY.PEEK[]` bodies in one command. See B19 for the transport-level cap and the corrected scope of this.
 
 ### B5 · low · unbounded net-job queue; one pool thread per send
 `mailapp/src/bridge/worker.rs:143-172` (`mpsc::channel()` is unbounded; `spawn_flag_push`'s
@@ -244,29 +303,27 @@ throwaway `SmtpTransport`, spawning a `lettre-connection-pool` thread that lives
 A 50-row outbox flush spawns 50 threads.
 **Fix:** build the transport once per flush; cap/coalesce the net queue.
 
-### B6 · low · one sleeping OS thread per undo
-`mailapp/src/bridge/worker.rs:135-141`, `crates/mailffi/src/net.rs:280-287` — `std::thread::spawn` + `sleep`
-per undoable action. Unbounded if the user hammers delete/move.
-**Fix:** coalesce on the existing in-flight table (see E10).
+### B6 · `[removed]` — same as D8
+One sleeping OS thread per undoable action. Kept as **D8**, which covers both frontends
+(`mailapp/src/bridge/worker.rs:135-141` and `crates/mailffi/src/net.rs:288-294`).
 
-### B7 · medium · UIDVALIDITY change wipes the cache before the replacement exists
-`sync/imap/engine/sync.rs:88-95`
+### B7 · medium · UIDVALIDITY change wipes the cache before the replacement exists — confirmed
+`sync/imap/engine/sync.rs:77-81`
 
 ```rust
-if validity_changed { messages::delete_by_folder(db, folder_id)?; }
+if validity_changed { log::warn!(…); messages::delete_by_folder(db, folder_id)?; }
 ```
 Deletion happens at the top of `sync_folder_window`; every later step (flag fetch, backfill, Sent copy,
 connection drop, task abort in `push.rs:181-187`) can leave the folder locally **empty** with the
 badge/notification baseline lost until the next successful sync.
 **Fix:** fetch the new window first (staging table) or defer the delete / write a "resync pending" marker.
 
-### B8 · low-medium · step 3 uses the stale modseq after a validity change
-`sync/imap/engine/sync.rs:222-230` vs `:191-195` — step 2 correctly zeroes `flags_since` when
-`validity_changed`, but step 3 (`older_existing`, messages outside the window) uses `folder.highest_modseq`,
-a modseq from a mailbox incarnation that no longer exists.
-**Fix:** `let flags_since = if condstore_enabled && !validity_changed { folder.highest_modseq } else { 0 }` in step 3 too.
+### B8 · `[removed]` — the premise is false
+`engine/sync.rs:81` (`delete_by_folder`) runs **before** `engine/sync.rs:141`
+(`let local_uids = messages::list_uids(...)`), so after a validity change `local_uids` is empty and
+step 3's `older_existing` (`:223`) is empty. The stale `folder.highest_modseq` is never used. No action.
 
-### B9 · low · Trash `\Seen` sweep clobbers starred/draft locally
+### B9 · low · Trash `\Seen` sweep clobbers starred/draft locally — confirmed
 `sync/imap/engine/sync.rs:55-59` with `store/messages/flags.rs:89-93`
 
 ```rust
@@ -276,32 +333,43 @@ let _ = messages::set_flags_by_uid(db, account_id, folder_id, *uid, true, false,
 `is_draft` is forced false until the next sync re-fetches.
 **Fix:** a read-only setter, or pass the row's current starred/draft.
 
-### B10 · low-medium · Trash sweep writes local state the server may not have
+### B10 · low-medium · Trash sweep writes local state the server may not have — confirmed
 `sync/imap/engine/sync.rs:49-60` — the STORE failure is only `log::warn`ed, yet local rows are marked read
 unconditionally. A server rejecting the STORE (read-only mailbox, quota) leaves a permanent local/server
 disagreement that nothing re-pushes, because the rows are not `flags_dirty`.
 **Fix:** update locally only after a successful STORE, or mark the rows dirty.
 
-### B11 · low · partial move deletes rows for UIDs the server may still hold *(suspected)*
-`sync/imap/engine/mutate.rs:107-109` — `uid_move` (COPY+STORE+EXPUNGE) can partially apply (per-UID
-ACL/quota) before failing; `delete_many_by_uids` then removes rows for messages still in the source folder.
-Self-healing only for UIDs inside the next window's search range.
-**Fix:** delete only the UIDs the server confirmed, or re-SEARCH the source before deleting.
+### B11 · medium · two real bugs where the first draft put a phantom `[corrected]`
+Withdrawn: the original claim (rows deleted after a failed move) is impossible, because
+`session.uid_move(&clean, dest_path).await?` (`engine/mutate.rs:107`) returns before
+`messages::delete_many_by_uids`. The two genuine defects nearby are:
 
-### B12 · low · `move_uids_to` pre-marks `\Seen`, leaving both sides inconsistent on failure
-`sync/imap/engine/mutate.rs:99-106` — a failed `uid_move` after a successful `\Seen` STORE leaves
-local-unread / server-read with no dirty flag to reconcile it.
-**Fix:** mark seen after the move succeeds.
+**B11a** · `engine/mutate.rs:107` + the `uid_move` fallback — when `UID MOVE` is unavailable or fails noise,
+the fallback path is `UID COPY` + `UID STORE \Deleted` + `UID EXPUNGE`. After a **timeout** between the
+COPY and the EXPUNGE the messages can end up in both folders on the next sync, because the local delete
+already ran and the server still holds a copy in the source.
+**B11b** · `engine/mutate.rs:121` + `session.rs` `uid_expunge` — the per-UID `UID EXPUNGE` fallback, when
+`UIDPLUS` is absent, degrades to a **mailbox-wide** `EXPUNGE`, deleting every other message carrying
+`\Deleted` in that mailbox, including ones this client never touched.
+**Fix:** for B11a, re-`SEARCH` the source after a fallback move before deleting locally; for B11b, only take
+the mailbox-wide EXPUNGE when the client can confirm no other `\Deleted` messages exist, or leave the
+EXPUNGE to the server/next session.
 
-### B13 · low · sessions checked back into the pool after an error
+### B12 · `[removed]` — the ordering is deliberate
+`engine/mutate.rs:99-106` marks `\Seen` **before** `uid_move` on purpose: after the move the UIDs belong to
+the **destination** folder, so a subsequent `set_flags_by_uid` on the source folder would not find them.
+The only residual effect of a failed move after a successful STORE is local-unread vs server-read, which the
+next flag refresh corrects. No action.
+
+### B13 · low · sessions checked back into the pool after an error — confirmed
 `sync/pool.rs:89-92,113` vs `sync/attachments.rs:30-33` — the pool documents that anything but clean
 completion should drop the session, but `imap.checkin()` also runs on the error path. It self-heals via
 `is_healthy()`, but a timed-out session goes back with stale reply data pending.
 **Fix:** `drop(imap)` / explicit discard on the error path.
 
-### B14 · low · `disconnect()` (a syscall) runs under the global pool mutex
-`sync/pool.rs:103-117,133-143` — harmless today, but it serializes every account's checkout behind a close.
-**Fix:** take the session out of the guard, drop the lock, then disconnect.
+### B14 · `[removed]` — no lock is held
+`checkin()` (`pool.rs:101-112`) does `drop(pool)` **before** `s.disconnect()`, and the `Drop` impl
+(`pool.rs:127-137`) never holds the mutex at all. `disconnect()` only clears the stored session. No action.
 
 ### B15 · medium · `task.abort()` can stop a push account mid-`push_check`
 `sync/push.rs:181-192`
@@ -320,24 +388,37 @@ aborted. A task stuck in the no-timeout SMTP send (B1) or a 30 s-per-read IMAP c
 thread alive for minutes.
 **Fix:** `abort()` then `await` with a timeout.
 
-### B17 · low · push swallows real errors, keeping the account "healthy"
-`sync/push.rs:373-382` — `report.errors` are ignored unless the session fails a NOOP, so a permanently
-failing outbox/SMTP never increments `failures` and never enters the 30 s→15 min backoff.
-**Fix:** surface send-path errors into the witness for a failing account.
+### B17 · low · send-path failures do not feed the backoff `[corrected]`
+`sync/push.rs:373-382`
 
-### B18 · low-medium · sync lock is TOCTOU-racy and recursively unbounded
-`sync/headless.rs:498-527` — an empty or partially-written pid file parses to nothing → `is_none_or(...)` yields
-"stale" → `remove_file` → retry. Two processes can each conclude the lock is stale and each hold it;
+```rust
+let report = background::push_check(&ctx.db, &ctx.db_path, account, imap).await;
+if !report.skipped { ctx.listener.report(&report); }          // errors DO reach the UI
+if !report.errors.is_empty() && !imap.is_healthy().await { return Err(…); }
+```
+Withdrawn: the claim "push swallows real errors" is false — `ctx.listener.report(&report)` forwards every
+report, errors included, so they do reach the UI. The residual, narrower truth is that `report.errors` only
+increments the account's failure counter via the NOOP branch, so a permanently failing outbox/SMTP never
+enters the 30 s→15 min backoff for that account and is retried at full rate instead.
+**Fix:** let `report.errors` count towards the witness failure tally.
+
+### B18 · low-medium · sync lock is TOCTOU-racy and recursively unbounded — confirmed
+`sync/headless.rs:498-527` — an empty or partially-written pid file parses to nothing → `is_none_or(...)`
+yields "stale" → `remove_file` → retry. Two processes can each conclude the lock is stale and each hold it;
 `acquire_sync_lock` also recurses without a depth bound (stack overflow if the path keeps coming back
 "stale", e.g. a directory at that path).
 **Fix:** `flock` / atomic create-and-verify, and a bounded loop instead of recursion.
 
-### B19 · medium · per-message attachment budget is only part-count × 25 MiB
+### B19 · low · per-message attachment budget is only part-count × 25 MiB `[corrected]`
 `sync/imap/parse.rs:150,157-159` + `sync/imap/engine/sync.rs:439-470` — `fetch_attachments` parses with
 `with_bytes = true` and stores up to `MAX_ATTACHMENTS_PER_MESSAGE` (50) parts × `MAX_ATTACHMENT_BYTES`
 (25 MiB) = 1.25 GiB into SQLite for a single message. Only *inline* images have a per-message budget
 (`MAX_INLINE_BYTES_PER_MESSAGE`).
-**Fix:** a per-message byte budget for the download path (see C4).
+Scope correction: B4's "no byte budget on the response" is wrong at the transport level — imap-next 0.3.4
+already caps each response (`imap-next/src/client.rs:53`, `max_response_size: 100 * 1024 * 1024`). So the
+real exposure is 100 MiB resident per response before parsing, not unbounded.
+**Fix:** a per-message byte budget for the download path (see C4), and rely on the imap-next cap for the
+transport side.
 
 ### B20 · low · systemic blocking SQLite on the async runtime
 Every `messages::upsert` / `set_flags_by_uid` inside `sync_folder_window`'s loops
@@ -369,7 +450,7 @@ let punycode = label.len() >= 4 && label[..4].eq_ignore_ascii_case("xn--");
 ```
 `label.len() >= 4` does not guarantee that byte 4 is a char boundary. `domain_label`
 (`badge.rs:93-110`) pops the TLD first, so a **single-label** domain with a multi-byte char is enough —
-no dot needed. Verified with the real `domain_label`:
+no dot needed. `[verify]` with the real `domain_label`:
 
 | sender | label | `len()` | `label[..4]` |
 |---|---|---|---|
@@ -385,15 +466,14 @@ search hit, or opening a message. Behind the cxx-qt/JNI boundary the unwind abor
 the job.
 **Fix:** `let punycode = label.get(..4).is_some_and(|p| p.eq_ignore_ascii_case("xn--"));`
 
-### C2 · high · quadratic entity decode: ~9.3 s CPU on one crafted mail `[verify]`
+### C2 · high · quadratic entity decode, applied twice per mail `[verify]` `[corrected]`
 `html/entities.rs:14`
 
 ```rust
 if let Some(semi) = s[i..].find(';').filter(|n| *n < 24) {
 ```
 `find(';')` scans to the **end of the string** before `< 24` is applied. Text nodes are split at `<`, so a
-512 KB tag-free body is one node, and `sanitize` feeds it to `decode_entities` (`html/sanitize.rs:147`) and
-`html_to_text` does it again. Measured with the exact algorithm:
+tag-free body is one node. `[verify]` with the exact algorithm:
 
 | n | elapsed |
 |---|---|
@@ -402,12 +482,16 @@ if let Some(semi) = s[i..].find(';').filter(|n| *n < 24) {
 | 80 000 | 210 ms |
 | 512 000 | **9.32 s** |
 
-Input: a body of `"&".repeat(512_000)`. ~19 s of the net/GUI thread per crafted mail; a mailing list of these
-starves every other job.
+Input: a body of `"&".repeat(512_000)`. There is no body-size cap on ingest
+(`sync/imap/parse.rs`, `mime.rs`), so a hostile sender can store a body that large.
+**Correction that raises severity:** the decode runs **twice** per mail — `html::sanitize`
+(`html/sanitize.rs:147`) and `html::html_to_text`, the latter on the **pre-sanitize** `candidate_html`
+(`feed.rs:390`, also `sync/sender/message.rs:90-137`), neither capped. ~19 s of the net/GUI thread per
+crafted mail; a mailing list of these starves every other job.
 **Fix:** bound the window before searching — `s.as_bytes()[i+1..].iter().take(24).position(|&b| b == b';')`
 — and treat "no `;` within 24 bytes" as a literal `&` without scanning further.
 
-### C3 · medium · CSS clickjacking: invisible full-body link overlay survives sanitizing
+### C3 · medium · CSS clickjacking: invisible full-body link overlay survives sanitizing `[corrected]`
 `html/css.rs:70-73` allows `display`, `width`/`height`, `margin`, `opacity`; `allowed_display` permits
 `block`; `safe_value("0")` passes. `presentational(tag, "style", v)` (`sanitize.rs:81`) applies it to **any**
 allowed tag, including `a`.
@@ -418,10 +502,12 @@ allowed tag, including `a`.
 The reader document CSS (`html/reader.rs:293-307`) only sets `a{color}` — no `pointer-events` guard — so the
 transparent rectangle covers the mail and steals the click. The CSP keeps `style-src 'unsafe-inline'`, so
 nothing blocks it downstream.
+Severity trimmed from medium-high: the user must click inside the overlay, and the click is at a chosen
+point rather than a guaranteed one. Still in-page phishing with no script and no permission prompt.
 **Fix:** clamp `opacity` to a visible minimum (or drop the declaration below ~0.15), and refuse
 `display:block` + size on `a`.
 
-### C4 · medium · no parse-side size cap: a 25 MB `.ics`/`.vcf`/DSN is parsed on every open
+### C4 · medium · no parse-side size cap: a 25 MB `.ics`/`.vcf`/DSN is parsed on every open — confirmed
 The caps only gate what sync *pre-caches* (`sync/imap/parse.rs:239-253`, 64 KB / 256 KB). On an explicit
 download `fetch_attachments` runs `extract_attachments(&parsed, true, …)` and `replace_attachments` stores
 **every part up to 25 MiB**; the feed then parses those bytes with no cap:
@@ -438,82 +524,94 @@ repeated on every message selection.
 **Fix:** re-apply the caps in the feed (`<= 64 * 1024` before `parse_ics_bytes`, `<= 256 * 1024` before
 `parse_vcard_bytes`/`parse_dsn`) and cap `calendar`'s component stack (C15).
 
-### C5 · medium · unbounded DSN recipient expansion
+### C5 · medium · unbounded DSN recipient expansion — confirmed
 `report.rs:152` — `parse_dsn` has no recipient cap (unlike `vcard.rs:15`'s `MAX_ENTRIES`). Every block with a
 `Final-Recipient` becomes a 7-field struct serialized into `message_json`. A 20 MB `message/delivery-status`
 part of ~600 000 `Final-Recipient:` blocks yields several hundred MB of `ReportRecipient`s plus a multi-MB
 JSON payload, on every message open.
 **Fix:** cap `dsn.recipients` (e.g. 50) as the vCard parser does.
 
-### C6 · medium · an unclosed drop-content tag swallows the rest of the message
+### C6 · medium · an unclosed drop-content tag swallows the rest of the message `[corrected]`
 `html/sanitize.rs:44-58` — nothing but a matching close tag ever lowers `drop_depth`; not `</html>`, not
 `</body>`, not EOF. `drop_content_tag` includes `style`, `head`, `template`, `form`, `title`, `noscript`
-(`html/tags.rs:100-117`). Input `<p>visible</p><template>` (or `…<style>p{color:red}`, or any mail whose
-`</style>` was mangled in transit) silently discards everything after it — `if drop_depth == 0` at
-`sanitize.rs:146` gates every text run. Content-loss DoS: a mail can hide its own body from the reader, or
-hide a tracked signature block from a spam filter that consumes this text.
+(`html/tags.rs:100-117`). `if drop_depth == 0` at `sanitize.rs:146` gates every text run.
+**Correction that raises the impact:** the most realistic trigger is a real mail whose `<head>` is never
+closed — which most mail has — so the whole body disappears, not just an optional trailer. Also reachable
+via `<p>visible</p><template>`, or any `</style>` mangled in transit.
 **Fix:** reset `drop_depth` to 0 at EOF, and/or treat `</html>`/`</body>` and a second document-level
 `<style>` as closing.
 
-### C7 · low-medium · `is_public_remote` misses link-local / ULA / CGNAT / non-dotted hosts
-`html/urls.rs:42-63` rejects `localhost`, `127.`, `10.`, `192.168.`, `::1`. Missing `169.254.0.0/16`
-(incl. cloud metadata `169.254.169.254`), `100.64.0.0/10`, `fc00::/7`, `fe80::/10`, `0.0.0.0`, and
-`inet_aton` forms (`2130706433`, `127.1`). An `<img src="http://169.254.169.254/latest/meta-data/…">` is
-fetched whenever the user enables remote images — the response is not readable, so this is internal port
-scanning / metadata probing, not exfiltration.
-**Fix:** parse the host as an IP and reject all non-global ranges (`!ip.is_global()`), keeping the literal
-denylist as a fallback.
+### C7 · medium-high · `is_public_remote` accepts every bracketed IPv6 host and the metadata IP `[corrected]`
+`html/urls.rs:42-63`
 
-### C8 · low · a bogus comment/PI with no closing token swallows the rest
+```rust
+let host = host.split(':').next().unwrap_or("");     // <-- mangles IPv6 to "["
+if host.is_empty() || host == "localhost" || host.starts_with("127.")
+    || host == "[::1]" || host == "::1" || host.starts_with("10.") || host.starts_with("192.168.") …
+```
+The `.split(':').next()` on line 43 (added to strip a port) reduces any bracketed IPv6 literal to `"["`,
+which passes every check — so **every** IPv6 URL, `[::1]` included, is treated as public. Independently,
+`169.254.0.0/16` (incl. cloud metadata `169.254.169.254`), `100.64.0.0/10`, `fc00::/7`, `fe80::/10`,
+`0.0.0.0` and `inet_aton` forms (`2130706433`, `127.1`) are all missing. An
+`<img src="http://169.254.169.254/latest/meta-data/…">` is fetched whenever the user enables remote images.
+The response is not readable by the page, so this is internal port scanning / metadata probing, not
+exfiltration.
+**Fix (do *not* use `IpAddr::is_global`):** it is `#[unstable(feature = "ip")]` and will not compile on
+stable. Write the ranges explicitly — v4 `0/8`, `10/8`, `100.64/10`, `127/8`, `169.254/16`, `172.16/12`,
+`192.0.0/24`, `192.168/16`, `198.18/15`, `255.255.255.255`; v6 `::`, `::1`, `fc00::/7`, `fe80::/10` — and
+parse the host with `IpAddr::from_str`, keeping the existing literal list as a fallback. Strip the port
+only when the host is **not** bracket-wrapped.
+
+### C8 · low · a bogus comment/PI with no closing token swallows the rest — confirmed
 `html/tags.rs:132-139` — for `<!-->` the search starts *past* the closing `>`, finds nothing, and consumes
 the rest of the document; `<!--->` likewise. Input `<!--><p>everything after this is gone</p>`.
 **Fix:** if `bytes[i+3] == b'>'` close the comment at `i+4`; likewise for `<!--->`.
 
-### C9 · low · a PI with no `?>` swallows the rest
+### C9 · low · a PI with no `?>` swallows the rest — confirmed
 `html/tags.rs:145-150` — returns `(None, bytes.len())` when `find_sub(bytes, b"?>", i)` finds nothing. HTML
 ends a bogus comment at the first `>`. Input `<p>ok</p><?x ><p>rest</p>` → `rest` never appears.
 **Fix:** end at the first `>` as HTML does, and only treat `<?xml … ?>` as a PI.
 
-### C10 · low · inline-image expansion escapes `MAX_OUT_BYTES`
+### C10 · low · inline-image expansion escapes `MAX_OUT_BYTES` — confirmed
 `html/inline.rs:120-160` — `MAX_INLINE_BYTES_PER_MESSAGE` is 6 MB of raw bytes, and each `cid:` hit appends
 `base64_encode(&img.data)` (~4/3 → ~8 MB) directly to `out` with no `MAX_OUT_BYTES` re-check (unlike
 `sanitize`'s `push_capped`). Four 1.5 MB inline PNGs referenced from `<img src="cid:…">` produce an ~8 MB
 document that `reader::document` embeds.
 **Fix:** count the produced length against `MAX_OUT_BYTES` (or a document budget) and stop substituting.
 
-### C11 · low · `is_body_referenced` re-lowercases the whole body once per attachment
+### C11 · low · `is_body_referenced` re-lowercases the whole body once per attachment — confirmed
 `feed.rs:691-695` — `is_body_referenced` → `img_cid_references(html)` → `html.to_ascii_lowercase()`
 (`html/inline.rs:66`), a full copy + scan of the body **per attachment** (up to 50). 512 KB × 50 ≈ 25 MB of
-copy+scan per message open.
+copy+scan per message open. Much worse now that C2 is known to apply to the same path.
 **Fix:** compute `let refs = html::img_cid_references(body_html)` once outside the filter and test `refs.contains(...)`.
 
-### C12 · low · unbounded Tier-2 similarity scan, no SQL `LIMIT`
+### C12 · low · unbounded Tier-2 similarity scan, no SQL `LIMIT` — confirmed
 `similar.rs:263-275` — `let mut rows = stmt.query(params![account_id, target_from])?;` with no limit, and
 every row's subject normalized in Rust. The loop only breaks once enough *matching* ids are collected, so a
 sender with a large history and no matches walks the whole set on the feed thread.
 **Fix:** add `limit ?N` (a small multiple of `remaining`) or stream with an explicit cursor.
 
-### C13 · low · dead branch in mime sniffing
-`mime.rs:299-313`
+### C13 · `[removed]` — documented decision, not a dead branch
+`mime.rs:288-311` — the identical `return None` arms look dead, but the comment above them states the rule:
+"A ZIP-subtype sniff (docx/xlsx/…) is more specific than a plain ZIP or generic header, but never overrules a
+different specific type." Collapsing or changing it would reverse that decision. If anything, add a comment
+noting the two arms are intentionally identical. No action.
 
-```rust
-if normalize_declared(declared) != sniffed { return None; }   // line 310
-return None;                                                  // line 312
-```
-Both arms identical. A docx/xlsx whose declared type is a *different specific* type (e.g. `application/msword`
-on OOXML bytes) keeps the wrong type, so `paths::safe_attachment_name_for_mime` leaves the wrong extension
-and the OS opens the wrong app.
-**Fix:** `return Some(sniffed.to_string())` for the mismatch case, or collapse the block.
-
-### C14 · low · fragile fixed-width slice in vcard
+### C14 · low · fragile fixed-width slice in vcard `[corrected]`
 `vcard.rs:369` — `s[..1].make_ascii_uppercase();` is safe only because `s` is always one of
 `"mobile" | "fax" | "pager"` today. Same class as C1.
-**Fix:** `s.get_mut(..1).map(str::make_ascii_uppercase)`.
+**Fix (the one-liner form fails clippy):** `Option::map` with `str::make_ascii_uppercase` (which takes
+`&mut self`) trips `clippy::explicit_auto_deref`/borrow errors under `-D warnings`. Use
+`if let Some(c) = s.get_mut(..1) { c.make_ascii_uppercase(); }`.
 
-### C15 · low · calendar component stack has no cap
-`calendar.rs:157-211` — `stack.push(comp)` runs per `BEGIN:` and only `END`/`truncate(pos)` ever shrinks it,
-and a non-matching `END` silently does nothing. The main amplifier behind C4.
-**Fix:** cap `stack.len()` and/or bail out after N components.
+### C15 · medium · calendar component stack: unbounded, and quadratic on `END` `[corrected]`
+`calendar.rs:157-211` — `stack.push(comp)` runs per `BEGIN:` with no cap, and the matching `END` does
+`stack.iter().rposition(|c| *c == comp)` (`:200`), a full scan per `END`. A 25 MB `.ics` of
+nested `BEGIN:X`/`END:X` is therefore **O(n²)** on top of the memory blowup, so a 25 MB file effectively
+hangs rather than merely allocating. This is the amplifier behind C4 and the reason C4 is not just a
+memory issue.
+**Fix:** cap `stack.len()` (e.g. 64) and bail out past it, and stop the scan early — the only legal
+`END` target is the top of the stack, so compare against `stack.last()` first.
 
 **Checked and found sound (no action):**
 - Tag/attribute allow-list: `allowed_tag` + `presentational` + the `a`/`img` match allow **no** URL sink other
@@ -544,67 +642,80 @@ and a non-matching `END` silently does nothing. The main amplifier behind C4.
 
 ## D. Qt frontend — `crates/mailapp/`
 
-### D1 · high · `expect()` on the GUI thread in the net-thread bootstrap
+### D1 · high · net-thread bootstrap `expect`s, and a latched `busy` `[corrected]`
 `crates/mailapp/src/bridge/worker.rs:143-172`
 
 ```rust
 let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime for mailclient-net");
 … .spawn(move || { … }).expect("mailclient-net thread");
 ```
-`net_tx()` is lazily initialised from the first `spawn_job`/`spawn_flag_push`, i.e. from inside a
-`#[qml_element]` method on the GUI thread. A runtime-build failure or thread-spawn failure (rlimits) aborts
-the GUI process from a QML click, and every later job silently no-ops (the `let _ = net_tx().send(...)`
-swallows it).
-Otherwise clean: no `unwrap()`/indexing in the `Bridge`/`SettingsBridge` invokables; the
-`uid < 0` / `folder_id < 0` / `Ok(db) = shared_db()` guards are applied consistently.
-**Fix:** initialise the runtime at startup and return an error to QML instead of `expect`.
+`net_tx()` is lazily initialised from the first `spawn_job`/`spawn_flag_push`, i.e. from a QML click on the
+GUI thread; both `expect`s abort the process there, and every later job silently no-ops (the
+`let _ = net_tx().send(...)` swallows it).
+**Correction that raises the severity:** the net thread itself cannot die — `worker.rs:163-167` wraps every
+job in `guard("background job", …)`, so a panic inside a job is caught and the `while let Ok(job) = rx.recv()`
+loop continues. The real second-order failure is `busy`: `spawn_job` sets it (`worker.rs:191`) and only
+clears it inside the `qt.queue` completion callback (`worker.rs:227`). If that callback never runs —
+`shutdown`, or the `queued` `Err` branch at `worker.rs:235` that the code itself flags with a comment — `busy`
+stays latched and **every later job is refused** with the busy message until restart.
+**Fix:** initialise the runtime eagerly at startup and return an error to QML instead of `expect`; clear
+`busy` in the shutdown/failure path at `worker.rs:235`.
 
-### D2 · medium · unchecked narrowing on a destructive bulk path
-`crates/mailapp/src/bridge/messages.rs:40`
+### D2 · medium · unchecked narrowing on a destructive bulk path — confirmed
+`crates/mailapp/src/bridge/messages/bulk.rs` (uid guard is in `crates/mailapp/src/bridge/messages.rs:40`)
 
 ```rust
 let uid = x.as_u64().ok_or_else(|| "invalid selection".to_string())? as u32;
 ```
-`parse_hits_json` guards the same cast (`messages.rs:76-80`: `if folder.is_empty() || uid == 0 || uid > u64::from(u32::MAX)`).
+`parse_hits_json` guards the same cast (`bridge/messages.rs:76-80`: `if folder.is_empty() || uid == 0 || uid > u64::from(u32::MAX)`).
 A payload uid above `u32::MAX` wraps and `mark_read_many`/`set_star_many`/`delete_many`/`archive_many`/
-`move_many`/`purge_many` (`bridge/bulk.rs:23-99`) act on a *different* message id. Today the feed cannot
-produce one — it is a missing guard on a destructive path.
+`move_many`/`purge_many` act on a *different* message id. Today the feed cannot produce one — it is a missing
+guard on a destructive path.
 **Fix:** mirror the `parse_hits_json` guard.
 
 ### D3 · medium · every message API crosses the bridge as `uid: i32` while `mailcore` UIDs are `u32` *(suspected)*
 `bridge.rs:221,226,279,285,291,296,302,312,317,322,415,421,426,433,491,496,506,514,520,525,537,647,653` vs
 `mailcore/src/models.rs:134`. A UID ≥ 2³¹ arrives negative and every method bails out
-(`messages.rs:104-107`), so such mail cannot be opened, starred, deleted or exported from Qt at all.
-`find_similar_json` is worse: `uid as i64` (`messages.rs:221`) sign-extends the negative value into the SQL
-`uid = ?` comparison, so it silently matches nothing. Real servers exceed 2³¹ on large mailboxes — hence
-"suspected" rather than confirmed.
+(`bridge/messages.rs:104-107`), so such mail cannot be opened, starred, deleted or exported from Qt at all.
+`find_similar_json` is worse: `uid as i64` (`bridge/messages.rs:221`) sign-extends the negative value into
+the SQL `uid = ?` comparison, so it silently matches nothing. Real servers exceed 2³¹ on large mailboxes —
+hence "suspected" rather than confirmed.
 **Fix:** widen to `i64`/`u32` for uid and add a range guard.
 
-### D4 · low · uid/attachment ids kept in QML `int`
+### D4 · low · uid/attachment ids kept in QML `int` — confirmed
 `EmlExportDialog.qml:13`, `MessageView.qml:93`, `Main.qml:61` use 32-bit signed properties/signals.
 `MessageView.showRemoteOnce` compares a `double` (`root.message.uid`, MessageView.qml:130) against an `int`
 (`messageUid`), which disagree above 2³¹. Attachment ids are the same shape: feed/`i64`
-(`messages::get_attachment(db, attachment_id as i64)`, `messages.rs:386`) squeezed through
+(`messages::get_attachment(db, attachment_id as i64)`, `bridge/messages.rs:386`) squeezed through
 `attachment_id: i32` (`bridge.rs:415,421`). Low because SQLite rowids that high are implausible.
-Verified-correct for contrast: `bridge.rs:877-878` (`.min(i32::MAX as u64) as i32`), `messages.rs:250,116,135`.
+Verified-correct for contrast: `bridge.rs:877-878` (`.min(i32::MAX as u64) as i32`), `bridge/messages.rs:250,116,135`.
 
 ### D5 · high · whole-cache JSON re-serialised on the GUI thread per interaction
-`crates/mailapp/src/bridge/worker.rs` (net rule verified sound) vs `crates/mailapp/src/bridge.rs:861-910`
-`push_feeds` — `shared_db()` (`bridge.rs:768-795`) is a leaked per-thread `rusqlite::Connection` used from
-~40 `#[qml_element]` methods. Documented as deliberate, but silent where it hurts:
-`push_feeds` re-serialises the **entire folder cache** and assigns it to a `QString` property on the GUI
-thread — on every `open_message`, `toggle_star`, `mark_read`, `select_folder`, `set_sort`, and after every
-finished job (`worker.rs:223-225`), with the limit set to the full cached count
-(`bridge.rs:873`, `feed::messages_list_json_paged(db, folder_id, cached, 0)`).
+`crates/mailapp/src/bridge/worker.rs` verifies the *net* rule sound end to end: all IMAP/SMTP runs on the one
+`mailclient-net` current-thread runtime (`worker.rs:143-172`), every job is queued there
+(`bridge/sync.rs:29,96,128,171,202,281`; `composer.rs:40`; `capabilities.rs:12`), and all three signals are
+delivered through `qt.queue(...)` (`worker.rs:75,213,231`). No off-thread signal emission and no dialing-out
+on the GUI thread exist.
+
+The *DB/IO* half does not hold. `shared_db()` (`bridge.rs:768-795`) is a leaked per-thread
+`rusqlite::Connection` used from ~40 `#[qml_element]` methods. Documented as deliberate, but silent where it
+hurts: `push_feeds` (`bridge.rs:861-910`) re-serialises the **entire folder cache** to JSON and assigns it to
+a `QString` property on the GUI thread — on every `open_message`, `toggle_star`, `mark_read`,
+`select_folder`, `set_sort`, and after every finished job (`worker.rs:223-225`), with the limit set to the
+full cached count (`bridge.rs:873`, `feed::messages_list_json_paged(db, folder_id, cached, 0)`).
 Also per keystroke: `MessageList.qml:381` calls
 `list_filter_keep(JSON.stringify(filter), JSON.stringify(rows))` — the whole feed stringified into Rust and
-an index array back — plus `search_json`/`contacts_json` (`bridge.rs:924,176`).
+an index array back — plus `search_json`/`contacts_json` (`bridge.rs:140,176`).
 **Fix:** paged/partial feed pushes; debounce keystroke-driven work onto the net thread.
 
-### D6 · high · file IO and OS IPC on the GUI thread
-- `bridge/composer.rs:81-86` → `sync::sender::inline`: `std::fs::read(&path)` then base64 — reads up to
-  `MAX_INLINE_IMAGE_BYTES` (1.5 MB) and pushes the whole `data:` URL across the bridge, from
-  `Composer.qml:416` inside the drop handler.
+*(D17 from the first draft — "`messages_json` always carries the full local cache" — was the same finding
+seen from `bridge.rs:873`; it is merged here rather than counted twice.)*
+
+### D6 · high · file IO and OS IPC on the GUI thread, size-checked after the read `[corrected]`
+- **`bridge/composer.rs:81-86` → `sync::sender/inline.rs:96-114`:** `compose::image_data_url` does
+  `let bytes = std::fs::read(&path)` **first** and only then `if bytes.len() > MAX_INLINE_IMAGE_BYTES`
+  (1.5 MB). So the *whole* file is read and buffered on the GUI thread from `Composer.qml:416` inside the
+  drop handler, before any size check, and the resulting `data:` URL is then pushed across the bridge.
 - `bridge/composer.rs:125,144` → `stage_forward_files`/`stage_resend_files`/`stage_draft_files`
   (`compose/forward.rs:97`, `compose/drafts.rs:191`) write attachment copies to temp dirs **and** run
   `prune_stale_draft_dirs` (`paths.rs:268-293`, a `read_dir` walk plus `remove_dir_all`) — all on the GUI thread.
@@ -613,64 +724,85 @@ an index array back — plus `search_json`/`contacts_json` (`bridge.rs:924,176`)
 - `bridge/accounts.rs:56` (`add_account` → `account_form::save` → `auth::save_account_secrets` →
   `keyring::Entry`) and `accounts.rs:119` do Secret Service D-Bus round trips on the GUI thread; a hung
   gnome-keyring/kwallet freezes the window.
-**Fix:** move these behind `net_tx()` or a dedicated IO job.
+**Fix:** size-check with metadata (`fs::metadata`) before reading; move all four behind `net_tx()` or a
+dedicated IO job.
 
-### D7 · medium · a SQLite read inside a property *binding*
+### D7 · medium · a SQLite read inside a property *binding* — confirmed, severity trimmed
 `Main.qml:1004-1005` — `autoSyncMinutes: … appSettings.sync_interval_for(backend.current_account_id)` →
 `account_settings::sync_interval` (`store/settings.rs:38-42`). Re-evaluated on every account switch and every
-`syncSettingsRevision++` (Settings.qml:1866).
+`syncSettingsRevision++` (Settings.qml:1866). Severity is medium only in that it is a small indexed read.
 **Fix:** cache the value in `SettingsBridge` behind the existing revision counter.
 
 ### D8 · medium · a new OS thread per undoable action
-`bridge/worker.rs:135-141` `spawn_push_after_grace` spawns a **new OS thread per action**, each sleeping
-grace+1 s. N deletes in one session = N sleeping threads, unbounded by any cap. (Same defect on Android: E10.)
-**Fix:** coalesce into one sleeping task keyed on the in-flight table.
+`bridge/worker.rs:135-141` `spawn_push_after_grace` and `crates/mailffi/src/net.rs:288-294`
+`spawn_push_after_grace` each `std::thread::spawn` a sleeper per undoable action
+(`api/mutate.rs:106,194` calls it). N deletes in one session = N sleeping threads plus N queued IMAP pushes,
+unbounded by any cap. *(This replaces first-draft B6.)*
+**Fix:** coalesce into one sleeping task keyed on the existing in-flight table (E10).
 
 ### D9 · low · timer polling does a DB read
 `Main.qml:993-999` `pendingOpenTimer` (2 s repeat) calls `consume_pending_open()` → a SQLite settings read on
 the GUI thread. Documented as cheap.
 
-### D10 · high · two `ScrollView`s whose content does not bind width to the ScrollView's own id
-`Main.qml:1920-1926` and `Composer.qml:772-781` — the exact pattern the rules forbid ("never
-`parent.availableWidth` — ScrollView reparents its children"):
+### D10 · low · two `ScrollView`s whose content does not bind width to the ScrollView's own id `[corrected]`
+`Main.qml:1920-1926` and `Composer.qml:772-781`
 
 ```qml
 ScrollView { Layout.fillWidth: true; Layout.fillHeight: true; clip: true
     TextArea { id: statusTextArea; text: root.statusText; wrapMode: TextArea.WrapAnywhere; … } }
 ```
-Both children fall back to text-dependent implicit width, so the status text wraps at the wrong width and the
-HTML-source editor wraps far narrower than the pane. Every other ScrollView in the app does it correctly
-(Settings.qml:638,686,741,798,897,1049,1145; MessageView.qml:1326; AccountSetup.qml:219).
-**Fix:** give each ScrollView an `id` and bind the child's width to it.
+**Correction:** a lone `TextArea` inside a `ScrollView` is the standard Qt arrangement, and a `TextArea` with
+`wrapMode` set is not the `parent.availableWidth` antipattern the AGENTS.md rule targets (that rule is about a
+`Column`/`Item` that falls back to its implicit width, disabling wrapping and pushing trailing controls
+off-screen). Every other ScrollView in the app does bind correctly
+(Settings.qml:638,686,741,798,897,1049,1145; MessageView.qml:1326; AccountSetup.qml:219), which is why these two
+look inconsistent — but I could not confirm a wrapping defect without running the GUI, so this is **not**
+rated high and is out of the fix order until checked on a narrow window. The one hard claim worth keeping:
+`statusTextArea` carries a status line whose length is unbounded, and if it *does* wrap at the wrong width a
+long error sentence cannot be read.
+**Fix:** if it reproduces, bind each child's `width` to the ScrollView's own `id`.
 
-### D11 · medium · core protocol parsing in JS
+### D11 · medium · core protocol parsing in JS `[corrected]` — confirmed, severity trimmed
 - `Main.qml:1456-1464` `undoMove(batch)` re-implements how undo batches are encoded — `batch.split(",")`,
-  while Rust joins them in `bridge/bulk.rs:193-197`.
+  while Rust joins them in `bridge/messages/bulk.rs:193-197`.
 - `Main.qml:777` `parseInt(nl < 0 ? r : r.slice(0, nl), 10)` decodes the `"<id>\n<folder>"` pending-open
   payload in JS.
-- `MessagesView.qml:170-181` `joinFileUrl` rebuilds a percent-encoded `file://` URL Rust already has
+- `MessageView.qml:170-181` `joinFileUrl` rebuilds a percent-encoded `file://` URL Rust already has
   (`bridge/messages/files.rs:8-24`).
-- `MessagesView.qml:376-384` `baseName` re-implements filename decoding.
+- `MessageView.qml:376-384` `baseName` re-implements filename decoding.
 
-Presentation-only logic is fine in QML; these are shared-protocol rules and belong in `mailcore`.
+Correction: the fix-order draft referenced `MessagesView.qml:170-181` and `:376-384`; that file does not
+exist — both helpers live in `MessageView.qml` as cited above. Severity is medium because it is duplicated
+parsing logic, not a wrong result.
 **Fix:** expose the parsing from Rust and have QML consume the result.
 
-### D12 · medium · every reader resize rebuilds a Chromium page
-`MessageView.qml:115` `onFitLayoutChanged: root.reloadHtml()` combined with `fitBelow`/`fitLayout`
-(MessageView.qml:79-81) — every resize re-runs `reader_fit_below` over the whole document, rebuilds via
-`wrapDoc`, and `loadHtml`s a fresh page, losing scroll position and flickering during a drag.
-`reader_document` (`messages.rs:253-283`) also re-reads `headerBlock.height` and re-quotes the theme palette
-each time.
-**Fix:** only reload when the layout bucket actually changes; keep the fit decision in Rust and expose a
-`fit_changed` signal.
+### D12 · low · a JNI round trip inside a property binding, plus dead change handlers `[corrected]`
+`MessageView.qml:79-81,115`
 
-### D13 · low · the list mutates a feed it does not own
+```qml
+readonly property int fitBelow: root.isHtml && root.backend ? root.backend.reader_fit_below(root.shownHtml) : 0
+readonly property bool fitLayout: !root.originalColors && root.fitBelow > 0 && bodyLoader.width > 0 && bodyLoader.width < root.fitBelow
+…
+onFitLayoutChanged: root.reloadHtml()
+```
+**Correction:** the first draft claimed every reader resize rebuilds a Chromium page. It does not —
+`fitLayout` is a **bool** with a width threshold, so `onFitLayoutChanged` fires only when `bodyLoader.width`
+crosses `fitBelow`, not per pixel. The suggested fix was already what the code does.
+What remains: `fitBelow` calls `backend.reader_fit_below(root.shownHtml)` — a full JNI round trip over the
+whole document — from inside a **property binding**, re-evaluated whenever `shownHtml` changes; and
+`reloadHtml` also runs on `onRemoteHtmlChanged`/`onLoadRemoteImagesChanged`/`onAllowRemoteOnceChanged`
+(`MessageView.qml:111-113`), which can fire transiently and rebuild the page.
+**Fix:** compute `fitBelow` once per message into a plain property (or cache it in `reader_document`,
+`bridge/messages.rs:253-283`, which already re-reads `headerBlock.height` and re-quotes the theme palette),
+and guard the reloads against no-op changes.
+
+### D13 · low · the list mutates a feed it does not own — confirmed
 `MessageList.qml:454-457` — `hits[i].key = hits[i].folder_id + ":" + hits[i].uid;` writes into `Main.qml`'s
 `searchRows` objects while rebuilding. `MessageList.qml:832` `onContentYChanged: root.rememberScroll()`
 calls `indexAt`/`itemAtIndex` on every scroll-pixel change during a flick.
 **Fix:** build a local proxy list; throttle scroll memory.
 
-### D14 · medium · non-resizable dialogs, against the stated rule
+### D14 · medium · non-resizable dialogs, against the stated rule — confirmed, severity trimmed
 Only the large managers use `AppDialog`; every small aux dialog is a plain `Dialog` with a fixed `width:`
 (and often a fixed `height:`) and no resize grip: `Main.qml:1724-1730` (`deleteConfirm`),
 `Main.qml:1793-1799` (`purgeConfirm`), `Main.qml:1871-1877` (`statusDetailsDialog`, also
@@ -680,7 +812,7 @@ Only the large managers use `AppDialog`; every small aux dialog is a plain `Dial
 status-details dialog is the practical loss: a long error sentence cannot be enlarged.
 **Fix:** migrate to `AppDialog` with geometry memory.
 
-### D15 · low · main window width expression has no floor
+### D15 · low · main window width expression has no floor — confirmed
 `Main.qml:20-21` `width: Math.min(1320, Screen.desktopAvailableWidth - 80)` goes negative on a screen
 narrower than 80 logical px (clamped by `minimumWidth: 380`, but the initial geometry is nonsense).
 Otherwise the responsiveness rules are followed: wrapping labels carry `wrapMode` + bound width, `RowLayout`
@@ -688,7 +820,7 @@ children that must yield carry `Layout.minimumWidth: 0` (BulkActionBar.qml:37, A
 Folders.qml:156, Outbox.qml:127-169, MessageView.qml:830, Settings.qml:1189, AccountSetup.qml:293),
 `Flow`s are `Layout.fillWidth` (Settings.qml:1108,1230; ComposerAttachmentTray.qml:40).
 
-### D16 · medium-high · the reader payload copies each body three times
+### D16 · medium-high · the reader payload copies each body three times — confirmed, severity trimmed
 `mailcore/src/feed.rs:562-565`
 
 ```rust
@@ -699,23 +831,21 @@ A large HTML mail is serialised 3× into one JSON string, copied into a QML JS o
 `currentMessage` while `MessageView` also builds a wrapped document — and `Main.reloadMessages()` re-fetches
 the whole payload after every job finish, star toggle, bulk action and sort change. On top of that,
 `MessageView.showRemoteOnce` (MessageView.qml:130) pulls the same body again through the separate
-`message_html` route (bridge.rs:216-220 documents why).
+`message_html` route (bridge.rs:216-220 documents why). Real memory cost scales with mail size, so medium-high
+rather than critical.
 **Fix:** drop `legacy_body`, paged the feed, and cache the reader document per message.
 
-### D17 · medium · `messages_json` always carries the full local cache
-`bridge.rs:873` — a folder at `MAX_MESSAGE_LIMIT` (2000) pushes 2000 rows × ~15 fields as one `QString`
-property on every feed rebuild (every star toggle, every message open, every job completion), with the
-previous string still alive until Qt swaps the property.
-**Fix:** page the feed or diff it.
+### D17 · `[removed]` — merged into D5
+Same as `bridge.rs:873`; see the note at the end of D5.
 
-### D18 · low · one `WebEngineView` kept alive for the app's lifetime
+### D18 · low · one `WebEngineView` kept alive for the app's lifetime — confirmed
 `Composer.qml` is a `Dialog` parented to `Overlay.overlay` holding `EditorFrame`'s `WebEngineView`
 (EditorFrame.qml:118); closing the dialog hides it but does not release the page, and its 200 ms
 `document.queryCommandState` poll (EditorFrame.qml:158-163) keeps running whenever the dialog is
 invisible-but-`ready`.
 **Fix:** destroy the WebEngineView on close (or stop the poll while hidden).
 
-### D19 · low · a deliberately leaked connection per bridge thread
+### D19 · low · a deliberately leaked connection per bridge thread — confirmed
 `bridge.rs:791` `Box::leak`s a `rusqlite::Connection` per thread that touches the bridge (documented, bounded
 at GUI + net today). The `mpsc` channel in `net_tx()` keeps job closures alive until the net thread drains
 them; nothing caps that queue, so a burst of dropped requests retains all closures until thread exit.
@@ -726,7 +856,7 @@ objects; `backend` references point at objects owned by `Main.qml`). No binding 
 `fitLayout`, filter and scroll-memory paths all resolve without re-entering a binding). `Connections`
 targets and handler names are right (`onJob_finished`/`onJob_progress`/`onUndo_available`). Timers are
 children of their owner. Delegate models use `required property`. `undo_available`/`job_finished`/
-`job_progress` are emitted only from `qt.queue` closures. One nuance: `bridge/bulk.rs:194-195,246-247`
+`job_progress` are emitted only from `qt.queue` closures. One nuance: `bridge/messages/bulk.rs:194-195,246-247`
 emits `undo_available` synchronously on the GUI thread inside the invokable, safe only because the row-level
 emits elsewhere are deferred with `Qt.callLater`.
 
@@ -734,7 +864,7 @@ emits elsewhere are deferred with `Qt.callLater`.
 
 ## E. Native Android + FFI — `crates/mailffi/src/`, `android/`
 
-### E1 · critical · `auth_vault.json` is not excluded from device-to-device transfer
+### E1 · medium · `auth_vault.json` is not excluded from device-to-device transfer `[corrected]`
 `android/app/src/main/res/xml/data_extraction_rules.xml:4-8`
 
 ```xml
@@ -746,30 +876,37 @@ emits elsewhere are deferred with `Qt.callLater`.
 ```
 On API 31+ a `<device-transfer>` section with no `<exclude>` transfers every app-private file, so the
 plaintext secrets file (`mailcore/src/auth.rs:168-183`, written by `init` into `filesDir`) moves to the new
-device.
-**Fix:** add `<device-transfer><exclude …/></device-transfer>` with the same paths.
+device. Note this file is the one referenced by `AndroidManifest.xml:39`
+(`android:dataExtractionRules`) and governs **both** cloud backup and device transfer on API 31+.
+Severity lowered from critical: device-to-device transfer goes to the user's **own** device, so it requires
+the old device to be in the attacker's hands or on the same account.
+**Fix:** add `<device-transfer><exclude domain="file" path="auth_vault.json" /></device-transfer>`.
 
-### E2 · high · the whole local mailbox is in cloud backup
-`android/app/src/main/res/xml/backup_rules.xml:4`, `AndroidManifest.xml:38`
+### E2 · high · the whole local mailbox is in cloud backup — confirmed, fix expanded
+`android/app/src/main/res/xml/backup_rules.xml:4` and `data_extraction_rules.xml:3`, referenced from
+`AndroidManifest.xml:38-39`
 
 ```xml
 <full-backup-content>
     <exclude domain="file" path="auth_vault.json" />
 </full-backup-content>
 ```
-`android:fullBackupContent` with no `<include>` means "everything except these", so `mailclient.sqlite`
-(cached subjects, senders, snippets, and full bodies/attachments once read) and `filesDir/crashes/*.log` are
-uploaded, despite the comment claiming "Mail itself stays on the server".
-**Fix:** also exclude `mailclient.sqlite` (+ `-wal`/`-shm`) and `crashes/`, or set `android:allowBackup="false"`.
+`fullBackupContent` with no `<include>` means "everything except these", so `mailclient.sqlite` (cached
+subjects, senders, snippets, and full bodies/attachments once read) and `filesDir/crashes/*.log` are uploaded
+despite the comment claiming "Mail itself stays on the server".
+**Fix:** exclude `mailclient.sqlite` (+ `-wal`/`-shm`) and `crashes/` **in both files**, since API 31+ reads
+`data_extraction_rules.xml` and older versions read `backup_rules.xml`; or set `android:allowBackup="false"`.
+*(Withdraws first-draft table row 2's claim that passwords leave via cloud backup — the vault is excluded
+from `<cloud-backup>`; E1 is the device-transfer half.)*
 
-### E3 · medium · `MailNative.init()` opens SQLite and migrates on the UI thread
+### E3 · medium · `MailNative.init()` opens SQLite and migrates on the UI thread — confirmed
 `ui/shell/MailShell.kt:291-294` → `ensureInit` → `init()` → `use_data_dir()` + `shared_db()` →
 `mailcore::Db::open` = "Open (creating parent dirs) and migrate to the current schema"
 (`mailcore/src/db/mod.rs:35-43`). When the UI process is the first into the library, a post-update migration
 of a large cache runs on the main thread.
 **Fix:** call `ensureInit` from `MailApplication.onCreate` on a background thread (also fixes E19).
 
-### E4 · low · `spawn` → `forward_busy` invokes Java from the caller's thread
+### E4 · low · `spawn` → `forward_busy` invokes Java from the caller's thread — confirmed
 `crates/mailffi/src/net.rs:259-260`
 
 ```rust
@@ -782,13 +919,22 @@ inside `withContext(Dispatchers.Main)` (`ui/state/MailState.kt:499-505`), so the
 subscriber just `scope.launch(Dispatchers.Main)`.
 **Fix:** run `queue()` on an IO dispatcher in `awaitFinished`.
 
-### E5 · low · every job event attaches and detaches the `mailclient-net` thread
-`crates/mailffi/src/android.rs:1346` and `:247` — `self.vm.attach_current_thread(|env| …)`. The `jni` crate's
-own docs warn against scoped attachment for a long-lived thread; each `queued` + `finished` pair pays a full
-JVM attach/detach.
-**Fix:** hold a permanent `AttachGuard` for the net/monitor thread.
+### E5 · low · attach policy is weaker than assumed `[corrected]`
+`crates/mailffi/src/android.rs:1346` and `:247` — `self.vm.attach_current_thread(|env| …)`.
+**Correction:** jni 0.22's `attach_current_thread` (`jni-0.22.4/src/vm/java_vm.rs:488`) "requests to
+permanently attach the current thread", is cheap when already attached (a TLS check, no JNI call), and
+guarantees attachment for the callback's duration; `attach_current_thread_for_scope` (`:532`) is the scoped
+variant that detaches. So there is **no** per-event attach/detach cost, and no fix is needed for the cost
+itself.
+What remains is accuracy and safety: the call still allocates a `DEFAULT_LOCAL_FRAME_CAPACITY` local frame
+on each invocation, and the "permanently attached" semantics are pre-existing-attachment-dependent (the
+docs warn a scoped attachment higher on the stack takes precedence). The net thread should therefore hold a
+single long-lived `AttachGuard` (`attach_current_thread_guard`) rather than re-entering per event, and a
+future switch to `_for_scope` — which a reader might reach for by name — would reintroduce the per-event
+attach/detach this doc previously warned about.
+**Fix:** hold one `AttachGuard` for the net/monitor thread; add a comment pinning the choice.
 
-### E6 · low · `uid < 0` is silently clamped to UID 0 instead of rejected
+### E6 · low · `uid < 0` is silently clamped to UID 0 instead of rejected — confirmed
 `crates/mailffi/src/android.rs:379,401,440,515,628,647,680,…`
 
 ```rust
@@ -806,10 +952,11 @@ let permanent: Vec<Option<bool>> =
     serde_json::from_str(&string(env, &permanent_json)?).unwrap_or_default();
 ```
 `delete_prompt` treats an empty slice as `permanent = true` (`mailcore/src/undo.rs:77`), so a bad payload
-silently flips the UI to "delete permanently, always confirm" with no clue why.
+silently flips the UI to "delete permanently, always confirm" with no clue why. Severity is low because the
+payload is produced in-process by the same build.
 **Fix:** `?` the parse instead of `unwrap_or_default()`.
 
-### E8 · medium · attachment finish events have no correlation key
+### E8 · medium · attachment finish events have no correlation key — confirmed
 `ui/reader/ReaderFiles.kt:63-66`
 
 ```kotlin
@@ -821,30 +968,35 @@ can be burned on other messages' jobs.
 **Fix:** include the target (`folder_id`, `uid`) in the event or in a `MailNative.attachmentsResult(folderId, uid)`
 read, and key the waiter on it.
 
-### E9 · low · `createFolder`'s waiter can be fired by an unrelated `Folders` job
+### E9 · low · `createFolder`'s waiter can be fired by an unrelated `Folders` job — confirmed
 `ui/state/MailStateFolders.kt:246` + `ui/state/MailState.kt:457` —
 `finishWaiters.remove(kind)?.forEach { it(ok, e.optString("status")) }`. A "Refresh" finish that lands between
 waiter registration and queue satisfies the create, so `FolderManagerScreen` shows the refresh's status (or an
 unrelated failure) and clears it. Same class as E8.
 **Fix:** add a correlation token to the event and match it.
 
-### E10 · low · `spawn_flag_push` un-deduped; `spawn_push_after_grace` spawns an OS thread per action
+### E10 · low · `spawn_flag_push` un-deduped; `spawn_push_after_grace` spawns an OS thread per action — confirmed
 `crates/mailffi/src/net.rs:272-294` — `std::thread::spawn` + `sleep(grace+1)` per undoable action
 (`api/mutate.rs:106,194`). N rapid archives = N sleeping threads plus N queued IMAP pushes.
-**Fix:** coalesce on the existing in-flight table (same fix as D8/B6).
+**Fix:** coalesce on the existing in-flight table (same fix as D8).
 
-### E11 · low · `MailNotifier.onMailChanged` is a single global slot cleared by composition
+### E11 · low · the list refresh is skipped while the shell is disposed `[corrected]`
 `ui/shell/MailShell.kt:353-359`
 
 ```kotlin
 onDispose { MailNotifier.onMailChanged = null }
 ```
-A background check that finishes while the shell is momentarily disposed hits `MailNotifier.kt:66`
-(`if (plan.getString("action") == "foreground") onMailChanged?.invoke()`): the notification is suppressed
-*and* the list is not refreshed, so new mail is invisible until the next resume/event.
-**Fix:** keep a process-level "cache changed" flag the shell drains in `ensureInit`.
+**Correction:** the first draft claimed the notification is suppressed and the list is not refreshed. Wrong
+on both halves — `MailNotifier.foreground` is set false in `MainActivity.kt:43` (`onStop`) and true in
+`MainActivity.kt:38` (`onStart`), so whenever the shell is disposed the app is going to the background and
+`plan` returns an action other than `"foreground"`: the notification **is** posted, and
+`onMailChanged?.invoke()` is simply skipped. What actually happens is a possible redundant notification for
+mail that arrived during an Activity recreate, plus a list that stays stale until the next resume — which
+`ensureInit` already forces. So this is a cosmetic/latent note, not a lost-notification bug.
+**Fix (optional):** drain a process-level "cache changed" flag in `ensureInit` instead of relying on the
+callback slot.
 
-### E12 · medium · `refreshSidebarRows()` runs a Rust SQL aggregate on the main thread
+### E12 · medium · `refreshSidebarRows()` runs a Rust SQL aggregate on the main thread — confirmed
 `ui/state/MailStateFolders.kt:116-125`, called at `:99` (inside `withContext(Dispatchers.Main)`) and `:112`
 (tap handler)
 
@@ -858,7 +1010,7 @@ internal fun MailState.refreshSidebarRows() {
 DB read in the same file is deliberately in `io { }`.
 **Fix:** build the JSON before the `withContext(Dispatchers.Main)`, assign state inside it.
 
-### E13 · medium · the reader's reply strip overflows at 360dp / 150 % text scale *(suspected)*
+### E13 · medium · the reader's reply strip overflows at 360dp / 150 % text scale *(unverified)*
 `ui/reader/ReaderScreen.kt:291-299`
 
 ```kotlin
@@ -868,26 +1020,26 @@ Row(modifier = Modifier.fillMaxWidth().height(48.dp), horizontalArrangement = Ar
     ReplyAction(R.drawable.ic_forward, "Forward") { … }
 ```
 Three icon+label `TextButton`s with no `Modifier.weight` sum to ~330dp at 100 % scale and ~420dp at 150 %;
-`Row` does not wrap, so the last action is squeezed to zero width and becomes unreachable (measured, not run).
+`Row` does not wrap, so the last action is squeezed to zero width and becomes unreachable. *(First draft said
+"measured"; it was a size estimate only — this needs a device check.)*
 **Fix:** `Modifier.weight(1f)` on each `ReplyAction` (or icons only / a `FlowRow` above a scale breakpoint),
 and `heightIn(min = 48.dp)`.
 
-### E14 · medium/low · JNI calls inside `remember` blocks (side effects in composition)
-Three sites:
+### E14 · medium/low · JNI calls inside `remember` blocks (side effects in composition) — confirmed
 - `ui/composer/ComposerScreen.kt:166-170` — `remember(editorBody) { … MailNative.editorDocument(…) }` builds
   the entire editor HTML document (body embedded, fresh nonce) **on the main thread**; the same build is done
-  on `Dispatchers.IO` in `MailWebView.kt:128-133`.
+  on `Dispatchers.IO` in `MailWebView.kt:128-133`. Medium.
 - `ui/reader/ReaderScreen.kt:451-464` — `remember(m, dark, originalColors, scheme) { pagePaint(…) }` → two
-  JNI calls.
-- `ui/list/ListScreen.kt:111-113` — `remember(state.folders) { state.folders.associate { it.id to state.deletePrompt(…) } }`.
+  JNI calls. Low.
+- `ui/list/ListScreen.kt:111-113` — `remember(state.folders) { state.folders.associate { it.id to state.deletePrompt(…) } }`. Low.
 **Fix:** compute in a `LaunchedEffect` on IO, hold the result in state.
 
-### E15 · low · `StatusStrip`'s tap line is 40dp tall
+### E15 · low · `StatusStrip`'s tap line is 40dp tall — confirmed
 `ui/shell/ShellBars.kt:237-257` — `.height(40.dp)` with the clickable line inside; below the 48dp touch-target
 floor AGENTS.md requires.
 **Fix:** `heightIn(min = 48.dp)`.
 
-### E16 · low · stale `@SuppressLint` and unset `mixedContentMode`
+### E16 · low · stale `@SuppressLint` and unset `mixedContentMode` — confirmed
 `ui/reader/MailWebView.kt:65` vs `ui/composer/ComposerEditor.kt:163` — `MailWebView` sets
 `javaScriptEnabled = false` (`:143`), so the suppression is stale and hides accidental future changes.
 `ComposerEditor` legitimately enables JS with `addJavascriptInterface`; it is safe only because
@@ -896,19 +1048,20 @@ floor AGENTS.md requires.
 `blockNetworkLoads=true` — none of which is asserted locally.
 **Fix:** remove the stale annotation; set `mixedContentMode` explicitly and comment the `MCHost` contract.
 
-### E17 · low · `usesCleartextTraffic="true"` app-wide with no `networkSecurityConfig`
+### E17 · low · `usesCleartextTraffic="true"` app-wide with no `networkSecurityConfig` — confirmed
 `AndroidManifest.xml:40` — the comment says cleartext is "opt-in per account", but the flag is global: with
 `load_remote_images` on, an `http://` image from a plaintext-configured account's mail is fetched in the clear
 by the reader WebView regardless of the account's TLS choice.
 **Fix:** scope cleartext with `networkSecurityConfig` to the configured hosts, or reword the comment.
 
-### E18 · low · `Scaffold` gets `safeDrawingPadding()` while its default `contentWindowInsets` also applies
-*(suspected)* `ui/shell/MailShell.kt:439-443` — the reader's own `Scaffold` opts out with
-`contentWindowInsets = WindowInsets(0)`; the shell's does not, so the content column may get the system-bar
-inset twice (a large top gap). Verify on device.
-**Fix:** `contentWindowInsets = WindowInsets(0, 0, 0, 0)` on the shell Scaffold.
+### E18 · low · possible double insets on the shell `Scaffold` *(very likely wrong — verify on device)*
+`ui/shell/MailShell.kt:439-443` — the shell applies `Modifier.fillMaxSize().safeDrawingPadding()` while
+`Scaffold`'s default `contentWindowInsets` also applies; the reader's own `Scaffold` opts out with
+`contentWindowInsets = WindowInsets(0)`. A reviewer points out that Material3's `Scaffold` already subtracts
+insets an ancestor has consumed, so the effect may not exist. Do not act on this without a device check; if it
+does reproduce, the fix is `contentWindowInsets = WindowInsets(0, 0, 0, 0)` on the shell Scaffold.
 
-### E19 · low · several screens never call `MailNative.ensureInit`
+### E19 · low · several screens never call `MailNative.ensureInit` — confirmed
 `ui/contacts/ContactsScreen.kt:128,137`, `ui/outbox/OutboxScreen.kt:93`, the folder screens and
 `MaintenanceSection`/`BackgroundStatus`. Only `MailShell` and the background components
 (`MailCheckWorker`, `MailPushService`, `MailSchedule`, `MailActions`) initialise the core. Today the shell
@@ -917,7 +1070,7 @@ link into a full-page route) would execute against the fallback `db_path()`
 (`mailcore/src/db/mod.rs:18-25`), which on Android resolves to a relative path under `/` and fails.
 **Fix:** initialise in `MailApplication.onCreate`.
 
-### E20 · low · notification signature format re-implemented in Kotlin
+### E20 · low · notification signature format re-implemented in Kotlin — confirmed
 `MailNotifier.kt:118` duplicates `mailcore/src/sync/background/notify.rs:123-125`
 
 ```kotlin
@@ -927,39 +1080,50 @@ out.put(tag, "$title\n$body")
 The two must match byte-for-byte or every posted notification reads as "changed" (or never changes).
 **Fix:** expose `MailNative.signature(title, body)`, or have `plan()` return the per-tag signatures.
 
-### E21 · low · the "Similar to: …" sentence is built twice, with different empty-subject fallbacks
-`ui/state/MailStateSearch.kt:79` vs `crates/mailapp/qml/MessageList.qml:773`
+### E21 · low · the "Similar to: …" sentence template is duplicated in both frontends `[corrected]`
+`ui/list/ListScreen.kt` / `ui/state/MailStateSearch.kt:79` and `crates/mailapp/qml/MessageList.qml:773`
 
 ```kotlin
 similarLabel = "Similar to: ${subject.ifEmpty { "this message" }}"
 // qml: text: qsTr("Similar to: %1").arg(root.similarSubject)
 ```
-Qt shows nothing for an empty subject, Flutter "(no subject)" — so the same data renders differently per
-frontend, which is exactly what `mailcore` is meant to prevent. Rust function: `mailcore::similar::target_subject`.
-**Fix:** `mailcore::similar::chip_label(db, …) -> String` returning the whole sentence.
+**Correction:** the first draft claimed the two frontends disagree on the empty-subject fallback. They do not —
+`similar::target_subject` (`similar.rs:116-129`) already filters empties and returns `"(no subject)"`, so the
+Kotlin `ifEmpty` is dead code and both show the same string. What really remains is that the sentence
+**template** is written twice, so the two translations can drift apart independently — an i18n duplication,
+not a behaviour bug.
+**Fix:** `mailcore::similar::chip_label(db, …, locale) -> String`, or at minimum a shared golden test that
+both templates render the same string for the same subject.
 
-### E22 · low · Kotlin re-parses the core's `ReadTarget` JSON to find `account_id`
+### E22 · low · Kotlin re-parses the core's `ReadTarget` JSON to find `account_id` — confirmed
 `android/.../MailActions.kt:33` — `MailFlagWorker.enqueue(app, JSONObject(target).getLong("account_id"))`.
 `ReadTarget` is a Rust struct (`notify.rs:132-135`); the WorkManager enqueue only needs the account id, so a
 frontend must know an internal field name.
 **Fix:** `MailNative.markReadAccount(target): Long`, or have `markRead` return `(report, account_id)`.
 
-### E23 · low · `SHARED-CORE.md` items 8 and 2 are open or stale
-- `ui/contacts/ContactsScreen.kt:77-87` (`Candidate.reasonText`) — Kotlin wording of the core's machine
-  reasons, no Rust function exists (reasons come from `contacts::cleanup_candidates_json`).
-  **Fix:** a `mailcore` label map.
+### E23 · low · `SHARED-CORE.md` items are open, stale, or wrongly filed `[corrected]`
+Including two that the first draft proposed changing in the wrong direction.
+
+- `ui/contacts/ContactsScreen.kt:77-87` (`Candidate.reasonText`) — Kotlin wording of the core's machine reasons,
+  no Rust function exists (reasons come from `contacts::cleanup_candidates_json`).
+  **Do not** move this to `mailcore`: `SHARED-CORE.md` §8 records it as a deliberate exception (the wording
+  needs translation and tone control per frontend, while the *reason code* stays core-side). Leave it; keep the
+  Rust label map in sync by test instead.
 - `ui/reader/ReaderScreen.kt:317-321` (`canToggleColors`) — the "when the colours toggle shows" decision,
-  Kotlin-only, as listed.
+  Kotlin-only, as listed in SHARED-CORE. No action.
 - `ui/settings/SettingLabels.kt:10-44` and `AccountSetupScreen.kt:532-536` (`securityLabel`) — a 10-key plus
   3-key value→words map in Kotlin, kept in step with the QML twins by convention only.
-  **Fix:** promote the label maps into `mailcore::store::settings` next to `choices`.
+  **Do not** move these to `mailcore` either: value→display-string maps are locale data, and `SHARED-CORE.md`
+  already flags them as deliberate; a translation test is the right guard. The real gap is that the *keys*
+  come from `store::settings::choices`, which is core-side and correct — only the labels are duplicated.
 - §2 ("Sync-on-resume gap … lives in Kotlin (`MailState.RESUME_SYNC_GAP_MS`)") is **stale**: the constant no
   longer exists; it is now `MailNative.resumeSyncDue` → `mailcore::sync::resume::resume_sync_due`.
-  **Fix:** delete the stale entry.
+  **Fix:** delete the stale entry so the file describes what is still duplicated.
 
-### E24 · informational · `ui/folders/FolderIcon.kt:17-25`
-Maps the core's folder role to a drawable — declared frontend-only in SHARED-CORE, so no action; listed for
-completeness.
+### E24 · `[removed]` — there was nothing to fix
+`ui/folders/FolderIcon.kt:17-25` maps the core's folder role to a drawable. It is not listed in
+`SHARED-CORE.md`, so it is neither an approved exception nor a documented violation; role→icon is
+unambiguously toolkit-side (a drawable id). No action.
 
 ### E25 · verified clean · no leaked parent `Global<JObject>`
 `pushStart` (`android.rs:297-310`) drops the old monitor and its `Arc<KotlinListener>` before installing the new
@@ -970,18 +1134,18 @@ table overflow (no long JNI loops without `DeleteLocalRef`), no `GetStringUTFCha
 
 ---
 
-## F. Cross-cutting duplication (AGENTS.md §1 / §5 core-first)
+## F. Cross-frontend duplication (AGENTS.md §1 / §5 core-first)
 
-| # | Logic | Qt side | Android side | Belongs in |
+| # | Logic | Qt side | Android side | Verdict |
 |---|---|---|---|---|
-| F1 | notification signature `"<title>\n<body>"` | — | `MailNotifier.kt:118` | `sync::background::notify::signature_of` (exists, E20) |
-| F2 | "Similar to: …" sentence | `MessageList.qml:773` | `MailStateSearch.kt:79` | `mailcore::similar::chip_label` (E21) |
-| F3 | undo batch splitting | `Main.qml:1456-1464` JS | — | `mailcore` (D11) |
-| F4 | pending-open payload decode | `Main.qml:777` JS | `MailActions.kt:33` | `mailcore` (D11, E22) |
-| F5 | attachment filename decode | `MessagesView.qml:376-384` JS | — | `mailcore::paths` (exists, D11) |
-| F6 | file:// URL building | `MessagesView.qml:170-181` JS | — | `mailapp::bridge::messages::files` (exists, D11) |
-| F7 | account/security value → words | `AccountSetup.qml` / `Settings.qml` | `SettingLabels.kt:10-44`, `AccountSetupScreen.kt:532-536` | `mailcore::store::settings::choices` (E23) |
-| F8 | cleanup-candidate reason wording | `Contacts.qml` | `ContactsScreen.kt:77-87` | `mailcore::store::contacts` (E23) |
+| F1 | notification signature `"<title>\n<body>"` | — | `MailNotifier.kt:118` | real — core fn exists, unused (E20) |
+| F2 | "Similar to: …" sentence | `MessageList.qml:773` | `MailStateSearch.kt:79` | template duplicated, behaviour identical; guard with a test, not a move (E21) |
+| F3 | undo batch splitting | `Main.qml:1456-1464` JS | — | real — belongs in `mailcore` (D11) |
+| F4 | pending-open payload decode | `Main.qml:777` JS | `MailActions.kt:33` | real — belongs in `mailcore` (D11, E22) |
+| F5 | attachment filename decode | `MessageView.qml:376-384` JS | — | real — `mailcore::paths` exists (D11) |
+| F6 | file:// URL building | `MessageView.qml:170-181` JS | — | real — `mailapp::bridge::messages::files` exists (D11) |
+| F7 | account/security value → words | `AccountSetup.qml`/`Settings.qml` | `SettingLabels.kt:10-44` | **deliberate** — locale data, listed in SHARED-CORE; guard with a golden test (E23) |
+| F8 | cleanup-candidate reason wording | `Contacts.qml` | `ContactsScreen.kt:77-87` | **deliberate** — SHARED-CORE §8 records the exception (E23) |
 
 ---
 
@@ -989,12 +1153,13 @@ table overflow (no long JNI loops without `DeleteLocalRef`), no `GetStringUTFCha
 
 - **Read:** every file in `crates/mailcore/src`, `crates/mailapp/src`, `crates/mailapp/qml`,
   `crates/mailffi/src` (except generated `frb_generated.rs`), and `android/app/src/main` Kotlin,
-  plus the four manifest/backup XML files and the root docs.
-- **Reproduced (`[verify]`):** C1 (real `domain_label` + `label[..4]`), C2 (exact algorithm, timing table),
-  A1/A3/A11 (synthetic `version=21` DB, `schema_meta` variants), A2 (two-connection deferred-tx upgrade),
-  A4 (32 764-variable statement), A7 (`attachment_has_data` on a missing id), A8 (`to_addrs='not json'`),
+  plus the four manifest/backup XML files, the root docs, and the jni 0.22.4 source.
+- **`[verify]`** — reproduced by running code: C1 (real `domain_label` + `label[..4]`), C2 (exact algorithm,
+  timing table), A1/A3/A11 (synthetic DBs + `schema_meta` variants), A2 (two-connection deferred-tx upgrade),
+  A4 (32,766-variable statement), A7 (`attachment_has_data` on a missing id), A8 (`to_addrs='not json'`),
   A18 (`sqlite_master` diff + grep for `select *`), B1 (lettre `Timeout(None)` semantics).
+  The `[verify]` tag appears on the item itself and means exactly this: the claim was executed, not merely read.
 - **Not run:** `cargo fmt`/`clippy`/`cargo test`, `scripts/qml-check.sh`, `./build.sh --android`.
   Run the applicable one before closing each item.
-- **Assumptions to confirm:** D3/C3 uid `i32` width on a real large mailbox; E13 and E18 layout measurements
-  on a device; B11 partial-move behaviour on a real server.
+- **Unverified claims flagged inline:** D3 (uid `i32` width on a real large mailbox), D10 (wrapping at runtime),
+  E13 and E18 (layout measurements on a device), B11 (partial-move behaviour on a real server).
