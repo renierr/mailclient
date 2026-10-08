@@ -351,17 +351,17 @@ private fun ComposingSection(d: SettingsDraft) {
         modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
     )
     SettingSwitch(
-        "Request read receipt",
+        "Offer read receipt",
         d.flag("request_mdn"),
         { d.setFlag("request_mdn", it) },
-        help = "The recipient's mail app may confirm opening. It only asks.",
+        help = "Shows a Read receipt toggle in the composer. The recipient's mail app may confirm opening; it only asks.",
     )
     SettingSwitch(
-        "Request delivery confirmation",
+        "Offer delivery confirmation",
         d.flag("request_dsn"),
         { d.setFlag("request_dsn", it) },
-        help = "The receiving server reports once the mail is in the mailbox, where every server supports it. " +
-            "Both start each new mail; the composer can switch them per mail.",
+        help = "Shows a Delivery confirmation toggle in the composer. The receiving server reports once the mail " +
+            "is in the mailbox, where every server supports it. Both toggles start off on each mail.",
     )
 }
 

@@ -326,10 +326,10 @@ pub mod qobject {
         #[qinvokable]
         fn blank_draft_json(&self) -> QString;
 
-        /// Where a composer's receipt toggles start, from the settings:
-        /// `{read, delivery}` (`compose::Receipts`).
+        /// Which receipt toggles the composer shows, from the settings:
+        /// `{read, delivery}` (`compose::Receipts::offered`).
         #[qinvokable]
-        fn receipt_defaults_json(&self) -> QString;
+        fn receipt_toggles_json(&self) -> QString;
 
         /// FTS search over subject/from/body (`[{uid, folder_id, folder,
         /// subject, from, date, snippet, unread, starred, has_attachments}]`,

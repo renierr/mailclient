@@ -862,25 +862,25 @@ AppDialog {
                         Layout.fillWidth: true
                         Layout.topMargin: Theme.sm
                         checked: root.localRequestMdn
-                        text: qsTr("Request a read receipt")
+                        text: qsTr("Offer a read receipt")
                         onToggled: root.localRequestMdn = checked
                     }
                     HintLabel {
                         text: qsTr(
-                                  "Adds a receipt-request header to sent mail. Recipients may ignore it; it only asks.")
+                                  "Shows a read receipt toggle in the composer. Recipients may ignore the request; it only asks.")
                     }
                     AppCheckBox {
                         Layout.fillWidth: true
                         checked: root.localRequestDsn
-                        text: qsTr("Request a delivery confirmation")
+                        text: qsTr("Offer a delivery confirmation")
                         onToggled: root.localRequestDsn = checked
                     }
                     HintLabel {
                         text: qsTr(
-                                  "Asks the receiving server to report once the mail is in the mailbox. Only works where every server on the way supports it.")
+                                  "Shows a delivery confirmation toggle in the composer. The receiving server reports once the mail is in the mailbox, where every server on the way supports it.")
                     }
                     HintLabel {
-                        text: qsTr("Both are where a new mail starts; the composer can switch them per mail.")
+                        text: qsTr("Both toggles start off on every mail.")
                     }
                 }
             }

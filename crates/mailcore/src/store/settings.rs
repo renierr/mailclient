@@ -64,12 +64,13 @@ pub const SIGNATURE_ENABLED: &str = "signature_enabled";
 pub const SIGNATURE_TEXT: &str = "signature_text";
 /// Place the reply below the quote instead of above it (default: off).
 pub const REPLY_BELOW_QUOTE: &str = "reply_below_quote";
-/// Request a read receipt (`Disposition-Notification-To`, default: off).
-/// Recipients may ignore it; it only asks.
+/// Offer a read receipt toggle (`Disposition-Notification-To`) in the
+/// composer (default: off). It is off on every new mail; recipients may
+/// ignore the request anyway.
 pub const REQUEST_MDN: &str = "request_mdn";
-/// Request a delivery confirmation (SMTP DSN `NOTIFY=SUCCESS`, default:
-/// off). Only servers that offer DSN pass it on; the composer can override
-/// it per mail, like [`REQUEST_MDN`].
+/// Offer a delivery confirmation toggle (SMTP DSN) in the composer
+/// (default: off), like [`REQUEST_MDN`]. Only servers that offer DSN pass
+/// the request on.
 pub const REQUEST_DSN: &str = "request_dsn";
 /// Interface scale factor (`1` = 100%, default). Snapped to the supported
 /// steps `1` | `1.1` | `1.25` | `1.5`; unknown values fall back to `1`.

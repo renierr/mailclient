@@ -137,11 +137,13 @@ fun ComposerScreen(
     var confirmDeleteDraft by remember { mutableStateOf(false) }
     var linkDialog by remember { mutableStateOf(false) }
     var sendFormat by remember { mutableStateOf(DEFAULT_SEND_FORMAT) }
-    // Receipts this mail asks for: from the settings (compose::Receipts)
-    // unless a failed send brought its own back or the user already chose.
+    // Receipts this mail asks for: none unless switched on here (or a
+    // failed send brought them back). The settings only decide which
+    // toggles show (compose::Receipts::offered).
     var requestMdn by remember { mutableStateOf(seed.requestMdn ?: false) }
     var requestDsn by remember { mutableStateOf(seed.requestDsn ?: false) }
-    var receiptsChosen by remember { mutableStateOf(seed.requestMdn != null) }
+    var offerMdn by remember { mutableStateOf(false) }
+    var offerDsn by remember { mutableStateOf(false) }
     var suggestContacts by remember { mutableStateOf(true) }
     val working = sending || savingDraft || deletingDraft
     // Like Qt: nothing to send to, nothing to press. The core checks the
@@ -174,10 +176,10 @@ fun ComposerScreen(
             sendFormat = o.optString("compose_send_format", DEFAULT_SEND_FORMAT).ifEmpty { DEFAULT_SEND_FORMAT }
             suggestContacts = o.optBoolean("collect_sent_contacts", true)
         }
-        val receipts = withContext(Dispatchers.IO) { runCatching { JSONObject(MailNative.receiptDefaults()) }.getOrNull() }
-        if (receipts != null && !receiptsChosen) {
-            requestMdn = receipts.optBoolean("read")
-            requestDsn = receipts.optBoolean("delivery")
+        val receipts = withContext(Dispatchers.IO) { runCatching { JSONObject(MailNative.receiptToggles()) }.getOrNull() }
+        if (receipts != null) {
+            offerMdn = receipts.optBoolean("read")
+            offerDsn = receipts.optBoolean("delivery")
         }
     }
 
@@ -513,15 +515,15 @@ fun ComposerScreen(
                 ComposerHeaderRow("Subject") {
                     ComposerTextField(subject, { edit(subject, it) { v -> subject = v } })
                 }
-                // This mail only; a new one starts from the settings again.
-                FlowRow(modifier = Modifier.padding(top = 4.dp)) {
-                    ComposerToggle("Read receipt", requestMdn) {
-                        requestMdn = !requestMdn
-                        receiptsChosen = true
-                    }
-                    ComposerToggle("Delivery confirmation", requestDsn) {
-                        requestDsn = !requestDsn
-                        receiptsChosen = true
+                // This mail only; a new one starts with both off.
+                if (offerMdn || offerDsn || requestMdn || requestDsn) {
+                    FlowRow(modifier = Modifier.padding(top = 4.dp)) {
+                        if (offerMdn || requestMdn) {
+                            ComposerToggle("Read receipt", requestMdn) { requestMdn = !requestMdn }
+                        }
+                        if (offerDsn || requestDsn) {
+                            ComposerToggle("Delivery confirmation", requestDsn) { requestDsn = !requestDsn }
+                        }
                     }
                 }
 

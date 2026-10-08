@@ -10,8 +10,8 @@ use crate::store::settings;
 use crate::sync::sender::{SendFormat, SendPolicy, SendRequest};
 use crate::Db;
 
-/// Which receipts a mail asks for. The composer's two toggles start from
-/// [`Receipts::defaults`].
+/// Which receipts a mail asks for. Every mail starts with none; the
+/// composer shows a toggle for each one [`Receipts::offered`] allows.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Receipts {
     /// Read receipt: `Disposition-Notification-To` (RFC 8098). The
@@ -23,17 +23,18 @@ pub struct Receipts {
 }
 
 impl Receipts {
-    /// The stored settings, where a new composer starts.
-    pub fn defaults(db: &Db) -> Self {
+    /// Which toggles the composer shows, from the stored settings. They
+    /// offer a receipt; they never request one by themselves.
+    pub fn offered(db: &Db) -> Self {
         Self {
             read: settings::get_bool(db, settings::REQUEST_MDN).unwrap_or(false),
             delivery: settings::get_bool(db, settings::REQUEST_DSN).unwrap_or(false),
         }
     }
 
-    /// [`Self::defaults`] as `{read, delivery}` JSON for the composers.
-    pub fn defaults_json(db: &Db) -> String {
-        serde_json::to_string(&Self::defaults(db)).unwrap_or_else(|_| "{}".to_string())
+    /// [`Self::offered`] as `{read, delivery}` JSON for the composers.
+    pub fn offered_json(db: &Db) -> String {
+        serde_json::to_string(&Self::offered(db)).unwrap_or_else(|_| "{}".to_string())
     }
 }
 
@@ -158,13 +159,11 @@ impl ComposeForm {
         }
     }
 
-    /// The receipts to request: the composer's choice, else the stored
-    /// settings.
-    pub fn receipts(&self, db: &Db) -> Receipts {
-        let defaults = Receipts::defaults(db);
+    /// The receipts to request: only what the composer switched on.
+    pub fn receipts(&self) -> Receipts {
         Receipts {
-            read: self.request_mdn.unwrap_or(defaults.read),
-            delivery: self.request_dsn.unwrap_or(defaults.delivery),
+            read: self.request_mdn.unwrap_or(false),
+            delivery: self.request_dsn.unwrap_or(false),
         }
     }
 
@@ -242,27 +241,21 @@ mod tests {
     }
 
     #[test]
-    fn receipts_follow_the_form_else_the_settings() {
+    fn receipts_come_from_the_form_and_settings_only_offer_them() {
         let db = crate::db::Db::open_in_memory().unwrap();
         crate::store::settings::set(&db, crate::store::settings::REQUEST_DSN, "1").unwrap();
         let f = ComposeForm::parse(r#"{"to":"a@example.com"}"#).unwrap();
-        assert_eq!(
-            f.receipts(&db),
-            Receipts {
-                read: false,
-                delivery: true
-            }
-        );
+        assert_eq!(f.receipts(), Receipts::default());
         let f = ComposeForm::parse(r#"{"request_mdn":true,"request_dsn":false}"#).unwrap();
         assert_eq!(
-            f.receipts(&db),
+            f.receipts(),
             Receipts {
                 read: true,
                 delivery: false
             }
         );
         assert_eq!(
-            Receipts::defaults_json(&db),
+            Receipts::offered_json(&db),
             r#"{"read":false,"delivery":true}"#
         );
     }

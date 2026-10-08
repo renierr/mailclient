@@ -125,6 +125,9 @@ Dialog {
     // starts from the settings, the toggles beside Send change just this one.
     property bool requestMdn: false
     property bool requestDsn: false
+    // Which receipt toggles to show (settings); every mail starts with none.
+    property bool offerMdn: false
+    property bool offerDsn: false
 
     // Flaw F5: Cancel used to throw the draft away silently. Everything the
     // user types sets this, and closing then asks first.
@@ -256,9 +259,11 @@ Dialog {
         root.filesNotice = "";
         root.attachments = [];
         root.draftUid = -1;
-        var receipts = root.backend ? FeedJson.parse(root.backend.receipt_defaults_json(), ({})) : ({});
-        root.requestMdn = receipts.read === true;
-        root.requestDsn = receipts.delivery === true;
+        var receipts = root.backend ? FeedJson.parse(root.backend.receipt_toggles_json(), ({})) : ({});
+        root.offerMdn = receipts.read === true;
+        root.offerDsn = receipts.delivery === true;
+        root.requestMdn = false;
+        root.requestDsn = false;
     }
 
     function setBody(html) {
@@ -802,6 +807,7 @@ Dialog {
                 Layout.fillWidth: true
             }
             IconButton {
+                visible: root.offerMdn || root.requestMdn
                 text: Icons.markRead
                 iconFont: true
                 active: root.requestMdn
@@ -810,6 +816,7 @@ Dialog {
                 onClicked: root.requestMdn = !root.requestMdn
             }
             IconButton {
+                visible: root.offerDsn || root.requestDsn
                 text: Icons.doneAll
                 iconFont: true
                 active: root.requestDsn

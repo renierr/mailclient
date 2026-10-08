@@ -88,7 +88,7 @@ pub fn prepare_send(db: &Db, account_id: i64, form: ComposeForm) -> Result<Prepa
     let acc = resolve_account(db, account_id)?;
     let format = SendFormat::parse(&settings::get_send_format(db));
     let include_plain = settings::get_bool(db, settings::COMPOSE_INCLUDE_PLAIN).unwrap_or(true);
-    let receipts = form.receipts(db);
+    let receipts = form.receipts();
     let policy = SendPolicy::Unrestricted;
     let (queue_id, raw) = SmtpSender::new(&acc)
         .enqueue_send(
