@@ -34,7 +34,7 @@ fn reply_quotes_html_in_a_blockquote_under_the_attribution() {
     assert_eq!(d.subject, "Re: Plans");
     assert_eq!(
         d.quote_html,
-        "<p>On 2026-09-12 13:50, Alice &lt;alice@example.com&gt; wrote:</p>\
+        "<hr><p>On 2026-09-12 13:50, Alice &lt;alice@example.com&gt; wrote:</p>\
          <blockquote><p>Hi <b>there</b></p></blockquote>"
     );
     assert_eq!(d.signature_html, "<p>-- <br> Me<br>Example Ltd </p>");
@@ -56,6 +56,7 @@ fn plain_mail_is_quoted_as_escaped_citations() {
         ..html_mail()
     };
     let d = answer_draft(&src, AnswerMode::Reply, &AnswerOptions::default());
+    assert!(d.quote_html.starts_with("<p>---</p>"));
     assert!(d
         .quote_html
         .ends_with("<p>&gt; a &lt; b<br>&gt; line two</p>"));
@@ -106,12 +107,50 @@ fn bottom_posting_puts_the_quote_first() {
 }
 
 #[test]
+fn separator_sits_between_typing_and_quote_in_both_modes() {
+    // Above (default): empty line, signature, line, original.
+    let top = answer_draft(&html_mail(), AnswerMode::Reply, &opts());
+    assert!(top.quote_html.starts_with("<hr>"));
+    assert_eq!(
+        top.body_html,
+        format!("{TEXT_SLOT}{}{}", top.signature_html, top.quote_html)
+    );
+    // Below: original, line, empty line, signature. The caret slot stays
+    // on the user's side either way.
+    let below = answer_draft(
+        &html_mail(),
+        AnswerMode::Reply,
+        &AnswerOptions {
+            reply_below_quote: true,
+            ..opts()
+        },
+    );
+    assert!(below.quote_html.ends_with("<hr>"));
+    assert_eq!(
+        below.body_html,
+        format!("{}{TEXT_SLOT}{}", below.quote_html, below.signature_html)
+    );
+    // A plain original separates with `---`, keeping an Auto send plain.
+    let plain = AnswerSource {
+        is_html: false,
+        body_html: String::new(),
+        body_text: "hi".into(),
+        ..html_mail()
+    };
+    let d = answer_draft(&plain, AnswerMode::Reply, &AnswerOptions::default());
+    assert!(d.quote_html.starts_with("<p>---</p>"));
+    assert!(!crate::html::needs_html_formatting(
+        &crate::html::sanitize_for_send(&d.quote_html)
+    ));
+}
+
+#[test]
 fn forward_has_no_recipients_and_a_forward_header() {
     let d = answer_draft(&html_mail(), AnswerMode::Forward, &opts());
     assert_eq!(d.to, "");
     assert_eq!(d.subject, "Fwd: Plans");
     assert!(d.quote_html.starts_with(
-        "<p>— Forwarded message —<br>From: Alice &lt;alice@example.com&gt;<br>\
+        "<hr><p>— Forwarded message —<br>From: Alice &lt;alice@example.com&gt;<br>\
          Date: 2026-09-12 13:50<br>Subject: Plans</p><blockquote>"
     ));
     assert!(!d.quote_first);

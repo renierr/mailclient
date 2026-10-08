@@ -147,6 +147,11 @@ pub fn html_to_text(html: &str) -> String {
                     | "blockquote" => {
                         out.push('\n');
                     }
+                    // The reply separator: an `<hr>` in HTML is `---` in
+                    // text, so the plain twin keeps the dividing line.
+                    "hr" => {
+                        out.push_str("\n---\n");
+                    }
                     _ => {}
                 }
             } else {

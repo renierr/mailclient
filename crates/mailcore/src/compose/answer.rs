@@ -107,6 +107,22 @@ pub struct AnswerDraft {
 /// land in the paragraph next to it.
 pub(crate) const TEXT_SLOT: &str = "<p><br></p>";
 
+/// The line between the user's text and the quoted original: a real `<hr>`
+/// for an HTML original, `---` for a plain one (which keeps an Auto send
+/// text/plain, since `<p>` carries no formatting).
+const SEP_HTML: &str = "<hr>";
+const SEP_TEXT: &str = "<p>---</p>";
+
+/// Which separator the quote gets: HTML originals quote as a `<blockquote>`
+/// (see [`quote`]), plain ones as `> ` citations.
+fn separator(src: &AnswerSource) -> &'static str {
+    if src.is_html && !src.body_html.trim().is_empty() {
+        SEP_HTML
+    } else {
+        SEP_TEXT
+    }
+}
+
 /// A new, empty mail: the text slot above the signature, or nothing (the
 /// editor's placeholder shows) without one.
 pub fn blank_draft(opts: &AnswerOptions) -> AnswerDraft {
@@ -147,7 +163,10 @@ pub fn answer_draft(src: &AnswerSource, mode: AnswerMode, opts: &AnswerOptions) 
             "— Forwarded message —\nFrom: {sender}\nDate: {}\nSubject: {}",
             src.date, src.subject
         );
-        let quote_html = quote(&header, src);
+        let inner = quote(&header, src);
+        // A forward always quotes below: the separator sits above it,
+        // between the user's text and the inserted original.
+        let quote_html = format!("{}{inner}", separator(src));
         return AnswerDraft {
             from: String::new(),
             to: String::new(),
@@ -196,11 +215,23 @@ pub fn answer_draft(src: &AnswerSource, mode: AnswerMode, opts: &AnswerOptions) 
             (reply, cc)
         }
     };
-    let quote_html = quote(&format!("On {}, {sender} wrote:", src.date), src);
-    let body_html = if opts.reply_below_quote {
-        format!("{quote_html}{TEXT_SLOT}{signature_html}")
+    let inner = quote(&format!("On {}, {sender} wrote:", src.date), src);
+    // The separator always sits between the user's text and the quote, on
+    // the quote's outer edge: above it when replying above (the default),
+    // below it when `reply_below_quote` puts the quote first. The empty
+    // editing line (`TEXT_SLOT`) stays on the user's side either way, so
+    // the caret never lands inside the attribution.
+    let sep = separator(src);
+    let (quote_html, body_html) = if opts.reply_below_quote {
+        (
+            format!("{inner}{sep}"),
+            format!("{inner}{sep}{TEXT_SLOT}{signature_html}"),
+        )
     } else {
-        format!("{TEXT_SLOT}{signature_html}{quote_html}")
+        (
+            format!("{sep}{inner}"),
+            format!("{TEXT_SLOT}{signature_html}{sep}{inner}"),
+        )
     };
     AnswerDraft {
         notice_addr: if reply.differs {
