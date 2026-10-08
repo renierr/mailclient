@@ -10,7 +10,7 @@ Work top to bottom; each item is self-contained so they can be picked out of ord
   the item; `[removed]` = withdrawn, with the reason kept so the ids stay stable for cross-referencing.
   Untagged = read from source, not executed. **Applied so far:** E1, E2 (`d3ef68b`), C1 (`1dac9e7`),
   C7 (`11137f4`), D1 (`74d3a4d`), D6 part 1 (`c3d90fb`), B1 (`bb9edb6`), C2 (`946e971`),
-  A2 (`5e07cab`), A4 (`f4ff35e`), C15 (`9698314`). See §Applied for what each did and what it did not.
+  A2 (`5e07cab`), A4 (`f4ff35e`), C15 (`9698314`), A6, E7, D15, E15, E16, E23 §2 (`83875ab`). See §Applied for what each did and what it did not.
   **Applied together in one later commit** (the one that added this line): A7, A11, A13, A17 (dead attachment delete only), C8, C9, C14, plus
   follow-up corrections to A2, A4, B1, C2, C15 and D6 from a validation pass over those six commits.
 - **AGENTS.md §7** governs closing any item: Rust → `cargo fmt --check` + `cargo clippy -p mailcore -- -D warnings`
@@ -86,6 +86,12 @@ the "not fixed" column before assuming a finding is closed.
 | **C9** | follow-up | `<?` ends at the first `>`, as HTML parses it; `<?xml … ?>` ends at the same place | — |
 | **C14** | follow-up | `s.get_mut(..1)` instead of `s[..1]` in the vCard label | — |
 | **C15** | `9698314` | Component-stack depth capped at 32; deeper input is refused | **Reason corrected: not quadratic.** Measured linear (8× depth → ~8× time, 4.1 s for 13 MB), so it is a memory/CPU bound, not a blowup. The first draft and the second reviewer both said "quadratic/hang" and both were wrong. *Follow-up:* the comment at the cap check still said "quadratic in the depth" — corrected |
+| **A6** | `83875ab` | `queue::get` uses `.optional()?.ok_or(NotFound)`, so DB failures surface as DB errors | — |
+| **E7** | `83875ab` | `deletePrompt` `?`s the `permanent_json` parse instead of `unwrap_or_default()`, so a bad payload errors instead of flipping to "delete permanently" | — |
+| **D15** | `83875ab` | Initial geometry floored at `Math.max(380/460, …)`, matching `minimumWidth/minimumHeight` | — |
+| **E15** | `83875ab` | `StatusStrip` row uses `heightIn(min = 48.dp)`, meeting the touch-target floor | — |
+| **E16** | `83875ab` | Stale `@SuppressLint` removed from `MailWebView`; `mixedContentMode = NEVER_ALLOW` set explicitly on both WebViews with the `MCHost` contract commented | — |
+| **E23** (§2 only) | `83875ab` | Stale "Sync-on-resume gap" entry deleted from `SHARED-CORE.md` | The remaining E23 bullets were no-action by design (deliberate frontend-only wording) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
 
@@ -180,7 +186,7 @@ boundary): it panics when the chunking is removed, so it is a real guard rather 
 (per A3) is never re-run.
 **Fix:** prepare once outside the loop; run in one `unchecked_transaction()`.
 
-### A6 · medium · every error becomes "not found" `[corrected]`
+### A6 · medium · every error becomes "not found" `[corrected]` — **FIXED** `[fixed]`
 `store/queue.rs:120-128`
 
 ```rust
@@ -191,6 +197,8 @@ A locked DB, a corrupt row or an I/O error is misreported as `NotFound`, so call
 "row is gone" from "the database failed" and keep retrying a permanently broken row. Every other store
 uses `.optional()?`. Severity lowered slightly: only affects the send queue, and the retry is bounded.
 **Fix:** `.optional()?.ok_or_else(|| StoreError::NotFound(…))`.
+
+**Fixed in `83875ab`.**
 
 ### A7 · medium · `attachment_has_data` leaks a raw no-rows error — **FIXED** `[fixed]`
 `store/messages/attachments.rs:173-182` — `[verify]` `attachment_has_data(db, 4242)` returns
@@ -950,13 +958,15 @@ Only the large managers use `AppDialog`; every small aux dialog is a plain `Dial
 status-details dialog is the practical loss: a long error sentence cannot be enlarged.
 **Fix:** migrate to `AppDialog` with geometry memory.
 
-### D15 · low · main window width expression has no floor — confirmed
+### D15 · low · main window width expression has no floor — confirmed — **FIXED** `[fixed]`
 `Main.qml:20-21` `width: Math.min(1320, Screen.desktopAvailableWidth - 80)` goes negative on a screen
 narrower than 80 logical px (clamped by `minimumWidth: 380`, but the initial geometry is nonsense).
 Otherwise the responsiveness rules are followed: wrapping labels carry `wrapMode` + bound width, `RowLayout`
 children that must yield carry `Layout.minimumWidth: 0` (BulkActionBar.qml:37, Accounts.qml:98-135,
 Folders.qml:156, Outbox.qml:127-169, MessageView.qml:830, Settings.qml:1189, AccountSetup.qml:293),
 `Flow`s are `Layout.fillWidth` (Settings.qml:1108,1230; ComposerAttachmentTray.qml:40).
+
+**Fixed in `83875ab`** — initial geometry floored at `Math.max(380/460, …)`.
 
 ### D16 · medium-high · the reader payload copies each body three times — confirmed, severity trimmed
 `mailcore/src/feed.rs:562-565`
@@ -1108,7 +1118,7 @@ A Kotlin-side `-1` ("no message") becomes a real operation on UID 0 rather than 
 JNI type truncates UIDs above `Int::MAX` (same class as D3).
 **Fix:** `u32::try_from(uid).map_err(...)` for `uid >= 0`, error otherwise.
 
-### E7 · low · malformed `permanent_json` is swallowed into the most destructive answer
+### E7 · low · malformed `permanent_json` is swallowed into the most destructive answer — **FIXED** `[fixed]`
 `crates/mailffi/src/android.rs:581-583`
 
 ```rust
@@ -1119,6 +1129,8 @@ let permanent: Vec<Option<bool>> =
 silently flips the UI to "delete permanently, always confirm" with no clue why. Severity is low because the
 payload is produced in-process by the same build.
 **Fix:** `?` the parse instead of `unwrap_or_default()`.
+
+**Fixed in `83875ab`.**
 
 ### E8 · medium · attachment finish events have no correlation key — confirmed
 `ui/reader/ReaderFiles.kt:63-66`
@@ -1198,12 +1210,14 @@ and `heightIn(min = 48.dp)`.
 - `ui/list/ListScreen.kt:111-113` — `remember(state.folders) { state.folders.associate { it.id to state.deletePrompt(…) } }`. Low.
 **Fix:** compute in a `LaunchedEffect` on IO, hold the result in state.
 
-### E15 · low · `StatusStrip`'s tap line is 40dp tall — confirmed
+### E15 · low · `StatusStrip`'s tap line is 40dp tall — confirmed — **FIXED** `[fixed]`
 `ui/shell/ShellBars.kt:237-257` — `.height(40.dp)` with the clickable line inside; below the 48dp touch-target
 floor AGENTS.md requires.
 **Fix:** `heightIn(min = 48.dp)`.
 
-### E16 · low · stale `@SuppressLint` and unset `mixedContentMode` — confirmed
+**Fixed in `83875ab`.**
+
+### E16 · low · stale `@SuppressLint` and unset `mixedContentMode` — confirmed — **FIXED** `[fixed]`
 `ui/reader/MailWebView.kt:65` vs `ui/composer/ComposerEditor.kt:163` — `MailWebView` sets
 `javaScriptEnabled = false` (`:143`), so the suppression is stale and hides accidental future changes.
 `ComposerEditor` legitimately enables JS with `addJavascriptInterface`; it is safe only because
@@ -1211,6 +1225,8 @@ floor AGENTS.md requires.
 `html::sanitize_for_send` (allow-list, drops `script`), plus a nonce CSP, `allowFileAccess=false`,
 `blockNetworkLoads=true` — none of which is asserted locally.
 **Fix:** remove the stale annotation; set `mixedContentMode` explicitly and comment the `MCHost` contract.
+
+**Fixed in `83875ab`.**
 
 ### E17 · low · `usesCleartextTraffic="true"` app-wide with no `networkSecurityConfig` — confirmed
 `AndroidManifest.xml:40` — the comment says cleartext is "opt-in per account", but the flag is global: with
@@ -1265,7 +1281,7 @@ both templates render the same string for the same subject.
 frontend must know an internal field name.
 **Fix:** `MailNative.markReadAccount(target): Long`, or have `markRead` return `(report, account_id)`.
 
-### E23 · low · `SHARED-CORE.md` items are open, stale, or wrongly filed `[corrected]`
+### E23 · low · `SHARED-CORE.md` items are open, stale, or wrongly filed `[corrected]` — **FIXED** (§2 only) `[fixed]`
 Including two that the first draft proposed changing in the wrong direction.
 
 - `ui/contacts/ContactsScreen.kt:77-87` (`Candidate.reasonText`) — Kotlin wording of the core's machine reasons,
@@ -1283,6 +1299,8 @@ Including two that the first draft proposed changing in the wrong direction.
 - §2 ("Sync-on-resume gap … lives in Kotlin (`MailState.RESUME_SYNC_GAP_MS`)") is **stale**: the constant no
   longer exists; it is now `MailNative.resumeSyncDue` → `mailcore::sync::resume::resume_sync_due`.
   **Fix:** delete the stale entry so the file describes what is still duplicated.
+
+**Fixed in `83875ab`** (stale §2 entry deleted; the other bullets were no-action by design).
 
 ### E24 · `[removed]` — there was nothing to fix
 `ui/folders/FolderIcon.kt:17-25` maps the core's folder role to a drawable. It is not listed in
