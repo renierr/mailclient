@@ -24,6 +24,9 @@ create table if not exists accounts (
     smtp_username      text not null default '',
     auth_vault_key     text not null,
     check_interval_secs integer not null default 300,
+    -- Whether the SMTP server offered DSN at the last delivery confirmation
+    -- attempt: 1 / 0, NULL = not known yet.
+    smtp_dsn           integer,
     created_at         text not null,
     updated_at         text not null
 );

@@ -92,7 +92,9 @@ fn outcome_is_the_worst_action() {
         diagnostic: None,
     };
     assert_eq!(outcome(&[r("delivered"), r("delayed")]), "delayed");
-    assert_eq!(outcome(&[r("relayed")]), "delivered");
+    assert_eq!(outcome(&[r("relayed")]), "relayed");
+    assert_eq!(outcome(&[r("delivered"), r("relayed")]), "relayed");
+    assert_eq!(outcome(&[r("delivered"), r("expanded")]), "delivered");
 }
 
 #[test]
@@ -151,6 +153,8 @@ fn tones_follow_the_action() {
     assert_eq!(action_tone("failed"), "negative");
     assert_eq!(action_tone("delayed"), "warning");
     assert_eq!(action_tone("delivered"), "positive");
+    assert_eq!(action_tone("relayed"), "neutral");
+    assert_eq!(action_label("relayed"), "Handed on");
     assert!(is_disposition_part(Some(
         "Message/Disposition-Notification"
     )));

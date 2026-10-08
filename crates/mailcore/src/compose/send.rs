@@ -88,7 +88,7 @@ pub fn prepare_send(db: &Db, account_id: i64, form: ComposeForm) -> Result<Prepa
     let acc = resolve_account(db, account_id)?;
     let format = SendFormat::parse(&settings::get_send_format(db));
     let include_plain = settings::get_bool(db, settings::COMPOSE_INCLUDE_PLAIN).unwrap_or(true);
-    let receipts = form.receipts(db);
+    let receipts = form.receipts(db, acc.id);
     let policy = SendPolicy::Unrestricted;
     let (queue_id, raw) = SmtpSender::new(&acc)
         .enqueue_send(
@@ -162,7 +162,7 @@ pub async fn deliver(
     on_accepted();
 
     let mut notes = Vec::new();
-    if submitted.dsn_unsupported {
+    if submitted.dsn == Some(false) {
         notes.push(
             "sent, but the mail server does not offer delivery confirmations, so none will come"
                 .to_string(),

@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 23;
+pub const SCHEMA_VERSION: u32 = 24;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -323,6 +323,11 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
             conn,
             &["alter table send_queue add column request_dsn integer not null default 0;"],
         )?;
+    }
+    if current < 24 {
+        // v24: `accounts.smtp_dsn`, whether the SMTP server offers delivery
+        // confirmations, learned on send; the composer warns where it does not.
+        add_columns(conn, &["alter table accounts add column smtp_dsn integer;"])?;
     }
     if current != SCHEMA_VERSION {
         conn.execute(

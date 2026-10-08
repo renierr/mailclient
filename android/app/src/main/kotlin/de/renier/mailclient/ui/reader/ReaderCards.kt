@@ -139,7 +139,8 @@ internal fun ReportCard(
                         report.optString("kind") == "read" -> R.drawable.ic_mark_email_read
                         !loaded || toneName == "negative" -> R.drawable.ic_error
                         toneName == "warning" -> R.drawable.ic_schedule
-                        else -> R.drawable.ic_check
+                        toneName == "positive" -> R.drawable.ic_check
+                        else -> R.drawable.ic_info
                     }
                     Icon(painterResource(icon), null, tint = tone, modifier = Modifier.size(20.dp))
                     Text(

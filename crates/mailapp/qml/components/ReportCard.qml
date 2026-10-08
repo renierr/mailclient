@@ -31,7 +31,9 @@ Rectangle {
             return Icons.markRead;
         if (!root.loaded || root.toneName === "negative")
             return Icons.error;
-        return root.toneName === "warning" ? Icons.schedule : Icons.checkCircle;
+        if (root.toneName === "warning")
+            return Icons.schedule;
+        return root.toneName === "positive" ? Icons.checkCircle : Icons.info;
     }
 
     // mailcore's `tone` to a theme colour.

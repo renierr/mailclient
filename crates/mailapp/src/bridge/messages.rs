@@ -163,11 +163,11 @@ impl qobject::Bridge {
         mailcore::compose::blank_draft_json(db).map_or_else(|_| qstring("{}"), |j| qstring(&j))
     }
 
-    pub fn receipt_defaults_json(&self) -> QString {
+    pub fn receipt_defaults_json(&self, account_id: i64) -> QString {
         let Ok(db) = shared_db() else {
             return qstring("{}");
         };
-        qstring(&mailcore::compose::Receipts::defaults_json(db))
+        qstring(&mailcore::compose::Receipts::defaults_json(db, account_id))
     }
 
     /// FTS search for the toolbar (up to 50 hits, newest first). `folder`

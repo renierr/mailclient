@@ -25,7 +25,7 @@ pub use drafts::{
     delete_draft, draft_editor_html, draft_html, drafts_folder, open_draft, save_draft,
     stage_draft_files, DraftSaved, StagedFile,
 };
-pub use form::{ComposeForm, Receipts};
+pub use form::{ComposeForm, ReceiptDefaults, Receipts};
 pub use forward::{
     forward_files, forward_missing, resend_files, resend_missing, stage_forward_files,
     stage_resend_files, ForwardFiles,

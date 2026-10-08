@@ -2141,17 +2141,19 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_blankDraft<'caller>(
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-/// `MailNative.receiptDefaults()`: `{read, delivery}`, where a composer's
-/// receipt toggles start (`compose::Receipts::defaults`).
+/// `MailNative.receiptDefaults(accountId)`: `{read, delivery,
+/// delivery_note}`, where a composer's receipt toggles start for that
+/// account (`compose::Receipts::defaults`).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_de_renier_mailclient_MailNative_receiptDefaults<'caller>(
     mut unowned: EnvUnowned<'caller>,
     _class: JClass<'caller>,
+    account_id: i64,
 ) -> JString<'caller> {
     unowned
         .with_env(|env| -> Result<JString<'caller>> {
             let db = crate::db::shared_db()?;
-            Ok(env.new_string(mailcore::compose::Receipts::defaults_json(db))?)
+            Ok(env.new_string(mailcore::compose::Receipts::defaults_json(db, account_id))?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }

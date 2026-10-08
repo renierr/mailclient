@@ -45,8 +45,9 @@ pub struct ReportRecipient {
 pub struct DeliveryReport {
     /// `delivery` (a DSN) or `read` (a read receipt).
     pub kind: String,
-    /// `failed`, `delayed` or `delivered`: the worst action reported. For
-    /// a read receipt the disposition: `displayed`, `deleted`, `processed`.
+    /// `failed`, `delayed`, `relayed` or `delivered`: the worst action
+    /// reported. For a read receipt the disposition: `displayed`,
+    /// `deleted`, `processed`.
     pub outcome: String,
     /// `positive`, `negative`, `warning` or `neutral`, from the outcome.
     pub tone: String,
@@ -241,7 +242,7 @@ fn action_tone(action: &str) -> &'static str {
     match action {
         "failed" => "negative",
         "delayed" => "warning",
-        "delivered" | "relayed" | "expanded" => "positive",
+        "delivered" | "expanded" => "positive",
         _ => "neutral",
     }
 }
@@ -251,7 +252,7 @@ fn action_label(action: &str) -> String {
         "failed" => "Failed".to_string(),
         "delayed" => "Delayed".to_string(),
         "delivered" => "Delivered".to_string(),
-        "relayed" => "Relayed".to_string(),
+        "relayed" => "Handed on".to_string(),
         "expanded" => "Expanded".to_string(),
         other => other.to_string(),
     }
@@ -431,6 +432,10 @@ pub fn delivery_report(
             "Delivery delayed",
             "The server is still trying to deliver it; there is no need to resend yet.",
         ),
+        "relayed" => (
+            "Delivery not confirmed",
+            "The message was handed on to a server that does not report delivery, so nobody can              confirm it arrived. It most likely did.",
+        ),
         _ => (
             "Delivered",
             "The receiving server put the message into the mailbox. That does not mean it was read.",
@@ -576,12 +581,16 @@ pub fn bounce(db: &Db, folder_id: i64, uid: u32) -> Result<Bounce, String> {
     Ok(Bounce { original, failed })
 }
 
-/// The worst action among the recipients.
+/// The worst action among the recipients. `relayed` (passed to a server
+/// without DSN) is worse than `delivered`: nothing confirms it arrived.
 fn outcome(recipients: &[ReportRecipient]) -> &'static str {
-    if recipients.iter().any(|r| r.action == "failed") {
+    let any = |action: &str| recipients.iter().any(|r| r.action == action);
+    if any("failed") {
         "failed"
-    } else if recipients.iter().any(|r| r.action == "delayed") {
+    } else if any("delayed") {
         "delayed"
+    } else if any("relayed") {
+        "relayed"
     } else {
         "delivered"
     }

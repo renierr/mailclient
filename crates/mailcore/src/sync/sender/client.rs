@@ -53,9 +53,10 @@ pub fn endpoint_for(account: &Account) -> SmtpEndpoint {
 /// What a successful submit learned on the way.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Submitted {
-    /// A delivery confirmation was asked for, but the server does not
-    /// offer DSN: the mail went without it and no confirmation will come.
-    pub dsn_unsupported: bool,
+    /// Whether the server offered DSN, when a delivery confirmation was
+    /// asked for (`None` otherwise). `Some(false)`: the mail went without
+    /// it and no confirmation will come.
+    pub dsn: Option<bool>,
 }
 
 /// SMTP sender bound to one account's settings.
@@ -326,6 +327,11 @@ impl SmtpSender {
                 if let Err(e) = queue::mark_sent(db, queue_id) {
                     log::warn!("smtp: sent, but outbox entry {queue_id} not updated: {e}");
                 }
+                if let Some(offered) = submitted.dsn {
+                    if let Err(e) = accounts::set_smtp_dsn(db, row.account_id, offered) {
+                        log::warn!("smtp: could not record DSN support: {e}");
+                    }
+                }
                 Ok(submitted)
             }
             Err(e) => {
@@ -421,9 +427,7 @@ impl SmtpSender {
                 "smtp: sent to {to:?} via {} (delivery confirmation: {dsn})",
                 self.endpoint.addr
             );
-            return Ok(Submitted {
-                dsn_unsupported: !dsn,
-            });
+            return Ok(Submitted { dsn: Some(dsn) });
         }
         let response = self.transport(password)?.send_raw(&envelope, raw)?;
         log::info!(
