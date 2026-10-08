@@ -343,6 +343,40 @@ fn named_entities_decode_to_their_characters() {
 }
 
 #[test]
+fn ampersands_without_a_closing_semicolon_decode_in_linear_time() {
+    // The closing `;` used to be found with `s[i..].find(';')` and filtered
+    // for `< 24` afterwards, so the scan reached the end of the string before
+    // being discarded: quadratic in any text full of `&` with no `;` after it.
+    let s = "&".repeat(512 * 1024);
+    let out = decode_entities(&s);
+    assert_eq!(out.len(), s.len());
+    assert_eq!(out, s);
+    // A `;` outside the scan window is not an entity either.
+    assert_eq!(decode_entities("&a;"), "&a;");
+    let far = format!("&{};", "a".repeat(40));
+    assert_eq!(decode_entities(&far), far);
+    assert_eq!(decode_entities("x&"), "x&");
+    assert_eq!(decode_entities("a&b"), "a&b");
+}
+
+#[test]
+fn entities_on_the_scan_boundary_still_decode() {
+    // The window is 23 bytes past the `&`, so the longest entity that still
+    // decodes is 24 bytes in total; one more byte stays literal. Both cases
+    // would decode if the window were a byte wider, so this pins the bound.
+    let inside = "&#000000000000000000065;";
+    assert_eq!(inside.len(), 24);
+    assert_eq!(decode_entities(inside), "A");
+    let outside = "&#0000000000000000000065;";
+    assert_eq!(outside.len(), 25);
+    assert_eq!(decode_entities(outside), outside);
+    // Ordinary and short forms are untouched.
+    assert_eq!(decode_entities("&#x00000000000000000026;"), "&");
+    assert_eq!(decode_entities("&AMP;"), "&");
+    assert_eq!(decode_entities("&nbsp;x&#65;y"), "\u{a0}xAy");
+}
+
+#[test]
 fn links_open_only_on_web_schemes() {
     for url in [
         "https://example.com/x",

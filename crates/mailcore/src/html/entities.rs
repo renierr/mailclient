@@ -4,6 +4,13 @@
 //! few HTML5 extras newsletters use. The serializer re-escapes text, so an
 //! entity this misses reaches the reader literally (`&auml;` for `ä`).
 
+/// How far past a `&` to look for the `;` that ends an entity. The bound is
+/// what keeps the decode linear: it used to be a filter applied *after*
+/// `s[i..].find(';')`, which scans to the end of the string before the
+/// throwaway check, so any text full of ampersands without a following `;`
+/// cost O(remaining) per `&` — 512 KB of that is ~9 s of CPU on every open.
+const ENTITY_SCAN: usize = 23;
+
 /// Decode character entities for URL decisions and text output.
 pub fn decode_entities(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -11,7 +18,14 @@ pub fn decode_entities(s: &str) -> String {
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'&' {
-            if let Some(semi) = s[i..].find(';').filter(|n| *n < 24) {
+            // Bounded scan for the closing `;` (`i + 1` is in bounds even
+            // when the `&` is the last byte, giving an empty slice).
+            let semi = b[i + 1..]
+                .iter()
+                .take(ENTITY_SCAN)
+                .position(|&c| c == b';')
+                .map(|n| n + 1);
+            if let Some(semi) = semi {
                 let ent = &s[i..i + semi + 1];
                 let decoded = match ent {
                     "&lt;" | "&LT;" => Some('<'),
