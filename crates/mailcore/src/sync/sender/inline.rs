@@ -105,7 +105,30 @@ pub fn image_data_url(path_or_url: &str) -> Result<String> {
             "{name} is not an image that can be shown inline (PNG, JPEG, GIF or WebP)"
         )));
     }
-    let bytes = std::fs::read(&path)
+    // Size first, read second. `std::fs::read` would pull the whole file into
+    // memory before the check below, so dropping a multi-gigabyte video onto
+    // the composer stalled the GUI thread behind an allocation to match. The
+    // metadata is one `stat`, and it also tells the user the real size rather
+    // than the truncated limit.
+    let size = std::fs::metadata(&path)
+        .map_err(|_| StoreError::InvalidInput(format!("cannot read {}", path.display())))?
+        .len();
+    if size > MAX_INLINE_IMAGE_BYTES as u64 {
+        return Err(StoreError::InvalidInput(format!(
+            "{name} is too large to insert inline ({} KB, max {} KB) — attach it instead",
+            size / 1024,
+            MAX_INLINE_IMAGE_BYTES / 1024
+        )));
+    }
+    // Capped anyway: a file that grew between the `stat` and the open must not
+    // be able to overrun the limit.
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(&path)
+        .and_then(|f| {
+            f.take(MAX_INLINE_IMAGE_BYTES as u64 + 1)
+                .read_to_end(&mut bytes)
+        })
         .map_err(|_| StoreError::InvalidInput(format!("cannot read {}", path.display())))?;
     if bytes.len() > MAX_INLINE_IMAGE_BYTES {
         return Err(StoreError::InvalidInput(format!(
@@ -269,5 +292,48 @@ mod tests {
         let big = dir.path().join("big.jpg");
         std::fs::write(&big, vec![0u8; MAX_INLINE_IMAGE_BYTES + 1]).unwrap();
         assert!(image_data_url(&big.to_string_lossy()).is_err());
+    }
+
+    #[test]
+    fn an_oversized_file_is_refused_before_it_is_read() {
+        // The old `std::fs::read` pulled the whole file into memory before
+        // the size check, so a multi-gigabyte file stalled the GUI thread
+        // behind an allocation to match. A sparse file keeps the test cheap
+        // while still being larger than the limit.
+        let dir = tempfile::tempdir().unwrap();
+        let huge = dir.path().join("huge.png");
+        {
+            use std::io::{Seek, SeekFrom, Write};
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&huge)
+                .unwrap();
+            f.write_all(b"x").unwrap();
+            f.seek(SeekFrom::Start(4 * 1024 * 1024 * 1024)).unwrap();
+            f.write_all(b"y").unwrap();
+            f.flush().unwrap();
+        }
+        let err = image_data_url(&huge.to_string_lossy())
+            .expect_err("must be refused")
+            .to_string();
+        assert!(err.contains("too large"), "{err}");
+        // The real size is reported, not the truncated limit, so the user
+        // learns *why* their file was refused.
+        assert!(err.contains("4194304 KB"), "{err}");
+    }
+
+    #[test]
+    fn a_file_that_grows_past_the_limit_is_still_refused() {
+        // Belt and braces: the capped read must not let a file that grew
+        // between the `stat` and the open overrun the limit.
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("grows.png");
+        std::fs::write(&png, vec![0u8; 64]).unwrap();
+        let url = image_data_url(&png.to_string_lossy()).unwrap();
+        assert!(url.starts_with("data:image/png;base64,"));
+        // Well under the limit, so nothing else applies.
+        assert!(url.len() < MAX_INLINE_IMAGE_BYTES);
     }
 }
