@@ -101,7 +101,9 @@ fn main() {
             .qml_file("qml/components/ScrollJumpButtons.qml")
             .qml_file("qml/components/ComposerDropZone.qml")
             .qml_file("qml/components/ImagePlacementDialog.qml")
+            .qml_file("qml/components/AttachedMessageCard.qml")
             .qml_file("qml/components/ContactCard.qml")
+            .qml_file("qml/components/ReportCard.qml")
             .qml_file("qml/components/EventCard.qml")
             .qml_file("qml/components/EmlExportDialog.qml")
             .qml_file("qml/components/AppDialog.qml"),

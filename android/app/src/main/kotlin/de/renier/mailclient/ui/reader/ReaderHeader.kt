@@ -1,6 +1,5 @@
 package de.renier.mailclient.ui.reader
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -11,11 +10,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -58,9 +55,10 @@ fun attachmentsOf(m: JSONObject): List<Attachment> {
 // The reader header (Flutter ReaderHeader): back in front of the subject
 // where the layout shows no back of its own, sender with avatar and date,
 // To line, reply-to warning, expandable details, then the message actions
-// right-aligned on their own row — and then the cards (calendar invite,
-// contact cards, missing inline images, attachments). It all scrolls away with the body;
-// nothing here is pinned.
+// right-aligned on their own row — and then the cards (ReaderCards.kt:
+// calendar invite, delivery report, contact cards, attached mails; then
+// missing inline images and attachments). It all scrolls away with the
+// body; nothing here is pinned.
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ReaderHeader(
@@ -77,6 +75,10 @@ fun ReaderHeader(
     onSaveEvent: (Long, String) -> Unit,
     onOpenContact: (Long) -> Unit,
     onSaveContact: (Long, String) -> Unit,
+    onOpenAttachedMail: (Long) -> Unit,
+    onSaveAttachedMail: (Long, String) -> Unit,
+    // "Edit & resend" on a bounce: the sent original's folder and uid.
+    onResend: (Long, Int) -> Unit,
     // Back in front of the subject, like Flutter: the one-pane reader and
     // the two-pane reader show the arrow, three panes the close icon.
     // Null hides it.
@@ -167,9 +169,23 @@ fun ReaderHeader(
 
         m.optJSONObject("event")?.let { EventCard(it, onOpenEvent, onSaveEvent) }
 
+        m.optJSONObject("report")?.let { ReportCard(it, downloadingInline, onDownloadInline, onResend) }
+
         m.optJSONArray("contacts")?.let { cards ->
             for (i in 0 until cards.length()) {
                 ContactCard(cards.getJSONObject(i), downloadingInline, onDownloadInline, onOpenContact, onSaveContact)
+            }
+        }
+
+        m.optJSONArray("attached_messages")?.let { mails ->
+            for (i in 0 until mails.length()) {
+                AttachedMessageCard(
+                    mails.getJSONObject(i),
+                    downloadingInline,
+                    onDownloadInline,
+                    onOpenAttachedMail,
+                    onSaveAttachedMail,
+                )
             }
         }
 
@@ -220,17 +236,6 @@ fun ReaderHeader(
 }
 
 @Composable
-private fun Muted(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-    )
-}
-
-@Composable
 private fun Details(m: JSONObject, h: JSONObject) {
     val rows = listOf(
         "From" to h.optString("from").ifEmpty { m.optString("from") },
@@ -250,147 +255,6 @@ private fun Details(m: JSONObject, h: JSONObject) {
                 )
                 Text(value, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
             }
-        }
-    }
-}
-
-@Composable
-private fun ReaderCard(alert: Boolean = false, content: @Composable () -> Unit) {
-    OutlinedCard(
-        modifier = Modifier.fillMaxWidth().padding(end = 8.dp),
-        border = if (alert) BorderStroke(1.dp, MaterialTheme.colorScheme.error) else androidx.compose.material3.CardDefaults.outlinedCardBorder(),
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) { content() }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun EventCard(event: JSONObject, onOpen: (Long) -> Unit, onSave: (Long, String) -> Unit) {
-    val cancelled = event.optBoolean("is_cancelled")
-    ReaderCard(alert = cancelled) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(painterResource(R.drawable.ic_event), null, modifier = Modifier.size(18.dp))
-            Text(
-                (if (cancelled) "Cancelled: " else "") + event.optString("summary", "(Event)"),
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(start = 8.dp),
-            )
-        }
-        Muted(event.optString("formatted_time"))
-        event.optString("location").takeIf { it.isNotBlank() }?.let { Muted("Where: $it") }
-        event.optString("organizer").takeIf { it.isNotBlank() }?.let { Muted("Organizer: $it") }
-        if (!event.isNull("attachment_id")) {
-            val id = event.optLong("attachment_id")
-            val name = event.optString("save_name", "event.ics").ifEmpty { "event.ics" }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End), modifier = Modifier.fillMaxWidth()) {
-                TextButton(onClick = { onOpen(id) }) { Text("Open in Calendar") }
-                TextButton(onClick = { onSave(id, name) }) { Text("Save .ics") }
-            }
-        }
-    }
-}
-
-// A `.vcf` attachment as a card (mailcore::vcard via the feed's `contacts`):
-// name with its badge, title/organisation, addresses, numbers and the
-// postal address, selectable for copying. A card whose file is not cached
-// yet offers the download that fills it in.
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun ContactCard(
-    card: JSONObject,
-    downloading: Boolean,
-    onDownload: () -> Unit,
-    onOpen: (Long) -> Unit,
-    onSave: (Long, String) -> Unit,
-) {
-    val loaded = card.optBoolean("loaded")
-    ReaderCard {
-        SelectionContainer {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (loaded) {
-                        Avatar(
-                            initials = card.optString("initials", "?").ifEmpty { "?" },
-                            avatarLight = card.optString("avatar_light"),
-                            avatarDark = card.optString("avatar_dark"),
-                            size = 36.dp,
-                        )
-                    } else {
-                        Icon(painterResource(R.drawable.ic_contacts), null, modifier = Modifier.size(18.dp))
-                    }
-                    Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
-                        Text(
-                            card.optString("name", "(Contact)"),
-                            style = MaterialTheme.typography.titleSmall,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        optText(card, "affiliation")?.let { Muted(it) }
-                        if (!loaded) Muted("Contact card not downloaded yet")
-                    }
-                }
-                fieldsOf(card, "emails").forEach { (value, label) -> ContactLine(R.drawable.ic_mail, value, label) }
-                fieldsOf(card, "phones").forEach { (value, label) -> ContactLine(R.drawable.ic_phone, value, label) }
-                optText(card, "address")?.let { ContactLine(R.drawable.ic_place, it, null) }
-                optText(card, "url")?.let { ContactLine(R.drawable.ic_link, it, null) }
-                val more = card.optInt("more_cards")
-                if (more > 0) Muted("+$more more contact${if (more == 1) "" else "s"} in this file")
-            }
-        }
-        if (!card.isNull("attachment_id")) {
-            val id = card.optLong("attachment_id")
-            val name = card.optString("save_name", "contact.vcf").ifEmpty { "contact.vcf" }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End), modifier = Modifier.fillMaxWidth()) {
-                if (!loaded) {
-                    TextButton(onClick = onDownload, enabled = !downloading) {
-                        Text(if (downloading) "Downloading…" else "Download")
-                    }
-                }
-                TextButton(onClick = { onOpen(id) }) { Text("Open in Contacts") }
-                TextButton(onClick = { onSave(id, name) }) { Text("Save .vcf") }
-            }
-        }
-    }
-}
-
-// A string field, null when absent, JSON null or blank (optString turns
-// null into "null").
-private fun optText(o: JSONObject, key: String): String? =
-    if (o.isNull(key)) null else o.optString(key).takeIf { it.isNotBlank() }
-
-private fun fieldsOf(card: JSONObject, key: String): List<Pair<String, String?>> {
-    val arr = card.optJSONArray(key) ?: return emptyList()
-    return (0 until arr.length()).map { arr.getJSONObject(it) }
-        .mapNotNull { f -> optText(f, "value")?.let { it to optText(f, "label") } }
-}
-
-@Composable
-private fun ContactLine(icon: Int, value: String, label: String?) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 2.dp)) {
-        Icon(
-            painterResource(icon),
-            null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(16.dp),
-        )
-        Text(
-            value,
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false).padding(start = 8.dp),
-        )
-        if (label != null) {
-            Text(
-                label,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                modifier = Modifier.padding(start = 8.dp),
-            )
         }
     }
 }

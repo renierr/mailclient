@@ -8,6 +8,7 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 
 // Brand blue shared with the launcher icon sources (#3B82F6).
@@ -51,3 +52,23 @@ fun MailTheme(
 @Composable
 fun starColor(starred: Boolean): Color =
     if (starred) StarAmber else MaterialTheme.colorScheme.onSurfaceVariant
+
+private val LightSuccess = Color(0xFF1E7A3C)
+private val DarkSuccess = Color(0xFF6CC88F)
+private val LightWarning = Color(0xFF9A5B00)
+private val DarkWarning = Color(0xFFF0B35A)
+
+// Colour for a core-given tone or outcome on the reader cards:
+// `positive`/`delivered` green, `negative`/`failed` error, `delayed` amber,
+// anything else the primary colour.
+@Composable
+fun toneColor(tone: String): Color {
+    val scheme = MaterialTheme.colorScheme
+    val dark = scheme.background.luminance() < 0.5f
+    return when (tone) {
+        "positive", "delivered" -> if (dark) DarkSuccess else LightSuccess
+        "negative", "failed" -> scheme.error
+        "delayed" -> if (dark) DarkWarning else LightWarning
+        else -> scheme.primary
+    }
+}

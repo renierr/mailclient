@@ -27,6 +27,12 @@ pub struct CalendarEvent {
     pub organizer: Option<String>,
     pub formatted_time: String,
     pub is_cancelled: bool,
+    /// What this file is besides a plain invitation: a reply
+    /// (`Jane Doe accepted`), a counter-proposal or an update. `None` for
+    /// a first invitation or a published event.
+    pub notice: Option<String>,
+    /// How to colour `notice`: `positive`, `negative` or `neutral`.
+    pub notice_tone: Option<String>,
     /// The `.ics` attachment the event came from, if any (none for an event
     /// found in the body text).
     pub attachment_id: Option<i64>,
@@ -55,6 +61,65 @@ struct Parsed {
     start: ParsedTime,
     #[cfg_attr(not(test), allow(dead_code))]
     end: Option<ParsedTime>,
+}
+
+/// The attendee an iTIP reply or counter speaks for: display name (or
+/// address) and participation status.
+struct Attendee {
+    who: String,
+    partstat: Option<String>,
+}
+
+fn parse_attendee(line: &ContentLine<'_>) -> Option<Attendee> {
+    let val = line.value.trim();
+    let email = match val.get(..7) {
+        Some(p) if p.eq_ignore_ascii_case("mailto:") => &val[7..],
+        _ => val,
+    }
+    .trim();
+    let who = line
+        .param("CN")
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .unwrap_or(email);
+    (!who.is_empty()).then(|| Attendee {
+        who: who.to_string(),
+        partstat: line
+            .param("PARTSTAT")
+            .map(|p| p.trim().to_ascii_uppercase()),
+    })
+}
+
+/// The notice line and its tone for a non-invitation: `method` is the
+/// effective iTIP method, `attendee` the first ATTENDEE with a status.
+fn notice_for(
+    method: Option<&str>,
+    sequence: u32,
+    attendee: Option<&Attendee>,
+) -> Option<(String, &'static str)> {
+    let method = method.map(str::to_ascii_uppercase);
+    let who = attendee.map_or("An attendee", |a| a.who.as_str());
+    match method.as_deref() {
+        Some("REPLY") => {
+            let status = attendee.and_then(|a| a.partstat.as_deref());
+            Some(match status {
+                Some("ACCEPTED") => (format!("{who} accepted"), "positive"),
+                Some("DECLINED") => (format!("{who} declined"), "negative"),
+                Some("TENTATIVE") => (format!("{who} tentatively accepted"), "neutral"),
+                Some("DELEGATED") => (format!("{who} delegated the invitation"), "neutral"),
+                _ => (format!("{who} replied"), "neutral"),
+            })
+        }
+        Some("COUNTER") => Some((format!("{who} proposed a new time"), "neutral")),
+        Some("DECLINECOUNTER") => Some((
+            "The organizer declined the proposed time".to_string(),
+            "negative",
+        )),
+        Some("REFRESH") => Some((format!("{who} asks for the latest version"), "neutral")),
+        Some("ADD") => Some(("New occurrences were added".to_string(), "neutral")),
+        Some("REQUEST") if sequence > 0 => Some(("Updated invitation".to_string(), "neutral")),
+        _ => None,
+    }
 }
 
 fn parse_organizer(line: &ContentLine<'_>) -> Option<String> {
@@ -105,6 +170,8 @@ fn parse(ics_data: &str) -> Option<Parsed> {
     let mut dtstart: Option<RawTime> = None;
     let mut dtend: Option<RawTime> = None;
     let mut duration_secs: Option<i64> = None;
+    let mut sequence: u32 = 0;
+    let mut attendee: Option<Attendee> = None;
 
     for line in unfolded.lines() {
         let line = line.trim();
@@ -180,6 +247,19 @@ fn parse(ics_data: &str) -> Option<Parsed> {
                     "DTSTART" => dtstart = read_time(&cl),
                     "DTEND" => dtend = read_time(&cl),
                     "DURATION" => duration_secs = parse_duration_seconds(cl.value),
+                    "SEQUENCE" => sequence = cl.value.trim().parse().unwrap_or(0),
+                    // A reply carries the replying attendee; prefer the
+                    // first one that states a participation status.
+                    "ATTENDEE" => {
+                        if let Some(a) = parse_attendee(&cl) {
+                            let replace = attendee
+                                .as_ref()
+                                .is_none_or(|cur| cur.partstat.is_none() && a.partstat.is_some());
+                            if replace {
+                                attendee = Some(a);
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -209,6 +289,7 @@ fn parse(ics_data: &str) -> Option<Parsed> {
     let formatted_time = format_date_range(&start, end.as_ref(), is_all_day);
 
     let method = event_method.or(calendar_method);
+    let notice = notice_for(method.as_deref(), sequence, attendee.as_ref());
     let is_cancelled = status
         .as_deref()
         .is_some_and(|s| s.eq_ignore_ascii_case("CANCELLED"))
@@ -228,6 +309,8 @@ fn parse(ics_data: &str) -> Option<Parsed> {
             organizer,
             formatted_time,
             is_cancelled,
+            notice: notice.as_ref().map(|(n, _)| n.clone()),
+            notice_tone: notice.map(|(_, t)| t.to_string()),
             attachment_id: None,
             save_name: None,
         },

@@ -11,6 +11,7 @@ enum class ComposeMode(val title: String) {
     Reply("Reply"),
     ReplyAll("Reply all"),
     Forward("Forward"),
+    Resend("Edit & resend"),
     Draft("Edit draft"),
 }
 
@@ -56,18 +57,20 @@ data class ComposerSeed(
          * Reply, reply-all or forward: recipients, subject, quote prepared by
          * the core. A forward also carries the original's files, staged under
          * [stageDir] from the cache (fetch them first, `forwardMissing`).
+         * Resend ([uid] is a bounce) does the same for the sent original.
          */
         fun answer(folderId: Long, uid: Int, mode: ComposeMode, stageDir: String): ComposerSeed {
             val wire = when (mode) {
                 ComposeMode.ReplyAll -> "reply_all"
                 ComposeMode.Forward -> "forward"
+                ComposeMode.Resend -> "resend"
                 else -> "reply"
             }
             val d = JSONObject(MailNative.answerDraft(folderId, uid, wire))
-            val fwd = if (mode == ComposeMode.Forward) {
-                JSONObject(MailNative.forwardFiles(folderId, uid, stageDir))
-            } else {
-                null
+            val fwd = when (mode) {
+                ComposeMode.Forward -> JSONObject(MailNative.forwardFiles(folderId, uid, stageDir))
+                ComposeMode.Resend -> JSONObject(MailNative.resendFiles(folderId, uid, stageDir))
+                else -> null
             }
             val files = fwd?.optJSONArray("files")
             return ComposerSeed(

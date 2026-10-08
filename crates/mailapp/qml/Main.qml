@@ -390,6 +390,22 @@ ApplicationWindow {
             root.statusText = r;
     }
 
+    // "Edit & resend" of a bounce: the sent original as a new draft to the
+    // failed recipients, with its files (fetched first by the "Resend" job
+    // when not cached).
+    function resendMessage(uid) {
+        if (uid < 0 || !composer.readyForNew())
+            return;
+        if (backend.resend_missing(uid) === 0) {
+            composer.openAnswerDraft(FeedJson.parse(backend.resend_draft_json(uid), ({})));
+            return;
+        }
+        root.statusText = qsTr("Downloading attachments…");
+        var r = backend.resend_fetch(uid);
+        if (r !== "")
+            root.statusText = r;
+    }
+
     function openMessage(uid) {
         if (uid < 0 || uid === root.currentUid)
             // already open: re-clicking a row must not reload anything
@@ -831,7 +847,7 @@ ApplicationWindow {
         target: backend
         // Jobs that only read: nothing they did is visible in the feeds, so
         // reloading would throw away the list's scroll position for free.
-        readonly property var readOnlyKinds: ["Open", "Open draft", "Forward", "Save", "Capabilities"]
+        readonly property var readOnlyKinds: ["Open", "Open draft", "Forward", "Resend", "Save", "Capabilities"]
 
         // SMTP has accepted the message; the Sent copy and the folder
         // resync still have to run, but the user is done waiting.
@@ -924,7 +940,7 @@ ApplicationWindow {
                     root.statusText = status;
                 return;
             }
-            if (kind === "Forward") {
+            if (kind === "Forward" || kind === "Resend") {
                 // The draft JSON on success, an error sentence otherwise.
                 try {
                     var fwd = JSON.parse(status);
@@ -1420,6 +1436,7 @@ ApplicationWindow {
             onReplyRequested: composer.openForAnswer(root.currentUid, "reply")
             onReplyAllRequested: composer.openForAnswer(root.currentUid, "reply_all")
             onForwardRequested: root.forwardMessage(root.currentUid)
+            onResendRequested: root.resendMessage(root.currentUid)
             onFindSimilarRequested: root.findSimilar("", root.currentUid)
             onStarRequested: root.toggleStar(root.currentUid)
             onArchiveRequested: root.archiveMessage(root.currentUid)

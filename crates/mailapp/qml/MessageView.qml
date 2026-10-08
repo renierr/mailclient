@@ -44,6 +44,8 @@ Rectangle {
     signal replyRequested
     signal replyAllRequested
     signal forwardRequested
+    // "Edit & resend" on a bounce's delivery report card.
+    signal resendRequested
     signal starRequested
     signal archiveRequested
     signal moveRequested
@@ -738,6 +740,17 @@ Rectangle {
                     }
                 }
 
+                // --- delivery report (bounce) --------------------------------------
+                ReportCard {
+                    Layout.fillWidth: true
+                    Layout.margins: Theme.md
+                    visible: !!root.message && !!root.message.report
+                    report: root.message ? root.message.report : null
+                    downloading: !!root.backend && root.backend.busy
+                    onResendClicked: root.resendRequested()
+                    onDownloadClicked: root.downloadInline(qsTr("Downloading delivery report…"))
+                }
+
                 // --- contact cards (.vcf) ------------------------------------------
                 Repeater {
                     model: (root.message && root.message.contacts) ? root.message.contacts : []
@@ -758,6 +771,29 @@ Rectangle {
                                                         "file_name": modelData.save_name || ""
                                                     })
                         onDownloadClicked: root.downloadInline(qsTr("Downloading contact card…"))
+                    }
+                }
+
+                // --- attached mails (.eml) -----------------------------------------
+                Repeater {
+                    model: (root.message && root.message.attached_messages) ? root.message.attached_messages : []
+
+                    delegate: AttachedMessageCard {
+                        required property var modelData
+
+                        Layout.fillWidth: true
+                        Layout.margins: Theme.md
+                        mail: modelData
+                        downloading: !!root.backend && root.backend.busy
+                        onOpenClicked: root.openOne({
+                                                        "id": modelData.attachment_id,
+                                                        "file_name": modelData.save_name || ""
+                                                    })
+                        onSaveClicked: root.saveOne({
+                                                        "id": modelData.attachment_id,
+                                                        "file_name": modelData.save_name || ""
+                                                    })
+                        onDownloadClicked: root.downloadInline(qsTr("Downloading attached message…"))
                     }
                 }
 

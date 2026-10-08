@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 21;
+pub const SCHEMA_VERSION: u32 = 22;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -307,6 +307,14 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         if let Err(e) = crate::store::contacts::backfill_sent_counts_from_connection(conn) {
             log::warn!("migration v21: sent-count backfill failed: {e}");
         }
+    }
+    if current < 22 {
+        // v22: look a message up by its Message-ID within an account (a
+        // bounce's reader card finds the sent original it reports on).
+        conn.execute_batch(
+            "create index if not exists idx_messages_account_msgid
+                on messages (account_id, message_id_header);",
+        )?;
     }
     if current != SCHEMA_VERSION {
         conn.execute(

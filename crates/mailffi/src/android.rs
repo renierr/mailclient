@@ -2082,6 +2082,51 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_forwardFiles<'caller
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `MailNative.resendMissing(folderId, uid)`: `forwardMissing` for "Edit &
+/// resend" of the bounce `(folderId, uid)` — counts the sent original's
+/// files with no cached bytes. Local read.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_resendMissing<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+    uid: i32,
+) -> i32 {
+    unowned
+        .with_env(|_env| -> Result<i32> {
+            let db = crate::db::shared_db()?;
+            let n = mailcore::compose::resend_missing(db, folder_id, uid.max(0) as u32)
+                .map_err(anyhow::Error::msg)?;
+            Ok(i32::try_from(n).unwrap_or(i32::MAX))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.resendFiles(folderId, uid, dir)`: `forwardFiles` for the
+/// sent original of the bounce `(folderId, uid)`. Local only.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_resendFiles<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+    uid: i32,
+    dir: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let db = crate::db::shared_db()?;
+            let files = mailcore::compose::stage_resend_files(
+                db,
+                folder_id,
+                uid.max(0) as u32,
+                std::path::Path::new(&string(env, &dir)?),
+            )
+            .map_err(anyhow::Error::msg)?;
+            Ok(env.new_string(serde_json::to_string(&files)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `MailNative.blankDraft()`: new-mail draft (just the signature), same
 /// shape as `answerDraft`.
 #[unsafe(no_mangle)]

@@ -12,6 +12,16 @@ Rectangle {
     signal openClicked
     signal saveClicked
 
+    // `notice_tone` from mailcore::calendar: positive / negative / neutral.
+    readonly property color noticeColor: {
+        var tone = root.event ? root.event.notice_tone : "";
+        if (tone === "positive")
+            return Theme.success;
+        if (tone === "negative")
+            return Theme.danger;
+        return Theme.accent;
+    }
+
     radius: Theme.radius
     color: Theme.bgAlt
     border.width: 1
@@ -85,6 +95,17 @@ Rectangle {
                             font.bold: true
                         }
                     }
+                }
+
+                // Reply / counter / update: what this file says (core text).
+                Label {
+                    Layout.fillWidth: true
+                    visible: !!root.event && !!root.event.notice
+                    text: (root.event && root.event.notice) ? root.event.notice : ""
+                    color: root.noticeColor
+                    font.pixelSize: Theme.fontSmall
+                    font.bold: true
+                    wrapMode: Text.Wrap
                 }
 
                 // Time

@@ -1,5 +1,7 @@
 //! Forwarding keeps the original's files: they are fetched if needed and
 //! staged for the composer, which attaches from paths like any picked file.
+//! An edit-and-resend of a bounced mail does the same with the sent
+//! original the bounce reports on.
 
 use crate::store::messages;
 use crate::Db;
@@ -54,6 +56,37 @@ pub fn stage_forward_files(
     base: &Path,
 ) -> Result<ForwardFiles, String> {
     stage_message_files(db, original(db, folder_id, uid)?.id, base)
+}
+
+/// [`forward_missing`] for an edit-and-resend: counts the files of the sent
+/// original the bounce at `(folder_id, uid)` reports on.
+pub fn resend_missing(db: &Db, folder_id: i64, uid: u32) -> Result<usize, String> {
+    let m = crate::report::bounce(db, folder_id, uid)?.original;
+    crate::sync::attachments::missing_count(db, m.id, false).map_err(|e| e.to_string())
+}
+
+/// [`forward_files`] for an edit-and-resend: fetch and stage the files of
+/// the bounce's sent original.
+pub async fn resend_files(
+    db: &Db,
+    folder_id: i64,
+    uid: u32,
+    base: &Path,
+) -> Result<ForwardFiles, String> {
+    let m = crate::report::bounce(db, folder_id, uid)?.original;
+    forward_files(db, m.folder_id, m.uid, base).await
+}
+
+/// [`stage_forward_files`] for an edit-and-resend: stage what is cached of
+/// the bounce's sent original. Local only.
+pub fn stage_resend_files(
+    db: &Db,
+    folder_id: i64,
+    uid: u32,
+    base: &Path,
+) -> Result<ForwardFiles, String> {
+    let m = crate::report::bounce(db, folder_id, uid)?.original;
+    stage_message_files(db, m.id, base)
 }
 
 fn original(db: &Db, folder_id: i64, uid: u32) -> Result<crate::models::Message, String> {

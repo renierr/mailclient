@@ -123,8 +123,37 @@ impl qobject::Bridge {
         let folder_id = *self.current_folder_id();
         let uid = uid.max(0) as u32;
         compose::stage_forward_files(db, folder_id, uid, &std::env::temp_dir())
-            .and_then(|files| forward_payload(db, folder_id, uid, files))
+            .and_then(|files| answer_payload(db, folder_id, uid, "forward", files))
             .map_or_else(|_| qstring("{}"), |j| qstring(&j))
+    }
+
+    pub fn resend_missing(&self, uid: i32) -> i32 {
+        let Ok(db) = shared_db() else {
+            return 0;
+        };
+        compose::resend_missing(db, *self.current_folder_id(), uid.max(0) as u32)
+            .map_or(0, |n| i32::try_from(n).unwrap_or(i32::MAX))
+    }
+
+    pub fn resend_draft_json(&self, uid: i32) -> QString {
+        let Ok(db) = shared_db() else {
+            return qstring("{}");
+        };
+        let folder_id = *self.current_folder_id();
+        let uid = uid.max(0) as u32;
+        compose::stage_resend_files(db, folder_id, uid, &std::env::temp_dir())
+            .and_then(|files| answer_payload(db, folder_id, uid, "resend", files))
+            .map_or_else(|_| qstring("{}"), |j| qstring(&j))
+    }
+
+    pub fn resend_fetch(self: Pin<&mut Self>, uid: i32) -> QString {
+        let folder_id = *self.current_folder_id();
+        let uid = uid.max(0) as u32;
+        spawn_job(self, "Resend", move |db, _progress| async move {
+            let files = compose::resend_files(db, folder_id, uid, &std::env::temp_dir()).await?;
+            // Read-only: nothing in the feeds changed.
+            Ok((answer_payload(db, folder_id, uid, "resend", files)?, None))
+        })
     }
 
     pub fn forward_fetch(self: Pin<&mut Self>, uid: i32) -> QString {
@@ -133,7 +162,7 @@ impl qobject::Bridge {
         spawn_job(self, "Forward", move |db, _progress| async move {
             let files = compose::forward_files(db, folder_id, uid, &std::env::temp_dir()).await?;
             // Read-only: nothing in the feeds changed.
-            Ok((forward_payload(db, folder_id, uid, files)?, None))
+            Ok((answer_payload(db, folder_id, uid, "forward", files)?, None))
         })
     }
 
@@ -193,16 +222,16 @@ impl qobject::Bridge {
     }
 }
 
-/// The forward answer draft with the staged files merged in, the way the
-/// QML composer takes a draft (`attachments` as `file://` URLs).
-fn forward_payload(
+/// The forward or resend answer draft with the staged files merged in, the
+/// way the QML composer takes a draft (`attachments` as `file://` URLs).
+fn answer_payload(
     db: &mailcore::Db,
     folder_id: i64,
     uid: u32,
+    mode: &str,
     files: compose::ForwardFiles,
 ) -> Result<String, String> {
-    let draft =
-        compose::answer_draft_json(db, folder_id, uid, "forward").map_err(|e| e.to_string())?;
+    let draft = compose::answer_draft_json(db, folder_id, uid, mode).map_err(|e| e.to_string())?;
     let mut draft: serde_json::Value = serde_json::from_str(&draft).map_err(|e| e.to_string())?;
     draft["attachments"] = files
         .files

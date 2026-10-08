@@ -40,6 +40,7 @@ QtObject {
     readonly property color star: "#f0a92c"
     readonly property color danger: dark ? "#f2777a" : "#c8342f"
     readonly property color warning: dark ? "#f0b35a" : "#9a5b00"
+    readonly property color success: dark ? "#6cc88f" : "#1e7a3c"
 
     // --- metrics ----------------------------------------------------------
     readonly property int xs: 4

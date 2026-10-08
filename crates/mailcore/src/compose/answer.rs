@@ -24,6 +24,9 @@ pub enum AnswerMode {
     Reply,
     ReplyAll,
     Forward,
+    /// Edit and send again the sent original a bounce reports on, to the
+    /// addresses delivery failed for.
+    Resend,
 }
 
 impl AnswerMode {
@@ -33,6 +36,7 @@ impl AnswerMode {
             "reply" => Some(Self::Reply),
             "reply_all" => Some(Self::ReplyAll),
             "forward" => Some(Self::Forward),
+            "resend" => Some(Self::Resend),
             _ => None,
         }
     }
@@ -108,7 +112,8 @@ pub fn blank_draft(opts: &AnswerOptions) -> AnswerDraft {
     }
 }
 
-/// Builds the draft for `src`.
+/// Builds the draft for `src`. `Resend` needs the bounce, not a source:
+/// it is built by [`resend_draft`] and reads as a reply here.
 pub fn answer_draft(src: &AnswerSource, mode: AnswerMode, opts: &AnswerOptions) -> AnswerDraft {
     let (signature_html, signature_text) = signature(opts);
     let sender = if src.from_name.trim().is_empty() {
@@ -205,10 +210,14 @@ pub fn answer_draft(src: &AnswerSource, mode: AnswerMode, opts: &AnswerOptions) 
 }
 
 /// The reader payload's message as an answer draft, as JSON. `mode` is
-/// `"reply"`, `"reply_all"` or `"forward"`.
+/// `"reply"`, `"reply_all"`, `"forward"` or `"resend"` (the message is then
+/// a bounce, see [`resend_draft`]).
 pub fn answer_draft_json(db: &Db, folder_id: i64, uid: u32, mode: &str) -> Result<String> {
     let mode = AnswerMode::parse(mode)
         .ok_or_else(|| StoreError::InvalidInput(format!("unknown answer mode {mode:?}")))?;
+    if mode == AnswerMode::Resend {
+        return Ok(serde_json::to_string(&resend_draft(db, folder_id, uid)?)?);
+    }
     let m = messages::get_by_uid(db, folder_id, uid)?;
     let allow_remote = settings::get_bool(db, settings::LOAD_REMOTE_IMAGES).unwrap_or(false);
     let (body_html, _, is_html, plain) =
@@ -237,6 +246,34 @@ pub fn answer_draft_json(db: &Db, folder_id: i64, uid: u32, mode: &str) -> Resul
         ..stored_options(db)
     };
     Ok(serde_json::to_string(&answer_draft(&src, mode, &opts))?)
+}
+
+/// The sent original of the bounce at `(folder_id, uid)` as a new draft to
+/// edit and send again: addressed to the recipients delivery failed for
+/// (the original's To when the report names none), same subject, its body
+/// as is — signature included, nothing quoted. Its files come separately
+/// (`compose::stage_resend_files`).
+pub fn resend_draft(db: &Db, folder_id: i64, uid: u32) -> Result<AnswerDraft> {
+    let bounce = crate::report::bounce(db, folder_id, uid).map_err(StoreError::InvalidInput)?;
+    let m = bounce.original;
+    let to = if bounce.failed.is_empty() {
+        m.to_addrs.join(", ")
+    } else {
+        bounce.failed.join(", ")
+    };
+    Ok(AnswerDraft {
+        to,
+        cc: String::new(),
+        subject: m.subject.clone().unwrap_or_default(),
+        notice_addr: String::new(),
+        notice_sender: String::new(),
+        notice: String::new(),
+        signature_html: String::new(),
+        signature_text: String::new(),
+        quote_html: String::new(),
+        quote_first: false,
+        body_html: super::drafts::draft_editor_html(db, &m),
+    })
 }
 
 /// [`blank_draft`] with the stored settings, as JSON.

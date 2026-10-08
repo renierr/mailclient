@@ -522,12 +522,16 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
     let listed = listed_attachments(db, m.id, m.body_html.as_deref());
     let event = find_calendar_event(db, &m);
     let contacts = contact_cards(db, &listed);
+    let report = crate::report::delivery_report(db, &m, &listed);
+    let attached = attached_messages(db, &listed);
     // Files a preview card already opens and saves: the frontends leave
     // them out of the attachment list so one file never shows twice.
     let carded: Vec<i64> = event
         .iter()
         .filter_map(|e| e.attachment_id)
         .chain(contacts.iter().filter_map(|c| c.attachment_id))
+        .chain(attached.iter().filter_map(|a| a.attachment_id))
+        .chain(report.iter().flat_map(|r| r.covered.iter().copied()))
         .collect();
     let files: Vec<serde_json::Value> = listed
         .iter()
@@ -562,6 +566,8 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
         "body": legacy_body,
         "event": event,
         "contacts": contacts,
+        "report": report,
+        "attached_messages": attached,
     });
     sender_badge(from_name, from).extend(&mut out);
     Ok(serde_json::to_string(&out)?)
@@ -626,6 +632,25 @@ fn contact_cards(db: &Db, listed: &[crate::models::Attachment]) -> Vec<crate::vc
                 }
                 None => Some(crate::vcard::ContactCard::pending(att)),
             }
+        })
+        .collect()
+}
+
+/// Cards for the listed mails attached to this one (`.eml`,
+/// `message/rfc822`). A pending card while the bytes are not cached; a file
+/// that is no mail stays an ordinary attachment.
+fn attached_messages(
+    db: &Db,
+    listed: &[crate::models::Attachment],
+) -> Vec<crate::attached::AttachedMessage> {
+    listed
+        .iter()
+        .filter(|a| {
+            crate::attached::is_message_attachment(a.filename.as_deref(), a.mime_type.as_deref())
+        })
+        .filter_map(|att| {
+            let full = messages::get_attachment(db, att.id).ok()?;
+            crate::attached::AttachedMessage::for_attachment(att, full.data.as_deref())
         })
         .collect()
 }

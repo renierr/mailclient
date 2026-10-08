@@ -91,6 +91,8 @@ create index if not exists idx_messages_account_thread
     on messages (account_id, thread_id);
 create index if not exists idx_messages_unread
     on messages (folder_id, is_read);
+create index if not exists idx_messages_account_msgid
+    on messages (account_id, message_id_header);
 
 -- --------------------------------------------- full-text search (FTS5, external content)
 -- Recipient columns are the stored JSON address arrays: the tokenizer drops

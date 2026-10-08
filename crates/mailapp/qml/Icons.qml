@@ -29,6 +29,7 @@ QtObject {
     readonly property string clear: "\ue14c"
     readonly property string close: "\ue5cd"
     readonly property string closeFullscreen: "\uf1cf"
+    readonly property string checkCircle: "\ue86c"
     readonly property string contacts: "\ue0ba"
     // `delete` alone is an ECMAScript reserved word and cannot be a
     // property name; the trash-can icon lives under `trash`.
@@ -43,6 +44,7 @@ QtObject {
     readonly property string driveFileMove: "\ue675"
     readonly property string edit: "\ue3c9"
     readonly property string editNote: "\ue745"
+    readonly property string error: "\ue000"
     readonly property string event: "\ue878"
     readonly property string expandLess: "\ue5ce"
     readonly property string expandMore: "\ue5cf"

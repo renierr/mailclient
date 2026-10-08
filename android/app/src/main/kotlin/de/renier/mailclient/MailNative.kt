@@ -227,6 +227,11 @@ object MailNative {
     // staged under [dir] as `{files: [{path,name}], missing, notice}`.
     @JvmStatic external fun forwardMissing(folderId: Long, uid: Int): Int
     @JvmStatic external fun forwardFiles(folderId: Long, uid: Int, dir: String): String
+
+    // "Edit & resend" of the bounce (folderId, uid): the same for the sent
+    // original it reports on (`answerDraft(.., "resend")` builds the draft).
+    @JvmStatic external fun resendMissing(folderId: Long, uid: Int): Int
+    @JvmStatic external fun resendFiles(folderId: Long, uid: Int, dir: String): String
     @JvmStatic external fun blankDraft(): String
     @JvmStatic external fun imageDataUrl(path: String): String
     @JvmStatic external fun senderParts(address: String): String

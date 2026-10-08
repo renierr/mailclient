@@ -309,3 +309,46 @@ fn outlook_style_invite_parses() {
     assert_eq!(event.summary, "Planung");
     assert_eq!(event.location.as_deref(), Some("Raum 1"));
 }
+
+fn with_method(method: &str, event_lines: &str) -> String {
+    format!("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:{method}\r\nBEGIN:VEVENT\r\nDTSTART:20261006T140000Z\r\n{event_lines}END:VEVENT\r\nEND:VCALENDAR\r\n")
+}
+
+#[test]
+fn reply_names_the_attendee_and_their_answer() {
+    let e = parse_ics(&with_method(
+        "REPLY",
+        "SUMMARY:Review\r\nATTENDEE;CN=\"Jane Doe\";PARTSTAT=ACCEPTED:mailto:jane@example.com\r\n",
+    ))
+    .unwrap();
+    assert_eq!(e.notice.as_deref(), Some("Jane Doe accepted"));
+    assert_eq!(e.notice_tone.as_deref(), Some("positive"));
+
+    let e = parse_ics(&with_method(
+        "REPLY",
+        "ATTENDEE:mailto:other@example.com\r\nATTENDEE;PARTSTAT=DECLINED:mailto:bob@example.com\r\n",
+    ))
+    .unwrap();
+    assert_eq!(e.notice.as_deref(), Some("bob@example.com declined"));
+    assert_eq!(e.notice_tone.as_deref(), Some("negative"));
+}
+
+#[test]
+fn counter_update_and_plain_invite() {
+    let counter = with_method("COUNTER", "ATTENDEE;CN=Bob:mailto:bob@example.com\r\n");
+    assert_eq!(
+        parse_ics(&counter).unwrap().notice.as_deref(),
+        Some("Bob proposed a new time")
+    );
+
+    let update = with_method("REQUEST", "SEQUENCE:2\r\n");
+    assert_eq!(
+        parse_ics(&update).unwrap().notice.as_deref(),
+        Some("Updated invitation")
+    );
+
+    let invite = with_method("REQUEST", "SEQUENCE:0\r\n");
+    let e = parse_ics(&invite).unwrap();
+    assert_eq!(e.notice, None);
+    assert_eq!(e.notice_tone, None);
+}

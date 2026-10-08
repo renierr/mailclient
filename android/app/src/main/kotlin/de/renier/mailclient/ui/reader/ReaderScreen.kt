@@ -99,6 +99,8 @@ fun ReaderScreen(
     onShowSimilar: () -> Unit,
     // Reply / Reply all / Forward: the shell loads the core's draft.
     onCompose: (ComposeMode) -> Unit,
+    // "Edit & resend" on a bounce's report card: the sent original's ids.
+    onResend: (Long, Int) -> Unit,
     // Beside the list (three panes) the way out closes, not goes back.
     closeIcon: Boolean = false,
     // The reader alone on screen, system bars hidden; the shell owns it.
@@ -355,6 +357,9 @@ fun ReaderScreen(
                     onSaveEvent = { id, name -> saveAttachment(id, name, "text/calendar") },
                     onOpenContact = { openAttachment(it, "text/vcard") },
                     onSaveContact = { id, name -> saveAttachment(id, name, "text/vcard") },
+                    onOpenAttachedMail = { openAttachment(it, "message/rfc822") },
+                    onSaveAttachedMail = { id, name -> saveAttachment(id, name, "message/rfc822") },
+                    onResend = onResend,
                     onClose = onClose,
                     closeIcon = closeIcon,
                     actions = {

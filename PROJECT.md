@@ -402,7 +402,9 @@ the open Qt ↔ native differences are listed at the end.
 | Header (subject/sender/date/To, expandable) | ✅ | ✅ | ✅ | |
 | Reply-To warning, link examine, headers view | ✅ | ✅ | ✅ | |
 | Attachments (open/save/save-all) | ✅ | ✅ | ✅ | Native via SAF + FileProvider. Inline images sync never kept show a notice with Download in both readers (`missing_inline_images`) |
-| Event card (ICS) | ✅ | ✅ | ✅ | |
+| Event card (ICS) | ✅ | ✅ | ✅ | Replies, counter-proposals and updates carry a notice line (`Jane accepted`, `Updated invitation`) in Qt and native; Flutter is retired |
+| Delivery report card (bounce) | ✅ | — | ✅ | `multipart/report` delivery status: outcome, per-recipient reason in plain words plus the server text, original subject; **Edit & resend** opens the cached Sent original (found by Message-ID) as a new draft to the failed recipients, with its files |
+| Attached mail card (.eml) | ✅ | — | ✅ | `message/rfc822` attachments: subject, sender, date, snippet; **Show message** expands the plain-text body; Open / Save .eml |
 | Contact card (vCard) | ✅ | — | ✅ | `.vcf` attachments as a card (name + badge, title/org, e-mails, phones, address, URL; Open in Contacts / Save .vcf). Small `.vcf` bytes are kept at sync; an older uncached one shows a Download. Flutter is retired |
 | Remote-image block + show-once | ✅ | ✅ | ✅ | |
 | Original/darkened colours, zoom | ✅ | ✅ | ✅ | Reader text size factor is `settings::reader_text_scale`: Qt scales the HTML document's base size by it (sizes a mail sets stay its own), native uses it as WebView text zoom with pinch zoom on top |

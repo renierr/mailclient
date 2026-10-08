@@ -1024,3 +1024,169 @@ fn sidebar_rows_show_well_known_skip_hidden_and_split_delimiters() {
     assert!(!shown.contains(&hidden));
     assert!(shown.contains(&orphan));
 }
+
+fn part(name: Option<&str>, mime: &str, data: Option<&[u8]>) -> crate::models::NewAttachment {
+    crate::models::NewAttachment {
+        filename: name.map(str::to_string),
+        mime_type: Some(mime.to_string()),
+        content_id: None,
+        size: data.map_or(100, |d| d.len() as u64),
+        data: data.map(<[u8]>::to_vec),
+        is_inline: false,
+    }
+}
+
+#[test]
+fn bounce_shows_a_report_card_and_resends_the_sent_original() {
+    let (db, acc, inbox) = setup();
+    let sent = folders::upsert(&db, acc, "Sent", "/", FolderRole::Sent).unwrap();
+    let mut original = msg_store::sample_new(acc, sent, 40);
+    original.message_id_header = Some("orig@example.com".to_string());
+    original.subject = Some("Project plan".to_string());
+    original.to_addrs = vec![
+        "bob@example.net".to_string(),
+        "carol@example.net".to_string(),
+    ];
+    original.body_html = Some("<p>The plan.</p><p>-- <br>Alice</p>".to_string());
+    let original_id = msg_store::upsert(&db, &original).unwrap();
+    msg_store::add_attachment(
+        &db,
+        original_id,
+        &part(Some("plan.pdf"), "application/pdf", Some(b"%PDF")),
+    )
+    .unwrap();
+
+    let bounce_id = msg_store::upsert(&db, &msg_store::sample_new(acc, inbox, 41)).unwrap();
+    let status = b"Reporting-MTA: dns; mx.example.org\r\n\r\n\
+Final-Recipient: rfc822; bob@example.net\r\nAction: failed\r\nStatus: 5.1.1\r\n\
+Diagnostic-Code: smtp; 550 5.1.1 User unknown\r\n\r\n\
+Final-Recipient: rfc822; carol@example.net\r\nAction: delivered\r\nStatus: 2.0.0\r\n";
+    let status_id = msg_store::add_attachment(
+        &db,
+        bounce_id,
+        &part(None, "message/delivery-status", Some(status)),
+    )
+    .unwrap();
+    let headers_id = msg_store::add_attachment(
+        &db,
+        bounce_id,
+        &part(
+            None,
+            "text/rfc822-headers",
+            Some(b"Message-ID: <orig@example.com>\r\nSubject: Project plan\r\n"),
+        ),
+    )
+    .unwrap();
+
+    let reader: serde_json::Value =
+        serde_json::from_str(&message_json(&db, inbox, 41).unwrap()).unwrap();
+    let report = &reader["report"];
+    assert_eq!(report["outcome"], "failed");
+    assert_eq!(report["title"], "Delivery failed");
+    assert_eq!(report["loaded"], true);
+    assert_eq!(report["recipients"][0]["address"], "bob@example.net");
+    assert_eq!(
+        report["recipients"][0]["reason"],
+        "The address does not exist (5.1.1)"
+    );
+    assert_eq!(report["recipients"][0]["action_label"], "Failed");
+    assert_eq!(report["recipients"][1]["action"], "delivered");
+    assert_eq!(report["original_subject"], "Project plan");
+    assert_eq!(report["original_folder_id"], sent);
+    assert_eq!(report["original_uid"], 40);
+    assert_eq!(report["can_resend"], true);
+    assert!(report.get("covered").is_none());
+    for a in reader["attachments"].as_array().unwrap() {
+        assert!(a["id"] == status_id || a["id"] == headers_id);
+        assert_eq!(a["in_card"], true);
+    }
+
+    // Resend goes to the failed recipient only, with the original's body
+    // and files.
+    let draft: serde_json::Value =
+        serde_json::from_str(&crate::compose::answer_draft_json(&db, inbox, 41, "resend").unwrap())
+            .unwrap();
+    assert_eq!(draft["to"], "bob@example.net");
+    assert_eq!(draft["subject"], "Project plan");
+    assert!(draft["body_html"].as_str().unwrap().contains("The plan."));
+    assert_eq!(draft["quote_html"], "");
+    assert_eq!(crate::compose::resend_missing(&db, inbox, 41).unwrap(), 0);
+    let dir = tempfile::tempdir().unwrap();
+    let files = crate::compose::stage_resend_files(&db, inbox, 41, dir.path()).unwrap();
+    assert_eq!(files.files.len(), 1);
+    assert_eq!(files.files[0].name, "plan.pdf");
+
+    // Not a bounce: no report, and no resend.
+    assert!(crate::compose::answer_draft_json(&db, sent, 40, "resend").is_err());
+    let plain: serde_json::Value =
+        serde_json::from_str(&message_json(&db, sent, 40).unwrap()).unwrap();
+    assert!(plain["report"].is_null());
+}
+
+#[test]
+fn uncached_report_is_pending_and_unknown_original_cannot_resend() {
+    let (db, acc, inbox) = setup();
+    let id = msg_store::upsert(&db, &msg_store::sample_new(acc, inbox, 50)).unwrap();
+    msg_store::add_attachment(&db, id, &part(None, "message/delivery-status", None)).unwrap();
+    let reader: serde_json::Value =
+        serde_json::from_str(&message_json(&db, inbox, 50).unwrap()).unwrap();
+    assert_eq!(reader["report"]["loaded"], false);
+    assert_eq!(reader["report"]["can_resend"], false);
+
+    let id = msg_store::upsert(&db, &msg_store::sample_new(acc, inbox, 51)).unwrap();
+    msg_store::add_attachment(
+        &db,
+        id,
+        &part(
+            None,
+            "message/delivery-status",
+            Some(b"Final-Recipient: rfc822; x@example.net\r\nAction: failed\r\n"),
+        ),
+    )
+    .unwrap();
+    let reader: serde_json::Value =
+        serde_json::from_str(&message_json(&db, inbox, 51).unwrap()).unwrap();
+    assert_eq!(reader["report"]["outcome"], "failed");
+    assert_eq!(reader["report"]["can_resend"], false);
+    assert!(reader["report"]["original_uid"].is_null());
+}
+
+#[test]
+fn attached_mails_become_cards() {
+    let (db, acc, f) = setup();
+    let id = msg_store::upsert(&db, &msg_store::sample_new(acc, f, 60)).unwrap();
+    let eml = b"From: Jane <jane@example.com>\r\nSubject: Inner\r\nDate: Tue, 6 Oct 2026 14:00:00 +0000\r\n\r\nInner body\r\n";
+    let loaded =
+        msg_store::add_attachment(&db, id, &part(None, "message/rfc822", Some(eml))).unwrap();
+    let pending =
+        msg_store::add_attachment(&db, id, &part(Some("old.eml"), "message/rfc822", None)).unwrap();
+    let junk = msg_store::add_attachment(
+        &db,
+        id,
+        &part(Some("junk.eml"), "message/rfc822", Some(b"\x00\x01")),
+    )
+    .unwrap();
+
+    let reader: serde_json::Value =
+        serde_json::from_str(&message_json(&db, f, 60).unwrap()).unwrap();
+    let cards = reader["attached_messages"].as_array().unwrap();
+    assert_eq!(cards.len(), 2);
+    assert_eq!(cards[0]["subject"], "Inner");
+    assert_eq!(cards[0]["from"], "Jane <jane@example.com>");
+    assert_eq!(cards[0]["body_text"], "Inner body");
+    assert_eq!(cards[0]["attachment_id"], loaded);
+    assert_eq!(cards[1]["loaded"], false);
+    assert_eq!(cards[1]["subject"], "old.eml");
+    let in_card = |want: i64| {
+        reader["attachments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == want)
+            .unwrap()["in_card"]
+            .clone()
+    };
+    assert_eq!(in_card(loaded), true);
+    assert_eq!(in_card(pending), true);
+    assert_eq!(in_card(junk), false);
+}

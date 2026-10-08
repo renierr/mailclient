@@ -232,19 +232,23 @@ fn is_inline_image(content_id: &Option<String>, mime: &Option<String>, len: usiz
         && len <= MAX_INLINE_IMAGE_BYTES
 }
 
-/// An iCalendar (.ics / text/calendar) or vCard (.vcf / text/vcard) part
-/// kept at sync time so the reader can render its event or contact preview
-/// card offline without an on-demand download. vCards may carry a photo,
-/// hence the larger cap.
+/// A part kept at sync time so the reader can render its preview card
+/// offline without an on-demand download: an iCalendar (.ics), a vCard
+/// (.vcf, may carry a photo), a delivery report's status and headers parts,
+/// or an attached mail (.eml) of moderate size.
 fn is_preview_part(filename: Option<&str>, mime: Option<&str>, len: usize) -> bool {
     const MAX_CALENDAR_BYTES: usize = 64 * 1024;
-    const MAX_VCARD_BYTES: usize = 256 * 1024;
+    const MAX_CARD_BYTES: usize = 256 * 1024;
     let is_ics = filename.is_some_and(|f| f.to_ascii_lowercase().ends_with(".ics"));
     let is_cal_mime = mime.is_some_and(crate::mime::is_calendar_mime);
     if is_ics || is_cal_mime {
         return len <= MAX_CALENDAR_BYTES;
     }
-    crate::vcard::is_vcard_attachment(filename, mime) && len <= MAX_VCARD_BYTES
+    let is_card = crate::vcard::is_vcard_attachment(filename, mime)
+        || crate::report::is_status_part(mime)
+        || crate::report::is_headers_part(mime)
+        || crate::attached::is_message_attachment(filename, mime);
+    is_card && len <= MAX_CARD_BYTES
 }
 
 /// Store attachment rows for a freshly synced message: names and sizes,

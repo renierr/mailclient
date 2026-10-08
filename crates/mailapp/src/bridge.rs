@@ -286,7 +286,7 @@ pub mod qobject {
 
         /// Reply/forward draft for one message in the current folder as JSON
         /// (`mailcore::compose::AnswerDraft`); `mode` is `reply`,
-        /// `reply_all` or `forward`. Returns `"{}"` if unknown.
+        /// `reply_all`, `forward` or `resend`. Returns `"{}"` if unknown.
         #[qinvokable]
         fn answer_draft_json(&self, uid: i32, mode: &QString) -> QString;
 
@@ -305,6 +305,21 @@ pub mod qobject {
         /// `forward_draft_json`'s payload as the job status.
         #[qinvokable]
         fn forward_fetch(self: Pin<&mut Self>, uid: i32) -> QString;
+
+        /// `forward_missing` for "Edit & resend" of the bounce `uid`
+        /// (current folder): counts the sent original's missing files.
+        #[qinvokable]
+        fn resend_missing(&self, uid: i32) -> i32;
+
+        /// Resend draft for the bounce `uid` (`compose::resend_draft`) with
+        /// the original's cached files, shaped like `forward_draft_json`.
+        #[qinvokable]
+        fn resend_draft_json(&self, uid: i32) -> QString;
+
+        /// Job "Resend": download the original's files, then report
+        /// `resend_draft_json`'s payload as the job status.
+        #[qinvokable]
+        fn resend_fetch(self: Pin<&mut Self>, uid: i32) -> QString;
 
         /// New-mail draft (just the signature) as JSON, same shape as
         /// `answer_draft_json`.

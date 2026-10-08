@@ -3,6 +3,7 @@
 //! No Qt dependency here (see AGENT.md). The Qt/QML bridge lives in `mailapp`
 //! and talks to this crate.
 
+pub mod attached;
 pub mod badge;
 pub mod bulk;
 pub mod calendar;
@@ -18,6 +19,7 @@ pub mod mime;
 pub mod models;
 pub mod outbox;
 pub mod paths;
+pub mod report;
 pub mod search;
 pub mod similar;
 pub mod store;

@@ -219,6 +219,16 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
         }
     }
 
+    // "Edit & resend" on a bounce's report card: the sent original
+    // (origFolderId, origUid, from the card) gets its files fetched, then
+    // the core builds the draft from the bounce (failed recipients only).
+    fun resend(accountId: Long, folderId: Long, uid: Int, origFolderId: Long, origUid: Int) {
+        val stageDir = context.cacheDir.absolutePath
+        composeAfterFetch(accountId, origFolderId, origUid, { MailNative.resendMissing(folderId, uid) }) {
+            ComposerSeed.answer(folderId, uid, ComposeMode.Resend, stageDir)
+        }
+    }
+
     // A row of the Drafts folder continues the draft instead of reading it.
     // Files or inline images not cached yet are fetched first (Qt's "Open
     // draft" job does the same), so the reopened draft keeps them.
@@ -558,6 +568,9 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                                 if (layout == PaneLayout.Three) readerFullscreen = false else back()
                             },
                             onCompose = { mode -> answer(r.accountId, r.folderId, r.uid, mode) },
+                            onResend = { origFolderId, origUid ->
+                                resend(r.accountId, r.folderId, r.uid, origFolderId, origUid)
+                            },
                             closeIcon = layout == PaneLayout.Three,
                             fullscreen = fullscreen,
                             onToggleFullscreen = { readerFullscreen = !readerFullscreen },

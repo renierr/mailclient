@@ -277,6 +277,36 @@ pub fn get_by_uid(db: &Db, folder_id: i64, uid: u32) -> Result<Message> {
         .ok_or_else(|| StoreError::NotFound(format!("message uid {uid} in folder {folder_id}")))
 }
 
+/// A cached message of `account_id` by its Message-ID (with or without the
+/// angle brackets), the copy in a Sent folder first. `None` when none is
+/// cached.
+pub fn find_by_message_id(db: &Db, account_id: i64, message_id: &str) -> Result<Option<Message>> {
+    let bare = message_id
+        .trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>');
+    if bare.is_empty() {
+        return Ok(None);
+    }
+    let cols = COLS
+        .split(',')
+        .map(|c| format!("m.{}", c.trim()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(db
+        .conn()
+        .query_row(
+            &format!(
+                "select {cols} from messages m join folders f on f.id = m.folder_id
+                 where m.account_id = ?1 and m.message_id_header in (?2, ?3)
+                 order by (f.role = 'sent') desc, m.id desc limit 1"
+            ),
+            params![account_id, bare, format!("<{bare}>")],
+            row_to_message,
+        )
+        .optional()?)
+}
+
 /// Whether `(folder_id, uid)` is still a message the lists show: cached and
 /// not waiting out an undoable delete, archive or move. A reader showing a
 /// message that is no longer listed closes, in every frontend.
