@@ -149,6 +149,19 @@ pub fn parse_ics(ics_data: &str) -> Option<CalendarEvent> {
     parse(ics_data).map(|p| p.event)
 }
 
+/// Deepest component nesting the parser tolerates.
+///
+/// iCalendar nests at most VCALENDAR -> VEVENT -> VALARM (RFC 5545), so a
+/// handful covers every real invitation. Nothing bounded the stack, so every
+/// `BEGIN:` line spent a `String` on it: a 13 MB attachment of `BEGIN:VEVENT`
+/// lines pushed a million entries and took ~4 s of the feed thread to do it,
+/// which blocks every other job for that long. Measured linear in input size
+/// (8x the depth cost ~8x the time), so this is a memory and CPU bound rather
+/// than a quadratic blowup — the `END` handler's `rposition` scan is not the
+/// problem, since it scans from the innermost and the innermost almost always
+/// matches.
+const MAX_DEPTH: usize = 32;
+
 fn parse(ics_data: &str) -> Option<Parsed> {
     let unfolded = unfold(ics_data);
     // Open components, innermost last. Properties are only read where the
@@ -189,11 +202,18 @@ fn parse(ics_data: &str) -> Option<Parsed> {
                 if comp == "VTIMEZONE" {
                     zone = Some(ZoneBuilder::default());
                 }
+                if stack.len() >= MAX_DEPTH {
+                    // Deeper than any real calendar. Refusing is better than
+                    // parsing it: the cost is quadratic in the depth, and the
+                    // caller only wanted to know whether there is an event.
+                    return None;
+                }
                 stack.push(comp);
                 continue;
             }
             "END" => {
                 let comp = value_upper();
+                // Bounded by MAX_DEPTH, which is what keeps this linear.
                 if let Some(pos) = stack.iter().rposition(|c| *c == comp) {
                     stack.truncate(pos);
                 }

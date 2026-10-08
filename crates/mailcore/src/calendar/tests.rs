@@ -352,3 +352,37 @@ fn counter_update_and_plain_invite() {
     assert_eq!(e.notice, None);
     assert_eq!(e.notice_tone, None);
 }
+
+#[test]
+fn a_real_invitation_still_parses() {
+    // The boundary the depth cap must not cross: every real nesting fits in a
+    // handful of levels, and a VALARM inside a VEVENT still gets its own.
+    let ics = wrap("SUMMARY:Team sync\nDTSTART:20260401T100000Z\nBEGIN:VALARM\nSUMMARY:Alarm\nTRIGGER:-PT15M\nEND:VALARM\n");
+    let p = parse(&ics).expect("a real invitation must still parse");
+    assert_eq!(p.event.summary, "Team sync");
+}
+
+#[test]
+fn nesting_deeper_than_any_real_calendar_is_refused() {
+    // Nothing bounded the component stack, so a large attachment of nested
+    // `BEGIN:` lines spent memory and CPU in proportion to its size on the
+    // feed thread. Depth is now capped at MAX_DEPTH, which no real calendar
+    // approaches.
+    let opens = "BEGIN:VEVENT\n".repeat(MAX_DEPTH + 8);
+    let closes = "END:VEVENT\n".repeat(MAX_DEPTH + 8);
+    let deep = format!(
+        "BEGIN:VCALENDAR\n{opens}SUMMARY:buried\nDTSTART:20260401T100000Z\n{closes}END:VCALENDAR\n"
+    );
+    assert!(parse_ics(&deep).is_none());
+}
+
+#[test]
+fn nesting_exactly_at_the_cap_still_parses() {
+    // One level under the limit must be unaffected by the check.
+    let opens = "BEGIN:VEVENT\n".repeat(MAX_DEPTH - 1);
+    let closes = "END:VEVENT\n".repeat(MAX_DEPTH - 1);
+    let at_cap = format!(
+        "BEGIN:VCALENDAR\n{opens}SUMMARY:deep\nDTSTART:20260401T100000Z\n{closes}END:VCALENDAR\n"
+    );
+    assert!(parse_ics(&at_cap).is_some());
+}
