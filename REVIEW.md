@@ -8,7 +8,7 @@ Work top to bottom; each item is self-contained so they can be picked out of ord
 - **Status tags:** `[verify]` = I reproduced it by running code; `[corrected]` = an earlier draft of this
   review got it wrong and this is the fixed version; `[fixed]` = fixed in the repo, with the commit noted in
   the item; `[removed]` = withdrawn, with the reason kept so the ids stay stable for cross-referencing.
-  Untagged = read from source, not executed. **Applied so far:** E1, E2 (`d3ef68b`), C1 (`1dac9e7`).
+  Untagged = read from source, not executed. **Applied so far:** E1, E2 (`d3ef68b`), C1 (`1dac9e7`), C7 (`11137f4`).
 - **AGENTS.md §7** governs closing any item: Rust → `cargo fmt --check` + `cargo clippy -p mailcore -- -D warnings`
   + `cargo test -p mailcore`; QML → `scripts/qml-check.sh`; Android → `./build.sh --android`.
 - **§0** records the second-pass audit of this document. Read it first if you are trusting these findings.
@@ -46,7 +46,7 @@ would have caused damage. Reference errors corrected. Nothing in the repo was ed
 |---|---|---|---|
 | 1 | ~~**C1** `badge.rs:76` byte-index panic~~ | ~~one malicious sender crashes folder listing on every frontend~~ | **done** — `__C1__` |
 | 2 | ~~**E2** backup excludes~~ | ~~whole local mailbox (bodies, attachments) uploaded to cloud backup~~ | **done** — `d3ef68b` |
-| 3 | **C7** `is_public_remote` IPv6 | every bracketed IPv6 host, incl. `[::1]`, passes as public; metadata IP reachable | |
+| 3 | ~~**C7** `is_public_remote` IPv6~~ | ~~every bracketed IPv6 host, incl. `[::1]`, passes as public; metadata IP reachable~~ | **done** — `11137f4` |
 | 4 | **D1** `expect` + latched `busy` | a failed net-thread bootstrap aborts or bricks every later job | |
 | 5 | **D6** GUI-thread image read | whole file read before the size check, on the GUI thread | |
 | 6 | **B1** SMTP has no timeout | one dead SMTP host hangs the net thread forever | |
@@ -562,7 +562,7 @@ via `<p>visible</p><template>`, or any `</style>` mangled in transit.
 **Fix:** reset `drop_depth` to 0 at EOF, and/or treat `</html>`/`</body>` and a second document-level
 `<style>` as closing.
 
-### C7 · medium-high · `is_public_remote` accepts every bracketed IPv6 host and the metadata IP `[corrected]`
+### C7 · medium-high · `is_public_remote` accepts every bracketed IPv6 host and the metadata IP — **FIXED** `[fixed]`
 `html/urls.rs:42-63`
 
 ```rust
@@ -577,11 +577,36 @@ which passes every check — so **every** IPv6 URL, `[::1]` included, is treated
 `<img src="http://169.254.169.254/latest/meta-data/…">` is fetched whenever the user enables remote images.
 The response is not readable by the page, so this is internal port scanning / metadata probing, not
 exfiltration.
-**Fix (do *not* use `IpAddr::is_global`):** it is `#[unstable(feature = "ip")]` and will not compile on
-stable. Write the ranges explicitly — v4 `0/8`, `10/8`, `100.64/10`, `127/8`, `169.254/16`, `172.16/12`,
-`192.0.0/24`, `192.168/16`, `198.18/15`, `255.255.255.255`; v6 `::`, `::1`, `fc00::/7`, `fe80::/10` — and
-parse the host with `IpAddr::from_str`, keeping the existing literal list as a fallback. Strip the port
-only when the host is **not** bracket-wrapped.
+
+**Fixed in `11137f4`.** `IpAddr::is_global` was not used (it is `#[unstable(feature = "ip")]`); the ranges
+are written out instead:
+- new `http_host()` returns the authority host with user info, the `[..]` wrapper and a real port removed.
+  A bare IPv6 literal (more than one `:`, no brackets) is left whole rather than cut at the first colon,
+  and a bracketed literal is unwrapped. A zoned `[fe80::1%25eth0]` is unwrapped too.
+- `is_public_ipv4` blocks `0/8`, `10/8`, `127/8`, `100.64/10`, `169.254/16`, `172.16/12`, `192.0.0/24`,
+  `192.168/16`, `198.18/15` and `240/4` (reserved + broadcast), by octet masks.
+- `is_public_ipv6` unwraps the IPv4-mapped (`::ffff:169.254.169.254`) and IPv4-compatible (`::10.0.0.1`)
+  forms into the v4 rule first, then blocks `::`, `::1`, `fc00::/7`, `fe80::/10` and multicast.
+- `loose_ipv4` catches the `inet_aton` shorthands a browser resolves (`127.1`, `10.1`,
+  `2130706433`, and `2852039166` — the numeric twin of the metadata address) so blocking a range cannot
+  be sidestepped by a number. Digits and dots only, so a hostname is never mistaken for a number.
+- **Two gaps found while writing the tests:** a trailing root dot defeated both `ends_with(".local")` and
+  the address parse, so `http://foo.local./` and `http://127.0.0.1./` were allowed; the host is now
+  `strip_suffix('.')` once before any comparison.
+
+Existing behaviour deliberately kept: `localhost.example.com` is still blocked by the pre-existing
+`contains("localhost")` name check, and the numeric forms `127.1` / `127.0.0.1.` were *already* blocked by
+the old `starts_with("127.")` prefix — they are guards against a regression, not newly-closed holes.
+
+Six tests added in `html/tests.rs`, including `blocked_hosts_never_reach_the_reader_html`, which drives the
+same hosts through `sanitize(…, true)` and asserts the host string never reaches the output HTML while
+`had_remote` still records them (so the reader still offers the "show remote images" affordance). The old
+host parsing was reproduced against the new lists in a scratch program: `[::1]` → host `"["` not blocked,
+`[fc00::1]` → `"[fc00"` not blocked, `[::ffff:169.254.169.254]` → `"["` not blocked, `169.254.169.254`,
+`100.64.0.1`, `2130706433` and `foo.local.` all not blocked.
+
+Gates per AGENTS.md §7: `cargo fmt --check` OK, `cargo clippy -p mailcore -- -D warnings` OK,
+`cargo test -p mailcore` 570 passed (564 before + 6 new).
 
 ### C8 · low · a bogus comment/PI with no closing token swallows the rest — confirmed
 `html/tags.rs:132-139` — for `<!-->` the search starts *past* the closing `>`, finds nothing, and consumes
