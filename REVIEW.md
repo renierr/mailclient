@@ -131,6 +131,10 @@ the "not fixed" column before assuming a finding is closed.
 | **E14** (composer) | `d18dd28` | Editor document built on IO | `pagePaint` and `deletePrompt` still in `remember` |
 | **D12** / **D13** | `777b5d5` | Reader reloads coalesced; the list no longer writes into Main's search rows | Scroll-memory throttle not done |
 | **D18** | — | No change: the poll already stops when hidden | — |
+| **E8** / **E9** | `d91b5cd` | Kotlin finish waiters keyed by job key, with the key from the core and in the event | — |
+| **E13** | `535f3a0` | Reply actions weighted into thirds, strip `heightIn(min = 48.dp)` | Not device-checked |
+| **E17** | `fa7291b` | Manifest comment states what the flag really governs | Flag kept: `http://` images are a product call |
+| **D7** | — | No change: the binding re-reads only on account switch or Settings save | — |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -1158,11 +1162,16 @@ decision to take rather than an item to close: the keyring round trip is D-Bus o
 the staging walks the cache dir on every draft open and forward, and the maintenance calls are user-triggered
 from Settings. Leaving them on the GUI thread means a hung gnome-keyring can still freeze the window.
 
-### D7 · medium · a SQLite read inside a property *binding* — confirmed, severity trimmed
+### D7 · medium · a SQLite read inside a property *binding* — confirmed, severity trimmed — **no change**
 `Main.qml:1004-1005` — `autoSyncMinutes: … appSettings.sync_interval_for(backend.current_account_id)` →
 `account_settings::sync_interval` (`store/settings.rs:38-42`). Re-evaluated on every account switch and every
 `syncSettingsRevision++` (Settings.qml:1866). Severity is medium only in that it is a small indexed read.
 **Fix:** cache the value in `SettingsBridge` behind the existing revision counter.
+
+**Not changed: the binding already is that cache.** QML re-evaluates a binding only when a dependency
+changes. Here those are `syncSettingsRevision` and `current_account_id`, so the read runs once per account
+switch and once per Settings save. That is one indexed read each time, which is what a Rust-side cache keyed
+on the revision would do too.
 
 ### D8 · medium · a new OS thread per undoable action — **FIXED** `[fixed]`
 `bridge/worker.rs:135-141` `spawn_push_after_grace` and `crates/mailffi/src/net.rs:288-294`
@@ -1475,7 +1484,7 @@ payload is produced in-process by the same build.
 
 **Fixed in `83875ab`.**
 
-### E8 · medium · attachment finish events have no correlation key — confirmed
+### E8 · medium · attachment finish events have no correlation key — confirmed — **FIXED** `[fixed]`
 `ui/reader/ReaderFiles.kt:63-66`
 
 ```kotlin
@@ -1487,12 +1496,23 @@ can be burned on other messages' jobs.
 **Fix:** include the target (`folder_id`, `uid`) in the event or in a `MailNative.attachmentsResult(folderId, uid)`
 read, and key the waiter on it.
 
-### E9 · low · `createFolder`'s waiter can be fired by an unrelated `Folders` job — confirmed
+**Fixed in `d91b5cd` with the job's in-flight key.** The finish event Kotlin receives now carries `"key"` (the
+dedupe key `net::spawn` already had; it is added only to the Kotlin JSON, so FRB's `JobEvent` and the Flutter
+bindings are unchanged). `finishWaiters` is keyed by job key, not kind, and a finish wakes only its own job's
+waiters. Kotlin gets the key from the core before queuing (`MailNative.attachmentsJobKey(folderId, uid)`), so
+the format is not copied into Kotlin and the waiter is in place before the job can finish, even with E4's
+IO queue call.
+
+### E9 · low · `createFolder`'s waiter can be fired by an unrelated `Folders` job — confirmed — **FIXED** `[fixed]`
 `ui/state/MailStateFolders.kt:246` + `ui/state/MailState.kt:457` —
 `finishWaiters.remove(kind)?.forEach { it(ok, e.optString("status")) }`. A "Refresh" finish that lands between
 waiter registration and queue satisfies the create, so `FolderManagerScreen` shows the refresh's status (or an
 unrelated failure) and clears it. Same class as E8.
 **Fix:** add a correlation token to the event and match it.
+
+**Fixed in `d91b5cd`** by the same key: `MailNative.createFolderJobKey(accountId)` (the key moved into
+`net::create_folder_key`, which the job uses too). A folder refresh no longer answers for a creation.
+Verified with `./build.sh --android` and Android `cargo ndk clippy`.
 
 ### E10 · low · `spawn_flag_push` un-deduped; `spawn_push_after_grace` spawns an OS thread per action — confirmed — **PARTLY FIXED** `[fixed]`
 `crates/mailffi/src/net.rs:272-294` — `std::thread::spawn` + `sleep(grace+1)` per undoable action
@@ -1536,7 +1556,7 @@ DB read in the same file is deliberately in `io { }`.
 `sidebarGeneration` counter keeps a slower, older fold (two quick expand taps) from overwriting a newer one.
 Callers are unchanged, since every one already runs on Main.
 
-### E13 · medium · the reader's reply strip overflows at 360dp / 150 % text scale *(unverified)*
+### E13 · medium · the reader's reply strip overflows at 360dp / 150 % text scale *(unverified)* — **FIXED** (not device-checked) `[fixed]`
 `ui/reader/ReaderScreen.kt:291-299`
 
 ```kotlin
@@ -1550,6 +1570,10 @@ Three icon+label `TextButton`s with no `Modifier.weight` sum to ~330dp at 100 % 
 "measured"; it was a size estimate only — this needs a device check.)*
 **Fix:** `Modifier.weight(1f)` on each `ReplyAction` (or icons only / a `FlowRow` above a scale breakpoint),
 and `heightIn(min = 48.dp)`.
+
+**Applied in `535f3a0`:** each action takes `Modifier.weight(1f)` (labels already ellipsize inside), and the
+row is `heightIn(min = 48.dp)` instead of a fixed 48dp. The APK builds. The layout was not checked on a
+360dp / 150% device, so whether it overflowed before is still the original estimate.
 
 ### E14 · medium/low · JNI calls inside `remember` blocks (side effects in composition) — confirmed — **PARTLY FIXED** `[fixed]`
 - `ui/composer/ComposerScreen.kt:166-170` — `remember(editorBody) { … MailNative.editorDocument(…) }` builds
@@ -1583,11 +1607,17 @@ floor AGENTS.md requires.
 
 **Fixed in `83875ab`.**
 
-### E17 · low · `usesCleartextTraffic="true"` app-wide with no `networkSecurityConfig` — confirmed
+### E17 · low · `usesCleartextTraffic="true"` app-wide with no `networkSecurityConfig` — confirmed — **comment fixed** `[corrected]`
 `AndroidManifest.xml:40` — the comment says cleartext is "opt-in per account", but the flag is global: with
 `load_remote_images` on, an `http://` image from a plaintext-configured account's mail is fetched in the clear
 by the reader WebView regardless of the account's TLS choice.
 **Fix:** scope cleartext with `networkSecurityConfig` to the configured hosts, or reword the comment.
+
+**Comment reworded in `fa7291b`; the flag is kept.** The old comment was wrong about what the flag does. IMAP and
+SMTP run over the core's Rust sockets, which Android's cleartext policy never sees. The flag only governs the
+platform HTTP stacks, i.e. the reader WebView fetching `http://` remote images after the user allowed remote
+images. Scoping by account host would not help, because image hosts are arbitrary. Turning it off would block
+`http://` images on Android while the Qt reader still loads them: feature drift, and a product decision.
 
 ### E18 · low · possible double insets on the shell `Scaffold` *(very likely wrong — verify on device)*
 `ui/shell/MailShell.kt:439-443` — the shell applies `Modifier.fillMaxSize().safeDrawingPadding()` while
