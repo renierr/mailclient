@@ -127,6 +127,10 @@ the "not fixed" column before assuming a finding is closed.
 | **E6** | `d82ef9f` | Negative JNI uids are refused instead of clamped to UID 0 | `Int` width is D3 |
 | **E20** / **E22** | `aee7410` | Notification signatures built in the core from raw title/body; `ReadTarget` account read by the core | Flutter host keeps its old shape (accepted) |
 | **D11** | `8c67b4d` | Undo split (dead), pending-open decode, file URL join and file-name decode moved out of QML | — |
+| **E3** / **E4** / **E12** / **E19** | `9af48e6` | Core init off the UI thread and early for every route; queue call and sidebar fold on IO | — |
+| **E14** (composer) | `d18dd28` | Editor document built on IO | `pagePaint` and `deletePrompt` still in `remember` |
+| **D12** / **D13** | `777b5d5` | Reader reloads coalesced; the list no longer writes into Main's search rows | Scroll-memory throttle not done |
+| **D18** | — | No change: the poll already stops when hidden | — |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -1224,7 +1228,7 @@ parsing logic, not a wrong result.
 Rust tests for both helpers (QUrl, plain path and trailing-slash folders; encoded names). `qml-check` on the
 three files: lint and QML tests OK. The format check skipped itself (Windows kit 6.9 vs pinned 6.11).
 
-### D12 · low · a JNI round trip inside a property binding, plus dead change handlers `[corrected]`
+### D12 · low · a JNI round trip inside a property binding, plus dead change handlers `[corrected]` — **FIXED** `[fixed]`
 `MessageView.qml:79-81,115`
 
 ```qml
@@ -1240,15 +1244,24 @@ What remains: `fitBelow` calls `backend.reader_fit_below(root.shownHtml)` — a 
 whole document — from inside a **property binding**, re-evaluated whenever `shownHtml` changes; and
 `reloadHtml` also runs on `onRemoteHtmlChanged`/`onLoadRemoteImagesChanged`/`onAllowRemoteOnceChanged`
 (`MessageView.qml:111-113`), which can fire transiently and rebuild the page.
-**Fix:** compute `fitBelow` once per message into a plain property (or cache it in `reader_document`,
+**Fixed in `777b5d5` where the cost really was.** (It is a Qt bridge call, not JNI.) `fitBelow` already runs
+once per `shownHtml`. The waste was the reloads: opening another mail fires `onMessageUidChanged`,
+`onRemoteHtmlChanged`, `onAllowRemoteOnceChanged`, `onPaintModeChanged` and `onHtmlBodyChanged` together, and
+each rebuilt the WebEngine page. `reloadHtml` now schedules `loadShownHtml` through `Qt.callLater`, which runs
+it once per event-loop turn. `qml-check`: lint and tests OK; format check skipped (Windows kit).
+**Original fix text:** compute `fitBelow` once per message into a plain property (or cache it in `reader_document`,
 `bridge/messages.rs:253-283`, which already re-reads `headerBlock.height` and re-quotes the theme palette),
 and guard the reloads against no-op changes.
 
-### D13 · low · the list mutates a feed it does not own — confirmed
+### D13 · low · the list mutates a feed it does not own — confirmed — **PARTLY FIXED** `[fixed]`
 `MessageList.qml:454-457` — `hits[i].key = hits[i].folder_id + ":" + hits[i].uid;` writes into `Main.qml`'s
 `searchRows` objects while rebuilding. `MessageList.qml:832` `onContentYChanged: root.rememberScroll()`
 calls `indexAt`/`itemAtIndex` on every scroll-pixel change during a flick.
 **Fix:** build a local proxy list; throttle scroll memory.
+
+**Mutation fixed in `777b5d5`:** the key is set on the row `displayRow` builds, not on Main's `searchRows`
+objects. The scroll-memory throttle is not done: a deferred write could land after a folder switch under the
+new folder's name. It needs a check on a running GUI, which this environment cannot do.
 
 ### D14 · medium · non-resizable dialogs, against the stated rule — confirmed, severity trimmed
 Only the large managers use `AppDialog`; every small aux dialog is a plain `Dialog` with a fixed `width:`
@@ -1295,12 +1308,17 @@ with D5.
 ### D17 · `[removed]` — merged into D5
 Same as `bridge.rs:873`; see the note at the end of D5.
 
-### D18 · low · one `WebEngineView` kept alive for the app's lifetime — confirmed
+### D18 · low · one `WebEngineView` kept alive for the app's lifetime — confirmed — **no change** `[corrected]`
 `Composer.qml` is a `Dialog` parented to `Overlay.overlay` holding `EditorFrame`'s `WebEngineView`
 (EditorFrame.qml:118); closing the dialog hides it but does not release the page, and its 200 ms
 `document.queryCommandState` poll (EditorFrame.qml:158-163) keeps running whenever the dialog is
 invisible-but-`ready`.
 **Fix:** destroy the WebEngineView on close (or stop the poll while hidden).
+
+**Not changed: the poll already stops.** The timer runs `while root.ready && root.visible`, and `visible`
+is the effective visibility, false once the dialog closes. What remains is the page staying in memory between
+compositions. Destroying it would make every new message reload WebEngine from scratch, so that is a
+trade-off, not a defect.
 
 ### D19 · low · a deliberately leaked connection per bridge thread — confirmed
 `bridge.rs:791` `Box::leak`s a `rusqlite::Connection` per thread that touches the bridge (documented, bounded
@@ -1382,14 +1400,20 @@ is safer by default for any *future* file added to `filesDir` — an exclude lis
 today. Left as-is for now because the project's own comment states the intent as "mail stays on the server",
 which is what this now enforces.
 
-### E3 · medium · `MailNative.init()` opens SQLite and migrates on the UI thread — confirmed
+### E3 · medium · `MailNative.init()` opens SQLite and migrates on the UI thread — confirmed — **FIXED** `[fixed]`
 `ui/shell/MailShell.kt:291-294` → `ensureInit` → `init()` → `use_data_dir()` + `shared_db()` →
 `mailcore::Db::open` = "Open (creating parent dirs) and migrate to the current schema"
 (`mailcore/src/db/mod.rs:35-43`). When the UI process is the first into the library, a post-update migration
 of a large cache runs on the main thread.
 **Fix:** call `ensureInit` from `MailApplication.onCreate` on a background thread (also fixes E19).
 
-### E4 · low · `spawn` → `forward_busy` invokes Java from the caller's thread — confirmed
+**Fixed in `9af48e6`, with a second half the proposed fix lacked.** `MailApplication.onCreate` starts
+`MailNative.ensureInit` on a `core-init` thread. That alone would not keep the UI thread free:
+`ensureInit` is `synchronized`, so the shell's own first call on main would just wait for the migration.
+So `MailState.ensureInit` now does its first init on IO before loading, and the `JobEvents` subscription
+(whose registration also opens the core) moved behind it too.
+
+### E4 · low · `spawn` → `forward_busy` invokes Java from the caller's thread — confirmed — **FIXED** `[fixed]`
 `crates/mailffi/src/net.rs:259-260`
 
 ```rust
@@ -1401,6 +1425,9 @@ inside `withContext(Dispatchers.Main)` (`ui/state/MailState.kt:499-505`), so the
 (`JobEvents.onJobEvent`) on the main thread from inside a native frame. Legal today only because the
 subscriber just `scope.launch(Dispatchers.Main)`.
 **Fix:** run `queue()` on an IO dispatcher in `awaitFinished`.
+
+**Fixed in `9af48e6`:** the waiter is still registered on Main first (so a fast job cannot finish unseen), then
+`queue()` runs in `withContext(Dispatchers.IO)`.
 
 ### E5 · low · attach policy is weaker than assumed `[corrected]`
 `crates/mailffi/src/android.rs:1346` and `:247` — `self.vm.attach_current_thread(|env| …)`.
@@ -1491,7 +1518,7 @@ mail that arrived during an Activity recreate, plus a list that stays stale unti
 **Fix (optional):** drain a process-level "cache changed" flag in `ensureInit` instead of relying on the
 callback slot.
 
-### E12 · medium · `refreshSidebarRows()` runs a Rust SQL aggregate on the main thread — confirmed
+### E12 · medium · `refreshSidebarRows()` runs a Rust SQL aggregate on the main thread — confirmed — **FIXED** `[fixed]`
 `ui/state/MailStateFolders.kt:116-125`, called at `:99` (inside `withContext(Dispatchers.Main)`) and `:112`
 (tap handler)
 
@@ -1504,6 +1531,10 @@ internal fun MailState.refreshSidebarRows() {
 (`onJobEvent` → `loadFolders()`) and every expand/collapse tap does this on the UI thread, while every other
 DB read in the same file is deliberately in `io { }`.
 **Fix:** build the JSON before the `withContext(Dispatchers.Main)`, assign state inside it.
+
+**Fixed in `9af48e6`.** `refreshSidebarRows` reads its inputs on Main, folds on IO and assigns on Main. A
+`sidebarGeneration` counter keeps a slower, older fold (two quick expand taps) from overwriting a newer one.
+Callers are unchanged, since every one already runs on Main.
 
 ### E13 · medium · the reader's reply strip overflows at 360dp / 150 % text scale *(unverified)*
 `ui/reader/ReaderScreen.kt:291-299`
@@ -1520,7 +1551,7 @@ Three icon+label `TextButton`s with no `Modifier.weight` sum to ~330dp at 100 % 
 **Fix:** `Modifier.weight(1f)` on each `ReplyAction` (or icons only / a `FlowRow` above a scale breakpoint),
 and `heightIn(min = 48.dp)`.
 
-### E14 · medium/low · JNI calls inside `remember` blocks (side effects in composition) — confirmed
+### E14 · medium/low · JNI calls inside `remember` blocks (side effects in composition) — confirmed — **PARTLY FIXED** `[fixed]`
 - `ui/composer/ComposerScreen.kt:166-170` — `remember(editorBody) { … MailNative.editorDocument(…) }` builds
   the entire editor HTML document (body embedded, fresh nonce) **on the main thread**; the same build is done
   on `Dispatchers.IO` in `MailWebView.kt:128-133`. Medium.
@@ -1528,6 +1559,11 @@ and `heightIn(min = 48.dp)`.
   JNI calls. Low.
 - `ui/list/ListScreen.kt:111-113` — `remember(state.folders) { state.folders.associate { it.id to state.deletePrompt(…) } }`. Low.
 **Fix:** compute in a `LaunchedEffect` on IO, hold the result in state.
+
+**The medium one is fixed in `d18dd28`:** the composer builds its editor document in a
+`LaunchedEffect(editorBody)` on IO, the same way the reader builds its own. A `Spacer` of the editor's
+minimum height holds its place for the moment it takes. The two low ones (`pagePaint`, the list's
+`deletePrompt` map) are small and still run in `remember`.
 
 ### E15 · low · `StatusStrip`'s tap line is 40dp tall — confirmed — **FIXED** `[fixed]`
 `ui/shell/ShellBars.kt:237-257` — `.height(40.dp)` with the clickable line inside; below the 48dp touch-target
@@ -1560,7 +1596,7 @@ by the reader WebView regardless of the account's TLS choice.
 insets an ancestor has consumed, so the effect may not exist. Do not act on this without a device check; if it
 does reproduce, the fix is `contentWindowInsets = WindowInsets(0, 0, 0, 0)` on the shell Scaffold.
 
-### E19 · low · several screens never call `MailNative.ensureInit` — confirmed
+### E19 · low · several screens never call `MailNative.ensureInit` — confirmed — **FIXED** `[fixed]`
 `ui/contacts/ContactsScreen.kt:128,137`, `ui/outbox/OutboxScreen.kt:93`, the folder screens and
 `MaintenanceSection`/`BackgroundStatus`. Only `MailShell` and the background components
 (`MailCheckWorker`, `MailPushService`, `MailSchedule`, `MailActions`) initialise the core. Today the shell
@@ -1568,6 +1604,10 @@ always runs first, but any of these reached before the shell's `DisposableEffect
 link into a full-page route) would execute against the fallback `db_path()`
 (`mailcore/src/db/mod.rs:18-25`), which on Android resolves to a relative path under `/` and fails.
 **Fix:** initialise in `MailApplication.onCreate`.
+
+**Fixed in `9af48e6`** by the same early init (see E3). Every route, worker and receiver now finds the core
+started with the process. A call that still beat it would fail ("cannot open database") rather than poison
+the cache: mailffi's `shared_db` caches nothing on a failed open.
 
 ### E20 · low · notification signature format re-implemented in Kotlin — confirmed — **FIXED** `[fixed]`
 `MailNotifier.kt:118` duplicates `mailcore/src/sync/background/notify.rs:123-125`
