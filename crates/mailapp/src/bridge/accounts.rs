@@ -95,8 +95,12 @@ impl qobject::Bridge {
             Ok(d) => d,
             Err(_) => return qstring(""),
         };
+        // JSON, not a `"<id>\n<folder>"` string QML had to take apart (D11).
+        // `take_pending_open` already refuses an invalid id.
         match settings::take_pending_open(db) {
-            Some((id, folder)) => qstring(&format!("{id}\n{folder}")),
+            Some((id, folder)) => {
+                qstring(&serde_json::json!({ "account_id": id, "folder": folder }).to_string())
+            }
             None => qstring(""),
         }
     }

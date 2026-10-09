@@ -96,8 +96,9 @@ pub mod qobject {
         #[qinvokable]
         fn select_account(self: Pin<&mut Self>, id: i64) -> QString;
 
-        /// Take a queued `mailapp --open` jump request: `"<id>\n<folder>"`
-        /// (empty folder = inbox) or `""`. Take-once — each click jumps once.
+        /// Take a queued `mailapp --open` jump request:
+        /// `{"account_id", "folder"}` JSON (empty folder = inbox) or `""`.
+        /// Take-once — each click jumps once.
         #[qinvokable]
         fn consume_pending_open(self: Pin<&mut Self>) -> QString;
 
@@ -240,6 +241,15 @@ pub mod qobject {
         /// when it has none. Once per mail, not per resize.
         #[qinvokable]
         fn reader_fit_below(&self, body: &QString) -> i32;
+
+        /// `file://` URL for `name` inside the folder `dir` (a dialog or
+        /// `StandardPaths` value: URL or plain path); `name` may be empty.
+        #[qinvokable]
+        fn file_url_in(&self, dir: &QString, name: &QString) -> QString;
+
+        /// The file name a dialog URL or path points at, decoded.
+        #[qinvokable]
+        fn file_name_of(&self, url: &QString) -> QString;
 
         /// The reader's full HTML document around a sanitized body
         /// (`mailcore::html::reader::document`). `options_json`: `paint`,

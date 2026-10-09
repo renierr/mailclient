@@ -253,6 +253,14 @@ impl qobject::Bridge {
         i32::try_from(reader::fit_below(&body.to_string())).unwrap_or(i32::MAX)
     }
 
+    pub fn file_url_in(&self, dir: &QString, name: &QString) -> QString {
+        qstring(&files::file_url_in(&dir.to_string(), &name.to_string()))
+    }
+
+    pub fn file_name_of(&self, url: &QString) -> QString {
+        qstring(&files::file_name_of(&url.to_string()))
+    }
+
     pub fn reader_document(&self, body: &QString, options_json: &QString) -> QString {
         let o: serde_json::Value =
             serde_json::from_str(&options_json.to_string()).unwrap_or_default();

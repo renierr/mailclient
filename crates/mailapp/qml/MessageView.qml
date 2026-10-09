@@ -162,24 +162,6 @@ Rectangle {
         return a.display_name || a.filename || "";
     }
 
-    // Join a downloads-folder value with a filename into a `file://` URL
-    // for the save dialogs. `writableLocation` returns a QUrl on Qt 6
-    // (already `file:///…`) but a plain path on others — both are handled.
-    // The filename is encoded so spaces/`#` survive the string→QUrl trip
-    // (Rust decodes it back).
-    function joinFileUrl(dir, name) {
-        var s = dir.toString().replace(/\\/g, "/");
-        if (s.indexOf("file:") !== 0) {
-            if (s.length >= 2 && s[1] === ":")
-                s = "/" + s;
-            s = "file://" + s;
-        }
-        s = s.replace(/\/+$/, "");
-        if (name !== undefined)
-            s += "/" + encodeURIComponent(name);
-        return s;
-    }
-
     // Copy to the system clipboard. QML has no Clipboard singleton, so this
     // goes through a hidden TextEdit (selectAll + copy, no new dependencies).
     function copyText(s) {
@@ -221,7 +203,7 @@ Rectangle {
             return;
         saveOneDialog.attachmentId = a.id;
         var base = StandardPaths.writableLocation(StandardPaths.DownloadLocation);
-        saveOneDialog.selectedFile = root.joinFileUrl(base, a.file_name || "");
+        saveOneDialog.selectedFile = root.backend.file_url_in(base.toString(), a.file_name || "");
         saveOneDialog.open();
     }
 
@@ -230,7 +212,7 @@ Rectangle {
             return;
         var base = StandardPaths.writableLocation(StandardPaths.DownloadLocation);
         if (base.toString() !== "")
-            saveAllDialog.selectedFolder = root.joinFileUrl(base);
+            saveAllDialog.selectedFolder = root.backend.file_url_in(base.toString(), "");
         saveAllDialog.open();
     }
 

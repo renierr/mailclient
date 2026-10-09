@@ -770,14 +770,11 @@ ApplicationWindow {
     // Rust side — each click jumps exactly once. Returns true when a jump
     // happened.
     function consumePendingOpen() {
-        var r = backend.consume_pending_open();
-        if (r === "")
+        var r = FeedJson.parse(backend.consume_pending_open(), null);
+        if (!r)
             return false;
-        var nl = r.indexOf("\n");
-        var id = parseInt(nl < 0 ? r : r.slice(0, nl), 10);
-        var folder = nl < 0 ? "" : r.slice(nl + 1);
-        if (!isFinite(id) || id <= 0)
-            return false;
+        var id = r.account_id;
+        var folder = r.folder;
         if (id !== backend.current_account_id)
             selectAccount(id);
         // Let the account switch settle (feeds reload) before landing.
@@ -1451,12 +1448,10 @@ ApplicationWindow {
         }
     }
 
-    // A bulk action over search results undoes as one: its batches arrive
-    // joined (uuids, so the comma cannot clash).
+    // One batch per action, also for a bulk action over search results
+    // (`mailcore::bulk::queue_move` queues every folder under one batch).
     function undoMove(batch) {
-        var parts = batch.split(",");
-        for (var i = 0; i < parts.length; i++)
-            root.statusText = backend.undo_move(parts[i]);
+        root.statusText = backend.undo_move(batch);
         reloadFolders();
         reloadMessages();
         if (root.searching)

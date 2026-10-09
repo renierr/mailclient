@@ -376,16 +376,6 @@ Dialog {
         }
     }
 
-    function baseName(url) {
-        var s = url.toString();
-        var i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
-        var name = i < 0 ? s : s.substring(i + 1);
-        try {
-            name = decodeURIComponent(name);
-        } catch (e) {}
-        return name === "" ? s : name;
-    }
-
     function addAttachments(urls) {
         var next = root.attachments.slice();
         for (var i = 0; i < urls.length; i++) {
@@ -400,7 +390,7 @@ Dialog {
             if (!known)
                 next.push({
                               path: u,
-                              name: root.baseName(u)
+                              name: root.backend ? root.backend.file_name_of(u.toString()) : u.toString()
                           });
         }
         root.attachments = next;
