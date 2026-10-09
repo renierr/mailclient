@@ -514,11 +514,6 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
     } else {
         (body_html, 0)
     };
-    let legacy_body = if is_html {
-        body_html.clone()
-    } else {
-        plain.clone()
-    };
     let listed = listed_attachments(db, m.id, m.body_html.as_deref());
     let event = find_calendar_event(db, &m);
     let contacts = contact_cards(db, &listed);
@@ -563,7 +558,6 @@ pub fn message_json(db: &Db, folder_id: i64, uid: u32) -> Result<String> {
         "is_html": is_html, "has_remote_images": had_remote && is_html,
         "missing_inline_images": missing_inline,
         "html_colored": is_html && html::has_own_colors(&body_html),
-        "body": legacy_body,
         "event": event,
         "contacts": contacts,
         "report": report,

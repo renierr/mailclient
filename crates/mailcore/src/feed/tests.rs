@@ -60,7 +60,8 @@ fn feeds_shape_matches_qml_roles() {
     // …the reader payload carries the bodies.
     let reader: serde_json::Value =
         serde_json::from_str(&message_json(&db, f, 7).unwrap()).unwrap();
-    assert_eq!(reader["body"], "<b>hi</b>");
+    // No legacy `body` copy: each body travels once (D16).
+    assert!(reader.get("body").is_none());
     assert!(reader["is_html"].as_bool().unwrap());
     assert_eq!(reader["body_html"], "<b>hi</b>");
     // No files on this message: flag off, empty list.
