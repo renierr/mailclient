@@ -125,6 +125,8 @@ the "not fixed" column before assuming a finding is closed.
 | **D8** / **E10** | `d199c25` | One shared undo timer thread in `mailcore` with per-account coalescing replaces a thread per action in both adapters | Per-toggle `spawn_flag_push` is still one queued job per click |
 | **D16** (part) | `43f898b` | `message_json` no longer carries a third copy of the body | Re-fetch frequency and caching go with D5 |
 | **E6** | `d82ef9f` | Negative JNI uids are refused instead of clamped to UID 0 | `Int` width is D3 |
+| **E20** / **E22** | `aee7410` | Notification signatures built in the core from raw title/body; `ReadTarget` account read by the core | Flutter host keeps its old shape (accepted) |
+| **D11** | `8c67b4d` | Undo split (dead), pending-open decode, file URL join and file-name decode moved out of QML | — |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -1196,7 +1198,7 @@ rated high and is out of the fix order until checked on a narrow window. The one
 long error sentence cannot be read.
 **Fix:** if it reproduces, bind each child's `width` to the ScrollView's own `id`.
 
-### D11 · medium · core protocol parsing in JS `[corrected]` — confirmed, severity trimmed
+### D11 · medium · core protocol parsing in JS `[corrected]` — confirmed, severity trimmed — **FIXED** `[fixed]`
 - `Main.qml:1456-1464` `undoMove(batch)` re-implements how undo batches are encoded — `batch.split(",")`,
   while Rust joins them in `bridge/messages/bulk.rs:193-197`.
 - `Main.qml:777` `parseInt(nl < 0 ? r : r.slice(0, nl), 10)` decodes the `"<id>\n<folder>"` pending-open
@@ -1209,6 +1211,18 @@ Correction: the fix-order draft referenced `MessagesView.qml:170-181` and `:376-
 exist — both helpers live in `MessageView.qml` as cited above. Severity is medium because it is duplicated
 parsing logic, not a wrong result.
 **Fix:** expose the parsing from Rust and have QML consume the result.
+
+**Fixed in `8c67b4d`.** All four are gone from QML:
+- `undoMove`'s `split(",")` was dead. `mailcore::bulk::queue_move` puts every folder's share under **one**
+  batch, so the loop always ran once. It is a single `undo_move(batch)` now.
+- `consume_pending_open` returns `{"account_id", "folder"}` JSON (read with `FeedJson.parse`, the bridge
+  convention) instead of `"<id>\n<folder>"`. The id check is the core's: `take_pending_open` already refuses
+  an invalid one.
+- `joinFileUrl` → `backend.file_url_in(dir, name)`, built on `mailcore::paths::file_url_to_path` and the
+  existing `file_url`.
+- `Composer.baseName` → `backend.file_name_of(url)`, same decoding.
+Rust tests for both helpers (QUrl, plain path and trailing-slash folders; encoded names). `qml-check` on the
+three files: lint and QML tests OK. The format check skipped itself (Windows kit 6.9 vs pinned 6.11).
 
 ### D12 · low · a JNI round trip inside a property binding, plus dead change handlers `[corrected]`
 `MessageView.qml:79-81,115`
@@ -1555,7 +1569,7 @@ link into a full-page route) would execute against the fallback `db_path()`
 (`mailcore/src/db/mod.rs:18-25`), which on Android resolves to a relative path under `/` and fails.
 **Fix:** initialise in `MailApplication.onCreate`.
 
-### E20 · low · notification signature format re-implemented in Kotlin — confirmed
+### E20 · low · notification signature format re-implemented in Kotlin — confirmed — **FIXED** `[fixed]`
 `MailNotifier.kt:118` duplicates `mailcore/src/sync/background/notify.rs:123-125`
 
 ```kotlin
@@ -1564,6 +1578,13 @@ out.put(tag, "$title\n$body")
 ```
 The two must match byte-for-byte or every posted notification reads as "changed" (or never changes).
 **Fix:** expose `MailNative.signature(title, body)`, or have `plan()` return the per-tag signatures.
+
+**Fixed in `aee7410` a third way: the host sends raw data, the core builds signatures.** `MailNotifier.shown()`
+now puts `{"title", "body"}` per tag, and `notify::shown_of` turns that into the `Shown` map through
+`signature_of`. The format exists once, and no extra JNI round trip per notification is needed. `Posted` is
+an untagged enum that also accepts the old pre-built string, because the retired Flutter host's own
+`MailNotifier.kt` calls the same JNI `plan` and must keep working unchanged. Tests: both shapes, plus a
+missing body.
 
 ### E21 · low · the "Similar to: …" sentence template is duplicated in both frontends `[corrected]`
 `ui/list/ListScreen.kt` / `ui/state/MailStateSearch.kt:79` and `crates/mailapp/qml/MessageList.qml:773`
@@ -1580,11 +1601,16 @@ not a behaviour bug.
 **Fix:** `mailcore::similar::chip_label(db, …, locale) -> String`, or at minimum a shared golden test that
 both templates render the same string for the same subject.
 
-### E22 · low · Kotlin re-parses the core's `ReadTarget` JSON to find `account_id` — confirmed
+### E22 · low · Kotlin re-parses the core's `ReadTarget` JSON to find `account_id` — confirmed — **FIXED** `[fixed]`
 `android/.../MailActions.kt:33` — `MailFlagWorker.enqueue(app, JSONObject(target).getLong("account_id"))`.
 `ReadTarget` is a Rust struct (`notify.rs:132-135`); the WorkManager enqueue only needs the account id, so a
 frontend must know an internal field name.
 **Fix:** `MailNative.markReadAccount(target): Long`, or have `markRead` return `(report, account_id)`.
+
+**Fixed in `aee7410`:** `ReadTarget::account_of(json)` in `mailcore`, reached as `MailNative.readTargetAccount`.
+`MailActions.kt` treats the JSON as opaque. Verified with `./build.sh --android` (signed APK built) and
+`cargo ndk clippy` for the JNI side. Flutter's twin `MailActions.kt` was left alone (retired, and it still
+works).
 
 ### E23 · low · `SHARED-CORE.md` items are open, stale, or wrongly filed `[corrected]` — **FIXED** (§2 only) `[fixed]`
 Including two that the first draft proposed changing in the wrong direction.
