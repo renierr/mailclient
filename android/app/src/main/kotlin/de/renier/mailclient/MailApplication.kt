@@ -14,6 +14,18 @@ class MailApplication : Application() {
         super.onCreate()
         CrashLog.install(this)
         sweepCache()
+        initCore()
+    }
+
+    // Open the core (data dir, database, migrations) as the process starts,
+    // off the main thread: every screen, worker and receiver then finds it
+    // ready, and none can reach the database before the data dir is set.
+    // Callers still call ensureInit; it returns at once once this is done.
+    private fun initCore() {
+        thread(name = "core-init", isDaemon = true) {
+            runCatching { MailNative.ensureInit(this) }
+                .onFailure { android.util.Log.w("mailclient", "core init failed", it) }
+        }
     }
 
     // Leftovers nothing in a fresh process can still be using: the old

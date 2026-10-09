@@ -59,6 +59,9 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
     // toggle; the sidebar paints these joined to `folders` by id.
     var sidebarRows: List<SidebarRow> by mutableStateOf(emptyList())
         internal set
+    // Bumped by each refreshSidebarRows (main thread only): its result
+    // paints only while it is still the latest request.
+    internal var sidebarGeneration = 0
     var messages: List<MessageRow> by mutableStateOf(emptyList())
         internal set
     var canLoadOlder by mutableStateOf(false)
@@ -300,25 +303,35 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
 
     /** First load + job-event listener. Idempotent for the composition. */
     fun ensureInit() {
-        if (jobEvents == null) {
-            jobEvents =
-                JobEvents.subscribe(appContext) { json ->
-                    scope.launch(Dispatchers.Main) { onJobEvent(json) }
-                }
-        }
         if (initialized) {
+            subscribeJobs()
             refreshAll()
             return
         }
         initialized = true
-        MailNative.ensureInit(appContext)
-        // Jobs may already run (started before this composition): pick up
-        // the core's table instead of assuming idle.
-        loadBusy()
-        // Cold start: the cache paints first, then the account syncs, like
-        // Flutter's start() — a slow server never holds the first paint.
-        refreshAll(syncAfter = true, coldStart = true)
-        loadReaderPrefs()
+        scope.launch {
+            // Opening the database can run a schema migration after an
+            // update: never on the main thread. MailApplication started it
+            // already, so this usually only waits for that to finish. The
+            // job subscription waits too: registering it opens the core.
+            withContext(Dispatchers.IO) { MailNative.ensureInit(appContext) }
+            subscribeJobs()
+            // Jobs may already run (started before this composition): pick up
+            // the core's table instead of assuming idle.
+            loadBusy()
+            // Cold start: the cache paints first, then the account syncs, like
+            // Flutter's start() — a slow server never holds the first paint.
+            refreshAll(syncAfter = true, coldStart = true)
+            loadReaderPrefs()
+        }
+    }
+
+    private fun subscribeJobs() {
+        if (jobEvents != null) return
+        jobEvents =
+            JobEvents.subscribe(appContext) { json ->
+                scope.launch(Dispatchers.Main) { onJobEvent(json) }
+            }
     }
 
     fun release() {
@@ -501,7 +514,10 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
         val cb: (Boolean, String) -> Unit = { ok, status -> waiter.complete(ok to status) }
         finishWaiters.getOrPut(kind) { mutableListOf() }.add(cb)
         try {
-            queue()
+            // The waiter is in place (main thread), so the queue call itself
+            // can go to IO: it is a JNI call whose "queued" event re-enters
+            // Java from inside the native frame.
+            withContext(Dispatchers.IO) { queue() }
             withTimeoutOrNull(timeoutMs) { waiter.await() }
         } finally {
             finishWaiters[kind]?.remove(cb)

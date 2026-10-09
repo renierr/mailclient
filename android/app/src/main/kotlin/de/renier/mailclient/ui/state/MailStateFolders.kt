@@ -112,15 +112,26 @@ fun MailState.toggleFolderExpanded(id: Long) {
     refreshSidebarRows()
 }
 
-/** Re-fold the sidebar for the current expanded set (main thread; local DB read). */
+/**
+ * Re-fold the sidebar for the current expanded set. Call on the main thread;
+ * the fold itself is a SQL aggregate over the account's messages, so it runs
+ * on IO and the rows land back on Main. A newer request wins over a slower
+ * older one (two quick expand taps).
+ */
 internal fun MailState.refreshSidebarRows() {
     val id = activeAccountId
-    sidebarRows = if (id < 0) {
-        emptyList()
-    } else {
-        val expanded = "[${expandedFolders.sorted().joinToString(",")}]"
-        runCatching { parseSidebarRows(MailNative.sidebarRowsJson(id, expanded)) }
+    val generation = ++sidebarGeneration
+    if (id < 0) {
+        sidebarRows = emptyList()
+        return
+    }
+    val expanded = "[${expandedFolders.sorted().joinToString(",")}]"
+    io {
+        val rows = runCatching { parseSidebarRows(MailNative.sidebarRowsJson(id, expanded)) }
             .getOrDefault(emptyList())
+        withContext(Dispatchers.Main) {
+            if (sidebarGeneration == generation) sidebarRows = rows
+        }
     }
 }
 
