@@ -115,6 +115,8 @@ the "not fixed" column before assuming a finding is closed.
 | **A9** | `6ebe8bd` | `store::atomic` makes the multi-row deletes/updates all-or-nothing | — |
 | **A10** | `6ebe8bd` | `set_sort` and `set_pending_open` write both keys atomically | — |
 | **A14** | `63fe609` | Row casts go through `int_col`: out of range reads as 0 with a warning | `highest_modseq` keeps its round-trip cast; `outbox.rs:68` still casts |
+| **A17** (rest) | `a7f6526` | Settings number getters shared; undo looks ids up in one query per 900 uids | — |
+| **A18** | `a7f6526` | Column-order caveat documented in the migrations header | No table rebuild |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -371,20 +373,27 @@ stored path was raw server form, so decoding it is the right operation. The sugg
 (`encode_modified_utf7(&decoded) == path`) holds for pre-v12 data too, so it would not prevent the rename it
 was meant to prevent. No action.
 
-### A17 · low · duplication and dead code
+### A17 · low · duplication and dead code — **FIXED** `[fixed]`
 - ~~`store/contacts.rs:380-396`, `:399-413`, `:472-487` — three copies of the same query + row mapping.~~
   **Row mapping shared** (`row_to_contact`, `af18a03`). The three queries differ in filter and order, so they stay.
-- `store/settings.rs:314-329` vs `:487-502` — `get_delay_secs` / `get_sync_interval` are one function twice.
+- ~~`store/settings.rs:314-329` vs `:487-502` — `get_delay_secs` / `get_sync_interval` are one function twice.~~
+  **Shared** as `get_number(db, key, normalize)` (`a7f6526`).
 - ~~`store/messages/attachments.rs:212-218` `delete_attachments_for_message` — **verified** no non-test callers.
   Dead per AGENTS.md; delete it and its test.~~ **Deleted**.
-- `undo.rs:171-176` — `messages::get_by_uid` in a loop over a whole selection: N+1 over `get_by_uid`.
+- ~~`undo.rs:171-176` — `messages::get_by_uid` in a loop over a whole selection: N+1 over `get_by_uid`.~~
+  **Batched** (`a7f6526`): `messages::ids_by_uids` reads only the ids, 900 uids per query. Before, every uid loaded a
+  full row, bodies included.
 
-### A18 · low · column-order drift between `schema.sql` and an upgraded DB `[verify]`
+### A18 · low · column-order drift between `schema.sql` and an upgraded DB `[verify]` — **FIXED** (documented) `[fixed]`
 `ALTER TABLE ADD COLUMN` always appends, so an upgraded DB puts `accounts.from_name`, `folders.server_total`,
 `messages.from_name`, `attachments.data`, `contacts.alias`, `send_queue.raw_mime` at the end, not at their
 `schema.sql` position. Verified no `select *` anywhere and every `row_to_*` names columns explicitly, so it is
 harmless today — but `schema.sql` is not a faithful description of an upgraded DB.
 **Fix:** record the caveat in the `migrations.rs` header, or rebuild the affected tables once to restore canonical order.
+
+**Documented in `a7f6526`** in the `migrations.rs` header, together with the rule that keeps it harmless (no
+`select *`, row mappers name their columns). A table rebuild was not done: it would be a migration that
+copies every message row to fix something nothing depends on.
 
 ---
 
