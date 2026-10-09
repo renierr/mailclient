@@ -1,0 +1,20 @@
+/* This video's own styling, on top of engine/theme.css. Keep it small so the look stays shared. */
+#avatar { --avatar-hue: 170deg; }
+.hero-copy .mega { font-size: 122px; }
+
+/* layers: three bands, core at the bottom */
+.stack { width: 1300px; margin: 0 auto; display: flex; flex-direction: column; gap: 26px; }
+.band { display: grid; grid-template-columns: 200px 1fr 1fr; gap: 24px; }
+.band.one { grid-template-columns: 200px 1fr; }
+.band .label { align-self: center; font-size: 28px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.box { padding: 26px 34px; border-radius: 28px; background: var(--card); border: 1px solid var(--line); border-top: 8px solid var(--accent); }
+.box h4 { font-size: 46px; margin: 0 0 6px; }
+.box p { font-size: 30px; color: var(--muted); margin: 0; }
+.box.qt { --accent: var(--green); }
+.box.and { --accent: var(--cyan); }
+.box.ad { --accent: var(--violet); }
+.box.core { --accent: var(--pink); }
+
+.cards.short .card { min-height: 0; }
+.cards.narrow { width: 1300px; margin: 0 auto; }
+.row.after { margin-top: 40px; gap: 26px; }

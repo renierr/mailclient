@@ -1,0 +1,16 @@
+{
+  "name": "mailclient-architecture",
+  "private": true,
+  "type": "module",
+  "description": "How mailclient is built: core, adapters, frontends (explainer-video kit)",
+  "scripts": {
+    "voice": "bun engine/voice.mjs",
+    "preview": "bun engine/preview.mjs",
+    "check": "bun engine/render.mjs --check",
+    "render": "bun engine/render.mjs",
+    "build": "bun engine/voice.mjs && bun engine/render.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

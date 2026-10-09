@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mailclient architecture</title>
+<link rel="stylesheet" href="../engine/theme.css">
+<link rel="stylesheet" href="custom.css">
+</head>
+<body>
+<!--
+  One <section> per scene in script.mjs. The engine adds background, avatar, subtitles
+  and player. Elements animate in with data-fx at data-cue (+ data-delay) seconds.
+-->
+<div id="stage">
+
+  <section class="scene" data-scene="intro" data-avatar="center, hero@title" data-wave="hi">
+    <div class="hero-copy">
+      <div class="eyebrow" data-fx="up" data-cue="hi" data-delay="0.2">Under the hood of</div>
+      <h1 class="mega" data-fx="blur" data-cue="title" data-dur="1"><span class="grad">mailclient</span></h1>
+      <p class="lead" data-fx="up" data-cue="title" data-delay="0.6">Who does what, and when.</p>
+      <div class="chips" data-fx="up" data-cue="title" data-delay="1.1">
+        <span class="chip">one Rust core</span><span class="chip">two thin adapters</span><span class="chip">Qt + Android</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="layers" data-look="0.4,-0.6">
+    <h2 class="title" data-fx="up" data-delay="0.2">Three layers</h2>
+    <div class="stack">
+      <div class="band">
+        <div class="label" data-fx="fade" data-cue="qt">frontends</div>
+        <div class="box qt" data-fx="up" data-cue="qt"><h4>Qt / QML</h4><p>desktop · Linux, Windows</p></div>
+        <div class="box and" data-fx="up" data-cue="android"><h4>Kotlin + Compose</h4><p>native Android</p></div>
+      </div>
+      <div class="band">
+        <div class="label" data-fx="fade" data-cue="adapt">adapters</div>
+        <div class="box ad" data-fx="up" data-cue="adapt"><h4>mailapp</h4><p>cxx-qt bridge</p></div>
+        <div class="box ad" data-fx="up" data-cue="adapt" data-delay="0.25"><h4>mailffi</h4><p>JNI bridge</p></div>
+      </div>
+      <div class="band one">
+        <div class="label" data-fx="fade" data-cue="core">core</div>
+        <div class="box core" data-fx="up" data-cue="core"><h4>mailcore</h4><p>Rust · SQLite · IMAP / SMTP · no UI</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="core">
+    <h2 class="title" data-fx="up" data-cue="brain">mailcore: the brain</h2>
+    <div class="facts">
+      <div class="fact cyan" data-fx="up" data-cue="sync"><i class="ic ic-refresh"></i><div><h4>Talks to servers</h4><p>IMAP to read, SMTP to send.</p></div></div>
+      <div class="fact green" data-fx="up" data-cue="cache"><i class="ic ic-file"></i><div><h4>Local cache</h4><p>SQLite on your device, works offline.</p></div></div>
+      <div class="fact violet" data-fx="up" data-cue="search"><i class="ic ic-spark"></i><div><h4>Search</h4><p>Full text over subjects, senders, bodies.</p></div></div>
+      <div class="fact amber" data-fx="up" data-cue="rules"><i class="ic ic-code"></i><div><h4>Shared decisions</h4><p>Filters, sorting, display rules: written once.</p></div></div>
+    </div>
+    <div class="row after">
+      <div class="pill" data-fx="pop" data-cue="noui"><i class="ic ic-shield"></i>no UI · plain Rust · unit-tested</div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="adapters">
+    <h2 class="title" data-fx="up" data-cue="thin">Adapters: translators only</h2>
+    <div class="cards short narrow" style="--cols:2">
+      <div class="card brand" style="--c1:#34d399;--c2:#059669" data-fx="flip" data-cue="mailapp">
+        <div class="logo">QT</div><h4>mailapp</h4>
+        <p>core calls become Qt properties, invokables and signals</p>
+        <span class="badge ok">desktop</span>
+      </div>
+      <div class="card brand" style="--c1:#22d3ee;--c2:#0891b2" data-fx="flip" data-cue="mailffi">
+        <div class="logo">KT</div><h4>mailffi</h4>
+        <p>the same calls as plain functions for Kotlin, over JNI</p>
+        <span class="badge ok">Android</span>
+      </div>
+    </div>
+    <div class="row after">
+      <div class="pill" data-fx="pop" data-cue="json"><i class="ic ic-code"></i>JSON: lists, records, events</div>
+      <div class="pill alt" data-fx="pop" data-cue="plain"><i class="ic ic-key"></i>plain: ids, flags, bytes</div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="frontends">
+    <h2 class="title" data-fx="up" data-cue="ui">Frontends: they draw</h2>
+    <div class="cards short narrow" style="--cols:2">
+      <div class="card brand" style="--c1:#34d399;--c2:#059669" data-fx="flip" data-cue="qml">
+        <div class="logo">Q</div><h4>QML</h4>
+        <p>desktop windows, mouse and keyboard, resizable dialogs</p>
+      </div>
+      <div class="card brand" style="--c1:#22d3ee;--c2:#0891b2" data-fx="flip" data-cue="compose">
+        <div class="logo">C</div><h4>Jetpack Compose</h4>
+        <p>phones and tablets, touch, swipe and long-press</p>
+      </div>
+    </div>
+    <div class="row after">
+      <div class="pill" data-fx="pop" data-cue="how"><i class="ic ic-window"></i>layout · gestures · themes</div>
+      <div class="pill alt" data-fx="pop" data-cue="same"><i class="ic ic-shield"></i>same features, own layout</div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="open">
+    <h2 class="title" data-fx="up" data-delay="0.2">Opening a folder: local and instant</h2>
+    <div class="steps">
+      <svg class="steps-line" viewBox="0 0 1400 20" preserveAspectRatio="none">
+        <path d="M60,10 H1340" pathLength="1" data-fx="draw" data-cue="s1" data-until="s4" />
+      </svg>
+      <div class="step" data-fx="up" data-cue="s1"><div class="num">1</div><i class="ic ic-window"></i><h4>Asks</h4><p>app → adapter</p></div>
+      <div class="step" data-fx="up" data-cue="s2"><div class="num">2</div><i class="ic ic-file"></i><h4>Reads</h4><p>core → SQLite cache</p></div>
+      <div class="step" data-fx="up" data-cue="s3"><div class="num">3</div><i class="ic ic-code"></i><h4>Returns</h4><p>rows as JSON</p></div>
+      <div class="step" data-fx="up" data-cue="s4"><div class="num">4</div><i class="ic ic-spark"></i><h4>Paints</h4><p>the list on screen</p><div class="tick" data-fx="check" data-cue="s4" data-delay="0.9"></div></div>
+    </div>
+    <div class="row after">
+      <div class="pill" data-fx="pop" data-cue="s4" data-delay="1.6"><i class="ic ic-shield"></i>from the cache · works offline</div>
+      <div class="pill alt" data-fx="pop" data-cue="sync"><i class="ic ic-refresh"></i>meanwhile: fetch new mail</div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="jobs">
+    <h2 class="title" data-fx="up" data-delay="0.2">Network work: a background job</h2>
+    <div class="steps">
+      <svg class="steps-line" viewBox="0 0 1400 20" preserveAspectRatio="none">
+        <path d="M60,10 H1340" pathLength="1" data-fx="draw" data-cue="s1" data-until="s4" />
+      </svg>
+      <div class="step" data-fx="up" data-cue="s1"><div class="num">1</div><i class="ic ic-term"></i><h4>Queued</h4><p>one network thread</p></div>
+      <div class="step" data-fx="up" data-cue="s2"><div class="num">2</div><i class="ic ic-refresh"></i><h4>Syncs</h4><p>server → cache</p></div>
+      <div class="step" data-fx="up" data-cue="s3"><div class="num">3</div><i class="ic ic-bell"></i><h4>Reports</h4><p>event: what changed</p></div>
+      <div class="step" data-fx="up" data-cue="s4"><div class="num">4</div><i class="ic ic-window"></i><h4>Re-reads</h4><p>just that part</p><div class="tick" data-fx="check" data-cue="s4" data-delay="0.9"></div></div>
+    </div>
+    <div class="row after">
+      <div class="pill alt" data-fx="pop" data-cue="bg"><i class="ic ic-bell"></i>Android: WorkManager runs background checks</div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="rule">
+    <h2 class="title" data-fx="up" data-delay="0.2">The rule: core first</h2>
+    <div class="steps" style="grid-template-columns: repeat(3, 1fr)">
+      <svg class="steps-line" viewBox="0 0 1400 20" preserveAspectRatio="none">
+        <path d="M60,10 H1340" pathLength="1" data-fx="draw" data-cue="s1" data-until="s3" />
+      </svg>
+      <div class="step" data-fx="up" data-cue="s1"><div class="num">1</div><i class="ic ic-code"></i><h4>Core</h4><p>logic + tests in mailcore</p><div class="tick" data-fx="check" data-cue="s1" data-delay="1.2"></div></div>
+      <div class="step" data-fx="up" data-cue="s2"><div class="num">2</div><i class="ic ic-plug"></i><h4>Adapters</h4><p>mailapp + mailffi pass it on</p><div class="tick" data-fx="check" data-cue="s2" data-delay="1.2"></div></div>
+      <div class="step" data-fx="up" data-cue="s3"><div class="num">3</div><i class="ic ic-window"></i><h4>UIs</h4><p>Qt and Android, last</p><div class="tick" data-fx="check" data-cue="s3" data-delay="1.2"></div></div>
+    </div>
+    <div class="row after">
+      <div class="pill" data-fx="pop" data-cue="dup"><i class="ic ic-spark"></i>same logic twice? → it belongs in the core</div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="outro" data-avatar="hero" data-wave="bye+" data-confetti="bye">
+    <div class="hero-copy spread">
+      <div class="pill big" data-fx="pop" data-cue="sum"><i class="ic ic-hex"></i>one core · two adapters · two frontends</div>
+      <h1 class="mega" data-fx="blur" data-cue="bye"><span class="grad">Happy hacking!</span></h1>
+    </div>
+  </section>
+
+</div>
+<script src="../build/timeline.js" onerror="window.TIMELINE = null"></script>
+<script src="../engine/avatar.js"></script>
+<script src="../engine/deck.js"></script>
+</body>
+</html>
