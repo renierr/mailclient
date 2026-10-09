@@ -8,6 +8,7 @@ import android.service.quicksettings.TileService
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -19,47 +20,45 @@ import org.json.JSONArray
  * for people who set background checking off, and for anyone who would
  * rather pull the shade down than open the app and press Sync.
  *
- * The tap runs the very check the background schedulers run — WorkManager
- * expedited work, [MailCheckWorker], `mailcore::sync::background` in the
- * Rust core — only marked explicit, so it also serves the accounts the
- * scheduler skips: manual ones, and any inside their quiet hours. Quiet
- * hours gate unattended checks; a tap is the user asking.
+ * It runs the very check the background schedulers run —
+ * `mailcore::sync::background` over JNI — only marked explicit, so it also
+ * serves the accounts the scheduler skips: manual ones, and any inside
+ * their quiet hours. Quiet hours gate unattended checks; a tap is the user
+ * asking.
  *
- * The user adds the tile once through the shade's edit mode, and from then
- * on it lives there. Two rules the tile keeps no matter what the phone is
- * doing:
+ * Why the tap does the work here instead of handing it to WorkManager like
+ * the schedulers do: a tile lives while the shade is open, and the tap is
+ * the user waiting behind it. A phone may defer background work for a long
+ * time (battery restriction, no network when the job was posted), and a
+ * tile that says "checking" for minutes — or nothing at all — looks broken.
+ * Running it here answers in seconds whether or not the OS would run a job.
+ * The schedulers keep their worker path; nothing else changes.
  *
- * - **Every state answers a tap.** `STATE_UNAVAILABLE` is reserved for
- *   "nothing to check yet" (its tap opens the app to fix that). While a
- *   check runs, a tap answers "Still checking mail…" instead of being
- *   dropped: on a real phone the work can sit queued a while (network,
- *   battery optimisation, Doze), and a dead tile is indistinguishable
- *   from a broken one.
- * - **The answer stays on the tile.** A click does not collapse the shade
- *   on Android 12+, so the check's answer — "No new mail", "3 new
- *   messages", "Mail check failed" — shows as the tile's subtitle while
- *   the shade is up, and as a toast when one can be posted.
+ * Every tap is acknowledged ("Checking mail…"), and the answer lands as a
+ * toast and on the tile itself ("No new mail", "3 new messages", "Mail
+ * check failed") — a click does not collapse the shade on Android 12+, and
+ * a toast can be suppressed on a phone, so the tile shows it too.
  */
 class MailCheckTileService : TileService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var stopObservingChecks: (() -> Unit)? = null
+
+    @Volatile
+    private var checking = false
 
     override fun onStartListening() {
         super.onStartListening()
-        render()
-        // Without this the tile would sit in its busy state until the
-        // shade is next opened: a click keeps the shade up.
-        stopObservingChecks = MailAlarm.observeChecks(applicationContext) { render() }
-    }
-
-    override fun onStopListening() {
-        stopObservingChecks?.invoke()
-        stopObservingChecks = null
-        super.onStopListening()
+        val accounts = accountCount()
+        show(busy = checking, accounts = accounts)
     }
 
     override fun onClick() {
         super.onClick()
+        if (checking) {
+            // The check is already under way; the tile never blocks a tap,
+            // it answers it.
+            CheckFeedback.toast(this, "Still checking mail…")
+            return
+        }
         scope.launch {
             val accounts = withContext(Dispatchers.IO) { accountCount() }
             if (accounts == 0) {
@@ -67,39 +66,45 @@ class MailCheckTileService : TileService() {
                 openApp()
                 return@launch
             }
-            when (withContext(Dispatchers.IO) { MailAlarm.checkState(applicationContext) }) {
-                CheckState.Running -> answer("Still checking mail…")
-                CheckState.Queued -> answer("Still waiting to check…")
-                CheckState.Idle -> {
-                    // The last answer has been seen; the next one is owed.
-                    CheckFeedback.takeOutcome()
-                    // KEEP inside: a check already waiting is reused.
-                    MailAlarm.enqueueCheck(applicationContext, "tile", now = true)
-                    show(busy = true, accounts = accounts)
-                }
-            }
+            checking = true
+            checkNow(accounts)
         }
     }
 
     override fun onDestroy() {
-        stopObservingChecks?.invoke()
-        stopObservingChecks = null
+        // The check itself cannot be interrupted mid-call, and its answer is
+        // delivered from a non-cancellable block below, so closing the shade
+        // early costs a moment of silence, never a half-answered tap.
         scope.cancel()
         super.onDestroy()
     }
 
-    // Reading the account list touches SQLite and asking WorkManager for
-    // its state blocks; neither belongs on the main thread.
-    private fun render() {
+    private fun checkNow(accounts: Int) {
         scope.launch {
-            val accounts = withContext(Dispatchers.IO) { accountCount() }
-            val state = withContext(Dispatchers.IO) { MailAlarm.checkState(applicationContext) }
-            val outcome = CheckFeedback.takeOutcome()
-            show(busy = state != CheckState.Idle, accounts = accounts, outcome = outcome)
+            CheckFeedback.toast(this@MailCheckTileService, "Checking mail…")
+            show(busy = true, accounts = accounts)
+            val report = withContext(Dispatchers.IO) {
+                runCatching {
+                    MailNative.ensureInit(applicationContext)
+                    MailNative.check("tile", now = true)
+                }.getOrNull()
+            }
+            withContext(NonCancellable) {
+                checking = false
+                val line = if (report == null) {
+                    CheckFeedback.showFailure(this@MailCheckTileService)
+                    "Mail check failed"
+                } else {
+                    withContext(Dispatchers.IO) {
+                        MailNotifier.deliver(applicationContext, report)
+                    }
+                    CheckFeedback.show(this@MailCheckTileService, report)
+                    CheckFeedback.takeOutcome() ?: "Mail check failed"
+                }
+                show(busy = false, accounts = accounts, outcome = line)
+            }
         }
     }
-
-    private fun answer(line: String) = CheckFeedback.toast(this, line)
 
     private fun show(busy: Boolean, accounts: Int, outcome: String? = null) {
         val tile = qsTile ?: return

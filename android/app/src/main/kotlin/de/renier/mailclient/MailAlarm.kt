@@ -7,18 +7,12 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.SystemClock
-import androidx.lifecycle.LiveData
-import androidx.lifecycle.Observer
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequest
 import androidx.work.OutOfQuotaPolicy
-import androidx.work.WorkInfo
 import androidx.work.WorkManager
-
-// What the check work is doing, for the tile that starts it.
-enum class CheckState { Idle, Queued, Running }
 
 // The on-time background mail check: a self-rearming exact one-shot alarm
 // (setExactAndAllowWhileIdle, so it fires in Doze) whose receiver hands the
@@ -56,9 +50,9 @@ object MailAlarm {
         if (minutes > 0) schedule(context, minutes)
     }
 
-    fun enqueueCheck(context: Context, trigger: String = "alarm", now: Boolean = false) {
+    fun enqueueCheck(context: Context, trigger: String = "alarm") {
         val request = OneTimeWorkRequest.Builder(MailCheckWorker::class.java)
-            .setInputData(MailCheckWorker.input(trigger, now))
+            .setInputData(MailCheckWorker.input(trigger))
             .setConstraints(
                 Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),
             )
@@ -71,47 +65,6 @@ object MailAlarm {
         // KEEP: a check still waiting for the network is not stacked twice.
         WorkManager.getInstance(context)
             .enqueueUniqueWork(CHECK_TASK, ExistingWorkPolicy.KEEP, request)
-    }
-
-    /**
-     * What the check work is doing, for the "Check mail" Quick Settings
-     * tile to show and to answer a tap. Blocks on WorkManager, so call it
-     * off the main thread.
-     *
-     * [CheckState.Queued] is waiting — for the network, or for the system
-     * to let it run — which on a real phone can outlast a tap by a while
-     * (battery optimisation, Doze), so the tile must stay usable.
-     */
-    fun checkState(context: Context): CheckState = runCatching {
-        val work = WorkManager.getInstance(context)
-        val states = listOf(CHECK_TASK, MailCheckWorker.PERIODIC).flatMap { name ->
-            work.getWorkInfosForUniqueWork(name).get().map { it.state }
-        }
-        when {
-            states.any { it == WorkInfo.State.RUNNING } -> CheckState.Running
-            states.any { it == WorkInfo.State.ENQUEUED || it == WorkInfo.State.BLOCKED } -> CheckState.Queued
-            else -> CheckState.Idle
-        }
-    }.getOrDefault(CheckState.Idle)
-
-    /**
-     * Call `onChange` on the main thread every time a check's work changes
-     * state, and return what stops that again.
-     *
-     * A tile click does not collapse the shade on Android 12+, so the
-     * "Check mail" tile stays visible while the check runs: without this it
-     * would sit in its busy state until the shade is next opened. Main
-     * thread only, like every LiveData call.
-     */
-    fun observeChecks(context: Context, onChange: (List<WorkInfo>) -> Unit): () -> Unit {
-        val work = WorkManager.getInstance(context)
-        val observed = listOf(CHECK_TASK, MailCheckWorker.PERIODIC).map { name ->
-            val live = work.getWorkInfosForUniqueWorkLiveData(name)
-            val observer = Observer<List<WorkInfo>> { onChange(it) }
-            live.observeForever(observer)
-            live to observer
-        }
-        return { observed.forEach { (live, observer) -> live.removeObserver(observer) } }
     }
 
     // Exact when allowed; otherwise AllowWhileIdle still fires in Doze, just

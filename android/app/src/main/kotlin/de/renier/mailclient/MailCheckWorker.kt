@@ -19,9 +19,10 @@ class MailCheckWorker(context: Context, params: WorkerParameters) : Worker(conte
     override fun doWork(): Result = try {
         MailNative.ensureInit(applicationContext)
         val trigger = inputData.getString(KEY_TRIGGER) ?: "worker"
-        // `now` marks an explicit check (the "Check mail" Quick Settings
-        // tile): every account, quiet hours included.
-        val report = MailNative.check(trigger, inputData.getBoolean(KEY_NOW, false))
+        // The check the schedulers ask for: what they owe now, so manual
+        // accounts are left to their own syncs (the Quick Settings tile
+        // runs its own check, marked explicit, in the shade instead).
+        val report = MailNative.check(trigger, now = false)
         MailNotifier.deliver(applicationContext, report)
         // The tap answers even when it found nothing, so the user is not
         // left guessing whether the tile did anything at all.
@@ -38,13 +39,10 @@ class MailCheckWorker(context: Context, params: WorkerParameters) : Worker(conte
 
     companion object {
         const val KEY_TRIGGER = "trigger"
-        private const val KEY_NOW = "now"
 
         // WorkManager name of the periodic check. The same name the Dart
         // workmanager plugin used, so scheduling replaces its old entry.
-        // Read by MailAlarm.checkRunning, so the "Check mail" tile can tell
-        // that a scheduled check is in flight.
-        internal const val PERIODIC = "mail-background-sync"
+        private const val PERIODIC = "mail-background-sync"
 
         // Android's floor for periodic work.
         private const val MIN_MINUTES = 15L
@@ -52,8 +50,7 @@ class MailCheckWorker(context: Context, params: WorkerParameters) : Worker(conte
         private const val PREFS = "mailclient_worker"
         private const val KEY_NATIVE = "native_periodic"
 
-        fun input(trigger: String, now: Boolean = false): Data =
-            Data.Builder().putString(KEY_TRIGGER, trigger).putBoolean(KEY_NOW, now).build()
+        fun input(trigger: String): Data = Data.Builder().putString(KEY_TRIGGER, trigger).build()
 
         // The battery-saving schedule: deferrable, only with a network.
         fun schedulePeriodic(context: Context, minutes: Int) {
