@@ -15,18 +15,36 @@ import org.json.JSONObject
  * Only ever called for the tile's tap, so a scheduled check never toasts.
  */
 internal object CheckFeedback {
+    /**
+     * The last tap's answer, until the tile has shown it once: the tile's
+     * own subtitle is the feedback that always works, while a toast can be
+     * hidden or blocked on a phone.
+     */
+    @Volatile
+    private var pendingOutcome: String? = null
+
     fun show(context: Context, report: String) {
-        toast(context, outcome(report) ?: return)
+        pendingOutcome = outcome(report)
+        toast(context, pendingOutcome ?: return)
     }
 
     /** The check blew up before the core could report anything. */
     fun showFailure(context: Context) {
-        toast(context, "Mail check failed")
+        pendingOutcome = "Mail check failed"
+        toast(context, pendingOutcome!!)
     }
 
-    private fun toast(context: Context, line: String) {
+    /** The answer a tap is still owed, taken once. */
+    fun takeOutcome(): String? {
+        val line = pendingOutcome
+        pendingOutcome = null
+        return line
+    }
+
+    /** A line the tile itself wants to say (still busy, waiting, …). */
+    fun toast(context: Context, line: String) {
         val app = context.applicationContext
-        // The worker runs on its own thread; a toast wants the main one.
+        // The caller may be a worker thread; a toast wants the main one.
         Handler(Looper.getMainLooper()).post {
             runCatching { Toast.makeText(app, line, Toast.LENGTH_SHORT).show() }
         }

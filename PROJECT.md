@@ -266,6 +266,9 @@ cache-only so they render immediately.
 ./build.sh --flutter    # Flutter release build → dist/mailclient-flutter/{mailclient,lib/,data/}
 ./build.sh --apk        # signed Android APK → dist/mailclient-apk/mailclient-<version>-release.apk
 ./build.sh --all        # both desktop release bundles (Qt + Flutter Linux)
+./build-android.sh      # native Compose Android release APK → dist/mailclient-android/ (= ./build.sh --android)
+./install-android.sh    # install that APK on a phone/emulator (--build, --serial ID, --launch);
+                        # reinstalls over what is there and never uninstalls
 ./scripts/install-local.sh  # copy Qt bundle to ~/.local/{bin,share/mailclient} + install .desktop
 cargo test -p mailcore      # backend unit tests (SQLite in-memory)
 qmllint crates/mailapp/qml/*.qml crates/mailapp/qml/components/*.qml  # QML lint (uses /usr/lib/qt6/bin when on PATH)

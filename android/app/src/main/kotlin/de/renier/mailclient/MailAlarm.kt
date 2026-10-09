@@ -17,6 +17,9 @@ import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 
+// What the check work is doing, for the tile that starts it.
+enum class CheckState { Idle, Queued, Running }
+
 // The on-time background mail check: a self-rearming exact one-shot alarm
 // (setExactAndAllowWhileIdle, so it fires in Doze) whose receiver hands the
 // check to WorkManager as expedited work, run by MailCheckWorker (trigger
@@ -71,17 +74,25 @@ object MailAlarm {
     }
 
     /**
-     * A check is queued or running — the one-shot alarm/tile checks and the
-     * periodic poll — so the "Check mail" Quick Settings tile can show
-     * itself busy. Blocks on WorkManager, so call it off the main thread.
+     * What the check work is doing, for the "Check mail" Quick Settings
+     * tile to show and to answer a tap. Blocks on WorkManager, so call it
+     * off the main thread.
+     *
+     * [CheckState.Queued] is waiting — for the network, or for the system
+     * to let it run — which on a real phone can outlast a tap by a while
+     * (battery optimisation, Doze), so the tile must stay usable.
      */
-    fun checkRunning(context: Context): Boolean = runCatching {
+    fun checkState(context: Context): CheckState = runCatching {
         val work = WorkManager.getInstance(context)
-        fun busy(name: String) =
-            work.getWorkInfosForUniqueWork(name).get()
-                .any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
-        busy(CHECK_TASK) || busy(MailCheckWorker.PERIODIC)
-    }.getOrDefault(false)
+        val states = listOf(CHECK_TASK, MailCheckWorker.PERIODIC).flatMap { name ->
+            work.getWorkInfosForUniqueWork(name).get().map { it.state }
+        }
+        when {
+            states.any { it == WorkInfo.State.RUNNING } -> CheckState.Running
+            states.any { it == WorkInfo.State.ENQUEUED || it == WorkInfo.State.BLOCKED } -> CheckState.Queued
+            else -> CheckState.Idle
+        }
+    }.getOrDefault(CheckState.Idle)
 
     /**
      * Call `onChange` on the main thread every time a check's work changes

@@ -1,5 +1,7 @@
 package de.renier.mailclient
 
+import android.app.PendingIntent
+import android.content.Intent
 import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
@@ -24,10 +26,19 @@ import org.json.JSONArray
  * hours gate unattended checks; a tap is the user asking.
  *
  * The user adds the tile once through the shade's edit mode, and from then
- * on it lives there. A click does not collapse the shade on Android 12+,
- * so the tile itself carries the whole story: greyed out with "Checking
- * mail…" while the check runs, and [CheckFeedback] answers with a toast
- * when it is done ("No new mail", or how many messages arrived).
+ * on it lives there. Two rules the tile keeps no matter what the phone is
+ * doing:
+ *
+ * - **Every state answers a tap.** `STATE_UNAVAILABLE` is reserved for
+ *   "nothing to check yet" (its tap opens the app to fix that). While a
+ *   check runs, a tap answers "Still checking mail…" instead of being
+ *   dropped: on a real phone the work can sit queued a while (network,
+ *   battery optimisation, Doze), and a dead tile is indistinguishable
+ *   from a broken one.
+ * - **The answer stays on the tile.** A click does not collapse the shade
+ *   on Android 12+, so the check's answer — "No new mail", "3 new
+ *   messages", "Mail check failed" — shows as the tile's subtitle while
+ *   the shade is up, and as a toast when one can be posted.
  */
 class MailCheckTileService : TileService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -49,11 +60,24 @@ class MailCheckTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
-        // KEEP inside: a check already waiting for the network is reused,
-        // so what the tile is about to show is honest.
-        MailAlarm.enqueueCheck(applicationContext, "tile", now = true)
         scope.launch {
-            show(active = true, accounts = withContext(Dispatchers.IO) { accountCount() })
+            val accounts = withContext(Dispatchers.IO) { accountCount() }
+            if (accounts == 0) {
+                // Nothing to check yet: open the app rather than sit dead.
+                openApp()
+                return@launch
+            }
+            when (withContext(Dispatchers.IO) { MailAlarm.checkState(applicationContext) }) {
+                CheckState.Running -> answer("Still checking mail…")
+                CheckState.Queued -> answer("Still waiting to check…")
+                CheckState.Idle -> {
+                    // The last answer has been seen; the next one is owed.
+                    CheckFeedback.takeOutcome()
+                    // KEEP inside: a check already waiting is reused.
+                    MailAlarm.enqueueCheck(applicationContext, "tile", now = true)
+                    show(busy = true, accounts = accounts)
+                }
+            }
         }
     }
 
@@ -69,28 +93,36 @@ class MailCheckTileService : TileService() {
     private fun render() {
         scope.launch {
             val accounts = withContext(Dispatchers.IO) { accountCount() }
-            val active = withContext(Dispatchers.IO) { MailAlarm.checkRunning(applicationContext) }
-            show(active = active, accounts = accounts)
+            val state = withContext(Dispatchers.IO) { MailAlarm.checkState(applicationContext) }
+            val outcome = CheckFeedback.takeOutcome()
+            show(busy = state != CheckState.Idle, accounts = accounts, outcome = outcome)
         }
     }
 
-    private fun show(active: Boolean, accounts: Int) {
+    private fun answer(line: String) = CheckFeedback.toast(this, line)
+
+    private fun show(busy: Boolean, accounts: Int, outcome: String? = null) {
         val tile = qsTile ?: return
         val canSubtitle = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
         val label = getString(R.string.tile_check_mail)
         when {
             accounts == 0 -> {
-                // Nothing to check yet, so the tile says what to do about it.
                 tile.state = Tile.STATE_UNAVAILABLE
                 tile.label = label
                 if (canSubtitle) tile.subtitle = "Add an account in the app"
             }
 
-            active -> {
-                // Busy: greyed out, so a second tap cannot stack a check.
-                tile.state = Tile.STATE_UNAVAILABLE
+            busy -> {
+                // Greyed would block the tap; a live tile can always answer.
+                tile.state = Tile.STATE_INACTIVE
                 tile.label = label
                 if (canSubtitle) tile.subtitle = "Checking mail…"
+            }
+
+            outcome != null -> {
+                tile.state = Tile.STATE_INACTIVE
+                tile.label = label
+                if (canSubtitle) tile.subtitle = outcome
             }
 
             else -> {
@@ -102,6 +134,22 @@ class MailCheckTileService : TileService() {
         }
         runCatching { tile.updateTile() }
             .onFailure { Log.w("mailclient", "tile update failed", it) }
+    }
+
+    /** The app itself, for the tile that has nothing to check yet. */
+    private fun openApp() {
+        val intent = Intent(this, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startActivityAndCollapse(
+                    PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                startActivityAndCollapse(intent)
+            }
+        }.onFailure { startActivity(intent) }
     }
 
     /** Accounts the core knows; `-1` when the database could not be read. */
