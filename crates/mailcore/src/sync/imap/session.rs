@@ -37,7 +37,9 @@ use imap_types::{
 
 use super::{
     seq::{uids_to_sequence_set, vanished_ranges},
-    types::{CommandResult, DiscoveredFolder, SelectResult, COMMAND_TIMEOUT},
+    types::{
+        read_budget, CommandResult, DiscoveredFolder, SelectResult, COMMAND_MAX, COMMAND_TIMEOUT,
+    },
 };
 
 /// Active IMAP session using `imap-next`.
@@ -78,8 +80,11 @@ impl ImapSession {
     /// Read the initial server greeting, failing fast on `BYE` or timeout
     /// instead of spinning until TCP error.
     pub(crate) async fn read_greeting(stream: &mut Stream, client: &mut Client) -> Result<()> {
+        let started = tokio::time::Instant::now();
         loop {
-            let event = tokio::time::timeout(COMMAND_TIMEOUT, stream.next(&mut *client))
+            let budget = read_budget(started, tokio::time::Instant::now())
+                .ok_or_else(|| StoreError::Network("no server greeting in time".to_string()))?;
+            let event = tokio::time::timeout(budget, stream.next(&mut *client))
                 .await
                 .map_err(|_| {
                     StoreError::Network("timed out waiting for server greeting".to_string())
@@ -109,7 +114,8 @@ impl ImapSession {
 
     /// Execute a command and wait for its completion. `BYE` (untagged or
     /// tagged) is reported as an error immediately instead of looping on
-    /// `stream.next()` forever; every wait is bounded by [`COMMAND_TIMEOUT`].
+    /// `stream.next()` forever; every wait is bounded by [`read_budget`]:
+    /// 30 s per read and [`COMMAND_MAX`] for the whole command.
     pub(crate) async fn execute(&mut self, body: CommandBody<'static>) -> Result<CommandResult> {
         let tag = self.next_tag();
         let cmd = Command::new(tag.clone(), body)
@@ -119,8 +125,15 @@ impl ImapSession {
         let mut collected_data = Vec::new();
         let mut untagged_statuses = Vec::new();
 
+        let started = tokio::time::Instant::now();
         loop {
-            let event = tokio::time::timeout(COMMAND_TIMEOUT, self.stream.next(&mut self.client))
+            let budget = read_budget(started, tokio::time::Instant::now()).ok_or_else(|| {
+                StoreError::Network(format!(
+                    "{tag:?} took longer than {}s overall",
+                    COMMAND_MAX.as_secs()
+                ))
+            })?;
+            let event = tokio::time::timeout(budget, self.stream.next(&mut self.client))
                 .await
                 .map_err(|_| {
                     StoreError::Network(format!("timed out waiting for server reply to {tag:?}"))

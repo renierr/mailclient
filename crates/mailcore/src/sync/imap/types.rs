@@ -21,6 +21,24 @@ pub(crate) const FETCH_CHUNK: usize = 100;
 /// half-open socket blocks the single `mailclient-net` worker thread forever:
 /// `stream.next()` would await a server reply that never arrives.
 pub(crate) const COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Longest one command may take in total. [`COMMAND_TIMEOUT`] bounds each
+/// read, so a server that keeps sending untagged noise (`* OK Still here`)
+/// faster than that would otherwise hold a command, and the one net
+/// thread, forever (B2). Generous on purpose: a 100-mail FETCH chunk is
+/// capped at 100 MiB by imap-next, which this still allows at ~170 KiB/s.
+pub(crate) const COMMAND_MAX: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// How long the next read of a command started at `started` may wait: the
+/// per-read [`COMMAND_TIMEOUT`], cut to what is left of [`COMMAND_MAX`].
+/// `None` once the command is out of time.
+pub(crate) fn read_budget(
+    started: tokio::time::Instant,
+    now: tokio::time::Instant,
+) -> Option<std::time::Duration> {
+    let left = COMMAND_MAX.checked_sub(now.duration_since(started))?;
+    (!left.is_zero()).then(|| left.min(COMMAND_TIMEOUT))
+}
 /// Timeout for TCP connect + TLS handshake each.
 pub(crate) const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
@@ -176,5 +194,22 @@ mod tests {
         let ep = endpoint_for(&a);
         assert!(ep.implicit_tls);
         assert!(!ep.starttls);
+    }
+
+    #[test]
+    fn a_command_is_cut_off_overall_not_only_per_read() {
+        // Each read still waits COMMAND_TIMEOUT, but a server whose noise
+        // keeps every read short cannot stretch the command past COMMAND_MAX.
+        let t0 = tokio::time::Instant::now();
+        let at = |secs: u64| t0 + std::time::Duration::from_secs(secs);
+        assert_eq!(read_budget(t0, t0), Some(COMMAND_TIMEOUT));
+        assert_eq!(read_budget(t0, at(300)), Some(COMMAND_TIMEOUT));
+        let near_end = COMMAND_MAX.as_secs() - 5;
+        assert_eq!(
+            read_budget(t0, at(near_end)),
+            Some(std::time::Duration::from_secs(5))
+        );
+        assert_eq!(read_budget(t0, at(COMMAND_MAX.as_secs())), None);
+        assert_eq!(read_budget(t0, at(COMMAND_MAX.as_secs() + 60)), None);
     }
 }
