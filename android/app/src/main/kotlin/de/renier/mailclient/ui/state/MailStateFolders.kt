@@ -254,12 +254,15 @@ fun MailState.createFolder(path: String, onDone: (Boolean, String) -> Unit) {
         onDone(false, "No account")
         return
     }
-    finishWaiters.getOrPut("Folders") { mutableListOf() }.add(onDone)
+    // Keyed on this creation's job: a folder refresh finishing meanwhile is
+    // a "Folders" job too, and used to answer for it.
+    val key = MailNative.createFolderJobKey(id)
+    finishWaiters.getOrPut(key) { mutableListOf() }.add(onDone)
     io {
         runCatching { MailNative.createFolder(id, path) }
             .onFailure { e ->
                 withContext(Dispatchers.Main) {
-                    finishWaiters["Folders"]?.remove(onDone)
+                    finishWaiters[key]?.remove(onDone)
                     onDone(false, e.message ?: "Could not create the folder")
                 }
             }

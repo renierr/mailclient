@@ -139,6 +139,11 @@ object MailNative {
     // download is already queued (`spawn` dedupe) — then wait for its
     // event instead of queueing again.
     @JvmStatic external fun downloadAttachments(accountId: Long, folderId: Long, uid: Int)
+
+    // The in-flight keys jobs report under (the "key" of their finish event),
+    // so a waiter registers for exactly its own job before queuing it.
+    @JvmStatic external fun attachmentsJobKey(folderId: Long, uid: Int): String
+    @JvmStatic external fun createFolderJobKey(accountId: Long): String
     // That message's download is still queued or running (the event kind is shared).
     @JvmStatic external fun attachmentsPending(folderId: Long, uid: Int): Boolean
 

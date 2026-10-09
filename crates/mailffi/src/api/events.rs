@@ -64,9 +64,15 @@ pub fn job_events(sink: StreamSink<JobEvent>) {
 ///
 /// A dropped event is not an error: before Dart subscribes, and after a hot
 /// restart tears the old sink down, there is genuinely no one to tell.
-pub(crate) fn emit_event(event: JobEvent) {
+///
+/// `key` is the job's in-flight key ([`crate::net::spawn`]). Only the Kotlin
+/// host gets it: a waiter there matches its own job by key, since jobs of one
+/// kind (two messages' downloads) finish under the same `kind` (E8, E9).
+pub(crate) fn emit_event(event: JobEvent, key: &str) {
     #[cfg(target_os = "android")]
-    crate::android::forward_job_event(&event);
+    crate::android::forward_job_event(&event, key);
+    #[cfg(not(target_os = "android"))]
+    let _ = key;
     let guard = sink().lock().unwrap_or_else(|e| e.into_inner());
     if let Some(s) = guard.as_ref() {
         if s.add(event).is_err() {

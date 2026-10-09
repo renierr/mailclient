@@ -44,12 +44,12 @@ object ReaderFiles {
     ): ByteArray? {
         runCatching { MailNative.cachedAttachmentBytes(attachmentId) }.getOrNull()?.let { return it }
         withContext(Dispatchers.Main) { state.info("Downloading attachment…") }
-        // Parallel downloads share the `Attachments` kind, so a finish event
-        // may belong to another message's job: keep waiting while nothing
-        // arrived.
+        // Waits for this message's own download job (its key): another
+        // message's download no longer answers for it (E8).
+        val key = MailNative.attachmentsJobKey(folderId, uid)
         repeat(MAX_FINISH_WAITS) {
             val done = try {
-                state.awaitFinished("Attachments", DOWNLOAD_WAIT_MS) {
+                state.awaitFinished(key, DOWNLOAD_WAIT_MS) {
                     MailNative.downloadAttachments(accountId, folderId, uid)
                 }
             } catch (e: Exception) {
@@ -58,7 +58,7 @@ object ReaderFiles {
                     return runCatching { MailNative.cachedAttachmentBytes(attachmentId) }.getOrNull()
                 }
                 // Otherwise the bytes are on their way already — wait below.
-                state.awaitFinished("Attachments", DOWNLOAD_WAIT_MS) {}
+                state.awaitFinished(key, DOWNLOAD_WAIT_MS) {}
             }
             val bytes = runCatching { MailNative.cachedAttachmentBytes(attachmentId) }.getOrNull()
             if (bytes != null) return bytes
@@ -70,21 +70,22 @@ object ReaderFiles {
     /**
      * Queue a whole-message download and wait until it has finished (the
      * inline-images banner, a forward, a reopened draft: no single
-     * attachment id to re-read). Downloads of other messages share the
-     * `Attachments` event, so each finish asks the core whether this one is
-     * still running. True unless the wait timed out or the download could
+     * attachment id to re-read). The wait is for this message's own job (its
+     * key); after each finish the core says whether files are still pending.
+     * True unless the wait timed out or the download could
      * not start; the caller re-reads either way.
      */
     suspend fun downloadAll(state: MailState, accountId: Long, folderId: Long, uid: Int): Boolean {
         withContext(Dispatchers.Main) { state.info("Downloading…") }
         var queue: () -> Unit = { MailNative.downloadAttachments(accountId, folderId, uid) }
+        val key = MailNative.attachmentsJobKey(folderId, uid)
         repeat(MAX_FINISH_WAITS) {
             val done = try {
-                state.awaitFinished("Attachments", DOWNLOAD_WAIT_MS, queue)
+                state.awaitFinished(key, DOWNLOAD_WAIT_MS, queue)
             } catch (e: Exception) {
                 if (!e.isAlreadyRunning()) return false
-                // Ours is on its way already: wait for finishes below.
-                state.awaitFinished("Attachments", DOWNLOAD_WAIT_MS) {}
+                // Ours is on its way already: wait for its finish below.
+                state.awaitFinished(key, DOWNLOAD_WAIT_MS) {}
             }
             queue = {}
             if (done == null) return false

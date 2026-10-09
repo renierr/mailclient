@@ -198,8 +198,10 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
         internal set
     internal var searchJob: Job? = null
 
-    // One-shot callbacks for the next finished event of a job kind, keyed by
-    // kind. Main thread only (registered and drained there).
+    // One-shot callbacks for the finish of one job, keyed by the job's
+    // in-flight key (the core names it: MailNative.*JobKey). Keyed by kind,
+    // another message's download or a folder refresh satisfied the wait with
+    // its own result. Main thread only (registered and drained there).
     internal val finishWaiters = mutableMapOf<String, MutableList<(Boolean, String) -> Unit>>()
 
     // Qt's sendPending: the composer closes as soon as the send is queued,
@@ -467,7 +469,7 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
         Log.d(TAG, "job finished: kind=$kind ok=$ok busy=$busyKinds")
         // A finished server backfill lands via the re-run below.
         if (kind == "Search") serverSearchPending = false
-        finishWaiters.remove(kind)?.forEach { it(ok, e.optString("status")) }
+        finishWaiters.remove(e.optString("key"))?.forEach { it(ok, e.optString("status")) }
         val accountId = e.optLong("account_id", -1)
         val eventFolder = e.optLong("folder_id", -1)
         // Re-read whatever is showing, like the Dart side does: the folder
@@ -498,7 +500,7 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
     }
 
     /**
-     * Suspend until the next finished event of [kind], queuing via [queue]
+     * Suspend until the job with in-flight [key] finishes, queuing via [queue]
      * first. The waiter is registered on the main thread *before* [queue]
      * runs, so a fast job cannot finish unseen — the same ordering
      * Flutter's attachment download relies on. [queue] throwing skips the
@@ -506,13 +508,13 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
      * null and the caller re-reads the cache. Cancellation drops the waiter.
      */
     suspend fun awaitFinished(
-        kind: String,
+        key: String,
         timeoutMs: Long = 120_000,
         queue: () -> Unit,
     ): Pair<Boolean, String>? = withContext(Dispatchers.Main) {
         val waiter = CompletableDeferred<Pair<Boolean, String>>()
         val cb: (Boolean, String) -> Unit = { ok, status -> waiter.complete(ok to status) }
-        finishWaiters.getOrPut(kind) { mutableListOf() }.add(cb)
+        finishWaiters.getOrPut(key) { mutableListOf() }.add(cb)
         try {
             // The waiter is in place (main thread), so the queue call itself
             // can go to IO: it is a JNI call whose "queued" event re-enters
@@ -520,7 +522,7 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
             withContext(Dispatchers.IO) { queue() }
             withTimeoutOrNull(timeoutMs) { waiter.await() }
         } finally {
-            finishWaiters[kind]?.remove(cb)
+            finishWaiters[key]?.remove(cb)
         }
     }
 

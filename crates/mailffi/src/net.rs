@@ -73,19 +73,23 @@ impl From<(String, Option<JobRefresh>)> for JobDone {
 /// and the folder resyncs is a lie about what the user is waiting for.
 pub(crate) struct JobProgress {
     kind: String,
+    key: String,
 }
 
 impl JobProgress {
     pub fn report(&self, status: &str) {
-        emit_event(JobEvent {
-            kind: self.kind.clone(),
-            phase: JobPhase::Progress,
-            status: status.to_string(),
-            account_id: -1,
-            folder_id: -1,
-            ok: true,
-            outcome: String::new(),
-        });
+        emit_event(
+            JobEvent {
+                kind: self.kind.clone(),
+                phase: JobPhase::Progress,
+                status: status.to_string(),
+                account_id: -1,
+                folder_id: -1,
+                ok: true,
+                outcome: String::new(),
+            },
+            &self.key,
+        );
     }
 }
 
@@ -153,6 +157,11 @@ pub(crate) fn is_inflight(key: &str) -> bool {
 }
 
 /// The dedupe key of one message's attachment download.
+/// The in-flight key of [`crate::api::mutate::create_folder`]'s job.
+pub(crate) fn create_folder_key(account_id: i64) -> String {
+    format!("create-folder:{account_id}")
+}
+
 pub(crate) fn attachments_key(folder_id: i64, uid: u32) -> String {
     format!("attach:{folder_id}:{uid}")
 }
@@ -217,7 +226,10 @@ where
     let kind = kind.to_string();
     #[cfg(target_os = "android")]
     let queued_kind = kind.clone();
-    let progress = JobProgress { kind: kind.clone() };
+    let progress = JobProgress {
+        kind: kind.clone(),
+        key: key.clone(),
+    };
     // The closure owns the key (it clears the entry when the job ends); the
     // failure path below needs it too, so it keeps its own copy.
     let key_if_undelivered = key.clone();
@@ -237,15 +249,18 @@ where
             account_id: -1,
             folder_id: -1,
         });
-        emit_event(JobEvent {
-            kind,
-            phase: JobPhase::Finished,
-            status,
-            account_id: refresh.account_id,
-            folder_id: refresh.folder_id,
-            ok,
-            outcome: job_outcome,
-        });
+        emit_event(
+            JobEvent {
+                kind,
+                phase: JobPhase::Finished,
+                status,
+                account_id: refresh.account_id,
+                folder_id: refresh.folder_id,
+                ok,
+                outcome: job_outcome,
+            },
+            &key,
+        );
     }));
     if sent.is_err() {
         // Only reachable if the net thread died despite the guards above.

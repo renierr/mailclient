@@ -220,7 +220,7 @@ fn queue(
 pub fn create_folder(account_id: i64, path: String) -> anyhow::Result<()> {
     spawn(
         "Folders",
-        format!("create-folder:{account_id}"),
+        crate::net::create_folder_key(account_id),
         move |db, _progress| async move {
             let acc = resolve_account(db, account_id)?;
             let delim = folders::list_by_account(db, acc.id)

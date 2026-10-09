@@ -1370,7 +1370,7 @@ fn deliver_job_json(json: &str) {
 /// [`crate::api::events::emit_event`], i.e. on the net thread, after a
 /// finished job has left the in-flight table — so `busy` already says
 /// whether anything else is still queued.
-pub(crate) fn forward_job_event(event: &crate::api::events::JobEvent) {
+pub(crate) fn forward_job_event(event: &crate::api::events::JobEvent, key: &str) {
     use crate::api::events::JobPhase;
     let json = serde_json::json!({
         "kind": event.kind,
@@ -1383,10 +1383,43 @@ pub(crate) fn forward_job_event(event: &crate::api::events::JobEvent) {
         "outcome": event.outcome,
         "account_id": event.account_id,
         "folder_id": event.folder_id,
+        "key": key,
         "busy": crate::net::busy_snapshot(),
     })
     .to_string();
     deliver_job_json(&json);
+}
+
+/// `MailNative.attachmentsJobKey(folderId, uid)`: the key a message's
+/// download job reports under, so a waiter can register for exactly that job
+/// before queuing it.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_attachmentsJobKey<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+    uid: i32,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::net::attachments_key(folder_id, uid_arg(uid)?))?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.createFolderJobKey(accountId)`: the key a folder creation
+/// reports under (see `attachmentsJobKey`).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_createFolderJobKey<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::net::create_folder_key(account_id))?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
 }
 
 /// Tell Kotlin a job was queued (`phase: "queued"`), with the in-flight
