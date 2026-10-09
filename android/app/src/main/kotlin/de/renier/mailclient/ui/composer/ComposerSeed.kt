@@ -1,5 +1,7 @@
 package de.renier.mailclient.ui.composer
 
+import android.content.Context
+import android.net.Uri
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.ui.common.objects
 import org.json.JSONArray
@@ -89,6 +91,34 @@ data class ComposerSeed(
                 replyNoticeAddr = d.optString("notice_addr"),
                 filesNotice = fwd?.optString("notice").orEmpty(),
                 attachments = files.objects().map { PickedFile(it.getString("path"), it.getString("name")) },
+            )
+        }
+
+        /**
+         * New mail begun outside the app (ComposeEntryActivity's payload:
+         * the core's PrefillRequest plus shared content URIs): recipients,
+         * subject and body from the core, the files copied in like picked
+         * ones while this activity still holds their read grant.
+         */
+        fun prefill(context: Context, payload: String): ComposerSeed {
+            val p = JSONObject(payload)
+            val d = JSONObject(MailNative.composePrefill(p.optJSONObject("request")?.toString() ?: "{}"))
+            val shared = p.optJSONArray("files")?.let { a -> List(a.length()) { Uri.parse(a.getString(it)) } }.orEmpty()
+            val files = shared.mapNotNull { ComposerFiles.copyIn(context, it) }
+            val missed = shared.size - files.size
+            return ComposerSeed(
+                mode = ComposeMode.Blank,
+                to = d.optString("to"),
+                cc = d.optString("cc"),
+                bcc = d.optString("bcc"),
+                subject = d.optString("subject"),
+                bodyHtml = d.optString("body_html"),
+                attachments = files,
+                filesNotice = when (missed) {
+                    0 -> ""
+                    1 -> "1 shared file could not be attached."
+                    else -> "$missed shared files could not be attached."
+                },
             )
         }
 

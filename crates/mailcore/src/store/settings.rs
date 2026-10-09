@@ -78,6 +78,10 @@ pub const UI_SCALE: &str = "ui_scale";
 /// Post a notification when a background check finds new mail (default:
 /// on). Off still syncs; only the alert is suppressed.
 pub const NOTIFICATIONS_ENABLED: &str = "notifications_enabled";
+/// The third button of a single mail's Android notification, beside Reply
+/// and Mark read (Android shows three): `archive` (default) | `trash`.
+/// Unknown values fall back to `archive`. Qt never reads it.
+pub const NOTIFICATION_ACTION: &str = "notification_action";
 /// Which Android scheduler runs the background check: `workmanager`
 /// (default, battery-saving, deferrable in Doze) | `alarm` (exact alarm that
 /// fires in Doze, more wakeups). Unknown/empty values fall back to
@@ -133,6 +137,7 @@ pub fn defaults(key: &str) -> Option<&'static str> {
         REQUEST_DSN => Some("0"),
         UI_SCALE => Some("1"),
         NOTIFICATIONS_ENABLED => Some("1"),
+        NOTIFICATION_ACTION => Some("archive"),
         BACKGROUND_SCHEDULER => Some("workmanager"),
         QUIET_HOURS_ENABLED => Some("0"),
         QUIET_HOURS_START => Some("00:00"),
@@ -531,6 +536,24 @@ pub fn get_background_scheduler(db: &Db) -> String {
     }
 }
 
+#[must_use]
+pub fn normalize_notification_action(raw: &str) -> &'static str {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "trash" | "delete" => "trash",
+        _ => "archive",
+    }
+}
+
+/// The notification's Archive-or-Delete button, resilient to unknown values.
+pub fn get_notification_action(db: &Db) -> String {
+    match get(db, NOTIFICATION_ACTION) {
+        Ok(Some(v)) => normalize_notification_action(&v).to_string(),
+        _ => defaults(NOTIFICATION_ACTION)
+            .unwrap_or("archive")
+            .to_string(),
+    }
+}
+
 /// Plain-text signature body (`""` when unset).
 pub fn get_signature_text(db: &Db) -> String {
     match get(db, SIGNATURE_TEXT) {
@@ -775,6 +798,12 @@ mod tests {
         assert_eq!(get_background_scheduler(&db), "alarm");
         set(&db, BACKGROUND_SCHEDULER, "nonsense").unwrap();
         assert_eq!(get_background_scheduler(&db), "workmanager");
+        assert_eq!(get_notification_action(&db), "archive");
+        assert_eq!(normalize_notification_action(" Delete "), "trash");
+        set(&db, NOTIFICATION_ACTION, "trash").unwrap();
+        assert_eq!(get_notification_action(&db), "trash");
+        set(&db, NOTIFICATION_ACTION, "nonsense").unwrap();
+        assert_eq!(get_notification_action(&db), "archive");
         assert!(!get_bool(&db, SIGNATURE_ENABLED).unwrap());
         assert!(!get_bool(&db, REPLY_BELOW_QUOTE).unwrap());
         assert!(!get_bool(&db, REQUEST_MDN).unwrap());

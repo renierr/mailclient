@@ -57,6 +57,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.MailNotifier
+import de.renier.mailclient.ComposeEntryActivity
 import de.renier.mailclient.MailShortcuts
 import de.renier.mailclient.R
 import de.renier.mailclient.ui.accounts.AccountSetupScreen
@@ -305,13 +306,23 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
 
     // Notification tap: land on the folder, open the message in the reader.
     // Launcher shortcut (MailShortcuts): an account's inbox, or Compose from
-    // the active account. A cold start first waits for the account list.
+    // the active account. A mailto: link or a share (ComposeEntryActivity):
+    // the composer, prefilled. A cold start first waits for the account list.
     LaunchedEffect(openPayload) {
         val payload = openPayload ?: return@LaunchedEffect
         withTimeoutOrNull(10_000) { snapshotFlow { state.accounts }.first { it.isNotEmpty() } }
         val parts = payload.split(":")
         if (payload == MailShortcuts.COMPOSE) {
             if (stack.last() !is Route.Composer) startCompose { ComposerSeed.blank() }
+        } else if (payload.startsWith(ComposeEntryActivity.PREFILL_PREFIX)) {
+            when {
+                state.accounts.isEmpty() -> state.info("Add an account first to write mail")
+                // Replacing it would throw away what is typed there.
+                stack.last() is Route.Composer -> state.info("Send or close the open message first, then share again")
+                else -> startCompose {
+                    ComposerSeed.prefill(context, payload.removePrefix(ComposeEntryActivity.PREFILL_PREFIX))
+                }
+            }
         } else if (payload.startsWith(MailShortcuts.INBOX_PREFIX)) {
             val account = payload.removePrefix(MailShortcuts.INBOX_PREFIX).toLongOrNull()
             if (account != null && state.accounts.any { it.id == account }) {

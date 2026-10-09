@@ -46,9 +46,19 @@ object MailNative {
     // The account a ReadTarget JSON belongs to; the JSON stays opaque here.
     @JvmStatic external fun readTargetAccount(target: String): Long
 
-    // Send an account's queued flag changes; blocks for the network, throws
-    // when the server cannot be reached.
-    @JvmStatic external fun pushFlags(accountId: Long)
+    // A notification's Archive or Delete (its plan's quick_action): queued
+    // with no undo window, cache only. BackgroundReport JSON for plan();
+    // throws when the delete would destroy the mail.
+    @JvmStatic external fun notifyAct(target: String, action: String): String
+
+    // A notification's Reply: the core builds and queues the reply, then it
+    // is delivered on the network thread. Blocks until sent (worker thread
+    // only); returns the status, throws when it was not sent.
+    @JvmStatic external fun notifyReply(target: String, text: String): String
+
+    // Send an account's queued flag changes and due moves; blocks for the
+    // network, throws when the server cannot be reached.
+    @JvmStatic external fun pushChanges(accountId: Long)
 
     // The plan was carried out: commit its marks and outcome.
     @JvmStatic external fun commit(plan: String)
@@ -245,6 +255,11 @@ object MailNative {
     @JvmStatic external fun resendMissing(folderId: Long, uid: Int): Int
     @JvmStatic external fun resendFiles(folderId: Long, uid: Int, dir: String): String
     @JvmStatic external fun blankDraft(): String
+
+    // New mail begun outside the app (a mailto: link, a share): the
+    // PrefillRequest JSON {mailto?, to?, cc?, bcc?, subject?, text?} in,
+    // {to, cc, bcc, subject, body_html} out. Local read.
+    @JvmStatic external fun composePrefill(request: String): String
 
     // Which receipt toggles the composer shows: `{read, delivery}` from the
     // settings (`compose::Receipts::offered`).

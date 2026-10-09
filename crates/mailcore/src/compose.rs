@@ -13,13 +13,14 @@ pub mod editor;
 mod form;
 mod forward;
 mod from;
+mod prefill;
 mod reply;
 mod segments;
 mod send;
 
 pub use answer::{
-    answer_draft, answer_draft_json, blank_draft, blank_draft_json, AnswerDraft, AnswerMode,
-    AnswerOptions, AnswerSource,
+    answer_draft, answer_draft_for, answer_draft_json, blank_draft, blank_draft_json, AnswerDraft,
+    AnswerMode, AnswerOptions, AnswerSource,
 };
 pub use drafts::{
     delete_draft, draft_editor_html, draft_html, drafts_folder, open_draft, save_draft,
@@ -31,6 +32,9 @@ pub use forward::{
     stage_resend_files, ForwardFiles,
 };
 pub use from::{effective_from, sender_parts, SenderParts};
+pub use prefill::{
+    merge, parse_mailto, prefill_draft, prefill_draft_json, Prefill, PrefillDraft, PrefillRequest,
+};
 pub use reply::{reply_address, ReplyAddress};
 pub use segments::{recipient_segment, replace_recipient_segment};
 pub use send::{abandon_send, deliver, prepare_send, PreparedSend, SendOutcome};

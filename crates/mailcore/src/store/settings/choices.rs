@@ -65,6 +65,7 @@ const TABLE: &[(&str, Kind, &[&str])] = &[
     (REQUEST_DSN, Kind::Flag, &[]),
     (UI_SCALE, Kind::Real, &["1", "1.1", "1.25", "1.5"]),
     (NOTIFICATIONS_ENABLED, Kind::Flag, &[]),
+    (NOTIFICATION_ACTION, Kind::Text, &["archive", "trash"]),
     (
         BACKGROUND_SCHEDULER,
         Kind::Text,
@@ -131,6 +132,7 @@ mod tests {
                 LINK_CLICK_ACTION => normalize_link_click(raw).into(),
                 START_VIEW => normalize_start_view(raw).into(),
                 BACKGROUND_SCHEDULER => normalize_background_scheduler(raw).into(),
+                NOTIFICATION_ACTION => normalize_notification_action(raw).into(),
                 MARK_READ_DELAY_SECS => normalize_delay_secs(raw.parse().unwrap()).to_string(),
                 SYNC_INTERVAL_MINUTES => normalize_sync_interval(raw.parse().unwrap()).to_string(),
                 UI_SCALE => {

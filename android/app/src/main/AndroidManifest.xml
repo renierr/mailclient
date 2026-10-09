@@ -58,6 +58,36 @@
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />
         </activity>
+        <!-- New mail begun in another app: a mailto: link (VIEW / SENDTO,
+             which also lists the app as a mail app) or a share (SEND,
+             SEND_MULTIPLE, any type). Hands over to MainActivity in the
+             app's own task (ComposeEntryActivity.kt). -->
+        <activity
+            android:name=".ComposeEntryActivity"
+            android:exported="true"
+            android:label="Compose mail"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.SENDTO"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="mailto"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="mailto"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <action android:name="android.intent.action.SEND_MULTIPLE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="*/*"/>
+            </intent-filter>
+        </activity>
         <!-- The static shortcut's target: its own task, so the system's
              CLEAR_TASK on shortcut launch leaves the shell alone. Exported
              like MainActivity, which takes the same intent. -->
@@ -120,7 +150,8 @@
                 <action android:name="android.intent.action.TIME_SET"/>
             </intent-filter>
         </receiver>
-        <!-- The new-mail notifications' "Mark read" buttons (MailActions.kt). -->
+        <!-- The new-mail notifications' buttons: Mark read, Archive or
+             Delete, Reply (MailActions.kt). -->
         <receiver
             android:name=".MailActionReceiver"
             android:exported="false" />

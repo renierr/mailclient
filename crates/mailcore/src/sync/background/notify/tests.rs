@@ -1,5 +1,6 @@
 use super::*;
-use crate::sync::background::{collect_new_mail, commit_seen};
+use crate::store::messages;
+use crate::sync::background::{collect_new_mail, collect_pending, commit_seen};
 use crate::sync::headless::tests::setup_db;
 
 fn mail(uid: u32, from: &str) -> NewMail {
@@ -356,4 +357,107 @@ fn a_read_target_names_its_account() {
     .unwrap();
     assert_eq!(ReadTarget::account_of(&json).unwrap(), 7);
     assert!(ReadTarget::account_of("not json").is_err());
+}
+
+#[test]
+fn single_mails_get_reply_and_the_chosen_quick_action() {
+    let db = Db::open_in_memory().unwrap();
+    let acc = crate::store::accounts::create_for_test(&db, "a@example.org");
+    let both = vec![of_account(acc, 1), of_account(acc, 2)];
+    let p = plan_for(
+        &db,
+        &arrived(both.clone(), both.clone()),
+        true,
+        false,
+        &Shown::new(),
+    );
+    let (summary, children) = p.post.split_first().unwrap();
+    assert!(summary.summary && !summary.reply && summary.quick_action.is_empty());
+    assert!(children
+        .iter()
+        .all(|n| n.reply && n.quick_action == "archive"));
+
+    settings::set(&db, settings::NOTIFICATION_ACTION, "trash").unwrap();
+    let p = plan_for(
+        &db,
+        &arrived(both.clone(), both),
+        true,
+        false,
+        &Shown::new(),
+    );
+    assert!(p.post[1..].iter().all(|n| n.quick_action == "trash"));
+}
+
+/// Two unread mails past the seen mark, as a background check leaves them.
+fn two_pending() -> (Db, i64, i64, i64) {
+    let (db, acc, inbox, trash) = setup_db();
+    commit_seen(&db, &collect_new_mail(&db).1);
+    for uid in [3, 4] {
+        messages::upsert(&db, &messages::sample_new(acc, inbox, uid)).unwrap();
+    }
+    commit_seen(&db, &collect_new_mail(&db).1);
+    assert_eq!(collect_pending(&db).len(), 2);
+    (db, acc, inbox, trash)
+}
+
+fn one(account_id: i64, folder_id: i64, uid: u32) -> ReadTarget {
+    ReadTarget {
+        account_id,
+        mails: vec![ReadMail { folder_id, uid }],
+    }
+}
+
+#[test]
+fn archive_and_delete_hide_the_mail_and_are_due_at_once() {
+    let (db, acc, inbox, trash) = two_pending();
+    let report = act(&db, &one(acc, inbox, 3), "archive").unwrap();
+    assert_eq!(
+        report.pending.iter().map(|m| m.uid).collect::<Vec<_>>(),
+        [4]
+    );
+    let report = act(&db, &one(acc, inbox, 4), "trash").unwrap();
+    assert!(report.pending.is_empty());
+    let due = crate::store::pending_moves::list_due(&db, acc, &crate::store::now()).unwrap();
+    assert_eq!(due.len(), 2, "no undo window: pushed by the next push");
+
+    // Deleting from Trash destroys: the app has to confirm that.
+    messages::upsert(&db, &messages::sample_new(acc, trash, 9)).unwrap();
+    assert!(act(&db, &one(acc, trash, 9), "trash").is_err());
+}
+
+#[test]
+fn quick_reply_queues_the_reply_and_marks_the_mail_read() {
+    let (db, acc, inbox, _) = two_pending();
+    let sent = quick_reply(&db, &one(acc, inbox, 3), "Thanks <3\nSee you").unwrap();
+    assert_eq!(sent.account_id, acc);
+    let row = crate::store::queue::get(&db, sent.queue_id).unwrap();
+    let mime = String::from_utf8(row.raw_mime.unwrap()).unwrap();
+    assert!(mime.contains("Subject: Re: Hello"), "{mime}");
+    assert!(mime.contains("alice@example.com"), "replies to the sender");
+    assert!(mime.contains("Thanks &lt;3<br>See you") || mime.contains("Thanks <3"));
+    assert_eq!(
+        collect_pending(&db)
+            .iter()
+            .map(|m| m.uid)
+            .collect::<Vec<_>>(),
+        [4],
+        "the answered mail is read"
+    );
+
+    assert!(quick_reply(&db, &one(acc, inbox, 4), "  ").is_err());
+    let both = ReadTarget {
+        account_id: acc,
+        mails: vec![
+            ReadMail {
+                folder_id: inbox,
+                uid: 3,
+            },
+            ReadMail {
+                folder_id: inbox,
+                uid: 4,
+            },
+        ],
+    };
+    assert!(quick_reply(&db, &both, "hi").is_err());
+    assert!(quick_reply(&db, &one(acc, inbox, 99), "hi").is_err());
 }

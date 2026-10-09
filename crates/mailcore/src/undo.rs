@@ -92,9 +92,33 @@ pub fn queue_move(
     uids: &[u32],
     target: MoveTarget,
 ) -> Result<Queued, String> {
+    queue_with_grace(db, account_id, folder_id, uids, target, UNDO_GRACE_SECS)
+}
+
+/// [`queue_move`] without the undo window: due at once, for a caller that
+/// offers no Undo (a notification's Archive or Delete). Hidden now like any
+/// queued move; the next [`push_local_changes`] or sync carries it out.
+pub fn queue_move_now(
+    db: &Db,
+    account_id: i64,
+    folder_id: i64,
+    uids: &[u32],
+    target: MoveTarget,
+) -> Result<Queued, String> {
+    queue_with_grace(db, account_id, folder_id, uids, target, 0)
+}
+
+fn queue_with_grace(
+    db: &Db,
+    account_id: i64,
+    folder_id: i64,
+    uids: &[u32],
+    target: MoveTarget,
+    grace_secs: i64,
+) -> Result<Queued, String> {
     let batch = uuid::Uuid::new_v4().to_string();
     Ok(
-        match queue_into(db, account_id, folder_id, uids, &target, &batch)? {
+        match queue_into(db, account_id, folder_id, uids, &target, &batch, grace_secs)? {
             Share::Pending {
                 count,
                 action,
@@ -130,7 +154,7 @@ pub(crate) fn label(action: PendingAction, count: u64, place: &str) -> String {
 }
 
 /// [`queue_move`] into an existing `batch`, so one Undo can take back an
-/// action that spans folders (see [`crate::bulk`]).
+/// action that spans folders (see [`crate::bulk`]). Due after `grace_secs`.
 pub(crate) fn queue_into(
     db: &Db,
     account_id: i64,
@@ -138,6 +162,7 @@ pub(crate) fn queue_into(
     uids: &[u32],
     target: &MoveTarget,
     batch: &str,
+    grace_secs: i64,
 ) -> Result<Share, String> {
     if uids.is_empty() {
         return Err("no messages selected".to_string());
@@ -178,7 +203,7 @@ pub(crate) fn queue_into(
     if ids.is_empty() {
         return Err("message is no longer available".to_string());
     }
-    let due = (chrono::Utc::now() + chrono::Duration::seconds(UNDO_GRACE_SECS))
+    let due = (chrono::Utc::now() + chrono::Duration::seconds(grace_secs))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let count =
         pending_moves::queue(db, &ids, action, dest_id, batch, &due).map_err(|e| e.to_string())?;

@@ -86,7 +86,15 @@ pub fn queue_move(
     let mut queued: Option<(crate::store::pending_moves::PendingAction, String)> = None;
     let mut count = 0;
     for (folder_id, uids) in groups {
-        match undo::queue_into(db, account_id, *folder_id, uids, &target, &batch)? {
+        match undo::queue_into(
+            db,
+            account_id,
+            *folder_id,
+            uids,
+            &target,
+            &batch,
+            undo::UNDO_GRACE_SECS,
+        )? {
             Share::Pending {
                 count: n,
                 action,

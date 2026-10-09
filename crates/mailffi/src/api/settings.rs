@@ -49,6 +49,7 @@ pub fn settings_json() -> anyhow::Result<String> {
     for key in [s::REQUEST_MDN, s::REQUEST_DSN] {
         out[key] = flag(key).into();
     }
+    out[s::NOTIFICATION_ACTION] = s::get_notification_action(db).into();
     Ok(out.to_string())
 }
 

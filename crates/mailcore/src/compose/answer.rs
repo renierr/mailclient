@@ -102,6 +102,42 @@ pub struct AnswerDraft {
     pub body_html: String,
 }
 
+impl AnswerDraft {
+    /// The whole body with `text` (plain, as typed) in place of the empty
+    /// line, signature and quote where [`Self::body_html`] has them: what a
+    /// send without the editor (a notification's Reply) or a prefilled new
+    /// mail (`mailto:`, a share) puts in.
+    #[must_use]
+    pub fn with_text(&self, text: &str) -> String {
+        let text = text_html(text);
+        if self.quote_first {
+            format!("{}{text}{}", self.quote_html, self.signature_html)
+        } else {
+            format!("{text}{}{}", self.signature_html, self.quote_html)
+        }
+    }
+}
+
+/// Plain text as editor HTML: a paragraph per blank-line-separated block,
+/// `<br>` within; the empty line itself when there is no text.
+pub(crate) fn text_html(text: &str) -> String {
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    let blocks: Vec<String> = text
+        .split("\n\n")
+        .map(|b| b.trim_matches('\n'))
+        .filter(|b| !b.trim().is_empty())
+        .map(|b| {
+            let lines: Vec<String> = b.split('\n').map(escape_text).collect();
+            format!("<p>{}</p>", lines.join("<br>"))
+        })
+        .collect();
+    if blocks.is_empty() {
+        TEXT_SLOT.to_string()
+    } else {
+        blocks.concat()
+    }
+}
+
 /// The empty line the user types into. `<br>` gives it a line's height: an
 /// empty `<p></p>` collapses in a `contentEditable`, and the caret can only
 /// land in the paragraph next to it.
@@ -270,8 +306,20 @@ pub fn answer_draft(src: &AnswerSource, mode: AnswerMode, opts: &AnswerOptions) 
 pub fn answer_draft_json(db: &Db, folder_id: i64, uid: u32, mode: &str) -> Result<String> {
     let mode = AnswerMode::parse(mode)
         .ok_or_else(|| StoreError::InvalidInput(format!("unknown answer mode {mode:?}")))?;
+    Ok(serde_json::to_string(&answer_draft_for(
+        db, folder_id, uid, mode,
+    )?)?)
+}
+
+/// The cached message at `(folder_id, uid)` as an answer draft.
+pub fn answer_draft_for(
+    db: &Db,
+    folder_id: i64,
+    uid: u32,
+    mode: AnswerMode,
+) -> Result<AnswerDraft> {
     if mode == AnswerMode::Resend {
-        return Ok(serde_json::to_string(&resend_draft(db, folder_id, uid)?)?);
+        return resend_draft(db, folder_id, uid);
     }
     let m = messages::get_by_uid(db, folder_id, uid)?;
     let allow_remote = settings::get_bool(db, settings::LOAD_REMOTE_IMAGES).unwrap_or(false);
@@ -304,7 +352,7 @@ pub fn answer_draft_json(db: &Db, folder_id: i64, uid: u32, mode: &str) -> Resul
             .unwrap_or_default(),
         ..stored_options(db)
     };
-    Ok(serde_json::to_string(&answer_draft(&src, mode, &opts))?)
+    Ok(answer_draft(&src, mode, &opts))
 }
 
 /// The sent original of the bounce at `(folder_id, uid)` as a new draft to
@@ -342,7 +390,7 @@ pub fn blank_draft_json(db: &Db) -> Result<String> {
     Ok(serde_json::to_string(&blank_draft(&stored_options(db)))?)
 }
 
-fn stored_options(db: &Db) -> AnswerOptions {
+pub(crate) fn stored_options(db: &Db) -> AnswerOptions {
     AnswerOptions {
         own_address: String::new(),
         signature: settings::get_bool(db, settings::SIGNATURE_ENABLED)

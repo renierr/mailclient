@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.RemoteInput
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -33,6 +34,7 @@ object MailNotifier {
     // and the Settings test sample.
     private val TAG_PREFIXES = listOf("mail:", "account:")
     private const val TEST_TAG = "test"
+    private const val REPLY_FAILED_PREFIX = "reply-failed:"
 
     private const val TAG = "mailclient"
 
@@ -91,6 +93,26 @@ object MailNotifier {
             .put("payload", "")
             .put("mark_read", "")
         manager.notify(TEST_TAG, NOTIFICATION_ID, build(context, sample))
+    }
+
+    // A notification Reply that did not go out: says why and keeps the
+    // typed text, since the outbox only keeps the failure. Tapping it opens
+    // the mail it answered. Outside the plan's tags, so a check leaves it.
+    fun showReplyFailed(context: Context, payload: String, text: String, error: String) {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        ensureChannel(manager)
+        val tag = REPLY_FAILED_PREFIX + payload
+        val notification = builder(context)
+            .setSmallIcon(R.drawable.ic_launcher_monochrome)
+            .setContentTitle("Reply not sent")
+            .setContentText(error)
+            .setStyle(Notification.BigTextStyle().bigText("$error\n\nYour reply:\n$text"))
+            .setAutoCancel(true)
+            .setCategory(Notification.CATEGORY_ERROR)
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .setContentIntent(openIntent(context, tag, payload))
+            .build()
+        manager.notify(tag, NOTIFICATION_ID, notification)
     }
 
     // Remove every mail notification (the app was opened).
@@ -158,12 +180,30 @@ object MailNotifier {
         } else if (!n.isNull("big_text")) {
             builder.setStyle(Notification.BigTextStyle().setBigContentTitle(title).bigText(n.getString("big_text")))
         }
+        // Android shows three buttons: a single mail gets Mark read, the
+        // Archive-or-Delete the user picked, and Reply; a summary only
+        // Mark all read. The core's plan says which.
         val target = n.optString("mark_read")
         if (target.isNotEmpty()) {
             val label = if (summary && n.optInt("count") > 1) "Mark all read" else "Mark read"
             val pending = MailActionReceiver.markReadIntent(context, tag, target)
             @Suppress("DEPRECATION")
             builder.addAction(Notification.Action.Builder(R.drawable.ic_launcher_monochrome, label, pending).build())
+            val quick = n.optString("quick_action")
+            if (quick.isNotEmpty()) {
+                val (icon, text) = if (quick == "trash") R.drawable.ic_delete to "Delete" else R.drawable.ic_archive to "Archive"
+                val act = MailActionReceiver.actIntent(context, tag, target, quick)
+                @Suppress("DEPRECATION")
+                builder.addAction(Notification.Action.Builder(icon, text, act).build())
+            }
+            if (n.optBoolean("reply")) {
+                val input = RemoteInput.Builder(MailActionReceiver.KEY_REPLY).setLabel("Reply").build()
+                val reply = MailActionReceiver.replyIntent(context, tag, target)
+                @Suppress("DEPRECATION")
+                builder.addAction(
+                    Notification.Action.Builder(R.drawable.ic_reply, "Reply", reply).addRemoteInput(input).build(),
+                )
+            }
         }
         if (!n.optBoolean("alert")) builder.muted()
         return builder.build()

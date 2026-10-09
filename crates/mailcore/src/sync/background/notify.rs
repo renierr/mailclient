@@ -13,10 +13,13 @@ use std::collections::{HashMap, HashSet};
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 
-use super::{collect_pending, BackgroundReport, NewMail, SeenMark};
+use super::{BackgroundReport, NewMail, SeenMark};
 use crate::db::Db;
 use crate::error::Result;
-use crate::store::{account_settings, messages, settings};
+use crate::store::{account_settings, settings};
+
+mod buttons;
+pub use buttons::{act, mark_read, quick_reply};
 
 /// Payload prefix for "open this message" taps: `mail:<account>:<folder>:<uid>`.
 /// A mail's notification carries the same string as its tag.
@@ -105,8 +108,15 @@ pub struct MailNotification {
     pub alert: bool,
     /// Tap target, see [`open_payload`].
     pub payload: String,
-    /// What the "Mark read" button marks, as [`ReadTarget`] JSON.
+    /// What the "Mark read" button marks, as [`ReadTarget`] JSON. The
+    /// other buttons act on the same target.
     pub mark_read: String,
+    /// Offer a Reply button with an inline text field: a single mail only.
+    pub reply: bool,
+    /// The third button of a single mail, from the user's setting
+    /// (`settings::NOTIFICATION_ACTION`): `"archive"` or `"trash"`, handed
+    /// back to [`act`]. Empty for a summary, which only marks all read.
+    pub quick_action: String,
 }
 
 impl MailNotification {
@@ -308,30 +318,18 @@ pub fn plan_for(
     let mut heard = report.clone();
     heard.new.retain(&mut audible);
     heard.pending.retain(&mut audible);
-    if heard.new.is_empty() && !report.new.is_empty() {
+    let mut planned = if heard.new.is_empty() && !report.new.is_empty() {
         // Still new mail, so it plans as alerts off rather than nothing.
         heard.new.clone_from(&report.new);
-        return plan(&heard, false, permitted, foreground, shown);
+        plan(&heard, false, permitted, foreground, shown)
+    } else {
+        plan(&heard, true, permitted, foreground, shown)
+    };
+    let quick = settings::get_notification_action(db);
+    for n in planned.post.iter_mut().filter(|n| !n.summary) {
+        n.quick_action.clone_from(&quick);
     }
-    plan(&heard, true, permitted, foreground, shown)
-}
-
-/// A "Mark read" button was pressed: mark `target` read in the cache (queued
-/// for the server like any toggle, `flags_dirty`) and report what is still
-/// pending, for re-planning the notifications. No network.
-pub fn mark_read(db: &Db, target: &ReadTarget) -> Result<BackgroundReport> {
-    let mut by_folder: HashMap<i64, Vec<u32>> = HashMap::new();
-    for m in &target.mails {
-        by_folder.entry(m.folder_id).or_default().push(m.uid);
-    }
-    for (folder_id, uids) in by_folder {
-        messages::set_read_many_by_uids(db, folder_id, &uids, true)?;
-    }
-    Ok(BackgroundReport {
-        pending: collect_pending(db),
-        total_unread: super::cached_total_unread(db),
-        ..Default::default()
-    })
+    planned
 }
 
 /// `items` grouped by account, in order of first appearance; each group
@@ -372,6 +370,8 @@ pub fn child_of(m: &NewMail) -> MailNotification {
         alert: false,
         payload: open_payload(m),
         mark_read: read_target(m.account_id, &[m]),
+        reply: true,
+        quick_action: String::new(),
     }
 }
 
@@ -407,6 +407,8 @@ pub fn summary_of(group: &[&NewMail], alert: bool) -> MailNotification {
         alert,
         payload: open_payload(newest),
         mark_read: read_target(newest.account_id, group),
+        reply: false,
+        quick_action: String::new(),
     }
 }
 

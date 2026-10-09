@@ -116,6 +116,14 @@ fun GlobalSyncSettings(draft: SettingsDraft, choices: JSONObject, onTestNotifica
         )
     }
     SettingSwitch("Show notifications for new mail", draft.flag("notifications_enabled"), { draft.setFlag("notifications_enabled", it) })
+    SettingChoice(
+        title = "Notification button",
+        value = draft["notification_action"],
+        options = draft.options("notification_action"),
+        label = { SettingLabels.of("notification_action", it) },
+        onChange = { draft["notification_action"] = it },
+        help = "A new mail's notification offers Mark read, Reply and this. Neither can be undone from the notification.",
+    )
     OutlinedButton(onClick = onTestNotification, modifier = Modifier.padding(top = 4.dp)) {
         Icon(painterResource(R.drawable.ic_info), null, Modifier.size(18.dp))
         Text("Send test notification", modifier = Modifier.padding(start = 8.dp))

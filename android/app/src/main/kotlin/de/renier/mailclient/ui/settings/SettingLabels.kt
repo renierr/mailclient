@@ -35,6 +35,7 @@ object SettingLabels {
             "60" -> "Every hour"
             else -> "Every $value minutes"
         }
+        "notification_action" -> if (value == "trash") "Delete" else "Archive"
         "background_scheduler" -> when (value) {
             "alarm" -> "On-time alarm"
             "push" -> "Push (IMAP IDLE)"

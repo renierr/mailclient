@@ -153,7 +153,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_plan<'caller>(
 /// `MailNative.markRead(target)`: a notification's "Mark read" button, with
 /// the `ReadTarget` JSON the plan gave it. Marks the cache only and returns
 /// a `BackgroundReport` of what is still pending, to plan again with;
-/// `pushFlags` carries the change to the server.
+/// `pushChanges` carries the change to the server.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_de_renier_mailclient_MailNative_markRead<'caller>(
     mut unowned: EnvUnowned<'caller>,
@@ -184,12 +184,116 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_readTargetAccount<'c
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-/// `MailNative.pushFlags(accountId)`: send the account's queued flag changes
-/// over a fresh connection. Blocks for the network, so only a worker thread
-/// calls it; throws when the server cannot be reached (the change stays
-/// queued).
+/// `MailNative.notifyAct(target, action)`: a notification's Archive or
+/// Delete button (`action` is its plan's `quick_action`). Queues the move
+/// with no undo window and returns a `BackgroundReport` of what is still
+/// pending, to plan again with; `pushChanges` carries it to the server.
+/// Throws when the delete would destroy the mail.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_de_renier_mailclient_MailNative_pushFlags<'caller>(
+pub extern "system" fn Java_de_renier_mailclient_MailNative_notifyAct<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    target: JString<'caller>,
+    action: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let target: notify::ReadTarget = serde_json::from_str(&string(env, &target)?)?;
+            let report = notify::act(crate::db::shared_db()?, &target, &string(env, &action)?)
+                .map_err(BridgeError)?;
+            Ok(env.new_string(serde_json::to_string(&report)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.notifyReply(target, text)`: a notification's Reply. The core
+/// builds and queues the reply (`notify::quick_reply`); delivery runs on
+/// `mailclient-net` like a composer send — the pooled sessions it files
+/// the Sent copy over are only driven from there — and this blocks until it
+/// is done, so only a worker thread calls it. Returns the job's status;
+/// throws when the reply was not sent (the outbox shows it as failed).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_notifyReply<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    target: JString<'caller>,
+    text: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let target: notify::ReadTarget = serde_json::from_str(&string(env, &target)?)?;
+            let db = crate::db::shared_db()?;
+            let prepared =
+                notify::quick_reply(db, &target, &string(env, &text)?).map_err(BridgeError)?;
+            let queue_id = prepared.queue_id;
+            let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<String, String>>();
+            let started = crate::net::spawn(
+                "Send",
+                format!("send:{queue_id}"),
+                move |db, progress| async move {
+                    let delivered = mailcore::compose::deliver(db, prepared, -1, || {
+                        progress.report("");
+                    })
+                    .await;
+                    let done = delivered.map(|outcome| crate::net::JobDone {
+                        status: if outcome.notes.is_empty() {
+                            "Reply sent".to_string()
+                        } else {
+                            outcome.notes.join("; ")
+                        },
+                        refresh: Some(crate::net::JobRefresh::account(outcome.account_id)),
+                        outcome: outcome.outcome().to_string(),
+                    });
+                    let _ = tx.send(
+                        done.as_ref()
+                            .map(|d| d.status.clone())
+                            .map_err(Clone::clone),
+                    );
+                    done
+                },
+            );
+            if let Err(e) = started {
+                mailcore::compose::abandon_send(db, queue_id);
+                return Err(e.into());
+            }
+            let status = match rx.recv_timeout(std::time::Duration::from_secs(300)) {
+                Ok(result) => result.map_err(BridgeError)?,
+                // Still going: the job finishes on its own and the outbox
+                // shows how.
+                Err(_) => "Still sending".to_string(),
+            };
+            Ok(env.new_string(status)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.composePrefill(request)`: the composer's starting point for
+/// mail begun outside the app — a `mailto:` link or a share — from the
+/// `PrefillRequest` JSON (`{mailto?, to?, cc?, bcc?, subject?, text?}`), as
+/// `{to, cc, bcc, subject, body_html}`. Local read.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_composePrefill<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    request: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let draft = mailcore::compose::prefill_draft_json(
+                crate::db::shared_db()?,
+                &string(env, &request)?,
+            )?;
+            Ok(env.new_string(draft)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.pushChanges(accountId)`: send the account's queued flag
+/// changes and due moves over a fresh connection. Blocks for the network, so
+/// only a worker thread calls it; throws when the server cannot be reached
+/// (the changes stay queued).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_pushChanges<'caller>(
     mut unowned: EnvUnowned<'caller>,
     _class: JClass<'caller>,
     account_id: i64,
@@ -197,7 +301,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_pushFlags<'caller>(
     unowned
         .with_env(|_env| -> Result<()> {
             let db = crate::db::shared_db()?;
-            headless::push_flags_blocking(db, account_id)?;
+            headless::push_changes_blocking(db, account_id)?;
             Ok(())
         })
         .resolve::<ThrowRuntimeExAndDefault>()
@@ -372,7 +476,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_pushStop<'caller>(
 }
 
 /// Drive `f` on a throwaway current-thread Tokio runtime, like
-/// `headless::push_flags_blocking`: JNI worker threads have no runtime.
+/// `headless::push_changes_blocking`: JNI worker threads have no runtime.
 fn blocking<T>(f: impl std::future::Future<Output = anyhow::Result<T>>) -> Result<T> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

@@ -23,7 +23,7 @@ use crate::auth;
 use crate::db::Db;
 use crate::error::Result;
 use crate::models::{Account, Folder, FolderRole};
-use crate::store::{accounts, folders, messages, settings};
+use crate::store::{accounts, folders, messages, pending_moves, settings};
 use crate::sync::imap::{full_discovery_due, ImapSync, FULL_SYNC_WINDOW, QUICK_SYNC_WINDOW};
 use crate::sync::sender::SmtpSender;
 use crate::sync::traits::SyncProvider;
@@ -369,30 +369,35 @@ pub async fn sync_accounts(db: &Db, list: &[Account], scope: SyncScope) -> SyncA
     report
 }
 
-/// Push one account's queued flag changes over a fresh connection — for
-/// callers without the app's pooled sessions, such as a notification's
-/// "Mark read" while the app is closed. Returns how many went out; whatever
-/// fails stays queued (`flags_dirty`) for the next sync.
-pub async fn push_flags(db: &Db, account_id: i64) -> Result<u64> {
-    if messages::list_flags_dirty(db, account_id)?.is_empty() {
+/// Push one account's queued local changes — read/star flags, then moves
+/// that are due — over a fresh connection, for callers without the app's
+/// pooled sessions, such as a notification's "Mark read" or "Archive" while
+/// the app is closed. Returns how many went out; whatever fails stays
+/// queued (`flags_dirty`, `pending_moves`) for the next sync.
+pub async fn push_changes(db: &Db, account_id: i64) -> Result<u64> {
+    let flags_dirty = !messages::list_flags_dirty(db, account_id)?.is_empty();
+    let moves_due = !pending_moves::list_due(db, account_id, &crate::store::now())?.is_empty();
+    if !flags_dirty && !moves_due {
         return Ok(0);
     }
     let acc = accounts::get(db, account_id)?;
     let secrets = auth::load_account_secrets_retry(&acc.auth_vault_key).await?;
     let mut imap = ImapSync::new(&acc);
     imap.connect(&secrets.imap_password).await?;
-    let pushed = imap.push_dirty_flags(db, acc.id).await;
+    // Flags first: a toggle on a message about to move must reach the
+    // server while its UID is still valid in the source folder.
+    let pushed = imap.push_dirty_flags(db, acc.id).await + imap.push_due_moves(db, acc.id).await;
     imap.logout().await;
     Ok(pushed)
 }
 
-/// Synchronous wrapper around [`push_flags`] for FFI callers.
-pub fn push_flags_blocking(db: &Db, account_id: i64) -> Result<u64> {
+/// Synchronous wrapper around [`push_changes`] for FFI callers.
+pub fn push_changes_blocking(db: &Db, account_id: i64) -> Result<u64> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .expect("tokio runtime for flag push");
-    rt.block_on(push_flags(db, account_id))
+        .expect("tokio runtime for change push");
+    rt.block_on(push_changes(db, account_id))
 }
 
 /// Synchronous wrapper around [`sync_all_accounts`] for CLI callers.
