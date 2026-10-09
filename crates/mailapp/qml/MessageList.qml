@@ -453,8 +453,11 @@ Rectangle {
             // newest hit, newest first inside each.
             var hits = root.keptRows(root.searchRows || [], "");
             for (var i = 0; i < hits.length; i++) {
-                hits[i].key = hits[i].folder_id + ":" + hits[i].uid;
-                rows.push(root.displayRow(hits[i]));
+                // Keyed on the row built here: the hits are Main's
+                // `searchRows` objects, which this list does not own.
+                var row = root.displayRow(hits[i]);
+                row.key = hits[i].folder_id + ":" + hits[i].uid;
+                rows.push(row);
             }
             ModelSync.sync(filtered, rows, "key");
             return;

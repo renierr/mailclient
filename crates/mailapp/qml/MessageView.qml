@@ -115,7 +115,15 @@ Rectangle {
     onFitLayoutChanged: root.reloadHtml()
     onReaderFontChanged: root.reloadHtml()
 
+    // Coalesced: opening another mail changes several of the inputs above in
+    // one go (uid, remote copy, consent, colours, body), and each used to
+    // rebuild the page. `Qt.callLater` runs `loadShownHtml` once per event
+    // loop turn, however many of them fired.
     function reloadHtml() {
+        Qt.callLater(root.loadShownHtml);
+    }
+
+    function loadShownHtml() {
         if (root.isHtml && bodyLoader.item)
             bodyLoader.item.loadHtml(root.wrapDoc(root.shownHtml), "");
     }
