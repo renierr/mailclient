@@ -10,21 +10,27 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.drawable.Icon
 import android.os.Build
+import android.os.PersistableBundle
 import android.util.Log
 import de.renier.mailclient.ui.state.Account
 
-// Launcher shortcuts (long-press on the app icon): Compose, then one inbox
-// per account. Each opens MainActivity like a notification tap
-// (MailNotifier.ACTION_OPEN), with a payload the shell resolves:
-// "compose" or "inbox:<account id>". Rebuilt whenever the account list
-// loads; a shortcut pinned to the home screen for a removed account is
-// disabled instead of opening nothing.
+// Launcher shortcuts (long-press on the app icon). Compose is static
+// (xml/shortcuts.xml), so the menu has it from install on; this object
+// keeps the dynamic ones, one inbox per account. Each opens MainActivity
+// like a notification tap (MailNotifier.ACTION_OPEN), with a payload the
+// shell resolves: "compose" or "inbox:<account id>". Republished when the
+// account list loads and the shortcuts differ; a shortcut pinned to the
+// home screen for a removed account is disabled instead of opening nothing.
 object MailShortcuts {
     const val COMPOSE = "compose"
     const val INBOX_PREFIX = "inbox:"
 
     private const val TAG = "mailclient"
     private const val BRAND = 0xFF3B82F6.toInt()
+
+    // Everything a shortcut shows, so an unchanged list is not republished:
+    // the system rate-limits these calls.
+    private const val SIGNATURE = "signature"
 
     // Icon canvas: adaptive icons are 108dp with a 72dp visible circle.
     private const val ICON_PX = 216
@@ -33,26 +39,29 @@ object MailShortcuts {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N_MR1) return
         val manager = context.getSystemService(ShortcutManager::class.java) ?: return
         try {
-            val compose = ShortcutInfo.Builder(context, COMPOSE)
-                .setShortLabel("Compose")
-                .setLongLabel("Compose new mail")
-                .setIcon(composeIcon(context))
-                .setIntent(intent(context, COMPOSE))
-                .setRank(0)
-                .build()
-            // Launchers show about four; the rest would only be cut off.
+            // Launchers show about four, the static Compose among them
+            // (it counts against the same limit); the rest would be cut off.
             val room = (manager.maxShortcutCountPerActivity - 1).coerceIn(0, 3)
             val inboxes = accounts.filter { it.id >= 0 }.take(room).mapIndexed { i, a ->
                 val label = a.name.ifBlank { a.email }.ifBlank { "Inbox" }
+                val longLabel = "Inbox · ${a.email.ifBlank { label }}"
+                val signature = listOf(label, longLabel, a.initials, a.avatarLight).joinToString("|")
                 ShortcutInfo.Builder(context, INBOX_PREFIX + a.id)
                     .setShortLabel(label)
-                    .setLongLabel("Inbox · ${a.email.ifBlank { label }}")
+                    .setLongLabel(longLabel)
                     .setIcon(accountIcon(a))
                     .setIntent(intent(context, INBOX_PREFIX + a.id))
-                    .setRank(i + 1)
+                    .setRank(i)
+                    .setExtras(PersistableBundle().apply { putString(SIGNATURE, signature) })
                     .build()
             }
-            manager.dynamicShortcuts = listOf(compose) + inboxes
+            val published = manager.dynamicShortcuts.map { it.id to it.extras?.getString(SIGNATURE) }
+            if (published != inboxes.map { it.id to it.extras?.getString(SIGNATURE) }) {
+                // false: rate-limited (the app was in the background).
+                if (!manager.setDynamicShortcuts(inboxes)) {
+                    Log.w(TAG, "launcher shortcuts rate-limited, retried on the next account load")
+                }
+            }
 
             // Home-screen copies: a removed account's go grey, a re-added
             // id comes back.
@@ -62,9 +71,9 @@ object MailShortcuts {
             if (keep.isNotEmpty()) manager.enableShortcuts(keep)
             if (gone.isNotEmpty()) manager.disableShortcuts(gone, "Account removed")
         } catch (e: Exception) {
-            // Rate limits or a launcher without shortcut support: the app
+            // A launcher without shortcut support or a locked user: the app
             // works the same without them.
-            Log.w(TAG, "launcher shortcuts not updated: ${e.message}")
+            Log.w(TAG, "launcher shortcuts not updated", e)
         }
     }
 
@@ -75,18 +84,6 @@ object MailShortcuts {
             .setAction(MailNotifier.ACTION_OPEN)
             .putExtra(MailNotifier.EXTRA_PAYLOAD, payload)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-
-    private fun composeIcon(context: Context): Icon {
-        val bitmap = canvasBitmap(BRAND) { canvas ->
-            val glyph = context.getDrawable(R.drawable.ic_edit)?.mutate() ?: return@canvasBitmap
-            glyph.setTint(0xFFFFFFFF.toInt())
-            val size = ICON_PX * 3 / 8
-            val inset = (ICON_PX - size) / 2
-            glyph.setBounds(inset, inset, inset + size, inset + size)
-            glyph.draw(canvas)
-        }
-        return wrap(bitmap)
-    }
 
     // The account's avatar (core-decided initials and colour), light theme:
     // launchers do not follow the app's theme.

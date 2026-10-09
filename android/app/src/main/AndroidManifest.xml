@@ -52,7 +52,22 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- Static Compose shortcut; the inbox ones are dynamic
+                 (MailShortcuts). -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
+        <!-- The static shortcut's target: its own task, so the system's
+             CLEAR_TASK on shortcut launch leaves the shell alone. Exported
+             like MainActivity, which takes the same intent. -->
+        <activity
+            android:name=".ShortcutTrampolineActivity"
+            android:exported="true"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay" />
         <!-- Viewer copies of attachments for ACTION_VIEW.
              Cache-private; the URI grant hands one file to the viewer. -->
         <provider

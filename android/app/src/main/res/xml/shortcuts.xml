@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Static launcher shortcut, published by the system at install time, so
+     it shows even when the dynamic ones (MailShortcuts: one inbox per
+     account) were never set. MailNotifier.ACTION_OPEN with the "compose"
+     payload, through ShortcutTrampolineActivity (see there for why).
+     targetPackage is the applicationId (resource XML gets no
+     ${applicationId} substitution): change both together. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="compose_static"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_compose"
+        android:shortcutShortLabel="@string/shortcut_compose_short"
+        android:shortcutLongLabel="@string/shortcut_compose_long">
+        <intent
+            android:action="de.renier.mailclient.OPEN_MAIL"
+            android:targetPackage="de.renier.mailclient.native"
+            android:targetClass="de.renier.mailclient.ShortcutTrampolineActivity">
+            <extra
+                android:name="payload"
+                android:value="compose" />
+        </intent>
+    </shortcut>
+</shortcuts>

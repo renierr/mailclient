@@ -34,6 +34,7 @@ android {
     defaultConfig {
         // Transition id so this app installs next to the Flutter one while
         // both exist. Drop the suffix at the flip, when it replaces it.
+        // res/xml/shortcuts.xml repeats it as targetPackage: change both.
         applicationId = "de.renier.mailclient.native"
         // Mirror of the workspace root Cargo.toml version (see AGENTS.md
         // bump order); fresh versionCode track for the new applicationId.

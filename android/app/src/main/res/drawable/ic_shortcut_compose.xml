@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 7.1 (no adaptive icons): a brand-blue circle, as MailShortcuts
+     draws its bitmaps there. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#3B82F6" />
+        </shape>
+    </item>
+    <item android:drawable="@drawable/ic_shortcut_compose_glyph" />
+</layer-list>

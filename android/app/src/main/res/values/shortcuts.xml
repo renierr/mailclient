@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Static shortcut labels must be string resources. -->
+    <string name="shortcut_compose_short">Compose</string>
+    <string name="shortcut_compose_long">Compose new mail</string>
+</resources>
