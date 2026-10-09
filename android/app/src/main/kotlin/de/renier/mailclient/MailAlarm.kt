@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.SystemClock
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.Observer
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
@@ -80,6 +82,26 @@ object MailAlarm {
                 .any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
         busy(CHECK_TASK) || busy(MailCheckWorker.PERIODIC)
     }.getOrDefault(false)
+
+    /**
+     * Call `onChange` on the main thread every time a check's work changes
+     * state, and return what stops that again.
+     *
+     * A tile click does not collapse the shade on Android 12+, so the
+     * "Check mail" tile stays visible while the check runs: without this it
+     * would sit in its busy state until the shade is next opened. Main
+     * thread only, like every LiveData call.
+     */
+    fun observeChecks(context: Context, onChange: (List<WorkInfo>) -> Unit): () -> Unit {
+        val work = WorkManager.getInstance(context)
+        val observed = listOf(CHECK_TASK, MailCheckWorker.PERIODIC).map { name ->
+            val live = work.getWorkInfosForUniqueWorkLiveData(name)
+            val observer = Observer<List<WorkInfo>> { onChange(it) }
+            live.observeForever(observer)
+            live to observer
+        }
+        return { observed.forEach { (live, observer) -> live.removeObserver(observer) } }
+    }
 
     // Exact when allowed; otherwise AllowWhileIdle still fires in Doze, just
     // not at the exact minute.

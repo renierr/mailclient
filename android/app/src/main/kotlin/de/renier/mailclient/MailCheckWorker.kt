@@ -23,9 +23,16 @@ class MailCheckWorker(context: Context, params: WorkerParameters) : Worker(conte
         // tile): every account, quiet hours included.
         val report = MailNative.check(trigger, inputData.getBoolean(KEY_NOW, false))
         MailNotifier.deliver(applicationContext, report)
+        // The tap answers even when it found nothing, so the user is not
+        // left guessing whether the tile did anything at all.
+        if (trigger == "tile") CheckFeedback.show(applicationContext, report)
         Result.success()
     } catch (e: RuntimeException) {
         Log.w("mailclient", "background check failed", e)
+        // The tap still answers, even when the check itself blew up.
+        if ((inputData.getString(KEY_TRIGGER) ?: "worker") == "tile") {
+            CheckFeedback.showFailure(applicationContext)
+        }
         Result.failure()
     }
 

@@ -482,8 +482,11 @@ pub fn recent_unread(db: &Db, limit: u64, account_id: Option<i64>) -> Vec<Recent
 /// the pid looked dead or the file was 15 minutes old. Two runs could both
 /// judge it stale (an empty file mid-write parsed as "stale") and both
 /// take it, and the reaping retried by unbounded recursion (B18).
+///
+/// `_file` is `None` on a filesystem that cannot lock at all (see
+/// [`acquire_sync_lock`]): the guard then excludes nobody.
 pub struct SyncLock {
-    _file: std::fs::File,
+    _file: Option<std::fs::File>,
 }
 
 impl SyncLock {
@@ -503,6 +506,13 @@ impl SyncLock {
 /// The file itself is never deleted: a run that opened it before the
 /// delete would lock the unlinked file while the next one creates and
 /// locks a new one, and both would hold "the" lock.
+///
+/// A filesystem that cannot lock at all — proven on an Android emulator's
+/// data dir, where `try_lock` answers "not supported" — gets an unlocked
+/// guard instead of an error. Refusing every check there would cost the
+/// user far more than losing the exclusion ever could: the lock only
+/// matters when two runs of one database really overlap, and a skipped
+/// run is indistinguishable from a broken feature.
 pub fn acquire_sync_lock(db_path: &Path) -> Result<Option<SyncLock>> {
     let path = SyncLock::lock_path(db_path);
     let io_error = |e: std::io::Error| {
@@ -521,11 +531,25 @@ pub fn acquire_sync_lock(db_path: &Path) -> Result<Option<SyncLock>> {
             if file.set_len(0).is_ok() {
                 let _ = writeln!(&file, "{}", std::process::id());
             }
-            Ok(Some(SyncLock { _file: file }))
+            Ok(Some(SyncLock { _file: Some(file) }))
         }
         Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(e)) if lock_unsupported(&e) => {
+            log::warn!(
+                "sync lock cannot be taken on {} ({e}); syncing without the cross-process lock",
+                path.display()
+            );
+            Ok(Some(SyncLock { _file: None }))
+        }
         Err(std::fs::TryLockError::Error(e)) => Err(io_error(e)),
     }
+}
+
+/// Whether a failed `try_lock` means "this filesystem cannot lock" rather
+/// than a real problem: the documented [`std::io::ErrorKind::Unsupported`],
+/// or the wording a platform uses for the same thing.
+fn lock_unsupported(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::Unsupported || e.to_string().contains("not supported")
 }
 
 #[cfg(test)]
@@ -557,6 +581,30 @@ pub(crate) mod tests {
                 "{content:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_filesystem_that_cannot_lock_still_gets_its_check() {
+        // What the Android emulator's data dir answers: try_lock() fails
+        // with "not supported", which must not skip every check.
+        let unsupported =
+            std::io::Error::new(std::io::ErrorKind::Unsupported, "try_lock() not supported");
+        assert!(lock_unsupported(&unsupported));
+        assert!(lock_unsupported(&std::io::Error::other(
+            "try_lock() not supported"
+        )));
+        // A real IO problem is still an error, not a degraded guard.
+        assert!(!lock_unsupported(&std::io::Error::other("no space left")));
+        assert!(!lock_unsupported(&std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied"
+        )));
+        // Losing the race stays a loss: no guard, run skipped.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("db.sqlite");
+        let held = acquire_sync_lock(&db_path).unwrap().expect("free lock");
+        assert!(acquire_sync_lock(&db_path).unwrap().is_none());
+        drop(held);
     }
 
     #[test]
