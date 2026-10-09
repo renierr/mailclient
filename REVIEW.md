@@ -13,6 +13,8 @@ Work top to bottom; each item is self-contained so they can be picked out of ord
   A2 (`5e07cab`), A4 (`f4ff35e`), C15 (`9698314`), A6, E7, D15, E15, E16, E23 §2 (`83875ab`). See §Applied for what each did and what it did not.
   **Applied together in `fd3548f`**: A7, A11, A13, A17 (dead attachment delete only), C8, C9, C14, plus
   follow-up corrections to A2, A4, B1, C2, C15 and D6 from a validation pass over those six commits.
+- **Fix loop:** every later fix is listed in the §Applied table with its commit; items closed without code
+  are marked **no change** with the reason in the item.
 - **AGENTS.md §7** governs closing any item: Rust → `cargo fmt --check` + `cargo clippy -p mailcore -- -D warnings`
   + `cargo test -p mailcore`; QML → `scripts/qml-check.sh`; Android → `./build.sh --android`.
 - **§0** records the second-pass audit of this document. Read it first if you are trusting these findings.
@@ -1721,12 +1723,12 @@ table overflow (no long JNI loops without `DeleteLocalRef`), no `GetStringUTFCha
 
 | # | Logic | Qt side | Android side | Verdict |
 |---|---|---|---|---|
-| F1 | notification signature `"<title>\n<body>"` | — | `MailNotifier.kt:118` | real — core fn exists, unused (E20) |
+| F1 | notification signature `"<title>\n<body>"` | — | `MailNotifier.kt:118` | ~~real~~ **fixed** — core builds the signature from raw title/body (E20) |
 | F2 | "Similar to: …" sentence | `MessageList.qml:773` | `MailStateSearch.kt:79` | template duplicated, behaviour identical; guard with a test, not a move (E21) |
-| F3 | undo batch splitting | `Main.qml:1456-1464` JS | — | real — belongs in `mailcore` (D11) |
-| F4 | pending-open payload decode | `Main.qml:777` JS | `MailActions.kt:33` | real — belongs in `mailcore` (D11, E22) |
-| F5 | attachment filename decode | `MessageView.qml:376-384` JS | — | real — `mailcore::paths` exists (D11) |
-| F6 | file:// URL building | `MessageView.qml:170-181` JS | — | real — `mailapp::bridge::messages::files` exists (D11) |
+| F3 | undo batch splitting | `Main.qml:1456-1464` JS | — | ~~real~~ **fixed** — the split was dead code; one batch per action (D11) |
+| F4 | pending-open payload decode | `Main.qml:777` JS | `MailActions.kt:33` | ~~real~~ **fixed** — JSON from the bridge; `ReadTarget::account_of` (D11, E22) |
+| F5 | attachment filename decode | `MessageView.qml:376-384` JS | — | ~~real~~ **fixed** — `backend.file_name_of` (D11) |
+| F6 | file:// URL building | `MessageView.qml:170-181` JS | — | ~~real~~ **fixed** — `backend.file_url_in` (D11) |
 | F7 | account/security value → words | `AccountSetup.qml`/`Settings.qml` | `SettingLabels.kt:10-44` | **deliberate** — locale data, listed in SHARED-CORE; guard with a golden test (E23) |
 | F8 | cleanup-candidate reason wording | `Contacts.qml` | `ContactsScreen.kt:77-87` | **deliberate** — SHARED-CORE §8 records the exception (E23) |
 
