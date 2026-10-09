@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -162,11 +163,16 @@ fun ComposerScreen(
 
     val scheme = MaterialTheme.colorScheme
     // Theme colours are read once per body: a recoloured page would mean a
-    // reload, and a reload loses what was typed.
-    val document = remember(editorBody) {
+    // reload, and a reload loses what was typed. Built on IO: the document
+    // embeds the whole body (a forward with inline images is megabytes), and
+    // the reader's own document is built off the main thread the same way.
+    var document by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(editorBody) {
         val c = listOf(scheme.surface, scheme.onSurface, scheme.onSurfaceVariant, scheme.primary, scheme.outlineVariant)
             .map { it.toArgb() and 0xFFFFFF }
-        MailNative.editorDocument(c[0], c[1], c[2], c[3], c[4], EDITOR_FONT_PX, "Write your message", editorBody)
+        document = withContext(Dispatchers.IO) {
+            MailNative.editorDocument(c[0], c[1], c[2], c[3], c[4], EDITOR_FONT_PX, "Write your message", editorBody)
+        }
     }
     val textZoom = (100 * LocalConfiguration.current.fontScale).toInt()
 
@@ -591,16 +597,22 @@ fun ComposerScreen(
                     ) {
                         header()
                     }
-                    ComposerEditor(
-                        controller = editor,
-                        document = document,
-                        textZoom = textZoom,
-                        minHeight = minBody,
-                        onChanged = {
-                            dirty = true
-                            edits++
-                        },
-                    )
+                    val doc = document
+                    if (doc == null) {
+                        // Holds the editor's place for the moment it takes to build.
+                        Spacer(Modifier.fillMaxWidth().height(minBody))
+                    } else {
+                        ComposerEditor(
+                            controller = editor,
+                            document = doc,
+                            textZoom = textZoom,
+                            minHeight = minBody,
+                            onChanged = {
+                                dirty = true
+                                edits++
+                            },
+                        )
+                    }
                 }
             }
         }
