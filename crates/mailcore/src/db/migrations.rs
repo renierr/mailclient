@@ -130,16 +130,7 @@ fn add_columns(conn: &Connection, statements: &[&str]) -> Result<()> {
 
 /// Create or upgrade the database to [`SCHEMA_VERSION`].
 pub fn ensure_schema(conn: &Connection) -> Result<()> {
-    let current: u32 = conn
-        .query_row(
-            "select value from schema_meta where key = 'version'",
-            [],
-            |row| {
-                let v: String = row.get(0)?;
-                Ok(v.parse::<u32>().unwrap_or(0))
-            },
-        )
-        .unwrap_or(0);
+    let current = stored_version(conn)?.unwrap_or(0);
 
     if current > SCHEMA_VERSION {
         // An older binary opening a database a newer one already migrated.
@@ -159,187 +150,350 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         return Ok(());
     }
     if current < 2 {
-        conn.execute_batch(SCHEMA_V2)?;
+        step(conn, 2, |conn| {
+            conn.execute_batch(SCHEMA_V2)?;
+            Ok(())
+        })?;
     }
     if current < 3 {
-        // v3: `messages.flags_dirty`.
-        add_columns(conn, &[SCHEMA_V3])?;
+        step(conn, 3, |conn| {
+            // v3: `messages.flags_dirty`.
+            add_columns(conn, &[SCHEMA_V3])?;
+            Ok(())
+        })?;
     }
     if current < 4 {
-        // v4: `attachments.data` BLOB + `is_inline` marker.
-        add_columns(
-            conn,
-            &[
-                "alter table attachments add column data blob;",
-                "alter table attachments add column is_inline integer not null default 0;",
-            ],
-        )?;
+        step(conn, 4, |conn| {
+            // v4: `attachments.data` BLOB + `is_inline` marker.
+            add_columns(
+                conn,
+                &[
+                    "alter table attachments add column data blob;",
+                    "alter table attachments add column is_inline integer not null default 0;",
+                ],
+            )?;
+            Ok(())
+        })?;
     }
     if current < 5 {
-        // v5: `accounts.from_name` — sender display name (`""` = address only).
-        add_columns(
-            conn,
-            &["alter table accounts add column from_name text not null default '';"],
-        )?;
+        step(conn, 5, |conn| {
+            // v5: `accounts.from_name` — sender display name (`""` = address only).
+            add_columns(
+                conn,
+                &["alter table accounts add column from_name text not null default '';"],
+            )?;
+            Ok(())
+        })?;
     }
     if current < 6 {
-        // v6: `messages.raw_headers` for the technical-headers view.
-        add_columns(conn, &["alter table messages add column raw_headers text;"])?;
+        step(conn, 6, |conn| {
+            // v6: `messages.raw_headers` for the technical-headers view.
+            add_columns(conn, &["alter table messages add column raw_headers text;"])?;
+            Ok(())
+        })?;
     }
     if current < 7 {
-        // v7: `folders.server_total` — last SELECT's message count.
-        add_columns(
-            conn,
-            &["alter table folders add column server_total integer;"],
-        )?;
+        step(conn, 7, |conn| {
+            // v7: `folders.server_total` — last SELECT's message count.
+            add_columns(
+                conn,
+                &["alter table folders add column server_total integer;"],
+            )?;
+            Ok(())
+        })?;
     }
     if current < 8 {
-        // v8: `contacts.alias`, backfilled from the transferred real name.
-        add_columns(conn, &["alter table contacts add column alias text;"])?;
-        if let Err(e) = conn.execute_batch(
-            "update contacts set alias = name where alias is null and name is not null;",
-        ) {
-            log::warn!("migration v8: alias backfill failed: {e}");
-        }
-        if let Err(e) = crate::store::contacts::seed_contacts_from_connection(conn) {
-            log::warn!("migration v8: contact seeding failed: {e}");
-        }
+        step(conn, 8, |conn| {
+            // v8: `contacts.alias`, backfilled from the transferred real name.
+            add_columns(conn, &["alter table contacts add column alias text;"])?;
+            repair(conn, "migration v8: alias backfill", |conn| {
+                Ok(conn.execute_batch(
+                    "update contacts set alias = name where alias is null and name is not null;",
+                )?)
+            });
+            repair(
+                conn,
+                "migration v8: contact seeding",
+                crate::store::contacts::seed_contacts_from_connection,
+            );
+            Ok(())
+        })?;
     }
     if current < 9 {
-        // v9: outbox keeps the raw MIME and envelope, so a send survives a crash.
-        add_columns(
-            conn,
-            &[
-                "alter table send_queue add column raw_mime blob;",
-                "alter table send_queue add column envelope_from text;",
-                "alter table send_queue add column envelope_to text not null default '[]';",
-            ],
-        )?;
+        step(conn, 9, |conn| {
+            // v9: outbox keeps the raw MIME and envelope, so a send survives a crash.
+            add_columns(
+                conn,
+                &[
+                    "alter table send_queue add column raw_mime blob;",
+                    "alter table send_queue add column envelope_from text;",
+                    "alter table send_queue add column envelope_to text not null default '[]';",
+                ],
+            )?;
+            Ok(())
+        })?;
     }
     if current < 10 {
-        // v10: `folders.highest_modseq` for CONDSTORE / QRESYNC.
-        add_columns(conn, &[SCHEMA_V10])?;
+        step(conn, 10, |conn| {
+            // v10: `folders.highest_modseq` for CONDSTORE / QRESYNC.
+            add_columns(conn, &[SCHEMA_V10])?;
+            Ok(())
+        })?;
     }
     if current < 11 {
-        // v11: stop the FTS trigger re-indexing bodies on every flag change.
-        conn.execute_batch(SCHEMA_V11)?;
+        step(conn, 11, |conn| {
+            // v11: stop the FTS trigger re-indexing bodies on every flag change.
+            conn.execute_batch(SCHEMA_V11)?;
+            Ok(())
+        })?;
     }
     if current < 12 {
-        // v12: folder paths were stored as raw IMAP modified UTF-7
-        // (`Entw&APw-rfe`). Discovery now stores decoded Unicode
-        // (`Entwürfe`), so rename existing rows — otherwise the next sync
-        // would file the same mailbox twice (raw row orphaned, decoded
-        // row fresh). Merging into an already-decoded row moves its
-        // messages first (conflicting UIDs stay with the survivor).
-        if let Err(e) = migrate_folder_paths_utf7(conn) {
-            log::warn!("migration v12: folder UTF-7 rename failed: {e}");
-        }
+        step(conn, 12, |conn| {
+            // v12: folder paths were stored as raw IMAP modified UTF-7
+            // (`Entw&APw-rfe`). Discovery now stores decoded Unicode
+            // (`Entwürfe`), so rename existing rows — otherwise the next sync
+            // would file the same mailbox twice (raw row orphaned, decoded
+            // row fresh). Merging into an already-decoded row moves its
+            // messages first (conflicting UIDs stay with the survivor).
+            repair(
+                conn,
+                "migration v12: folder UTF-7 rename",
+                migrate_folder_paths_utf7,
+            );
+            Ok(())
+        })?;
     }
     if current < 13 {
-        // v13: the address index ignores case, so `User@x` cannot be added
-        // next to `user@x`. Existing rows that already differ only by case
-        // would make the unique index fail; keep the old one then.
-        match conn.execute_batch(
-            "create unique index if not exists idx_accounts_email_nocase
-                 on accounts (email_address collate nocase);",
-        ) {
-            Ok(()) => {
-                conn.execute_batch("drop index if exists idx_accounts_email;")?;
+        step(conn, 13, |conn| {
+            // v13: the address index ignores case, so `User@x` cannot be added
+            // next to `user@x`. Existing rows that already differ only by case
+            // would make the unique index fail; keep the old one then.
+            match conn.execute_batch(
+                "create unique index if not exists idx_accounts_email_nocase
+                     on accounts (email_address collate nocase);",
+            ) {
+                Ok(()) => {
+                    conn.execute_batch("drop index if exists idx_accounts_email;")?;
+                }
+                Err(e) => {
+                    log::warn!("migration v13: accounts differ only by case, kept index: {e}")
+                }
             }
-            Err(e) => log::warn!("migration v13: accounts differ only by case, kept index: {e}"),
-        }
+            Ok(())
+        })?;
     }
     if current < 14 {
-        // v14: plain-text mail was stored with a `body_html` that mail-parser
-        // generated from the text, so it rendered as HTML. Drop exactly those.
-        if let Err(e) = drop_generated_html(conn) {
-            log::warn!("migration v14: generated html cleanup failed: {e}");
-        }
+        step(conn, 14, |conn| {
+            // v14: plain-text mail was stored with a `body_html` that mail-parser
+            // generated from the text, so it rendered as HTML. Drop exactly those.
+            repair(
+                conn,
+                "migration v14: generated html cleanup",
+                drop_generated_html,
+            );
+            Ok(())
+        })?;
     }
     if current < 15 {
-        // v15: `pending_moves`, the grace-period queue behind Undo.
-        conn.execute_batch(SCHEMA_V15)?;
+        step(conn, 15, |conn| {
+            // v15: `pending_moves`, the grace-period queue behind Undo.
+            conn.execute_batch(SCHEMA_V15)?;
+            Ok(())
+        })?;
     }
     if current < 16 {
-        // v16: `messages.from_name` — sender display name for the list rows.
-        // Stored at sync time from now on; existing rows backfill from
-        // their stored headers (empty stays empty = address only).
-        add_columns(conn, &["alter table messages add column from_name text;"])?;
-        if let Err(e) = backfill_from_names(conn) {
-            log::warn!("migration v16: sender-name backfill failed: {e}");
-        }
+        step(conn, 16, |conn| {
+            // v16: `messages.from_name` — sender display name for the list rows.
+            // Stored at sync time from now on; existing rows backfill from
+            // their stored headers (empty stays empty = address only).
+            add_columns(conn, &["alter table messages add column from_name text;"])?;
+            repair(
+                conn,
+                "migration v16: sender-name backfill",
+                backfill_from_names,
+            );
+            Ok(())
+        })?;
     }
     if current < 17 {
-        // v17: `account_settings`, per-account overrides of sync settings.
-        conn.execute_batch(SCHEMA_V17)?;
+        step(conn, 17, |conn| {
+            // v17: `account_settings`, per-account overrides of sync settings.
+            conn.execute_batch(SCHEMA_V17)?;
+            Ok(())
+        })?;
     }
     if current < 18 {
-        // v18: SMTP used to demand STARTTLS even with security `none`, which
-        // older Flutter forms offered without a warning. SMTP now honours
-        // `none`, so such accounts would silently start sending in the
-        // clear. Reset them to STARTTLS; a real plaintext opt-in is made
-        // again in the account form, which warns about it.
-        let reset = conn.execute(
-            "update accounts set smtp_security = 'starttls', updated_at = ?1
-             where lower(trim(smtp_security)) in ('none', 'plain')",
-            [crate::store::now()],
-        )?;
-        if reset > 0 {
-            log::info!("migration v18: {reset} account(s) reset from plaintext SMTP to STARTTLS");
-        }
+        step(conn, 18, |conn| {
+            // v18: SMTP used to demand STARTTLS even with security `none`, which
+            // older Flutter forms offered without a warning. SMTP now honours
+            // `none`, so such accounts would silently start sending in the
+            // clear. Reset them to STARTTLS; a real plaintext opt-in is made
+            // again in the account form, which warns about it.
+            let reset = conn.execute(
+                "update accounts set smtp_security = 'starttls', updated_at = ?1
+                 where lower(trim(smtp_security)) in ('none', 'plain')",
+                [crate::store::now()],
+            )?;
+            if reset > 0 {
+                log::info!(
+                    "migration v18: {reset} account(s) reset from plaintext SMTP to STARTTLS"
+                );
+            }
+            Ok(())
+        })?;
     }
     if current < 19 {
-        // v19: sender name and recipients join the search index.
-        conn.execute_batch(SCHEMA_V19)?;
+        step(conn, 19, |conn| {
+            // v19: sender name and recipients join the search index.
+            conn.execute_batch(SCHEMA_V19)?;
+            Ok(())
+        })?;
     }
     if current < 20 {
-        // v20: no DDL — repairs rows. Senders (newsletters) declare body
-        // images as `Content-Disposition: attachment` with a `Content-ID`
-        // the HTML shows via `cid:`; those listed as files and raised the
-        // list icon. Mark them inline and clear flags left without a real
-        // file, and fix stored MIME types against magic bytes. New mail is
-        // parsed this way from now on (see `parse_to_new`).
-        if let Err(e) = migrate_cid_inline_attachments(conn) {
-            log::warn!("migration v20: inline attachment repair failed: {e}");
-        }
+        step(conn, 20, |conn| {
+            // v20: no DDL — repairs rows. Senders (newsletters) declare body
+            // images as `Content-Disposition: attachment` with a `Content-ID`
+            // the HTML shows via `cid:`; those listed as files and raised the
+            // list icon. Mark them inline and clear flags left without a real
+            // file, and fix stored MIME types against magic bytes. New mail is
+            // parsed this way from now on (see `parse_to_new`).
+            repair(
+                conn,
+                "migration v20: inline attachment repair",
+                migrate_cid_inline_attachments,
+            );
+            Ok(())
+        })?;
     }
     if current < 21 {
-        // v21: `contacts.sent_count` — how often mail was sent *to* an
-        // address, so people you wrote to rank above merely harvested ones
-        // and are never cleanup `stale` candidates. Backfilled from cached
-        // Sent mail; only existing contacts are credited, removed ones stay
-        // forgotten.
-        add_columns(
-            conn,
-            &["alter table contacts add column sent_count integer not null default 0;"],
-        )?;
-        if let Err(e) = crate::store::contacts::backfill_sent_counts_from_connection(conn) {
-            log::warn!("migration v21: sent-count backfill failed: {e}");
-        }
+        step(conn, 21, |conn| {
+            // v21: `contacts.sent_count` — how often mail was sent *to* an
+            // address, so people you wrote to rank above merely harvested ones
+            // and are never cleanup `stale` candidates. Backfilled from cached
+            // Sent mail; only existing contacts are credited, removed ones stay
+            // forgotten.
+            add_columns(
+                conn,
+                &["alter table contacts add column sent_count integer not null default 0;"],
+            )?;
+            repair(
+                conn,
+                "migration v21: sent-count backfill",
+                crate::store::contacts::backfill_sent_counts_from_connection,
+            );
+            Ok(())
+        })?;
     }
     if current < 22 {
-        // v22: look a message up by its Message-ID within an account (a
-        // bounce's reader card finds the sent original it reports on).
-        conn.execute_batch(
-            "create index if not exists idx_messages_account_msgid
-                on messages (account_id, message_id_header);",
-        )?;
+        step(conn, 22, |conn| {
+            // v22: look a message up by its Message-ID within an account (a
+            // bounce's reader card finds the sent original it reports on).
+            conn.execute_batch(
+                "create index if not exists idx_messages_account_msgid
+                    on messages (account_id, message_id_header);",
+            )?;
+            Ok(())
+        })?;
     }
     if current < 23 {
-        // v23: `send_queue.request_dsn` — a delivery confirmation is an SMTP
-        // parameter, not part of the stored MIME, so a retried row needs it.
-        add_columns(
-            conn,
-            &["alter table send_queue add column request_dsn integer not null default 0;"],
-        )?;
+        step(conn, 23, |conn| {
+            // v23: `send_queue.request_dsn` — a delivery confirmation is an SMTP
+            // parameter, not part of the stored MIME, so a retried row needs it.
+            add_columns(
+                conn,
+                &["alter table send_queue add column request_dsn integer not null default 0;"],
+            )?;
+            Ok(())
+        })?;
     }
     if current != SCHEMA_VERSION {
-        conn.execute(
-            "update schema_meta set value = ?1 where key = 'version'",
-            [SCHEMA_VERSION.to_string()],
-        )?;
+        stamp(conn, SCHEMA_VERSION)?;
     }
     Ok(())
+}
+
+/// The stamped schema version. `None` when there is no stamp yet (a fresh
+/// file), an error when one is present but unreadable.
+///
+/// An unreadable stamp used to read as 0, which sent an existing database
+/// down the fresh-install path, where inserting the stamp hit the primary
+/// key on every open. Guessing a version instead would skip or repeat
+/// migrations on a schema of unknown shape, so refuse and say why.
+fn stored_version(conn: &Connection) -> Result<Option<u32>> {
+    let has_meta: bool = conn.query_row(
+        "select exists (select 1 from sqlite_master
+                         where type = 'table' and name = 'schema_meta')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_meta {
+        return Ok(None);
+    }
+    let raw: Option<String> = conn
+        .query_row(
+            "select value from schema_meta where key = 'version'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    match raw.trim().parse::<u32>() {
+        Ok(v) if v > 0 => Ok(Some(v)),
+        _ => Err(crate::error::StoreError::InvalidInput(format!(
+            "database schema version {raw:?} is unreadable; refusing to migrate"
+        ))),
+    }
+}
+
+fn stamp(conn: &Connection, version: u32) -> Result<()> {
+    conn.execute(
+        "update schema_meta set value = ?1 where key = 'version'",
+        [version.to_string()],
+    )?;
+    Ok(())
+}
+
+/// Run migration `version` and stamp it in one savepoint: a crash or an
+/// error leaves the database at the previous version with nothing of this
+/// step applied, so the next open runs it again from the start. Stamping
+/// only at the very end let a crash re-run steps that had already
+/// committed, and the v21 backfill is not idempotent.
+fn step(conn: &Connection, version: u32, f: impl FnOnce(&Connection) -> Result<()>) -> Result<()> {
+    conn.execute_batch("savepoint migration_step")?;
+    match f(conn).and_then(|()| stamp(conn, version)) {
+        Ok(()) => {
+            conn.execute_batch("release migration_step")?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("rollback to migration_step; release migration_step");
+            Err(e)
+        }
+    }
+}
+
+/// A best-effort data repair inside a [`step`]: on failure everything it
+/// wrote is rolled back and the step carries on, so a failure never leaves
+/// half a backfill recorded as done (v21 used to keep the credit it had
+/// given so far). It is not retried; the warning is the record.
+fn repair<T>(conn: &Connection, what: &str, f: impl FnOnce(&Connection) -> Result<T>) {
+    let outcome = conn
+        .execute_batch("savepoint migration_repair")
+        .map_err(Into::into)
+        .and_then(|()| f(conn));
+    match outcome {
+        Ok(_) => {
+            if let Err(e) = conn.execute_batch("release migration_repair") {
+                log::warn!("{what}: cannot release savepoint: {e}");
+            }
+        }
+        Err(e) => {
+            log::warn!("{what} failed, rolled back: {e}");
+            let _ = conn.execute_batch("rollback to migration_repair; release migration_repair");
+        }
+    }
 }
 
 /// Fill `messages.from_name` from stored header blocks (see v16). Rows
@@ -355,17 +509,17 @@ fn backfill_from_names(conn: &Connection) -> Result<()> {
         mapped.collect::<std::result::Result<Vec<_>, _>>()?
     };
     let mut filled = 0;
-    let tx = conn.unchecked_transaction()?;
+    // Atomic through the caller's `repair` savepoint; a transaction of its
+    // own would fail to begin inside it.
     for (id, raw) in &rows {
         if let Some(name) = crate::store::messages::display_name_from_headers(raw) {
-            tx.execute(
+            conn.execute(
                 "update messages set from_name = ?1 where id = ?2",
                 rusqlite::params![name, id],
             )?;
             filled += 1;
         }
     }
-    tx.commit()?;
     log::info!("migration v16: sender name backfilled for {filled} messages");
     Ok(())
 }
@@ -390,7 +544,7 @@ fn migrate_cid_inline_attachments(conn: &Connection) -> Result<()> {
     let (mut marked, mut cleared) = (0, 0);
     for (id, html) in &msgs {
         let parts: Vec<(i64, Option<String>)> = conn
-            .prepare(
+            .prepare_cached(
                 "select id, content_id from attachments
                   where message_id = ?1 and is_inline = 0",
             )?
@@ -463,11 +617,10 @@ fn drop_generated_html(conn: &Connection) -> Result<()> {
         }
         ids
     };
-    let tx = conn.unchecked_transaction()?;
+    // Atomic through the caller's `repair` savepoint.
     for id in &ids {
-        tx.execute("update messages set body_html = null where id = ?1", [id])?;
+        conn.execute("update messages set body_html = null where id = ?1", [id])?;
     }
-    tx.commit()?;
     log::info!(
         "migration v14: {} plain-text bodies no longer treated as html",
         ids.len()
@@ -1072,5 +1225,113 @@ b<c",
             )
             .unwrap();
         assert_eq!(v, SCHEMA_VERSION.to_string());
+    }
+
+    fn version(conn: &Connection) -> String {
+        conn.query_row(
+            "select value from schema_meta where key = 'version'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn an_unreadable_stamp_is_refused_with_a_reason() {
+        // These all read as 0 before, took the fresh-install path and failed
+        // on the stamp's primary key on every open.
+        for bad in ["", "0", "v23", "-1", "999999999999"] {
+            let conn = Connection::open_in_memory().unwrap();
+            conn.execute_batch(SCHEMA_FULL).unwrap();
+            conn.execute(
+                "insert into schema_meta (key, value) values ('version', ?1)",
+                [bad],
+            )
+            .unwrap();
+            let msg = ensure_schema(&conn).expect_err(bad).to_string();
+            assert!(msg.contains("unreadable"), "{bad:?}: {msg}");
+            assert_eq!(version(&conn), bad, "the stamp is left alone");
+        }
+    }
+
+    #[test]
+    fn a_padded_stamp_and_a_missing_one_still_open() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_FULL).unwrap();
+        conn.execute(
+            "insert into schema_meta (key, value) values ('version', ?1)",
+            [format!(" {SCHEMA_VERSION} ")],
+        )
+        .unwrap();
+        ensure_schema(&conn).unwrap();
+
+        // No row at all is a fresh file, not a corrupt one.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_FULL).unwrap();
+        ensure_schema(&conn).unwrap();
+        assert_eq!(version(&conn), SCHEMA_VERSION.to_string());
+    }
+
+    #[test]
+    fn a_failed_step_leaves_the_previous_version_and_none_of_its_writes() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_FULL).unwrap();
+        conn.execute(
+            "insert into schema_meta (key, value) values ('version', '4')",
+            [],
+        )
+        .unwrap();
+        let err = step(&conn, 5, |conn| {
+            conn.execute("insert into settings (key, value) values ('k', 'v')", [])?;
+            Err(crate::error::StoreError::InvalidInput("boom".into()))
+        });
+        assert!(err.is_err());
+        assert_eq!(version(&conn), "4");
+        let n: i64 = conn
+            .query_row("select count(*) from settings where key = 'k'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(n, 0);
+        // Not left inside a transaction: the next step commits normally.
+        step(&conn, 5, |_| Ok(())).unwrap();
+        assert!(conn.is_autocommit());
+        assert_eq!(version(&conn), "5");
+    }
+
+    #[test]
+    fn a_failed_repair_is_rolled_back_and_the_step_goes_on() {
+        // v21's backfill used to keep the credit it had given before an
+        // error and then be stamped as done, so the count stayed wrong.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_FULL).unwrap();
+        conn.execute(
+            "insert into schema_meta (key, value) values ('version', '20')",
+            [],
+        )
+        .unwrap();
+        step(&conn, 21, |conn| {
+            repair(conn, "test repair", |conn| {
+                conn.execute("insert into settings (key, value) values ('half', 'x')", [])?;
+                Err::<(), _>(crate::error::StoreError::InvalidInput("boom".into()))
+            });
+            conn.execute(
+                "insert into settings (key, value) values ('after', 'y')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let has = |k: &str| -> bool {
+            conn.query_row(
+                "select exists (select 1 from settings where key = ?1)",
+                [k],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert!(!has("half"), "the failed repair's write survived");
+        assert!(has("after"));
+        assert_eq!(version(&conn), "21");
     }
 }
