@@ -100,6 +100,7 @@ the "not fixed" column before assuming a finding is closed.
 | **A5** | `1031adc` | v20 repair prepares its statement once and runs atomically | — |
 | **A12** | `77d8de1` | A failed edit re-saves the previous secrets instead of leaving new passwords on the old row | Not restorable when the old entry was unreadable; logged |
 | **C3** | `6def2f8` | Negative margins and opacity below 0.15 dropped from inline styles | `display:block` + size on links kept on purpose (newsletter buttons) |
+| **A8** | `be8becb` | Unparseable JSON list columns warn (table, id, column; never the value) | `outbox::list_json` still reads `envelope_to` with a silent default for display |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -242,7 +243,7 @@ was meant.
 would start a download for an attachment that does not exist. Use
 `.optional()?.ok_or_else(|| StoreError::NotFound(format!("attachment {id}")))`.
 
-### A8 · medium · `unwrap_or_default()` hides column corruption `[verify]` — confirmed, severity trimmed
+### A8 · medium · `unwrap_or_default()` hides column corruption `[verify]` — confirmed, severity trimmed — **FIXED** `[fixed]` `[corrected]`
 `store/messages.rs:47-49,60` and `store/queue.rs:75`
 
 ```rust
@@ -254,6 +255,15 @@ having zero recipients and is claimed/submitted as such. Same at `contacts.rs:54
 (`serde_json::to_value(c).unwrap_or_default()` silently drops a contact from `contacts_json`) and `choices.rs:81`.
 Reachable only via a hand-edited or corrupt DB, hence medium rather than high.
 **Fix:** `warn!` on parse failure; treat an unparseable `envelope_to` as a hard error.
+
+**Fixed in `be8becb`, with one claim corrected.** A corrupt `envelope_to` is **not** "claimed/submitted as such":
+`submit_claimed` already refuses an empty recipient list ("queued send has no envelope recipients"), so
+nothing is sent. Making it a hard error in the row mapper would be worse, because `list_pending` collects
+with `?`, so one bad row would stop the whole outbox. What was really missing is the reason. The new
+`store::json_vec_logged` reads a bad column as empty and warns with table, row id and column. It does not log
+the value, which holds addresses. Used for `to/cc/bcc_addrs`, `keywords` and `envelope_to`.
+`contacts.rs:543` (`to_value` of a plain struct, cannot fail) and `choices.rs:81` (parses the compiled-in
+defaults table) read no stored data, so they are left as they are.
 
 ### A9 · low · "transactional" deletes that are not — confirmed as written
 `store/contacts.rs:449-463` — `delete_many` is documented/aliased as transactional but issues one implicit
