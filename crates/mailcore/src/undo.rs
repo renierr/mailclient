@@ -16,6 +16,9 @@ use crate::store::{folders, messages};
 use crate::sync::pool::{checkout_session, job_account};
 use crate::Db;
 
+mod grace;
+pub use grace::{push_after_grace, Due};
+
 /// How long an action stays undoable before it is pushed to the server.
 pub const UNDO_GRACE_SECS: i64 = 8;
 

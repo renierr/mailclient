@@ -136,15 +136,11 @@ pub(crate) fn spawn_flag_push(account_id: i64) {
     }));
 }
 
-/// [`spawn_flag_push`] once an undoable action's grace period is over. The
-/// wait runs on its own thread so the net thread stays free; if the app
-/// quits first, the queued move is pushed by the next sync instead.
+/// [`spawn_flag_push`] once an undoable action's grace period is over, on
+/// `mailcore`'s one shared timer thread (not a thread per action); if the
+/// app quits first, the queued move is pushed by the next sync instead.
 pub(crate) fn spawn_push_after_grace(account_id: i64) {
-    std::thread::spawn(move || {
-        let secs = mailcore::undo::UNDO_GRACE_SECS.max(0) as u64 + 1;
-        std::thread::sleep(std::time::Duration::from_secs(secs));
-        spawn_flag_push(account_id);
-    });
+    mailcore::undo::push_after_grace(account_id, spawn_flag_push);
 }
 
 /// The one background thread that runs every network job, and the channel
