@@ -11,7 +11,7 @@ Work top to bottom; each item is self-contained so they can be picked out of ord
   Untagged = read from source, not executed. **Applied so far:** E1, E2 (`d3ef68b`), C1 (`1dac9e7`),
   C7 (`11137f4`), D1 (`74d3a4d`), D6 part 1 (`c3d90fb`), B1 (`bb9edb6`), C2 (`946e971`),
   A2 (`5e07cab`), A4 (`f4ff35e`), C15 (`9698314`), A6, E7, D15, E15, E16, E23 §2 (`83875ab`). See §Applied for what each did and what it did not.
-  **Applied together in one later commit** (the one that added this line): A7, A11, A13, A17 (dead attachment delete only), C8, C9, C14, plus
+  **Applied together in `fd3548f`**: A7, A11, A13, A17 (dead attachment delete only), C8, C9, C14, plus
   follow-up corrections to A2, A4, B1, C2, C15 and D6 from a validation pass over those six commits.
 - **AGENTS.md §7** governs closing any item: Rust → `cargo fmt --check` + `cargo clippy -p mailcore -- -D warnings`
   + `cargo test -p mailcore`; QML → `scripts/qml-check.sh`; Android → `./build.sh --android`.
@@ -78,13 +78,13 @@ the "not fixed" column before assuming a finding is closed.
 | **C2** | `946e971` | Bounded scan for the closing `;`; 11.5 s → 12.4 ms on the same 512 KB input | The 9.32 s in the item's table and the 11.49 s here are two separate runs of the same input. *Follow-up:* the code comment said "~9 s", and the boundary test's comment wrongly claimed both cases fail if the window widens (only the 25-byte one does; the 24-byte one guards narrowing) |
 | **A2** | `5e07cab` | Transaction is `IMMEDIATE` | **Corrected in the follow-up:** `5e07cab` also moved the read *before* the `BEGIN`, which opened a new race — two writers for the same message could both see the old rows and insert duplicates, or update a row the other had just deleted. With `IMMEDIATE` the read needs no upgrade, so it is back inside the transaction. The test is a mechanism test, not a regression guard (the interleaving is inside the function); it now asserts the error really is `SQLITE_BUSY_SNAPSHOT` (517) instead of discarding it, and compares against `SCHEMA_VERSION` instead of a hard-coded `"23"` |
 | **A4** | `f4ff35e` | `uid in (?)` chunked at 900, inside `execute_over_uids` so all three callers are covered | Caller leading bindings became a borrowed slice — the old `Vec<Box<dyn ToSql>>` could not be repeated per chunk. *Follow-up:* `UID_CHUNK` had been inserted mid-sentence into `execute_over_uids`'s doc comment, splitting it across both items — restored. More than one chunk now runs in an `IMMEDIATE` transaction (skipped when the caller already has one open), so a failing chunk no longer leaves the earlier ones applied |
-| **A7** | follow-up | `attachment_has_data` uses `.optional()` and returns `NotFound` for a missing row, never `Ok(false)` (which would start a download) | — |
-| **A11** | follow-up | `ensure_schema` refuses a stamp newer than `SCHEMA_VERSION` before touching anything, instead of rewinding it | Refusing means an older build cannot open the file at all; that is the intended trade |
-| **A13** | follow-up | Dead `account_form::test_connection` deleted; its two tests retargeted at `prepare_connection_test`, the live path; its password-fallback doc moved there | — |
-| **A17** (one bullet) | follow-up | Dead `delete_attachments_for_message` and its test lines deleted | The other three A17 bullets are open |
-| **C8** | follow-up | `<!-->` and `<!--->` close at their `>` | — |
-| **C9** | follow-up | `<?` ends at the first `>`, as HTML parses it; `<?xml … ?>` ends at the same place | — |
-| **C14** | follow-up | `s.get_mut(..1)` instead of `s[..1]` in the vCard label | — |
+| **A7** | `fd3548f` | `attachment_has_data` uses `.optional()` and returns `NotFound` for a missing row, never `Ok(false)` (which would start a download) | — |
+| **A11** | `fd3548f` | `ensure_schema` refuses a stamp newer than `SCHEMA_VERSION` before touching anything, instead of rewinding it | Refusing means an older build cannot open the file at all; that is the intended trade |
+| **A13** | `fd3548f` | Dead `account_form::test_connection` deleted; its two tests retargeted at `prepare_connection_test`, the live path; its password-fallback doc moved there | — |
+| **A17** (one bullet) | `fd3548f` | Dead `delete_attachments_for_message` and its test lines deleted | The other three A17 bullets are open |
+| **C8** | `fd3548f` | `<!-->` and `<!--->` close at their `>` | — |
+| **C9** | `fd3548f` | `<?` ends at the first `>`, as HTML parses it; `<?xml … ?>` ends at the same place | — |
+| **C14** | `fd3548f` | `s.get_mut(..1)` instead of `s[..1]` in the vCard label | — |
 | **C15** | `9698314` | Component-stack depth capped at 32; deeper input is refused | **Reason corrected: not quadratic.** Measured linear (8× depth → ~8× time, 4.1 s for 13 MB), so it is a memory/CPU bound, not a blowup. The first draft and the second reviewer both said "quadratic/hang" and both were wrong. *Follow-up:* the comment at the cap check still said "quadratic in the depth" — corrected |
 | **A6** | `83875ab` | `queue::get` uses `.optional()?.ok_or(NotFound)`, so DB failures surface as DB errors | — |
 | **E7** | `83875ab` | `deletePrompt` `?`s the `permanent_json` parse instead of `unwrap_or_default()`, so a bad payload errors instead of flipping to "delete permanently" | — |
@@ -92,6 +92,7 @@ the "not fixed" column before assuming a finding is closed.
 | **E15** | `83875ab` | `StatusStrip` row uses `heightIn(min = 48.dp)`, meeting the touch-target floor | — |
 | **E16** | `83875ab` | Stale `@SuppressLint` removed from `MailWebView`; `mixedContentMode = NEVER_ALLOW` set explicitly on both WebViews with the `MCHost` contract commented | — |
 | **E23** (§2 only) | `83875ab` | Stale "Sync-on-resume gap" entry deleted from `SHARED-CORE.md` | The remaining E23 bullets were no-action by design (deliberate frontend-only wording) |
+| **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
 
@@ -604,7 +605,7 @@ part of ~600 000 `Final-Recipient:` blocks yields several hundred MB of `ReportR
 JSON payload, on every message open.
 **Fix:** cap `dsn.recipients` (e.g. 50) as the vCard parser does.
 
-### C6 · medium · an unclosed drop-content tag swallows the rest of the message `[corrected]`
+### C6 · medium · an unclosed drop-content tag swallows the rest of the message `[corrected]` — **FIXED** `[fixed]`
 `html/sanitize.rs:44-58` — nothing but a matching close tag ever lowers `drop_depth`; not `</html>`, not
 `</body>`, not EOF. `drop_content_tag` includes `style`, `head`, `template`, `form`, `title`, `noscript`
 (`html/tags.rs:100-117`). `if drop_depth == 0` at `sanitize.rs:146` gates every text run.
@@ -613,6 +614,23 @@ closed — which most mail has — so the whole body disappears, not just an opt
 via `<p>visible</p><template>`, or any `</style>` mangled in transit.
 **Fix:** reset `drop_depth` to 0 at EOF, and/or treat `</html>`/`</body>` and a second document-level
 `<style>` as closing.
+
+**Fixed in `2cd9771`, differently from the proposed fix.** "Reset at EOF" changes nothing, because there
+is no text left after EOF. Ending a `<style>` at a second `<style>` does not match browsers either: an
+unclosed `<style>`/`<script>`/`<template>` hides the rest of the page there too, so that behaviour stays.
+What was actually wrong:
+- **Unclosed `<head>`:** `</head>` is optional, and a parser ends the head at `<body>`, at any start tag that
+  cannot live in a head, at visible text, or at `</body>`/`</html>`/`</br>`. The sanitizer now does the
+  same (`ends_head`, with `head_child_tag` in `tags.rs`).
+- **Depth counting matched no names:** a stray `</form>` inside a `<style>` ended it and leaked the CSS text,
+  and `<script>document.write('<form>')</script>` left the depth at 1, which hid everything after it. The
+  depth is now a stack of interned drop-tag names (`drop_content_name`). A close only ends its own name and
+  anything opened inside it. The stack is capped at 256 entries.
+
+Three tests: the head cases, the name-matching cases (both fail on the old code) and an unclosed `<style>`,
+which pins the browser-matching behaviour that stays. `html_to_text` never dropped `head`, so it needed no change.
+An unclosed `<form>` still hides the rest, because forms are deliberately dropped with their content. That
+is the remaining edge.
 
 ### C7 · medium-high · `is_public_remote` accepts every bracketed IPv6 host and the metadata IP — **FIXED** `[fixed]`
 `html/urls.rs:42-63`
