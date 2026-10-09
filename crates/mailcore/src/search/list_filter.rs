@@ -1,9 +1,9 @@
 //! The message list's filters: the quick filters (unread, starred,
 //! attachments, date range) AND-ed with the short typed filter. They never
 //! touch the network. A folder's list asks [`keep_in_folder`] with the filter
-//! alone and the rows are read from the cache, so a keystroke costs the same
-//! however long the folder is; search hits, a short bounded set the frontend
-//! already holds, go through [`keep_json`].
+//! alone and the rows are read from the cache, so no rows cross the bridge
+//! (the pass is still linear in the folder's cached rows); search hits, a
+//! short bounded set the frontend already holds, go through [`keep_json`].
 
 use serde::Deserialize;
 

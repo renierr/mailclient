@@ -281,7 +281,6 @@ fun MailState.moveMessage(fromFolder: Long, uid: Int, destPath: String) = io {
     loadFolders()
 }
 
-/** After the reader changed a message: re-read list, tree and search. */
 /**
  * The rows [uidsJson] (a JSON uid array) of [folder] after a read/star
  * change, swapped in from the core (`feed::message_rows_json`) instead of

@@ -1143,7 +1143,8 @@ per keystroke and per filter toggle.
   swaps the rows in (`Main.patchRows`) and copies the flags into the open message instead of refetching its
   body. `refresh_messages_if_stale` rebuilds the feed only if QML reads it again. Android's row, bulk and
   reader read/star paths do the same through `MailNative.messageRowsJson` (`afterFlags`). Search-hit bulk
-  actions span folders and still reload.
+  actions span folders: they reload the shown folder's feed, and the hits are refreshed by re-running the
+  search (Qt `runBulk` → `updateSearch(false)`).
 - *The filter sends no rows.* `list_filter::keep_in_folder(folder, filter)` reads the folder's rows from the
   cache, with the same fallbacks the list shows (`(no subject)`, `?`, Trash never unread), and returns the
   kept uids. Qt `list_filter_uids`, native `listFilterUids` (now on IO, newest pass wins). Search hits are
@@ -1154,7 +1155,10 @@ per keystroke and per filter toggle.
 
 **Left:** `select_folder`, `set_sort` and account switches still build the whole feed on the GUI thread
 (user-initiated, and they need the whole list). After any feed change QML still re-runs `MessageList`'s
-O(n) model diff in JS — no JSON and no Rust work for a patch, but O(n) all the same. `ModelSync.sync`
+O(n) model diff in JS. With a quick filter or typed filter active, every patch and every keystroke also
+re-runs `list_filter_uids`, which reads every cached row of the folder (`list_compact_by_folder`, no
+limit): no rows cross the bridge any more, but the cost is still O(cached rows), and on Qt it is an
+undebounced call on the GUI thread — the "debounce onto the net thread" half of the fix is not done. `ModelSync.sync`
 rebuilds its index map after every insert or move, so a re-sort or a large load-older batch is O(n²) in
 JS. Android's job-finished reloads still read the whole folder, but on IO. Not measured on a large
 folder or a device.

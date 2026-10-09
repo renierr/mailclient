@@ -154,7 +154,11 @@ internal fun MailState.recomputeShown() {
         MailNative.ensureInit(appContext)
         val shown = if (rows.isEmpty()) rows else keptMessages(folder, rows, filter)
         val shownHitRows = if (hitFilter == null || hits.isEmpty()) hits else keptHits(hits, hitFilter)
-        withContext(Dispatchers.Main) { applyShown(shown, shownHitRows) }
+        withContext(Dispatchers.Main) {
+            // Stale if the folder or the rows changed meanwhile.
+            if (folderId != folder || messages !== rows || searchHits !== hits) return@withContext
+            applyShown(shown, shownHitRows)
+        }
     }
 }
 
