@@ -33,6 +33,32 @@ pub(crate) fn atomic<T>(db: &crate::db::Db, f: impl FnOnce() -> Result<T>) -> Re
     Ok(value)
 }
 
+/// Integer column `idx` as `T`. A value outside `T` (a hand-edited or
+/// corrupt row) reads as 0 with a warning naming the column, instead of
+/// wrapping: a port stored as 70000 read back as 4464, a negative size as
+/// 1.8e19 (A14).
+pub(crate) fn int_col<T: TryFrom<i64> + Default>(
+    row: &rusqlite::Row<'_>,
+    idx: usize,
+) -> rusqlite::Result<T> {
+    Ok(opt_int_col(row, idx)?.unwrap_or_default())
+}
+
+/// [`int_col`] for a nullable column.
+pub(crate) fn opt_int_col<T: TryFrom<i64> + Default>(
+    row: &rusqlite::Row<'_>,
+    idx: usize,
+) -> rusqlite::Result<Option<T>> {
+    let Some(v) = row.get::<_, Option<i64>>(idx)? else {
+        return Ok(None);
+    };
+    Ok(Some(T::try_from(v).unwrap_or_else(|_| {
+        let column = row.as_ref().column_name(idx).unwrap_or("?");
+        log::warn!("column {column}: {v} is out of range, read as 0");
+        T::default()
+    })))
+}
+
 /// Decode a JSON-encoded string vec column.
 pub(crate) fn json_vec(raw: &str) -> Result<Vec<String>> {
     if raw.trim().is_empty() {
@@ -70,6 +96,29 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap()
+    }
+
+    #[test]
+    fn out_of_range_integers_read_as_zero_not_wrapped() {
+        let db = Db::open_in_memory().unwrap();
+        let read = |v: Option<i64>| -> (u16, u32, u64, Option<u32>) {
+            db.conn()
+                .query_row("select ?1, ?1, ?1, ?1", [v], |r| {
+                    Ok((
+                        int_col(r, 0)?,
+                        int_col(r, 1)?,
+                        int_col(r, 2)?,
+                        opt_int_col(r, 3)?,
+                    ))
+                })
+                .unwrap()
+        };
+        assert_eq!(read(Some(993)), (993, 993, 993, Some(993)));
+        // 70000 used to read back as port 4464.
+        assert_eq!(read(Some(70_000)), (0, 70_000, 70_000, Some(70_000)));
+        // A negative size used to read back as 1.8e19.
+        assert_eq!(read(Some(-1)), (0, 0, 0, Some(0)));
+        assert_eq!(read(None).3, None);
     }
 
     #[test]

@@ -15,9 +15,11 @@ fn row_to_folder(row: &rusqlite::Row<'_>) -> rusqlite::Result<Folder> {
         path: row.get(2)?,
         delimiter: row.get(3)?,
         role: FolderRole::parse_role(&role),
-        uid_validity: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
-        uid_next: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
-        server_total: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
+        uid_validity: crate::store::opt_int_col(row, 5)?,
+        uid_next: crate::store::opt_int_col(row, 6)?,
+        server_total: crate::store::opt_int_col(row, 7)?,
+        // Not `int_col`: modseqs are stored with a bit-preserving `as i64`
+        // (they may exceed `i64::MAX`), so `as u64` is the exact inverse.
         highest_modseq: row.get::<_, Option<i64>>(8)?.unwrap_or(0) as u64,
         subscribed: opt_bool(row.get::<_, i64>(9)?),
         last_sync_at: row.get(10)?,

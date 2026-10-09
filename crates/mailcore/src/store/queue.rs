@@ -70,7 +70,7 @@ fn row_to_queued(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueuedSend> {
         message_id: row.get(2)?,
         status: QueueStatus::parse_status(&status),
         last_error: row.get(4)?,
-        retries: row.get::<_, i64>(5)? as u64,
+        retries: crate::store::int_col(row, 5)?,
         raw_mime: row.get(6)?,
         envelope_from: row.get(7)?,
         // Read as empty when corrupt, which `submit_claimed` refuses ("no

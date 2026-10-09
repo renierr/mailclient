@@ -40,7 +40,7 @@ pub(super) fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Messag
         id,
         account_id: row.get(1)?,
         folder_id: row.get(2)?,
-        uid: row.get::<_, i64>(3)? as u32,
+        uid: crate::store::int_col(row, 3)?,
         message_id_header: row.get(4)?,
         thread_id: row.get(5)?,
         subject: row.get(6)?,
@@ -59,7 +59,7 @@ pub(super) fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Messag
         is_draft: opt_bool(row.get::<_, i64>(20)?),
         has_attachments: opt_bool(row.get::<_, i64>(21)?),
         keywords: list(&kw, "keywords"),
-        size: row.get::<_, i64>(22)? as u64,
+        size: crate::store::int_col(row, 22)?,
         downloaded_full: opt_bool(row.get::<_, i64>(23)?),
         from_name: row.get(24)?,
     })
@@ -198,7 +198,7 @@ pub fn list_compact_by_folder_sorted(
     let rows = stmt
         .query_map(params![folder_id, limit as i64, offset as i64], |row| {
             Ok(CompactMessage {
-                uid: row.get::<_, i64>(0)? as u32,
+                uid: crate::store::int_col(row, 0)?,
                 subject: row.get(1)?,
                 from_addr: row.get(2)?,
                 from_name: row.get(3)?,

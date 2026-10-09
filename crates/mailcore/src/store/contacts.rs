@@ -452,8 +452,8 @@ fn row_to_contact(row: &rusqlite::Row<'_>) -> rusqlite::Result<Contact> {
         address: row.get(0)?,
         name: row.get(1)?,
         alias: row.get(2)?,
-        times_seen: row.get::<_, i64>(3)? as u64,
-        sent_count: row.get::<_, i64>(4)? as u64,
+        times_seen: crate::store::int_col(row, 3)?,
+        sent_count: crate::store::int_col(row, 4)?,
         last_seen_at: row.get(5)?,
     })
 }
