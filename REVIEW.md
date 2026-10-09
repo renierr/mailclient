@@ -138,6 +138,7 @@ the "not fixed" column before assuming a finding is closed.
 | **E17** | `fa7291b` | Manifest comment states what the flag really governs | Flag kept: `http://` images are a product call |
 | **D7** | — | No change: the binding re-reads only on account switch or Settings save | — |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
+| **D5** (part) | `4eea7db` | Read/star patches rows from `feed::message_rows_json`; the list filter reads the folder in the core (`keep_in_folder`), no rows sent; job refreshes build on the net thread. Both frontends | Folder/sort/account switches still rebuild on the GUI thread; QML's O(n) list diff remains |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
 
@@ -1114,7 +1115,7 @@ hence "suspected" rather than confirmed.
 `attachment_id: i32` (`bridge.rs:415,421`). Low because SQLite rowids that high are implausible.
 Verified-correct for contrast: `bridge.rs:877-878` (`.min(i32::MAX as u64) as i32`), `bridge/messages.rs:250,116,135`.
 
-### D5 · high · whole-cache JSON re-serialised on the GUI thread per interaction
+### D5 · high · whole-cache JSON re-serialised on the GUI thread per interaction — **PARTLY FIXED** `[fixed]`
 `crates/mailapp/src/bridge/worker.rs` verifies the *net* rule sound end to end: all IMAP/SMTP runs on the one
 `mailclient-net` current-thread runtime (`worker.rs:143-172`), every job is queued there
 (`bridge/sync.rs:29,96,128,171,202,281`; `composer.rs:40`; `capabilities.rs:12`), and all three signals are
@@ -1131,6 +1132,32 @@ Also per keystroke: `MessageList.qml:381` calls
 `list_filter_keep(JSON.stringify(filter), JSON.stringify(rows))` — the whole feed stringified into Rust and
 an index array back — plus `search_json`/`contacts_json` (`bridge.rs:140,176`).
 **Fix:** paged/partial feed pushes; debounce keystroke-driven work onto the net thread.
+
+**Applied (both frontends, core-first).** Native Android had the same shape: every read/star re-read the
+whole folder (on IO), and the list filter serialised every row into `listFilterKeep` on the **main** thread
+per keystroke and per filter toggle.
+- *Read/star changes patch rows.* `feed::message_rows_json(folder, uids)` returns just the touched rows in
+  the list feed's shape (one shared row builder, so a patched row equals the list's own). Qt's
+  `open_message` / `mark_read` / `toggle_star` / `mark_read_many` / `set_star_many` no longer rebuild
+  `messages_json`: they refresh the small folder and account feeds and mark the message feed stale; QML
+  swaps the rows in (`Main.patchRows`) and copies the flags into the open message instead of refetching its
+  body. `refresh_messages_if_stale` rebuilds the feed only if QML reads it again. Android's row, bulk and
+  reader read/star paths do the same through `MailNative.messageRowsJson` (`afterFlags`). Search-hit bulk
+  actions span folders and still reload.
+- *The filter sends no rows.* `list_filter::keep_in_folder(folder, filter)` reads the folder's rows from the
+  cache, with the same fallbacks the list shows (`(no subject)`, `?`, Trash never unread), and returns the
+  kept uids. Qt `list_filter_uids`, native `listFilterUids` (now on IO, newest pass wins). Search hits are
+  bounded by `HIT_LIMIT` and keep `keep_json`.
+- *Job refreshes build off the GUI thread.* `push_feeds` split into `Feeds::build` (any thread) and
+  `Feeds::apply`. A finished job builds its feeds on the net thread; the GUI applies them only when the
+  selection resolves to them and no local change happened since (`FEED_EPOCH`), else rebuilds as before.
+
+**Left:** `select_folder`, `set_sort` and account switches still build the whole feed on the GUI thread
+(user-initiated, and they need the whole list). After any feed change QML still re-runs `MessageList`'s
+O(n) model diff in JS — no JSON and no Rust work for a patch, but O(n) all the same. `ModelSync.sync`
+rebuilds its index map after every insert or move, so a re-sort or a large load-older batch is O(n²) in
+JS. Android's job-finished reloads still read the whole folder, but on IO. Not measured on a large
+folder or a device.
 
 *(D17 from the first draft — "`messages_json` always carries the full local cache" — was the same finding
 seen from `bridge.rs:873`; it is merged here rather than counted twice.)*
