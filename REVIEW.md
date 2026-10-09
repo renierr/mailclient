@@ -95,11 +95,14 @@ the "not fixed" column before assuming a finding is closed.
 | **C4** | `c5598e9` | Size caps inside the parsers: `.ics` refused above 1 MiB, `.vcf` above 4 MiB, report text read to 256 KiB | The attachment blob is still loaded from SQLite before the length check |
 | **C5** | `c5598e9` | DSN recipients capped at 50 | No "and N more" in the card; the cap is silent |
 | **D2** | `9702ed1` | `parse_uids_json` refuses a uid above `u32::MAX` instead of wrapping it | Qt and Android still parse selections separately |
+| **A1** | `1031adc` | An unreadable version stamp is refused with a reason instead of reading as 0 | Refusing means such a file does not open; that was already the case, now with a clear message |
+| **A3** | `1031adc` | Each migration and its stamp commit together; each best-effort repair rolls back as a whole on error | A rolled-back repair is not retried |
+| **A5** | `1031adc` | v20 repair prepares its statement once and runs atomically | — |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
 
-### A1 · medium · version stamp collapse bricks open forever `[verify]` `[corrected]`
+### A1 · medium · version stamp collapse bricks open forever `[verify]` `[corrected]` — **FIXED** `[fixed]`
 `db/migrations.rs:132-151`
 
 ```rust
@@ -127,6 +130,12 @@ let current: u32 = match raw.as_deref().map(str::trim).map(str::parse::<u32>) {
 };
 ```
 
+**Fixed in `1031adc`** as proposed, with two additions. A missing `schema_meta` *table* is checked in
+`sqlite_master` first, because `.optional()` alone would turn a fresh file's "no such table" into an error.
+And `0` counts as unreadable too. Every other failure of the read (a locked file, say) now propagates instead
+of reading as 0. Tests: the six bad stamps are refused with "unreadable" and left untouched; a padded stamp
+and a missing row still open.
+
 ### A2 · high · deferred transaction reads before it writes → `SQLITE_BUSY` — **FIXED** `[fixed]`
 `store/messages/attachments.rs:50-51`
 
@@ -144,7 +153,7 @@ connection commits in between (GUI thread + net thread in `mailapp`; the FRB poo
 `BEGIN`" was wrong — it trades the upgrade failure for a lost-update race between two writers of the same
 message. `5e07cab` did both; the read is back inside the transaction in the follow-up commit.)*
 
-### A3 · medium · failed migration steps still stamp success `[verify]` — confirmed
+### A3 · medium · failed migration steps still stamp success `[verify]` — confirmed — **FIXED** `[fixed]`
 `db/migrations.rs:303-310` (+ `:190-198`, `:225-228`, `:246-249`, `:259-262`, `:293-296`)
 
 ```rust
@@ -157,6 +166,21 @@ v21's backfill (`store/contacts.rs:149`) issues one `update contacts set sent_co
 per address with **no transaction**, so a mid-run failure leaves partial credit that is then recorded as
 done — never retried. Same shape for v8/v12/v14/v16/v20.
 **Fix:** wrap each best-effort step in its own transaction; do not advance `current` past a step that errored.
+
+**Fixed in `1031adc`, not quite as proposed.** "Do not advance past a failed step" would leave every later DDL step
+unapplied, and the app needs those columns, so a failed repair cannot block the version. Instead there are
+two savepoint levels:
+- `step(conn, N, …)` runs migration N **and its stamp** in one savepoint, so each version is all-or-nothing.
+  Before, the stamp was written once at the very end. A crash after the v21 backfill but before that stamp
+  re-ran the backfill on the next open and gave the credit twice.
+- `repair(conn, what, …)` wraps each best-effort data step (v8 ×2, v12, v14, v16, v20, v21) in a nested
+  savepoint. On error it rolls back everything that step wrote, logs it, and the version step goes on. Partial
+  credit can no longer be recorded as done.
+
+`backfill_from_names` and `drop_generated_html` lost their own `unchecked_transaction()`, because a `BEGIN`
+cannot start inside the savepoint. The savepoint makes them atomic now. **Still open:** a rolled-back repair
+is not retried. The warning is the only record. Retrying needs a per-repair marker, and v12 in particular is
+not safe to re-run once decoded names exist (see A16).
 
 ### A4 · medium · unbounded `uid in (?,?,…)` fails at 32 766 UIDs — **FIXED** `[fixed]`
 `store/messages/flags.rs:127-128`
@@ -184,11 +208,14 @@ The caller-side leading bindings became a borrowed slice of `&dyn ToSql`, becaus
 being built inside the array literal. One test with a 40 000-uid list and rows on UID 900 (the chunk
 boundary): it panics when the chunking is removed, so it is a real guard rather than a restatement.
 
-### A5 · medium · migration repair: no transaction, `prepare` inside the loop
+### A5 · medium · migration repair: no transaction, `prepare` inside the loop — **FIXED** `[fixed]`
 `db/migrations.rs:382-408` — `migrate_cid_inline_attachments` re-prepares the statement per message
 (N+1) and writes unbatched with no transaction, so a crash leaves a half-repaired attachment set that
 (per A3) is never re-run.
 **Fix:** prepare once outside the loop; run in one `unchecked_transaction()`.
+
+**Fixed in `1031adc`** together with A3. The per-message statement is `prepare_cached`, and the whole repair runs
+inside A3's `repair` savepoint rather than a transaction of its own, which could not begin there.
 
 ### A6 · medium · every error becomes "not found" `[corrected]` — **FIXED** `[fixed]`
 `store/queue.rs:120-128`
