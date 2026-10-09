@@ -468,13 +468,17 @@ pub fn recent_unread(db: &Db, limit: u64, account_id: Option<i64>) -> Vec<Recent
     rows.unwrap_or_default()
 }
 
-/// Cross-process sync mutex. The lock file lives next to the DB
-/// (`<db-dir>/.sync.lock`) and holds the holder's pid. Stale locks
-/// (dead pid, or older than 15 minutes) are reaped; a live holder makes
-/// [`acquire_sync_lock`] fail so the loser skips its run quietly.
+/// Cross-process sync mutex: an OS file lock (`flock` on Linux and
+/// Android, `LockFileEx` on Windows) on `<db-dir>/.sync.lock`. A live
+/// holder makes [`acquire_sync_lock`] return `None` so the loser skips its
+/// run quietly; the kernel drops the lock when the holder exits or dies.
+///
+/// It used to be a create-new file holding the holder's pid, reaped when
+/// the pid looked dead or the file was 15 minutes old. Two runs could both
+/// judge it stale (an empty file mid-write parsed as "stale") and both
+/// take it, and the reaping retried by unbounded recursion (B18).
 pub struct SyncLock {
-    path: PathBuf,
-    done: bool,
+    _file: std::fs::File,
 }
 
 impl SyncLock {
@@ -485,70 +489,37 @@ impl SyncLock {
             .unwrap_or_else(|| Path::new("."))
             .join(".sync.lock")
     }
-
-    fn pid_alive(pid: u32) -> bool {
-        // Android has /proc too, but is not `target_os = "linux"`.
-        #[cfg(any(target_os = "linux", target_os = "android"))]
-        {
-            // A live process has a /proc entry; a zombie/reaped pid does not.
-            // PID reuse is harmless here: at worst we skip one background run.
-            Path::new(&format!("/proc/{pid}")).exists()
-        }
-        #[cfg(not(any(target_os = "linux", target_os = "android")))]
-        {
-            let _ = pid;
-            true
-        }
-    }
 }
 
 /// Try to take the sync lock for `db_path`. `Ok(None)` = loss to a live
-/// holder (skip the run); `Ok(Some(guard))` = we hold it; `Err` = IO failure.
+/// holder (skip the run); `Ok(Some(guard))` = we hold it until the guard
+/// drops; `Err` = IO failure.
+///
+/// The file itself is never deleted: a run that opened it before the
+/// delete would lock the unlinked file while the next one creates and
+/// locks a new one, and both would hold "the" lock.
 pub fn acquire_sync_lock(db_path: &Path) -> Result<Option<SyncLock>> {
     let path = SyncLock::lock_path(db_path);
-    match std::fs::OpenOptions::new()
+    let io_error = |e: std::io::Error| {
+        crate::error::StoreError::InvalidInput(format!("sync lock {}: {e}", path.display()))
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
         .write(true)
-        .create_new(true)
+        .create(true)
+        .truncate(false)
         .open(&path)
-    {
-        Ok(mut f) => {
-            let _ = writeln!(f, "{}", std::process::id());
-            Ok(Some(SyncLock { path, done: false }))
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            let stale = std::fs::read_to_string(&path)
-                .ok()
-                .and_then(|s| s.trim().parse::<u32>().ok())
-                .is_none_or(|pid| {
-                    !SyncLock::pid_alive(pid) || lock_age(&path).unwrap_or_default() > 900
-                });
-            if stale {
-                let _ = std::fs::remove_file(&path);
-                return acquire_sync_lock(db_path);
+        .map_err(io_error)?;
+    match file.try_lock() {
+        Ok(()) => {
+            // The pid is only a hint for a human looking at the file.
+            if file.set_len(0).is_ok() {
+                let _ = writeln!(&file, "{}", std::process::id());
             }
-            Ok(None)
+            Ok(Some(SyncLock { _file: file }))
         }
-        Err(e) => Err(crate::error::StoreError::InvalidInput(format!(
-            "sync lock {}: {e}",
-            path.display()
-        ))),
-    }
-}
-
-fn lock_age(path: &Path) -> std::io::Result<u64> {
-    let mtime = std::fs::metadata(path)?.modified()?;
-    Ok(std::time::SystemTime::now()
-        .duration_since(mtime)
-        .map(|d| d.as_secs())
-        .unwrap_or(u64::MAX))
-}
-
-impl Drop for SyncLock {
-    fn drop(&mut self) {
-        if !self.done {
-            self.done = true;
-            let _ = std::fs::remove_file(&self.path);
-        }
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(e)) => Err(io_error(e)),
     }
 }
 
@@ -557,6 +528,31 @@ pub(crate) mod tests {
     use super::*;
     use crate::models::{FolderRole, NewAccount};
     use crate::store::{accounts, folders, messages};
+
+    #[test]
+    fn the_sync_lock_is_held_until_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("db.sqlite");
+        let held = acquire_sync_lock(&db_path).unwrap().expect("free lock");
+        assert!(acquire_sync_lock(&db_path).unwrap().is_none(), "held");
+        drop(held);
+        assert!(acquire_sync_lock(&db_path).unwrap().is_some(), "released");
+    }
+
+    #[test]
+    fn a_leftover_lock_file_does_not_block() {
+        // An empty file (a holder mid-write) used to read as stale for one
+        // run and live for another; a file is no lock now, only the OS lock.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("db.sqlite");
+        for content in ["", "not a pid\n", "4294967295\n"] {
+            std::fs::write(SyncLock::lock_path(&db_path), content).unwrap();
+            assert!(
+                acquire_sync_lock(&db_path).unwrap().is_some(),
+                "{content:?}"
+            );
+        }
+    }
 
     #[test]
     fn progress_status_names_step_total_and_folder() {
