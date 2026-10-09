@@ -259,16 +259,30 @@ Changes that cannot alter compiled code or runtime behaviour need no test or
 build runs: docs (`*.md`), ignore files, comment-only edits, and local-only
 gitignored config (`.env`, `flutter/android/key.properties`,
 `android/key.properties`, `local.properties`). State that verification was
-skipped and why instead of running suites "just in case". Anything else gets
-the matching check: Rust → item 1, QML → item 2, Dart → `flutter analyze` +
-`flutter test`, Kotlin/Compose → the affected `./build.sh --android` (or
-`installDebug` on a device), build
-scripts / manifests / Gradle / dependencies → the affected `./build.sh`
-target (`--qt` / `--flutter` / `--apk` / `--android`).
+skipped and why instead of running suites "just in case".
+
+Anything else gets the fast check for each layer it touches, and no more. A
+full `./build.sh` is a packaging step (release builds, every Android ABI,
+signing), not a compile check: it costs minutes where these cost seconds.
+
+| Changed | Fast check |
+|---|---|
+| `mailcore` | item 1 |
+| `mailapp` Rust (bridge) | `cargo clippy -p mailapp -- -D warnings` + `cargo test -p mailapp` (needs qmake on `PATH`; on Windows `source scripts/qt-env.sh` in the same shell) |
+| QML | item 2 |
+| `mailffi`, shared and FRB code | `cargo clippy -p mailffi -- -D warnings` |
+| `mailffi/src/android.rs` (JNI) | `cargo ndk -t arm64-v8a clippy -p mailffi -- -D warnings`, with `ANDROID_NDK_HOME` at the NDK pinned as `ndkVersion` in `android/app/build.gradle.kts`. Host clippy skips this file: it is `cfg(target_os = "android")` |
+| Kotlin/Compose | `./gradlew :app:compileDebugKotlin` from `android/`. It compiles Kotlin without the cargo-ndk build, which is wired only to the JNI-lib merge tasks |
+| Dart | `flutter analyze` + `flutter test` in `flutter/` |
+
+A Kotlin edit that calls a new JNI extern needs both the JNI row and the
+Kotlin row; neither checks the other side. Judge a Gradle run by its log
+(`BUILD FAILED`, `e:` lines), not only by the exit status: a pipe or a
+trailing command can hide the failure.
 
 1. `cargo fmt --check`, `cargo clippy -p mailcore -- -D warnings`, `cargo test -p mailcore` green.
 2. `scripts/qml-check.sh` green on touched QML (lint gate + headless QML tests + format check; or noted as skipped headless with reason — the format check skips itself without the pinned qmlformat). Qt/WebEngine enum and API names verified against the installed headers or Qt docs — QML misspellings of them fail silently.
-3. The affected `./build.sh` target produces a runnable bundle in `dist/` (`--qt` → `dist/mailclient/bin/mailapp`, `--flutter` → `dist/mailclient-flutter/`, `--apk` → `dist/mailclient-apk/`, `--android` → `dist/mailclient-android/`).
+3. Full build, only when packaging itself can change: build scripts, manifests, Gradle files, dependencies or `Cargo.toml` features, bundled resources and icons; or when the user asks for a bundle, or a release is being shipped. Then the affected `./build.sh` target produces a runnable bundle in `dist/` (`--qt` → `dist/mailclient/bin/mailapp`, `--flutter` → `dist/mailclient-flutter/`, `--apk` → `dist/mailclient-apk/`, `--android` → `dist/mailclient-android/`). Otherwise say it was skipped and which fast checks ran instead.
 4. `PROJECT.md` status table updated; no secrets/binaries/`dist/` staged.
 5. Cross-frontend features get a duplication check: read both adapters' new
    functions and both UIs' new code side by side. Do they show any logic
