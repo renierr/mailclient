@@ -21,8 +21,10 @@
 //! ([`HEARTBEAT_FRESH`]): the alarm adds no radio wake-ups of its own.
 //!
 //! Accounts in their quiet hours are not in [`schedule::push_account_ids`],
-//! so the next signal drops their connection; the host plans again when the
-//! window ends.
+//! so the next signal asks their task to leave; the host plans again when
+//! the window ends. A task leaves only where it is waiting (IDLE, offline,
+//! backing off) or between checks, never in the middle of one: aborting a
+//! sync can stop it between dropping a folder's rows and refetching them.
 //!
 //! [`PushListener::busy`] brackets every stretch of work, so the host holds
 //! a wake lock exactly while the monitor needs the CPU and not while it
@@ -59,6 +61,11 @@ pub const PIGGYBACK_AFTER: Duration = Duration::from_secs(10 * 60);
 /// alive. The host's keep-alive cadence, so any server chatty enough to
 /// arrive between two alarms qualifies.
 pub const HEARTBEAT_FRESH: Duration = Duration::from_secs(15 * 60);
+
+/// How long a stopping monitor waits for its accounts to log out before it
+/// aborts what is left. Each IMAP command is bounded on its own, but a
+/// shutdown should not wait out a slow sync.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
 /// What the monitor tells its host. Called on the push thread.
 pub trait PushListener: Send + Sync + 'static {
@@ -151,9 +158,16 @@ struct Ctx {
     busy: Cell<usize>,
 }
 
+/// One account's task and the flag that asks it to leave.
+struct Task {
+    handle: tokio::task::JoinHandle<()>,
+    leave: watch::Sender<bool>,
+}
+
 /// Keeps one task per push account and re-reads the account list on every
-/// signal. An account that left push is dropped mid-IDLE: the server sees
-/// the connection close, which is all a LOGOUT would have told it.
+/// signal. An account that left push is asked to leave, which it does at
+/// its next safe point (at once when it is in IDLE); one that comes back
+/// before that simply keeps its task.
 async fn supervise(
     db_path: PathBuf,
     listener: Arc<dyn PushListener>,
@@ -172,30 +186,51 @@ async fn supervise(
         listener,
         busy: Cell::new(0),
     });
-    let mut tasks: HashMap<i64, tokio::task::JoinHandle<()>> = HashMap::new();
+    let mut tasks: HashMap<i64, Task> = HashMap::new();
     loop {
         if rx.borrow_and_update().stop {
             break;
         }
         let wanted = schedule::push_account_ids(&ctx.db);
-        tasks.retain(|id, task| {
-            let keep = wanted.contains(id) && !task.is_finished();
-            if !keep {
-                task.abort();
-            }
-            keep
-        });
+        tasks.retain(|_, task| !task.handle.is_finished());
+        for (id, task) in &tasks {
+            task.leave.send_if_modified(|leave| {
+                let should = !wanted.contains(id);
+                std::mem::replace(leave, should) != should
+            });
+        }
         for id in wanted {
             tasks.entry(id).or_insert_with(|| {
-                tokio::task::spawn_local(run_account(ctx.clone(), id, rx.clone()))
+                let (leave, leave_rx) = watch::channel(false);
+                let handle =
+                    tokio::task::spawn_local(run_account(ctx.clone(), id, rx.clone(), leave_rx));
+                Task { handle, leave }
             });
         }
         if rx.changed().await.is_err() {
             break;
         }
     }
-    for (_, task) in tasks {
-        let _ = task.await;
+    // Every task sees `stop` at its next safe point. Past the grace period
+    // the process is going away anyway, so what is left is aborted (B16).
+    let deadline = tokio::time::Instant::now() + SHUTDOWN_GRACE;
+    for (id, task) in tasks {
+        let mut handle = task.handle;
+        if tokio::time::timeout_at(deadline, &mut handle)
+            .await
+            .is_err()
+        {
+            log::warn!("push: account {id} did not stop in time, aborting");
+            handle.abort();
+        }
+    }
+}
+
+/// Resolves once the supervisor asks this task to leave; never when the
+/// supervisor is gone (`stop` covers that).
+async fn until_leave(leave: &mut watch::Receiver<bool>) {
+    if leave.wait_for(|l| *l).await.is_err() {
+        std::future::pending::<()>().await;
     }
 }
 
@@ -241,19 +276,25 @@ enum Exit {
 /// One account, for the life of the monitor: connect, IDLE, check on every
 /// change, reconnect with backoff after errors. Ends when the monitor stops
 /// or the account is deleted.
-async fn run_account(ctx: Rc<Ctx>, account_id: i64, mut rx: watch::Receiver<Signal>) {
+async fn run_account(
+    ctx: Rc<Ctx>,
+    account_id: i64,
+    mut rx: watch::Receiver<Signal>,
+    mut leave: watch::Receiver<bool>,
+) {
     let mut busy = Busy::new(ctx.clone());
     let mut failures = 0u32;
     let mut last_error: Option<String> = None;
     loop {
         let signal = *rx.borrow_and_update();
-        if signal.stop {
+        if signal.stop || *leave.borrow() {
             return;
         }
         if !signal.online {
             busy.set(false);
-            if rx.changed().await.is_err() {
-                return;
+            tokio::select! {
+                changed = rx.changed() => if changed.is_err() { return },
+                () = until_leave(&mut leave) => return,
             }
             busy.set(true);
             continue;
@@ -261,7 +302,16 @@ async fn run_account(ctx: Rc<Ctx>, account_id: i64, mut rx: watch::Receiver<Sign
         let Ok(account) = accounts::get(&ctx.db, account_id) else {
             return;
         };
-        match serve(&ctx, &account, &mut rx, &mut busy, &mut failures).await {
+        match serve(
+            &ctx,
+            &account,
+            &mut rx,
+            &mut leave,
+            &mut busy,
+            &mut failures,
+        )
+        .await
+        {
             Ok(Exit::Stop) => return,
             Ok(Exit::Reconnect) => {}
             Err(e) => {
@@ -279,6 +329,7 @@ async fn run_account(ctx: Rc<Ctx>, account_id: i64, mut rx: watch::Receiver<Sign
                 tokio::select! {
                     () = tokio::time::sleep(backoff(failures)) => {}
                     changed = rx.changed() => if changed.is_err() { return },
+                    () = until_leave(&mut leave) => return,
                 }
                 busy.set(true);
             }
@@ -294,13 +345,14 @@ async fn serve(
     ctx: &Ctx,
     account: &Account,
     rx: &mut watch::Receiver<Signal>,
+    leave: &mut watch::Receiver<bool>,
     busy: &mut Busy,
     failures: &mut u32,
 ) -> Result<Exit> {
     let secrets = auth::load_account_secrets_retry(&account.auth_vault_key).await?;
     let mut imap = ImapSync::new(account);
     imap.connect(&secrets.imap_password).await?;
-    let result = serve_session(ctx, account, &mut imap, rx, busy, failures).await;
+    let result = serve_session(ctx, account, &mut imap, rx, leave, busy, failures).await;
     match result {
         Ok(_) => imap.logout().await,
         Err(_) => imap.disconnect(),
@@ -313,6 +365,7 @@ async fn serve_session(
     account: &Account,
     imap: &mut ImapSync,
     rx: &mut watch::Receiver<Signal>,
+    leave: &mut watch::Receiver<bool>,
     busy: &mut Busy,
     failures: &mut u32,
 ) -> Result<Exit> {
@@ -328,20 +381,34 @@ async fn serve_session(
         if let Some(exit) = exit_for(base, base) {
             return Ok(exit);
         }
+        // Between checks is a safe point to leave; so is the wait below.
+        if *leave.borrow() {
+            return Ok(Exit::Stop);
+        }
         busy.set(false);
         let end = if idle {
             let clock = IdleClock::new(SystemTime::now());
+            let wait = async {
+                tokio::select! {
+                    () = wait_for_signal(rx, base, Some(&clock)) => {}
+                    () = until_leave(leave) => {}
+                }
+            };
             imap.session()?
-                .idle(wait_for_signal(rx, base, Some(&clock)), || {
-                    clock.heartbeat(SystemTime::now())
-                })
+                .idle(wait, || clock.heartbeat(SystemTime::now()))
                 .await
         } else {
-            wait_for_signal(rx, base, None).await;
+            tokio::select! {
+                () = wait_for_signal(rx, base, None) => {}
+                () = until_leave(leave) => {}
+            }
             Ok(IdleEnd::Changed)
         };
         busy.set(true);
         let end = end?;
+        if *leave.borrow() {
+            return Ok(Exit::Stop);
+        }
         if idle {
             let stats = imap.session()?.last_idle();
             account_settings::record_idle_heartbeats(
@@ -559,6 +626,51 @@ mod tests {
             vec![true, false, true, false]
         );
         assert_eq!(ctx.busy.get(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_waiting_account_leaves_when_asked_not_on_other_signals() {
+        // B15: an account that left push used to be aborted wherever it
+        // was; now it leaves from a wait. Offline is one such wait.
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let ctx = Rc::new(Ctx {
+                    db: Db::open_in_memory().unwrap(),
+                    db_path: PathBuf::new(),
+                    listener: Arc::new(Recorder::default()),
+                    busy: Cell::new(0),
+                });
+                let (tx, rx) = watch::channel(Signal::default());
+                let (leave, leave_rx) = watch::channel(false);
+                let task = tokio::task::spawn_local(run_account(ctx.clone(), 1, rx, leave_rx));
+                tx.send_modify(|s| s.keepalive += 1);
+                tokio::task::yield_now().await;
+                assert!(!task.is_finished(), "a keep-alive is not a reason to leave");
+
+                leave.send_replace(true);
+                tokio::time::timeout(Duration::from_secs(1), task)
+                    .await
+                    .expect("the task leaves from its wait")
+                    .unwrap();
+                assert_eq!(ctx.busy.get(), 0, "busy is released on the way out");
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn until_leave_waits_for_true_and_outlives_its_supervisor() {
+        let (leave, mut rx) = watch::channel(false);
+        let waited = tokio::time::timeout(Duration::from_millis(20), until_leave(&mut rx)).await;
+        assert!(waited.is_err());
+        leave.send_replace(true);
+        until_leave(&mut rx).await;
+
+        // A dropped supervisor is `stop`'s business, not a leave.
+        let (leave, mut rx) = watch::channel(false);
+        drop(leave);
+        let waited = tokio::time::timeout(Duration::from_millis(20), until_leave(&mut rx)).await;
+        assert!(waited.is_err());
     }
 
     #[tokio::test]
