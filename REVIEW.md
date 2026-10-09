@@ -94,6 +94,7 @@ the "not fixed" column before assuming a finding is closed.
 | **E23** (§2 only) | `83875ab` | Stale "Sync-on-resume gap" entry deleted from `SHARED-CORE.md` | The remaining E23 bullets were no-action by design (deliberate frontend-only wording) |
 | **C4** | `c5598e9` | Size caps inside the parsers: `.ics` refused above 1 MiB, `.vcf` above 4 MiB, report text read to 256 KiB | The attachment blob is still loaded from SQLite before the length check |
 | **C5** | `c5598e9` | DSN recipients capped at 50 | No "and N more" in the card; the cap is silent |
+| **D2** | `9702ed1` | `parse_uids_json` refuses a uid above `u32::MAX` instead of wrapping it | Qt and Android still parse selections separately |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -831,7 +832,7 @@ stays latched and **every later job is refused** with the busy message until res
   thread that owns its receiver the send cannot fail, so the only way to reach it is the QObject being
   gone at shutdown, which is what its comment already says.
 
-### D2 · medium · unchecked narrowing on a destructive bulk path — confirmed
+### D2 · medium · unchecked narrowing on a destructive bulk path — confirmed — **FIXED** `[fixed]`
 `crates/mailapp/src/bridge/messages/bulk.rs` (uid guard is in `crates/mailapp/src/bridge/messages.rs:40`)
 
 ```rust
@@ -842,6 +843,11 @@ A payload uid above `u32::MAX` wraps and `mark_read_many`/`set_star_many`/`delet
 `move_many`/`purge_many` act on a *different* message id. Today the feed cannot produce one — it is a missing
 guard on a destructive path.
 **Fix:** mirror the `parse_hits_json` guard.
+
+**Fixed in `9702ed1`.** `parse_uids_json` uses `u32::try_from` and rejects 0 in the same expression. Its test
+pins `2^32 + 5` (which used to become uid 5) as an error. The Android twin (`mailffi` `uids_json`) already
+used `try_from`. The two parsers duplicate the same selection rules, a D11/§1 duplication left for a later
+move into `mailcore`.
 
 ### D3 · medium · every message API crosses the bridge as `uid: i32` while `mailcore` UIDs are `u32` *(suspected)*
 `bridge.rs:221,226,279,285,291,296,302,312,317,322,415,421,426,433,491,496,506,514,520,525,537,647,653` vs
