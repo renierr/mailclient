@@ -107,6 +107,8 @@ the "not fixed" column before assuming a finding is closed.
 | **B3** | `019f509` | A transport failure marks the session broken: no further commands, no fallbacks, not pooled, sweep stops | Errors are still one `StoreError::Network` kind; callers branch on the session state instead |
 | **B15** | `61acc33` | Push tasks leave at safe points through a per-task flag instead of being aborted | A check in flight still finishes, so it may notify at quiet-hours start |
 | **B16** | `61acc33` | Shutdown awaits tasks for at most 10 s, then aborts the rest | — |
+| **B9** | `2e5e88a` | Trash sweep moves only the read flag, of clean rows | — |
+| **B10** | `2e5e88a` | A failed Trash STORE queues the rows for the flag push instead of leaving them clean | — |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -464,7 +466,7 @@ badge/notification baseline lost until the next successful sync.
 (`let local_uids = messages::list_uids(...)`), so after a validity change `local_uids` is empty and
 step 3's `older_existing` (`:223`) is empty. The stale `folder.highest_modseq` is never used. No action.
 
-### B9 · low · Trash `\Seen` sweep clobbers starred/draft locally — confirmed
+### B9 · low · Trash `\Seen` sweep clobbers starred/draft locally — confirmed — **FIXED** `[fixed]`
 `sync/imap/engine/sync.rs:55-59` with `store/messages/flags.rs:89-93`
 
 ```rust
@@ -474,11 +476,21 @@ let _ = messages::set_flags_by_uid(db, account_id, folder_id, *uid, true, false,
 `is_draft` is forced false until the next sync re-fetches.
 **Fix:** a read-only setter, or pass the row's current starred/draft.
 
-### B10 · low-medium · Trash sweep writes local state the server may not have — confirmed
+**Fixed in `2e5e88a`** with a read-only setter, `messages::set_read_clean_by_uids`. It sets `is_read = 1` and
+nothing else, only on clean (`flags_dirty = 0`) unread rows, so a row the user marked unread in Trash is left
+to its own pending push, as before.
+
+### B10 · low-medium · Trash sweep writes local state the server may not have — confirmed — **FIXED** `[fixed]`
 `sync/imap/engine/sync.rs:49-60` — the STORE failure is only `log::warn`ed, yet local rows are marked read
 unconditionally. A server rejecting the STORE (read-only mailbox, quota) leaves a permanent local/server
 disagreement that nothing re-pushes, because the rows are not `flags_dirty`.
 **Fix:** update locally only after a successful STORE, or mark the rows dirty.
+
+**Fixed in `2e5e88a`** with the second option: the same setter with `queue_push = true` marks the rows read
+*and* dirty when the STORE fails, so the regular flag push sends `\Seen` later. Trash still reads as read
+at once. Store test: the star survives, a dirty row is untouched, and the dirty set is right for both
+outcomes. The existing mock sync test still passes. A failing STORE was not staged against the mock: by
+sweep time the step-2 flag refresh has already marked every in-window row read.
 
 ### B11 · medium · two real bugs where the first draft put a phantom `[corrected]`
 Withdrawn: the original claim (rows deleted after a failed move) is impossible, because
