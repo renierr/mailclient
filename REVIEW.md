@@ -99,6 +99,7 @@ the "not fixed" column before assuming a finding is closed.
 | **A3** | `1031adc` | Each migration and its stamp commit together; each best-effort repair rolls back as a whole on error | A rolled-back repair is not retried |
 | **A5** | `1031adc` | v20 repair prepares its statement once and runs atomically | — |
 | **A12** | `77d8de1` | A failed edit re-saves the previous secrets instead of leaving new passwords on the old row | Not restorable when the old entry was unreadable; logged |
+| **C3** | `6def2f8` | Negative margins and opacity below 0.15 dropped from inline styles | `display:block` + size on links kept on purpose (newsletter buttons) |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -603,7 +604,7 @@ Two tests: the ampersand flood itself (`"&".repeat(512 * 1024)` round-trips unch
 that pins the window at 24 bytes — a 24-byte entity decodes, a 25-byte one stays literal — so widening the
 window later fails instead of quietly reintroducing the cost.
 
-### C3 · medium · CSS clickjacking: invisible full-body link overlay survives sanitizing `[corrected]`
+### C3 · medium · CSS clickjacking: invisible full-body link overlay survives sanitizing `[corrected]` — **FIXED** `[fixed]`
 `html/css.rs:70-73` allows `display`, `width`/`height`, `margin`, `opacity`; `allowed_display` permits
 `block`; `safe_value("0")` passes. `presentational(tag, "style", v)` (`sanitize.rs:81`) applies it to **any**
 allowed tag, including `a`.
@@ -618,6 +619,16 @@ Severity trimmed from medium-high: the user must click inside the overlay, and t
 point rather than a guaranteed one. Still in-page phishing with no script and no permission prompt.
 **Fix:** clamp `opacity` to a visible minimum (or drop the declaration below ~0.15), and refuse
 `display:block` + size on `a`.
+
+**Fixed in `6def2f8`, with the second half replaced.** Refusing `display:block` + size on `a` would break
+newsletter "bulletproof" buttons, which are exactly that. Size is also not what makes the overlay cover the
+mail. The overlap is: with positioning already dropped, a **negative margin** is the only allowed way for a
+later box to slide over earlier content (or over the reader's `#mc-top` header spacer). So `keeps_boxes_apart`
+in `css.rs` drops any `margin*` value containing `-`, and drops `opacity` below 0.15 or unparseable
+(`nan`, garbage). A tall transparent block link is still possible, but it only occupies its own empty space
+and can no longer sit on top of the text the user means to click. Test: the overlay from this item loses its
+margins and opacity but keeps its link and harmless layout; a table of opacity/margin values pins the
+threshold.
 
 ### C4 · medium · no parse-side size cap: a 25 MB `.ics`/`.vcf`/DSN is parsed on every open — confirmed — **FIXED** `[fixed]`
 The caps only gate what sync *pre-caches* (`sync/imap/parse.rs:239-253`, 64 KB / 256 KB). On an explicit
