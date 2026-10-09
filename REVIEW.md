@@ -98,6 +98,7 @@ the "not fixed" column before assuming a finding is closed.
 | **A1** | `1031adc` | An unreadable version stamp is refused with a reason instead of reading as 0 | Refusing means such a file does not open; that was already the case, now with a clear message |
 | **A3** | `1031adc` | Each migration and its stamp commit together; each best-effort repair rolls back as a whole on error | A rolled-back repair is not retried |
 | **A5** | `1031adc` | v20 repair prepares its statement once and runs atomically | — |
+| **A12** | `77d8de1` | A failed edit re-saves the previous secrets instead of leaving new passwords on the old row | Not restorable when the old entry was unreadable; logged |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -273,7 +274,7 @@ with no default). **`set_sort` can be converted today.**
 version; the newer build then re-applies its own migrations over this build's schema.
 **Fix:** log loudly (or refuse) when `current > SCHEMA_VERSION`.
 
-### A12 · medium · `save_edit` has no keyring compensation `[corrected]`
+### A12 · medium · `save_edit` has no keyring compensation `[corrected]` — **FIXED** `[fixed]`
 `store/account_form.rs:404-409` — `secrets.save(...)` lands **before** `accounts::update_connection(...)`,
 whereas `create_new` (`:429-434`) deletes the orphaned vault entry when the row update fails. A failed
 `save_edit` therefore leaves *new* passwords next to *old* host/user: an account that cannot connect, with
@@ -282,6 +283,13 @@ no way for the user to tell which half is stale.
 failure wipes the credentials of an account that is still configured and working. Instead either (a) update
 the row first and only write secrets once it succeeds, or (b) re-save the previous secrets on the failure
 path. (a) is the smaller change.
+
+**Fixed in `77d8de1` with (b), not (a).** (a) only moves the mismatch: a keyring refusal, which is more likely
+than a failed row update (a locked or hung Secret Service), would then leave the new host next to the old
+password. That is the case the existing "secrets first" comment guards against. Now, if `update_connection`
+fails after the secrets were written, the previously loaded secrets are saved again. When they could not be
+read (the user replaced an unreadable IMAP password), there is nothing to restore. That is logged and the
+new password stays. Test: an edit refused by a trigger keeps both the old host and both old passwords.
 
 ### A13 · low · dead `async fn` holding `&Db` across `.await` — **FIXED** (deleted) `[fixed]`
 `store/account_form.rs:240-245` — the future is `!Send` (`&Db` is `!Send`). Both adapters deliberately avoid it
