@@ -236,6 +236,37 @@ fn void_input_and_embed_do_not_swallow_the_rest() {
 }
 
 #[test]
+fn an_invisible_link_overlay_loses_its_reach() {
+    let s = sanitize(
+        "<p>Pay here</p><a href=\"https://evil.example.net/\" \
+         style=\"display:block;width:100%;height:1400px;opacity:0;margin:-16px 0;margin-top:-1400px\">x</a>",
+        false,
+    );
+    assert!(
+        !s.html.contains("margin"),
+        "negative margin kept: {}",
+        s.html
+    );
+    assert!(!s.html.contains("opacity"), "zero opacity kept: {}", s.html);
+    // The link and its harmless layout stay.
+    assert!(s.html.contains("display:block;width:100%;height:1400px;"));
+    assert!(s.html.contains("href=\"https://evil.example.net/\""));
+
+    for (style, kept) in [
+        ("opacity:0.01", false),
+        ("opacity:5%", false),
+        ("opacity:nan", false),
+        ("opacity:.5", true),
+        ("opacity:80%", true),
+        ("margin:0 auto", true),
+        ("margin-left:-2px", false),
+    ] {
+        let s = sanitize(&format!("<div style=\"{style}\">t</div>"), false);
+        assert_eq!(s.html.contains("style="), kept, "{style}: {}", s.html);
+    }
+}
+
+#[test]
 fn an_unclosed_head_does_not_hide_the_body() {
     // `</head>` is optional; a parser ends the head at `<body>`, at the
     // first tag that cannot live in one, or at visible text.

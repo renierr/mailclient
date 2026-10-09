@@ -107,6 +107,32 @@ fn safe_value(v: &str) -> bool {
         && !low.contains("attr(")
 }
 
+/// Least opacity kept. Below it a box is effectively invisible yet still
+/// takes clicks.
+const MIN_OPACITY: f32 = 0.15;
+
+/// Whether a declaration stays clear of the invisible-overlay trick (C3):
+/// `<a style="display:block;height:1400px;opacity:0;margin-top:-1400px">`
+/// slides a transparent link over the mail and takes every click. With
+/// positioning already gone, a negative margin is the only allowed way for
+/// a box to cover earlier content (or the reader's header spacer), so it is
+/// dropped; a near-zero opacity is dropped too. Block links with a width
+/// stay, since newsletter buttons are built that way.
+fn keeps_boxes_apart(prop: &str, value: &str) -> bool {
+    if prop.starts_with("margin") {
+        return !value.contains('-');
+    }
+    if prop == "opacity" {
+        let v = value.trim();
+        let n = match v.strip_suffix('%') {
+            Some(p) => p.trim().parse::<f32>().map(|n| n / 100.0),
+            None => v.parse::<f32>(),
+        };
+        return n.is_ok_and(|n| n >= MIN_OPACITY);
+    }
+    true
+}
+
 /// Filter one `style` attribute value down to allowed declarations.
 /// `None` when nothing survives.
 pub(super) fn sanitize_style(raw: &str) -> Option<String> {
@@ -125,6 +151,9 @@ pub(super) fn sanitize_style(raw: &str) -> Option<String> {
             continue;
         }
         if prop == "display" && !allowed_display(&value.to_ascii_lowercase()) {
+            continue;
+        }
+        if !keeps_boxes_apart(&prop, value) {
             continue;
         }
         let piece = format!("{prop}:{value};");
