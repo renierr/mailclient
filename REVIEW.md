@@ -103,6 +103,7 @@ the "not fixed" column before assuming a finding is closed.
 | **A8** | `be8becb` | Unparseable JSON list columns warn (table, id, column; never the value) | `outbox::list_json` still reads `envelope_to` with a silent default for display |
 | **A15** | `af18a03` | `suggest` prefilters in SQL with a subsequence `like`, exact for every query | Rows with non-ASCII text are always scored in Rust |
 | **A17** (contacts bullet) | `af18a03` | One `row_to_contact` instead of three copies | Settings and undo bullets open |
+| **B2** | `65bbae6` | Each IMAP command (and the greeting) is capped at 10 min overall on top of the 30 s per-read timeout | IDLE keeps its caller-side bound; no per-kind caps |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -378,7 +379,7 @@ restart. The DSN path has no timeout at all.
 runs queued jobs one at a time (`rt.block_on` per job), so the next job waits regardless of which thread the
 SMTP call blocks. The timeout is the fix; moving off the runtime only reduces the blast radius.
 
-### B2 · medium · `COMMAND_TIMEOUT` bounds each *read*, not the command `[corrected]`
+### B2 · medium · `COMMAND_TIMEOUT` bounds each *read*, not the command `[corrected]` — **FIXED** `[fixed]`
 `sync/imap/session.rs:122-128` (and `session/idle.rs:150-155`, `read_greeting`)
 
 ```rust
@@ -390,6 +391,16 @@ here`, a quota notice, or a hostile drip) keeps the loop alive indefinitely whil
 fail large legitimate `FETCH BODY.PEEK[]` responses that take longer than 30 s to dribble in. Use a
 command-scoped deadline derived from the command's expected size, or keep the per-read timeout and add a
 separate, longer overall cap (e.g. `COMMAND_TIMEOUT` idle, plus an absolute bound per command kind).
+
+**Fixed in `65bbae6` with the second option, one cap for every command.** `execute` and `read_greeting` take
+each read's wait from `read_budget(started, now)`: 30 s per read as before, cut to whatever is left of
+`COMMAND_MAX` (10 min). Past that the command fails with "took longer than 600s overall". One cap rather than
+one per command kind: the costly command is a 100-mail `FETCH BODY.PEEK[]` chunk, which imap-next caps at
+100 MiB, and 10 min still allows that at ~170 KiB/s. Every other command is far below it. Untagged statuses
+still extend a read, on purpose: RFC 9585 `INPROGRESS` updates on a long SEARCH are legitimate. IDLE
+(`session/idle.rs`) is unchanged, since its caller bounds the wait. Test: `read_budget` at the start, mid-way,
+5 s before the cap and past it. The mock server answers immediately, so a timed noise drip cannot be staged
+against it. Interacts with B16: a shutdown now waits at most `COMMAND_MAX` per stuck command, not forever.
 
 ### B3 · medium · no error classification; a dead session is reused
 `sync/imap/session.rs:151-156,163-171`, `session/mailbox.rs:63-77,162-181`, `sync/headless.rs:285`
