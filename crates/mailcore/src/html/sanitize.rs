@@ -3,7 +3,8 @@
 use super::css::{keyword, safe_color, safe_font_face, safe_length, sanitize_style};
 use super::entities::{decode_entities, escape_attr, escape_text};
 use super::tags::{
-    allowed_tag, drop_content_tag, is_table_tag, parse_small_uint, parse_tag, void_tag,
+    allowed_tag, drop_content_name, head_child_tag, is_table_tag, parse_small_uint, parse_tag,
+    void_tag,
 };
 use super::urls::{is_http_url, safe_href, safe_img_src, urldecode_trim};
 use super::{Sanitized, MAX_HTML_BYTES, MAX_OUT_BYTES};
@@ -26,6 +27,22 @@ pub(super) fn truncate_on_char_boundary(s: &str, max: usize) -> &str {
     &s[..end]
 }
 
+/// Nesting bound for dropped content: past it, inner opens are not
+/// tracked, so the stack stays small on hostile input.
+const MAX_DROP_NESTING: usize = 256;
+
+/// Whether this tag ends an open `<head>`: `</head>`, `</body>`, `</html>`,
+/// `</br>`, or any start tag that cannot live in a head (`<body>`, `<p>`).
+/// Most mail never writes `</head>`; without this an unclosed head hid the
+/// whole message (C6).
+fn ends_head(name: &str, closing: bool) -> bool {
+    if closing {
+        matches!(name, "head" | "body" | "html" | "br")
+    } else {
+        !head_child_tag(name)
+    }
+}
+
 /// Sanitize untrusted HTML. `allow_remote=false` (reader default) strips
 /// remote `<img>` and records `had_remote`.
 pub fn sanitize(raw: &str, allow_remote: bool) -> Sanitized {
@@ -34,26 +51,36 @@ pub fn sanitize(raw: &str, allow_remote: bool) -> Sanitized {
     let mut out = String::new();
     let mut had_remote = false;
     let mut i = 0;
-    let mut drop_depth: usize = 0;
+    // Open drop-content tags, innermost last. A stack rather than a depth
+    // count: a close only ends its own name (a stray `</form>` inside a
+    // `<style>` must not end it), and an unclosed `<head>` can be ended
+    // the way a parser ends it instead of swallowing the whole body.
+    let mut dropping: Vec<&'static str> = Vec::new();
     let mut open: Vec<String> = Vec::new();
     while i < bytes.len() {
         if bytes[i] == b'<' {
             let (tag, next) = parse_tag(bytes, i);
             i = next;
             let Some(t) = tag else { continue };
-            if drop_depth > 0 {
-                if t.closing && drop_content_tag(&t.name) {
-                    drop_depth = drop_depth.saturating_sub(1);
-                } else if !t.closing && drop_content_tag(&t.name) && !t.self_closing {
-                    drop_depth += 1;
+            if dropping.last() == Some(&"head") && ends_head(&t.name, t.closing) {
+                dropping.pop();
+            }
+            if !dropping.is_empty() {
+                if let Some(name) = drop_content_name(&t.name) {
+                    if t.closing {
+                        if let Some(pos) = dropping.iter().rposition(|n| *n == name) {
+                            dropping.truncate(pos);
+                        }
+                    } else if !t.self_closing && dropping.len() < MAX_DROP_NESTING {
+                        dropping.push(name);
+                    }
                 }
                 continue;
             }
-            if !t.closing && drop_content_tag(&t.name) && !t.self_closing {
-                drop_depth += 1;
-                continue;
-            }
-            if drop_content_tag(&t.name) {
+            if let Some(name) = drop_content_name(&t.name) {
+                if !t.closing && !t.self_closing {
+                    dropping.push(name);
+                }
                 continue;
             }
             if !allowed_tag(&t.name) {
@@ -143,7 +170,10 @@ pub fn sanitize(raw: &str, allow_remote: bool) -> Sanitized {
                 i += 1;
             }
             let chunk = String::from_utf8_lossy(&bytes[ns..i]).to_string();
-            if drop_depth == 0 {
+            if dropping.last() == Some(&"head") && !chunk.trim().is_empty() {
+                dropping.pop();
+            }
+            if dropping.is_empty() {
                 push_capped(&mut out, &escape_text(&decode_entities(&chunk)));
             }
             if out.len() > MAX_OUT_BYTES {

@@ -236,6 +236,63 @@ fn void_input_and_embed_do_not_swallow_the_rest() {
 }
 
 #[test]
+fn an_unclosed_head_does_not_hide_the_body() {
+    // `</head>` is optional; a parser ends the head at `<body>`, at the
+    // first tag that cannot live in one, or at visible text.
+    for raw in [
+        "<html><head><meta charset=\"utf-8\"><title>T</title><body><p>shown</p></body></html>",
+        "<head><style>p{color:red}</style><p>shown</p>",
+        "<head><link rel=\"stylesheet\" href=\"x.css\">shown",
+        "<head><title>T</title></body><p>shown</p>",
+    ] {
+        let s = sanitize(raw, false);
+        assert!(s.html.contains("shown"), "body lost for {raw}: {}", s.html);
+        assert!(
+            !s.html.contains('T'),
+            "head text leaked for {raw}: {}",
+            s.html
+        );
+        assert!(
+            !s.html.contains("color"),
+            "style leaked for {raw}: {}",
+            s.html
+        );
+    }
+}
+
+#[test]
+fn a_close_only_ends_its_own_drop_tag() {
+    // Under a depth count `</form>` closed the `<style>`, leaking the rule
+    // text; and a `<form>` written inside a script left the count at one
+    // after `</script>`, hiding everything after it.
+    let s = sanitize(
+        "<style></form>p{x:y}</style><p>a</p>\
+         <script>document.write('<form>')</script><p>b</p>",
+        false,
+    );
+    assert!(!s.html.contains("p{x:y}"), "style leaked: {}", s.html);
+    assert!(!s.html.contains("document"), "script leaked: {}", s.html);
+    assert!(
+        s.html.contains("<p>a</p>") && s.html.contains("<p>b</p>"),
+        "{}",
+        s.html
+    );
+}
+
+#[test]
+fn an_unclosed_style_still_drops_the_rest() {
+    // Raw text to the end, as a browser renders it; only `<head>` gets the
+    // implicit close.
+    let s = sanitize("<p>a</p><style>p{x:y}<p>b</p>", false);
+    assert!(s.html.contains("<p>a</p>"));
+    assert!(
+        !s.html.contains('b') && !s.html.contains("x:y"),
+        "{}",
+        s.html
+    );
+}
+
+#[test]
 fn link_vectors_keep_link_drop_beacon() {
     // `ping` (hyperlink auditing beacon) is stripped; the link itself stays
     // clickable. `javascript:`/`data:` hrefs lose the URL, keep the text.

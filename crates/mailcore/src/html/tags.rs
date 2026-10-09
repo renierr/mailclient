@@ -98,21 +98,25 @@ pub(super) fn is_table_tag(tag: &str) -> bool {
 /// (CSS checkbox hacks put a bare `<input>` near the top). Not being in
 /// `allowed_tag` already drops them.
 pub(super) fn drop_content_tag(tag: &str) -> bool {
+    drop_content_name(tag).is_some()
+}
+
+/// [`drop_content_tag`] as the interned name, so the sanitizer can keep a
+/// stack of open drop tags without allocating per entry.
+pub(super) fn drop_content_name(tag: &str) -> Option<&'static str> {
+    const NAMES: [&str; 13] = [
+        "script", "style", "iframe", "object", "form", "button", "select", "textarea", "title",
+        "head", "noscript", "template", "slot",
+    ];
+    NAMES.iter().copied().find(|n| *n == tag)
+}
+
+/// Tags that may sit inside `<head>`. Any other start tag (or visible text)
+/// ends an unclosed head, as an HTML parser does ("in head" insertion mode).
+pub(super) fn head_child_tag(tag: &str) -> bool {
     matches!(
         tag,
-        "script"
-            | "style"
-            | "iframe"
-            | "object"
-            | "form"
-            | "button"
-            | "select"
-            | "textarea"
-            | "title"
-            | "head"
-            | "noscript"
-            | "template"
-            | "slot"
+        "meta" | "link" | "base" | "title" | "style" | "script" | "noscript" | "template"
     )
 }
 
