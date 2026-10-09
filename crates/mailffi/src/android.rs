@@ -61,6 +61,13 @@ impl From<serde_json::Error> for BridgeError {
 
 type Result<T> = std::result::Result<T, BridgeError>;
 
+/// A UID from Kotlin's `Int`. Negative is refused rather than clamped: a
+/// `-1` used to become an operation on UID 0 instead of an error (E6). UIDs
+/// past `Int.MAX_VALUE` cannot cross as `Int` at all; that is D3's widening.
+fn uid_arg(uid: i32) -> Result<u32> {
+    u32::try_from(uid).map_err(|_| BridgeError(format!("invalid uid {uid}")))
+}
+
 fn string(env: &Env<'_>, s: &JString<'_>) -> Result<String> {
     Ok(s.try_to_string(env)?)
 }
@@ -373,11 +380,8 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_readerMessage<'calle
 ) -> JString<'caller> {
     unowned
         .with_env(|env| -> Result<JString<'caller>> {
-            let json = mailcore::feed::message_json(
-                crate::db::shared_db()?,
-                folder_id,
-                uid.max(0) as u32,
-            )?;
+            let json =
+                mailcore::feed::message_json(crate::db::shared_db()?, folder_id, uid_arg(uid)?)?;
             Ok(env.new_string(json)?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
@@ -398,7 +402,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_messageListed<'calle
             Ok(mailcore::store::messages::is_listed(
                 crate::db::shared_db()?,
                 folder_id,
-                uid.max(0) as u32,
+                uid_arg(uid)?,
             )?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
@@ -434,11 +438,8 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_readerHeaders<'calle
 ) -> JString<'caller> {
     unowned
         .with_env(|env| -> Result<JString<'caller>> {
-            let json = mailcore::feed::headers_json(
-                crate::db::shared_db()?,
-                folder_id,
-                uid.max(0) as u32,
-            )?;
+            let json =
+                mailcore::feed::headers_json(crate::db::shared_db()?, folder_id, uid_arg(uid)?)?;
             Ok(env.new_string(json)?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
@@ -512,7 +513,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_readerMessageHtml<'c
             let html = mailcore::feed::message_html(
                 crate::db::shared_db()?,
                 folder_id,
-                uid.max(0) as u32,
+                uid_arg(uid)?,
                 allow_remote,
             )?;
             Ok(env.new_string(html)?)
@@ -625,7 +626,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_setReadFlag<'caller>
 ) {
     unowned
         .with_env(|_env| -> Result<()> {
-            crate::api::messages::mark_read(account_id, folder_id, uid.max(0) as u32, read)?;
+            crate::api::messages::mark_read(account_id, folder_id, uid_arg(uid)?, read)?;
             Ok(())
         })
         .resolve::<ThrowRuntimeExAndDefault>()
@@ -644,7 +645,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_toggleStar<'caller>(
 ) {
     unowned
         .with_env(|_env| -> Result<()> {
-            crate::api::messages::toggle_star(account_id, folder_id, uid.max(0) as u32)?;
+            crate::api::messages::toggle_star(account_id, folder_id, uid_arg(uid)?)?;
             Ok(())
         })
         .resolve::<ThrowRuntimeExAndDefault>()
@@ -674,11 +675,8 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_deleteMessage<'calle
 ) -> JString<'caller> {
     unowned
         .with_env(|env| -> Result<JString<'caller>> {
-            let r = crate::api::mutate::delete_messages(
-                account_id,
-                folder_id,
-                vec![uid.max(0) as u32],
-            )?;
+            let r =
+                crate::api::mutate::delete_messages(account_id, folder_id, vec![uid_arg(uid)?])?;
             move_result_json(env, r)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
@@ -695,11 +693,8 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_archiveMessage<'call
 ) -> JString<'caller> {
     unowned
         .with_env(|env| -> Result<JString<'caller>> {
-            let r = crate::api::mutate::archive_messages(
-                account_id,
-                folder_id,
-                vec![uid.max(0) as u32],
-            )?;
+            let r =
+                crate::api::mutate::archive_messages(account_id, folder_id, vec![uid_arg(uid)?])?;
             move_result_json(env, r)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
@@ -721,7 +716,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_moveMessage<'caller>
             let r = crate::api::mutate::move_messages(
                 account_id,
                 folder_id,
-                vec![uid.max(0) as u32],
+                vec![uid_arg(uid)?],
                 string(env, &dest_path)?,
             )?;
             move_result_json(env, r)
@@ -741,7 +736,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_purgeMessage<'caller
 ) {
     unowned
         .with_env(|_env| -> Result<()> {
-            crate::api::mutate::purge_messages(account_id, folder_id, vec![uid.max(0) as u32])?;
+            crate::api::mutate::purge_messages(account_id, folder_id, vec![uid_arg(uid)?])?;
             Ok(())
         })
         .resolve::<ThrowRuntimeExAndDefault>()
@@ -867,7 +862,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_downloadMessageFiles
     unowned
         .with_env(|env| -> Result<JString<'caller>> {
             let db = crate::db::shared_db()?;
-            let m = mailcore::store::messages::get_by_uid(db, folder_id, uid.max(0) as u32)?;
+            let m = mailcore::store::messages::get_by_uid(db, folder_id, uid_arg(uid)?)?;
             if m.account_id != account_id {
                 return Err(BridgeError(
                     "message does not belong to this account".to_string(),
@@ -899,11 +894,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_downloadAttachments<
 ) {
     unowned
         .with_env(|_env| -> Result<()> {
-            crate::api::attachments::download_attachments(
-                account_id,
-                folder_id,
-                uid.max(0) as u32,
-            )?;
+            crate::api::attachments::download_attachments(account_id, folder_id, uid_arg(uid)?)?;
             Ok(())
         })
         .resolve::<ThrowRuntimeExAndDefault>()
@@ -924,7 +915,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_attachmentsPending<'
         .with_env(|_env| -> Result<bool> {
             Ok(crate::net::is_inflight(&crate::net::attachments_key(
                 folder_id,
-                uid.max(0) as u32,
+                uid_arg(uid)?,
             )))
         })
         .resolve::<ThrowRuntimeExAndDefault>()
@@ -990,7 +981,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_suggestedEmlName<'ca
             let name = mailcore::export::suggested_eml_name(
                 crate::db::shared_db()?,
                 folder_id,
-                uid.max(0) as u32,
+                uid_arg(uid)?,
             );
             Ok(env.new_string(name)?)
         })
@@ -1009,7 +1000,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_exportEmlBytes<'call
 ) -> JByteArray<'caller> {
     unowned
         .with_env(|env| -> Result<JByteArray<'caller>> {
-            let uid = uid.max(0) as u32;
+            let uid = uid_arg(uid)?;
             blocking(async {
                 mailcore::export::prepare(crate::db::shared_db()?, folder_id, uid)
                     .await
@@ -1967,7 +1958,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_draftFiles<'caller>(
             let db = crate::db::shared_db()?;
             let drafts = mailcore::compose::drafts_folder(db, account_id)
                 .ok_or_else(|| anyhow::anyhow!("this account has no Drafts folder"))?;
-            let m = mailcore::compose::open_draft(db, drafts.id, uid.max(0) as u32)
+            let m = mailcore::compose::open_draft(db, drafts.id, uid_arg(uid)?)
                 .map_err(anyhow::Error::msg)?;
             let files = mailcore::compose::stage_draft_files(
                 db,
@@ -1991,10 +1982,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_draftForm<'caller>(
 ) -> JString<'caller> {
     unowned
         .with_env(|env| -> Result<JString<'caller>> {
-            Ok(env.new_string(crate::api::composer::draft_form(
-                account_id,
-                uid.max(0) as u32,
-            )?)?)
+            Ok(env.new_string(crate::api::composer::draft_form(account_id, uid_arg(uid)?)?)?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
@@ -2010,7 +1998,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_deleteDraft<'caller>
 ) {
     unowned
         .with_env(|_env| -> Result<()> {
-            crate::api::composer::delete_draft(account_id, uid.max(0) as u32)?;
+            crate::api::composer::delete_draft(account_id, uid_arg(uid)?)?;
             Ok(())
         })
         .resolve::<ThrowRuntimeExAndDefault>()
@@ -2030,7 +2018,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_answerDraft<'caller>
         .with_env(|env| -> Result<JString<'caller>> {
             Ok(env.new_string(crate::api::composer::answer_draft(
                 folder_id,
-                uid.max(0) as u32,
+                uid_arg(uid)?,
                 string(env, &mode)?,
             )?)?)
         })
@@ -2049,7 +2037,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_forwardMissing<'call
     unowned
         .with_env(|_env| -> Result<i32> {
             let db = crate::db::shared_db()?;
-            let n = mailcore::compose::forward_missing(db, folder_id, uid.max(0) as u32)
+            let n = mailcore::compose::forward_missing(db, folder_id, uid_arg(uid)?)
                 .map_err(anyhow::Error::msg)?;
             Ok(i32::try_from(n).unwrap_or(i32::MAX))
         })
@@ -2073,7 +2061,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_forwardFiles<'caller
             let files = mailcore::compose::stage_forward_files(
                 db,
                 folder_id,
-                uid.max(0) as u32,
+                uid_arg(uid)?,
                 std::path::Path::new(&string(env, &dir)?),
             )
             .map_err(anyhow::Error::msg)?;
@@ -2095,7 +2083,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_resendMissing<'calle
     unowned
         .with_env(|_env| -> Result<i32> {
             let db = crate::db::shared_db()?;
-            let n = mailcore::compose::resend_missing(db, folder_id, uid.max(0) as u32)
+            let n = mailcore::compose::resend_missing(db, folder_id, uid_arg(uid)?)
                 .map_err(anyhow::Error::msg)?;
             Ok(i32::try_from(n).unwrap_or(i32::MAX))
         })
@@ -2118,7 +2106,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_resendFiles<'caller>
             let files = mailcore::compose::stage_resend_files(
                 db,
                 folder_id,
-                uid.max(0) as u32,
+                uid_arg(uid)?,
                 std::path::Path::new(&string(env, &dir)?),
             )
             .map_err(anyhow::Error::msg)?;
@@ -2452,7 +2440,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_similarJson<'caller>
             Ok(env.new_string(crate::api::search::similar_json(
                 account_id,
                 folder_id,
-                uid.max(0) as i64,
+                i64::from(uid_arg(uid)?),
             )?)?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
@@ -2473,7 +2461,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_similarSubject<'call
             Ok(env.new_string(crate::api::search::similar_subject(
                 account_id,
                 folder_id,
-                uid.max(0) as i64,
+                i64::from(uid_arg(uid)?),
             )?)?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
