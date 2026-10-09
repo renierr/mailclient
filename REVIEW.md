@@ -119,6 +119,7 @@ the "not fixed" column before assuming a finding is closed.
 | **A18** | `a7f6526` | Column-order caveat documented in the migrations header | No table rebuild |
 | **B17** | — | No change: send retries are already capped at 5 per row; backoff stays IMAP-only | — |
 | **B18** | `36a877d` | Sync lock is an OS file lock; no stale-pid reaping, no recursion | A live but hung holder now keeps the lock until it exits |
+| **B11** | `18817de` | A landed COPY is not retried into duplicates; the mailbox-wide EXPUNGE only runs when nothing else is flagged | A source copy can stay behind after a failed cleanup |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -526,7 +527,7 @@ at once. Store test: the star survives, a dirty row is untouched, and the dirty 
 outcomes. The existing mock sync test still passes. A failing STORE was not staged against the mock: by
 sweep time the step-2 flag refresh has already marked every in-window row read.
 
-### B11 · medium · two real bugs where the first draft put a phantom `[corrected]`
+### B11 · medium · two real bugs where the first draft put a phantom `[corrected]` — **FIXED** `[fixed]`
 Withdrawn: the original claim (rows deleted after a failed move) is impossible, because
 `session.uid_move(&clean, dest_path).await?` (`engine/mutate.rs:107`) returns before
 `messages::delete_many_by_uids`. The two genuine defects nearby are:
@@ -541,6 +542,20 @@ already ran and the server still holds a copy in the source.
 **Fix:** for B11a, re-`SEARCH` the source after a fallback move before deleting locally; for B11b, only take
 the mailbox-wide EXPUNGE when the client can confirm no other `\Deleted` messages exist, or leave the
 EXPUNGE to the server/next session.
+
+**Fixed in `18817de`. B11a's mechanism was misstated, but a real duplicate was next to it.** The local delete
+cannot "already have run": any failed step returns from `uid_move` before `delete_many_by_uids`. What did
+happen: COPY succeeded, then STORE or EXPUNGE failed, the move was reported failed, and `push_due_moves`
+retried the whole move up to `MAX_PENDING_ATTEMPTS` times, **copying again each time**. Now
+`copy_then_remove` treats a landed COPY as the move having happened. A failing STORE/EXPUNGE afterwards is
+logged, and the worst case is the source copy staying visible, not N copies in the destination. No re-SEARCH
+was needed. A MOVE that failed on a broken session (B3) no longer tries the fallback at all.
+**B11b:** the mailbox-wide EXPUNGE (no UIDPLUS, or UID EXPUNGE refused) now first runs `UID SEARCH DELETED`.
+It goes ahead only when every flagged UID is one of ours; otherwise it refuses with "not expunged: N other
+message(s) in this folder are marked deleted". So a purge on such a server reports an error instead of
+destroying another client's mail. Tests: a flagged stranger (uid 9) blocks the EXPUNGE; a COPY whose STORE is
+refused is one COPY and an `Ok` move. The existing no-UIDPLUS fallback test still passes (nothing else
+flagged).
 
 ### B12 · `[removed]` — the ordering is deliberate
 `engine/mutate.rs:99-106` marks `\Seen` **before** `uid_move` on purpose: after the move the UIDs belong to
