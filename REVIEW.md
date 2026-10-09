@@ -124,6 +124,7 @@ the "not fixed" column before assuming a finding is closed.
 | **B4**, **B19** | — | No change: imap-next's 100 MiB response cap bounds one message | — |
 | **D8** / **E10** | `d199c25` | One shared undo timer thread in `mailcore` with per-account coalescing replaces a thread per action in both adapters | Per-toggle `spawn_flag_push` is still one queued job per click |
 | **D16** (part) | `43f898b` | `message_json` no longer carries a third copy of the body | Re-fetch frequency and caching go with D5 |
+| **E6** | `d82ef9f` | Negative JNI uids are refused instead of clamped to UID 0 | `Int` width is D3 |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -1402,7 +1403,7 @@ future switch to `_for_scope` — which a reader might reach for by name — wou
 attach/detach this doc previously warned about.
 **Fix:** hold one `AttachGuard` for the net/monitor thread; add a comment pinning the choice.
 
-### E6 · low · `uid < 0` is silently clamped to UID 0 instead of rejected — confirmed
+### E6 · low · `uid < 0` is silently clamped to UID 0 instead of rejected — confirmed — **FIXED** `[fixed]`
 `crates/mailffi/src/android.rs:379,401,440,515,628,647,680,…`
 
 ```rust
@@ -1411,6 +1412,13 @@ uid.max(0) as u32,
 A Kotlin-side `-1` ("no message") becomes a real operation on UID 0 rather than an error, and the `uid: i32`
 JNI type truncates UIDs above `Int::MAX` (same class as D3).
 **Fix:** `u32::try_from(uid).map_err(...)` for `uid >= 0`, error otherwise.
+
+**Fixed in `d82ef9f`.** One helper, `uid_arg(uid) -> Result<u32>` in `android.rs`, replaces all 25
+`uid.max(0) as …` clamps. A negative uid throws "invalid uid -1" into Kotlin like any other bridge error. No
+Kotlin call passes a sentinel uid, and UID 0 already failed as "not found" on these paths, so callers that
+handle errors today handle this one too. The `Int` width (D3) is unchanged. Verified with
+`cargo ndk -t arm64-v8a clippy -p mailffi -- -D warnings` against the build's pinned NDK, since `android.rs`
+compiles only for Android.
 
 ### E7 · low · malformed `permanent_json` is swallowed into the most destructive answer — **FIXED** `[fixed]`
 `crates/mailffi/src/android.rs:581-583`
