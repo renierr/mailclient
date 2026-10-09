@@ -14,7 +14,7 @@ use mailcore::undo::{self, MoveTarget, Queued};
 
 use crate::bridge::qobject;
 use crate::bridge::worker::{spawn_flag_push, spawn_job, spawn_push_after_grace, JobRefresh};
-use crate::bridge::{push_feeds, qstring, shared_db};
+use crate::bridge::{push_feeds, push_flag_change, qstring, shared_db};
 use mailcore::sync::pool::job_account;
 
 use super::{parse_hits_json, parse_uids_json};
@@ -35,7 +35,8 @@ impl qobject::Bridge {
         }
         match messages::set_read_many_by_uids(db, folder_id, &uids, read) {
             Ok(n) => {
-                push_feeds(&mut self, db, acc_id, folder_id);
+                // QML patches the selected rows (`message_rows_json`).
+                push_flag_change(&mut self, db, acc_id);
                 if n > 0 {
                     spawn_flag_push(acc_id);
                 }
@@ -60,7 +61,8 @@ impl qobject::Bridge {
         }
         match messages::set_star_many_by_uids(db, folder_id, &uids, starred) {
             Ok(n) => {
-                push_feeds(&mut self, db, acc_id, folder_id);
+                // QML patches the selected rows (`message_rows_json`).
+                push_flag_change(&mut self, db, acc_id);
                 if n > 0 {
                     spawn_flag_push(acc_id);
                 }

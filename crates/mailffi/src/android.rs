@@ -1677,6 +1677,27 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_messagesJson<'caller
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `MailNative.messageRowsJson(folderId, uids)`: the list rows of `uids`
+/// (a JSON array), shaped like `messagesJson`'s, in uid order
+/// (`feed::message_rows_json`). The list swaps them in after a read/star
+/// change instead of re-reading the folder.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_messageRowsJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+    uids: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let uids = uids_json(&string(env, &uids)?)?;
+            let rows =
+                mailcore::feed::message_rows_json(crate::db::shared_db()?, folder_id, &uids)?;
+            Ok(env.new_string(rows)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `MailNative.markReadMany(accountId, folderId, uids, read)`: local flag
 /// write + background push; how many rows changed, back as a string.
 #[unsafe(no_mangle)]
@@ -2383,8 +2404,8 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_searchPlan<'caller>(
 }
 
 /// `MailNative.listFilterKeep(filterJson, rowsJson)`: the list filters over
-/// every loaded row at once (`mailcore::search::list_filter`) — a JSON
-/// array of the kept row indexes.
+/// search hits (`list_filter::keep_json`) — a JSON array of the kept row
+/// indexes. A folder's rows go through `listFilterUids` instead.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_de_renier_mailclient_MailNative_listFilterKeep<'caller>(
     mut unowned: EnvUnowned<'caller>,
@@ -2397,6 +2418,28 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_listFilterKeep<'call
             let kept = mailcore::search::list_filter::keep_json(
                 &string(env, &filter_json)?,
                 &string(env, &rows_json)?,
+            )?;
+            Ok(env.new_string(kept)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.listFilterUids(folderId, filterJson)`: the list filters over
+/// a folder's rows, read from the cache (`list_filter::keep_in_folder`) — a
+/// JSON array of the kept uids. No rows go in.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_listFilterUids<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    folder_id: i64,
+    filter_json: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let kept = mailcore::search::list_filter::keep_in_folder_json(
+                crate::db::shared_db()?,
+                folder_id,
+                &string(env, &filter_json)?,
             )?;
             Ok(env.new_string(kept)?)
         })

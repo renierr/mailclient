@@ -282,6 +282,25 @@ fun MailState.moveMessage(fromFolder: Long, uid: Int, destPath: String) = io {
 }
 
 /** After the reader changed a message: re-read list, tree and search. */
+/**
+ * The rows [uidsJson] (a JSON uid array) of [folder] after a read/star
+ * change, swapped in from the core (`feed::message_rows_json`) instead of
+ * re-reading the folder. IO thread.
+ */
+internal suspend fun MailState.patchRows(folder: Long, uidsJson: String) {
+    MailNative.ensureInit(appContext)
+    val fresh = parseMessages(MailNative.messageRowsJson(folder, uidsJson)).associateBy { it.uid }
+    if (fresh.isEmpty()) return
+    withContext(Dispatchers.Main) {
+        if (folderId != folder) return@withContext
+        messages = messages.map { fresh[it.uid] ?: it }
+        recomputeShown()
+    }
+}
+
+/** The reader changed [uid]'s read or star flag (see [afterFlags]). */
+fun MailState.afterReaderFlags(folder: Long, uid: Int) = io { afterFlags(folder, "[$uid]") }
+
 fun MailState.afterReaderChange() {
     reloadMessages()
     loadFolders()

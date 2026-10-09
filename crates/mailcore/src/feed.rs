@@ -466,19 +466,39 @@ pub fn messages_list_json_paged(
     let descending = settings::get_sort_descending(db);
     let rows =
         messages::list_compact_by_folder_sorted(db, folder_id, limit, offset, &field, descending)?;
-    let folder = folders::get(db, folder_id).ok();
-    let is_trash = folder.as_ref().is_some_and(|f| f.role == FolderRole::Trash);
+    list_rows_json(rows, is_trash_folder(db, folder_id))
+}
+
+/// The list rows of `uids` in `folder_id`, shaped like
+/// [`messages_list_json_paged`]'s, in uid order. Uids that are not listed
+/// (gone, or hidden by a pending move) are left out. After a flag change a
+/// frontend swaps in just these rows instead of re-reading the folder.
+pub fn message_rows_json(db: &Db, folder_id: i64, uids: &[u32]) -> Result<String> {
+    let rows = messages::list_compact_by_uids(db, folder_id, uids)?;
+    list_rows_json(rows, is_trash_folder(db, folder_id))
+}
+
+/// Trash shows nothing as unread: its rows are on their way out.
+pub(crate) fn is_trash_folder(db: &Db, folder_id: i64) -> bool {
+    folders::get(db, folder_id).is_ok_and(|f| f.role == FolderRole::Trash)
+}
+
+/// What a list row shows for a mail without a subject or a sender address.
+pub(crate) const NO_SUBJECT: &str = "(no subject)";
+pub(crate) const NO_SENDER: &str = "?";
+
+fn list_rows_json(rows: Vec<messages::CompactMessage>, is_trash: bool) -> Result<String> {
     Ok(serde_json::to_string(
         &rows
             .into_iter()
             .map(|m| {
                 let date = short_date(m.date.as_deref());
-                let from = m.from_addr.unwrap_or_else(|| "?".to_string());
+                let from = m.from_addr.unwrap_or_else(|| NO_SENDER.to_string());
                 let from_name = m.from_name.unwrap_or_default();
                 let badge = sender_badge(&from_name, &from);
                 let mut row = json!({
                     "uid": m.uid,
-                    "subject": m.subject.unwrap_or_else(|| "(no subject)".to_string()),
+                    "subject": m.subject.unwrap_or_else(|| NO_SUBJECT.to_string()),
                     "from": from,
                     "from_name": from_name,
                     "date": date.text,
@@ -487,7 +507,7 @@ pub fn messages_list_json_paged(
                     // (`search::date_passes`); `date` above is display text.
                     "date_raw": m.date,
                     "snippet": m.snippet.unwrap_or_default(),
-                    "unread": if is_trash { false } else { !m.is_read },
+                    "unread": !is_trash && !m.is_read,
                     "starred": m.is_starred,
                     "has_attachments": m.has_attachments,
                 });

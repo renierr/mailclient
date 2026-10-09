@@ -364,13 +364,9 @@ Rectangle {
     }
 
     // The rows the list filters keep: the quick filters AND-ed with the
-    // short typed filter, decided by mailcore over the whole set in one call
-    // (`search::list_filter`). Search hits pass no text: the FTS query
-    // already matched them.
-    function keptRows(rows, text) {
-        if ((!root.hasQuickFilter && text === "") || !root.backend)
-            return rows;
-        var filter = {
+    // short typed filter, decided by mailcore (`search::list_filter`).
+    function listFilter(text) {
+        return {
             unread: root.filterUnread,
             starred: root.filterStarred,
             attachments: root.filterAttachments,
@@ -378,10 +374,32 @@ Rectangle {
             before: root.filterBefore,
             text: text
         };
-        var kept = JSON.parse(root.backend.list_filter_keep(JSON.stringify(filter), JSON.stringify(rows)));
+    }
+
+    // Search hits are few and already matched by their query, so they go
+    // over as rows with no text.
+    function keptHits(rows) {
+        if (!root.hasQuickFilter || !root.backend)
+            return rows;
+        var kept = JSON.parse(root.backend.list_filter_keep(JSON.stringify(root.listFilter("")), JSON.stringify(rows)));
         if (!kept)
             return rows;
         return kept.map(i => rows[i]);
+    }
+
+    // The folder's rows are read by the core from the cache: only the
+    // filter goes over, and the uids it keeps come back.
+    function keptMessages(rows, text) {
+        if ((!root.hasQuickFilter && text === "") || !root.backend)
+            return rows;
+        var kept = JSON.parse(root.backend.list_filter_uids(root.backend.current_folder_id, JSON.stringify(
+                                                                 root.listFilter(text))));
+        if (!kept)
+            return rows;
+        var keep = {};
+        for (var i = 0; i < kept.length; i++)
+            keep[kept[i]] = true;
+        return rows.filter(m => keep[m.uid] === true);
     }
 
     // The words for the active date filter, phrased once by mailcore.
@@ -451,7 +469,7 @@ Rectangle {
             // The feed arrives grouped by folder for the section headers
             // (mailcore `feed::search_json`): folders in the order of their
             // newest hit, newest first inside each.
-            var hits = root.keptRows(root.searchRows || [], "");
+            var hits = root.keptHits(root.searchRows || []);
             for (var i = 0; i < hits.length; i++) {
                 // Keyed on the row built here: the hits are Main's
                 // `searchRows` objects, which this list does not own.
@@ -462,7 +480,7 @@ Rectangle {
             ModelSync.sync(filtered, rows, "key");
             return;
         }
-        var src = root.keptRows(root.messages || [], root.filterText);
+        var src = root.keptMessages(root.messages || [], root.filterText);
         for (var j = 0; j < src.length; j++)
             rows.push(root.displayRow(src[j]));
         // In place: clearing the model destroyed and rebuilt every delegate on

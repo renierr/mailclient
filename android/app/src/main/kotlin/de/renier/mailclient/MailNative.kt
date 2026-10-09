@@ -206,6 +206,9 @@ object MailNative {
     // ([1,2,3], [{"folder":"INBOX","uid":1}]); undoable moves answer
     // {"batch","label","purging"}.
     @JvmStatic external fun messagesJson(folderId: Long, limit: Long, offset: Long): String
+    // Just these rows (JSON uid array), shaped like messagesJson's: swapped
+    // in after a read/star change instead of re-reading the folder.
+    @JvmStatic external fun messageRowsJson(folderId: Long, uids: String): String
     @JvmStatic external fun markReadMany(accountId: Long, folderId: Long, uids: String, read: Boolean): String
     @JvmStatic external fun setStarMany(accountId: Long, folderId: Long, uids: String, starred: Boolean): String
     @JvmStatic external fun markReadHits(accountId: Long, hits: String, read: Boolean): String
@@ -259,8 +262,10 @@ object MailNative {
     @JvmStatic external fun searchJson(accountId: Long, query: String, folder: String): String
     @JvmStatic external fun searchServer(accountId: Long, query: String, folder: String)
     @JvmStatic external fun searchPlan(query: String): String
-    // The list filters over every loaded row at once: JSON array of kept indexes.
+    // The list filters over search hits: JSON array of kept indexes.
     @JvmStatic external fun listFilterKeep(filterJson: String, rowsJson: String): String
+    // The list filters over a folder's cached rows: JSON array of kept uids.
+    @JvmStatic external fun listFilterUids(folderId: Long, filterJson: String): String
     // A typed custom date range, normalised or refused: {after, before, error}.
     @JvmStatic external fun dateRangeCheck(after: String, before: String): String
     // The load-older footer's words; server < 0 = never reported.

@@ -190,6 +190,9 @@ ApplicationWindow {
     }
 
     function reloadMessages() {
+        // A read/star change patches rows without rebuilding the feed
+        // property (see patchRows); catch it up before reading it.
+        backend.refresh_messages_if_stale();
         root.messageRows = FeedJson.parse(backend.messages_json, []);
         // Drop the selection only if that message really is gone.
         if (root.messageByUid(root.currentUid) === undefined)
@@ -217,6 +220,40 @@ ApplicationWindow {
     // so read-only jobs can refresh it without losing scroll position.
     function reloadOutboxStatus() {
         root.outboxStatus = FeedJson.parse(backend.outbox_status_json(), ({}));
+    }
+
+    // A read/star change touched only these rows of the open folder: swap
+    // in the core's fresh rows (`feed::message_rows_json`) instead of
+    // re-reading the whole folder, and carry the flags into the open
+    // message rather than fetching its body again.
+    function patchRows(uids) {
+        if (!uids || uids.length === 0)
+            return;
+        var fresh = FeedJson.parse(backend.message_rows_json(backend.current_folder_id, JSON.stringify(uids)), []);
+        var byUid = {};
+        for (var i = 0; i < fresh.length; i++)
+            byUid[fresh[i].uid] = fresh[i];
+        var rows = root.messageRows.slice();
+        for (var j = 0; j < rows.length; j++) {
+            if (byUid[rows[j].uid] !== undefined)
+                rows[j] = byUid[rows[j].uid];
+        }
+        root.messageRows = rows;
+        var open = byUid[root.currentUid];
+        if (open !== undefined && root.currentMessage !== undefined)
+            root.currentMessage = Object.assign({}, root.currentMessage, {
+                                                    unread: open.unread,
+                                                    starred: open.starred
+                                                });
+    }
+
+    // After a bulk read/star: folder selections are patched in place;
+    // search-hit selections span folders, so the feed is read again.
+    function afterBulkFlags(targets) {
+        if (root.isSearchTargets(targets))
+            reloadMessages();
+        else
+            root.patchRows(targets);
     }
 
     function messageByUid(uid) {
@@ -453,9 +490,8 @@ ApplicationWindow {
         if (r !== "")
             root.statusText = r;
         // messageRows are plain JS objects: mutating row.unread in place
-        // never re-renders the delegate. Rebuild the feed like every
-        // other mutation path does instead.
-        reloadMessages();
+        // never re-renders the delegate, so the row is swapped instead.
+        root.patchRows([uid]);
         reloadFolders();
     }
 
@@ -492,7 +528,7 @@ ApplicationWindow {
         if (uid < 0)
             return;
         showResult("", backend.toggle_star(uid));
-        reloadMessages();
+        root.patchRows([uid]);
         if (root.searching)
             root.updateSearch(false);
     }
@@ -660,14 +696,14 @@ ApplicationWindow {
         var r = root.runBulk(targets, json => backend.mark_read_many(json, read), json => backend.mark_read_hits(json,
                                                                                                                  read));
         reloadFolders();
-        reloadMessages();
+        root.afterBulkFlags(targets);
         root.statusText = r;
     }
 
     function bulkStar(targets, starred) {
         var r = root.runBulk(targets, json => backend.set_star_many(json, starred), json => backend.set_star_hits(json,
                                                                                                                   starred));
-        reloadMessages();
+        root.afterBulkFlags(targets);
         root.statusText = r;
     }
 
@@ -1398,7 +1434,7 @@ ApplicationWindow {
             onMarkReadRequested: (uid, read) => {
                 var r = backend.mark_read(uid, read);
                 reloadFolders();
-                reloadMessages();
+                root.patchRows([uid]);
                 if (root.searching)
                     root.updateSearch(false);
                 root.statusText = r !== "" ? r : (read ? qsTr("Marked as read") : qsTr("Marked as unread"));

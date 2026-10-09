@@ -367,11 +367,31 @@ pub mod qobject {
         #[qinvokable]
         fn search_plan_json(&self, query: &QString) -> QString;
 
-        /// The list filters over every row at once
-        /// (`mailcore::search::list_filter`): a filter object and the feed
-        /// rows as JSON in, a JSON array of the kept row indexes out.
+        /// The list filters over search hits
+        /// (`mailcore::search::list_filter::keep_json`): a filter object and
+        /// the hit rows as JSON in, a JSON array of the kept row indexes out.
         #[qinvokable]
         fn list_filter_keep(&self, filter_json: &QString, rows_json: &QString) -> QString;
+
+        /// The list filters over a folder's rows, read from the cache
+        /// (`list_filter::keep_in_folder`): a filter object in, a JSON array
+        /// of the kept uids out (`null` on a bad filter). No rows go in, so a
+        /// keystroke costs the same however long the folder is.
+        #[qinvokable]
+        fn list_filter_uids(&self, folder_id: i64, filter_json: &QString) -> QString;
+
+        /// The list rows of `uids_json` (a JSON uid array) in `folder_id`,
+        /// shaped like `messages_json`'s (`feed::message_rows_json`). QML
+        /// swaps them in after a read/star change instead of re-reading the
+        /// folder.
+        #[qinvokable]
+        fn message_rows_json(&self, folder_id: i64, uids_json: &QString) -> QString;
+
+        /// Rebuild `messages_json` if a read/star change left it behind the
+        /// rows QML patched; a no-op otherwise. QML calls it before reading
+        /// the feed property.
+        #[qinvokable]
+        fn refresh_messages_if_stale(self: Pin<&mut Self>);
 
         /// A typed custom date range, normalised or refused, as JSON
         /// (`mailcore::search::list_filter::date_range_check`):
@@ -765,7 +785,9 @@ pub mod qobject {
 }
 
 use core::pin::Pin;
+use cxx_qt::CxxQtType;
 use std::cell::OnceCell;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use cxx_qt_lib::QString;
 use mailcore::feed;
@@ -826,6 +848,9 @@ pub struct BridgeRust {
     busy: bool,
     app_version: QString,
     app_license: QString,
+    /// `messages_json` predates a read/star change that only patched rows
+    /// in QML (see [`push_flag_change`]).
+    messages_stale: bool,
 }
 
 /// Initial older-load batch size; cached messages are always rendered in full.
@@ -855,79 +880,138 @@ impl Default for BridgeRust {
             busy: false,
             app_version: qstring(env!("CARGO_PKG_VERSION")),
             app_license: qstring(env!("CARGO_PKG_LICENSE")),
+            messages_stale: false,
         }
     }
 }
 
-/// Push fresh JSON feeds for `(account_id, folder_id)` into the properties.
+/// Every property [`push_feeds`] writes, built off the properties so the
+/// heavy part (the whole folder as JSON) can run on any thread.
 ///
-/// The message feed always contains the full local cache. `messages_total`
-/// reports the cached DB total; `messages_server_total` is the latest count
-/// reported by IMAP so QML can distinguish an incomplete cache from a fully
-/// downloaded folder. The feed ordering comes
-/// from the `message_sort_*` settings; the matching `sort_field` /
-/// `sort_descending` properties are refreshed here too so QML sort controls
-/// always show what the feed actually used.
+/// The message feed always contains the full local cache. `total` is the
+/// cached DB total; `server_total` is the latest count reported by IMAP so
+/// QML can tell an incomplete cache from a fully downloaded folder. The feed
+/// ordering comes from the `message_sort_*` settings, and the sort fields
+/// carry them so QML sort controls always show what the feed actually used.
+pub(crate) struct Feeds {
+    account_id: i64,
+    folder_id: i64,
+    folders: String,
+    messages: String,
+    total: i32,
+    server_total: i32,
+    older: Option<feed::OlderState>,
+    email: String,
+    from_name: String,
+    accounts: String,
+    sort_field: String,
+    sort_descending: bool,
+}
+
+impl Feeds {
+    pub(crate) fn build(db: &mailcore::Db, account_id: i64, folder_id: i64) -> Self {
+        let (messages, total, server_total, older) = if folder_id >= 0 {
+            let cached = store::messages::count_by_folder(db, folder_id).unwrap_or(0);
+            let server = store::folders::get(db, folder_id)
+                .ok()
+                .and_then(|folder| folder.server_total);
+            let msgs = feed::messages_list_json_paged(db, folder_id, cached, 0)
+                .unwrap_or_else(|_| "[]".to_string());
+            (
+                msgs,
+                cached.min(i32::MAX as u64) as i32,
+                server.map_or(-1, |s| s.min(i32::MAX as u64) as i32),
+                Some(feed::older_state(cached, server)),
+            )
+        } else {
+            ("[]".to_string(), 0, -1, None)
+        };
+        let account = store::accounts::get(db, account_id).ok();
+        Self {
+            account_id,
+            folder_id,
+            folders: feed::folders_json(db, account_id).unwrap_or_else(|_| "[]".to_string()),
+            messages,
+            total,
+            server_total,
+            older,
+            email: account
+                .as_ref()
+                .map(|a| a.email_address.clone())
+                .unwrap_or_default(),
+            from_name: account.map(|a| a.from_name).unwrap_or_default(),
+            accounts: feed::accounts_json(db).unwrap_or_else(|_| "[]".to_string()),
+            sort_field: store::settings::get_sort_field(db),
+            sort_descending: store::settings::get_sort_descending(db),
+        }
+    }
+
+    /// Whether these feeds show `(account_id, folder_id)`.
+    pub(crate) fn shows(&self, account_id: i64, folder_id: i64) -> bool {
+        self.account_id == account_id && self.folder_id == folder_id
+    }
+
+    pub(crate) fn apply(self, bridge: &mut Pin<&mut qobject::Bridge>) {
+        bridge.as_mut().set_folders_json(qstring(&self.folders));
+        bridge.as_mut().set_messages_json(qstring(&self.messages));
+        bridge.as_mut().set_messages_total(self.total);
+        bridge.as_mut().set_messages_server_total(self.server_total);
+        bridge
+            .as_mut()
+            .set_messages_older(qstring(self.older.map_or("", feed::OlderState::as_str)));
+        bridge
+            .as_mut()
+            .set_messages_can_load_older(self.older.is_some_and(feed::OlderState::can_load));
+        bridge.as_mut().set_current_account_id(self.account_id);
+        bridge.as_mut().set_current_folder_id(self.folder_id);
+        bridge
+            .as_mut()
+            .set_current_account_email(qstring(&self.email));
+        bridge
+            .as_mut()
+            .set_current_account_from_name(qstring(&self.from_name));
+        bridge.as_mut().set_accounts_json(qstring(&self.accounts));
+        bridge.as_mut().set_sort_field(qstring(&self.sort_field));
+        bridge.as_mut().set_sort_descending(self.sort_descending);
+        bridge.as_mut().rust_mut().messages_stale = false;
+        FEED_EPOCH.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// Counts every change the GUI thread makes to what the feeds show. Feeds
+/// built on the net thread are applied only while it has not moved, so they
+/// can never paint over a newer local change (see `worker::spawn_job`).
+static FEED_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn feed_epoch() -> u64 {
+    FEED_EPOCH.load(Ordering::SeqCst)
+}
+
+/// Build and push fresh feeds for `(account_id, folder_id)` on this thread.
 pub(crate) fn push_feeds(
     bridge: &mut Pin<&mut qobject::Bridge>,
     db: &mailcore::Db,
     account_id: i64,
     folder_id: i64,
 ) {
-    let folders = feed::folders_json(db, account_id).unwrap_or_else(|_| "[]".to_string());
-    let (msgs, total, server_total, older) = if folder_id >= 0 {
-        let cached = store::messages::count_by_folder(db, folder_id).unwrap_or(0);
-        let server = store::folders::get(db, folder_id)
-            .ok()
-            .and_then(|folder| folder.server_total);
-        let msgs = feed::messages_list_json_paged(db, folder_id, cached, 0)
-            .unwrap_or_else(|_| "[]".to_string());
-        (
-            msgs,
-            cached.min(i32::MAX as u64) as i32,
-            server.map_or(-1, |s| s.min(i32::MAX as u64) as i32),
-            Some(feed::older_state(cached, server)),
-        )
-    } else {
-        ("[]".to_string(), 0, -1, None)
-    };
-    let email = store::accounts::get(db, account_id)
-        .map(|a| a.email_address)
-        .unwrap_or_default();
-    let from_name = store::accounts::get(db, account_id)
-        .map(|a| a.from_name)
-        .unwrap_or_default();
-    bridge.as_mut().set_folders_json(qstring(&folders));
-    bridge.as_mut().set_messages_json(qstring(&msgs));
-    bridge.as_mut().set_messages_total(total);
-    bridge.as_mut().set_messages_server_total(server_total);
-    bridge
-        .as_mut()
-        .set_messages_older(qstring(older.map_or("", feed::OlderState::as_str)));
-    bridge
-        .as_mut()
-        .set_messages_can_load_older(older.is_some_and(feed::OlderState::can_load));
-    bridge.as_mut().set_current_account_id(account_id);
-    bridge.as_mut().set_current_folder_id(folder_id);
-    bridge.as_mut().set_current_account_email(qstring(&email));
-    bridge
-        .as_mut()
-        .set_current_account_from_name(qstring(&from_name));
-    let accts = feed::accounts_json(db).unwrap_or_else(|_| "[]".to_string());
-    bridge.as_mut().set_accounts_json(qstring(&accts));
-    // Keep the QML-bound sort state aligned with what the feed just used.
-    sync_sort_props(bridge, db);
+    Feeds::build(db, account_id, folder_id).apply(bridge);
 }
 
-/// Mirror the persisted `message_sort_*` settings into the QML-bindable
-/// `sort_field` / `sort_descending` properties.
-pub(crate) fn sync_sort_props(bridge: &mut Pin<&mut qobject::Bridge>, db: &mailcore::Db) {
-    bridge
-        .as_mut()
-        .set_sort_field(qstring(&mailcore::store::settings::get_sort_field(db)));
-    bridge
-        .as_mut()
-        .set_sort_descending(mailcore::store::settings::get_sort_descending(db));
+/// After a read/star change: refresh the small feeds whose counts moved
+/// (folders, accounts) but not the folder's whole message feed. QML swaps
+/// the changed rows in through `message_rows_json`; the stale feed is only
+/// rebuilt if QML asks for it again (`refresh_messages_if_stale`).
+pub(crate) fn push_flag_change(
+    bridge: &mut Pin<&mut qobject::Bridge>,
+    db: &mailcore::Db,
+    account_id: i64,
+) {
+    let folders = feed::folders_json(db, account_id).unwrap_or_else(|_| "[]".to_string());
+    let accounts = feed::accounts_json(db).unwrap_or_else(|_| "[]".to_string());
+    bridge.as_mut().set_folders_json(qstring(&folders));
+    bridge.as_mut().set_accounts_json(qstring(&accounts));
+    bridge.as_mut().rust_mut().messages_stale = true;
+    FEED_EPOCH.fetch_add(1, Ordering::SeqCst);
 }
 
 impl qobject::Bridge {

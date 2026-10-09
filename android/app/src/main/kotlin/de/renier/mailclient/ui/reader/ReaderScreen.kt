@@ -211,7 +211,7 @@ fun ReaderScreen(
             else -> return@LaunchedEffect
         }
         withContext(Dispatchers.IO) { MailNative.setReadFlag(accountId, folderId, uid, true) }
-        state.afterReaderChange()
+        state.afterReaderFlags(folderId, uid)
     }
 
     val folder = state.folders.firstOrNull { it.id == folderId }
@@ -384,7 +384,7 @@ fun ReaderScreen(
                                 MailNative.toggleStar(accountId, folderId, uid)
                                 withContext(Dispatchers.Main) {
                                     reloadTick++
-                                    state.afterReaderChange()
+                                    state.afterReaderFlags(folderId, uid)
                                 }
                             }
                         }) {

@@ -199,20 +199,26 @@ fun MailState.bulkMarkRead(read: Boolean) = io {
     MailNative.ensureInit(appContext)
     if (searchActive) {
         MailNative.markReadHits(activeAccountId, selectionHitsJson(), read)
+        afterBulk(keepSelection = true)
     } else {
-        MailNative.markReadMany(activeAccountId, folderId, selectionUidsJson(), read)
+        val folder = folderId
+        val uids = selectionUidsJson()
+        MailNative.markReadMany(activeAccountId, folder, uids, read)
+        afterFlags(folder, uids)
     }
-    afterBulk(keepSelection = true)
 }
 
 fun MailState.bulkStar(starred: Boolean) = io {
     MailNative.ensureInit(appContext)
     if (searchActive) {
         MailNative.setStarHits(activeAccountId, selectionHitsJson(), starred)
+        afterBulk(keepSelection = true)
     } else {
-        MailNative.setStarMany(activeAccountId, folderId, selectionUidsJson(), starred)
+        val folder = folderId
+        val uids = selectionUidsJson()
+        MailNative.setStarMany(activeAccountId, folder, uids, starred)
+        afterFlags(folder, uids)
     }
-    afterBulk(keepSelection = true)
 }
 
 fun MailState.bulkArchive() = io {
@@ -274,14 +280,16 @@ fun MailState.rowDeleteIsPermanent(m: MessageRow): Boolean = rowDeletePrompt(m).
 
 fun MailState.rowMarkRead(m: MessageRow, read: Boolean) = io {
     MailNative.ensureInit(appContext)
-    MailNative.markReadMany(activeAccountId, rowFolderId(m), "[${m.uid}]", read)
-    afterRow()
+    val folder = rowFolderId(m)
+    MailNative.markReadMany(activeAccountId, folder, "[${m.uid}]", read)
+    afterFlags(folder, "[${m.uid}]")
 }
 
 fun MailState.rowStar(m: MessageRow, starred: Boolean) = io {
     MailNative.ensureInit(appContext)
-    MailNative.setStarMany(activeAccountId, rowFolderId(m), "[${m.uid}]", starred)
-    afterRow()
+    val folder = rowFolderId(m)
+    MailNative.setStarMany(activeAccountId, folder, "[${m.uid}]", starred)
+    afterFlags(folder, "[${m.uid}]")
 }
 
 fun MailState.rowArchive(m: MessageRow) = io {
@@ -311,6 +319,17 @@ fun MailState.rowPurge(m: MessageRow) = io {
     MailNative.ensureInit(appContext)
     MailNative.purgeMessages(activeAccountId, rowFolderId(m), "[${m.uid}]")
     afterRow()
+}
+
+/**
+ * After a read/star change on [uidsJson] in [folder]: only those rows are
+ * swapped in ([patchRows]), plus the folder counts and the hits; the
+ * folder is not read again.
+ */
+internal suspend fun MailState.afterFlags(folder: Long, uidsJson: String) {
+    patchRows(folder, uidsJson)
+    loadFolders()
+    withContext(Dispatchers.Main) { refreshSearch() }
 }
 
 private suspend fun MailState.afterRow() {

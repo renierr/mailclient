@@ -34,6 +34,33 @@ fn setup() -> (Db, i64, i64) {
 }
 
 #[test]
+fn message_rows_json_returns_just_the_asked_rows_like_the_list() {
+    let (db, acc, f) = setup();
+    for uid in [2, 5, 8] {
+        msg_store::upsert(&db, &msg_store::sample_new(acc, f, uid)).unwrap();
+    }
+    let rows: serde_json::Value =
+        serde_json::from_str(&message_rows_json(&db, f, &[8, 2, 99, 2]).unwrap()).unwrap();
+    let uids: Vec<u64> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["uid"].as_u64().unwrap())
+        .collect();
+    // Uid order, duplicates once, an uncached uid left out.
+    assert_eq!(uids, vec![2, 8]);
+    let list: serde_json::Value =
+        serde_json::from_str(&messages_list_json_paged(&db, f, 10, 0).unwrap()).unwrap();
+    let listed = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["uid"] == 8)
+        .unwrap();
+    assert_eq!(&rows[1], listed, "a patched row must equal the list's own");
+}
+
+#[test]
 fn feeds_shape_matches_qml_roles() {
     let (db, acc, f) = setup();
     let mut m = msg_store::sample_new(acc, f, 7);

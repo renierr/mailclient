@@ -190,27 +190,68 @@ pub fn list_compact_by_folder_sorted(
 ) -> Result<Vec<CompactMessage>> {
     let order = folder_sort_clause(sort_field, descending);
     let mut stmt = db.conn().prepare(&format!(
-        "select uid, subject, from_addr, from_name, date, snippet, is_read, is_starred,
-            has_attachments
+        "select {COMPACT_COLUMNS}
          from messages where folder_id = ?1 and {HIDDEN}
          order by {order} limit ?2 offset ?3"
     ))?;
     let rows = stmt
-        .query_map(params![folder_id, limit as i64, offset as i64], |row| {
-            Ok(CompactMessage {
-                uid: crate::store::int_col(row, 0)?,
-                subject: row.get(1)?,
-                from_addr: row.get(2)?,
-                from_name: row.get(3)?,
-                date: row.get(4)?,
-                snippet: row.get(5)?,
-                is_read: opt_bool(row.get::<_, i64>(6)?),
-                is_starred: opt_bool(row.get::<_, i64>(7)?),
-                has_attachments: opt_bool(row.get::<_, i64>(8)?),
-            })
-        })?
+        .query_map(params![folder_id, limit as i64, offset as i64], compact_row)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+/// Every listed row of `folder_id`, in no particular order: for callers that
+/// test rows rather than show them (the list filters).
+pub fn list_compact_by_folder(db: &Db, folder_id: i64) -> Result<Vec<CompactMessage>> {
+    let mut stmt = db.conn().prepare(&format!(
+        "select {COMPACT_COLUMNS} from messages where folder_id = ?1 and {HIDDEN}"
+    ))?;
+    let rows = stmt
+        .query_map(params![folder_id], compact_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// The listed rows among `uids` in `folder_id`, in uid order. Uids not
+/// cached, or hidden by a pending move, are skipped. One query per 900 uids.
+pub fn list_compact_by_uids(db: &Db, folder_id: i64, uids: &[u32]) -> Result<Vec<CompactMessage>> {
+    let mut clean: Vec<i64> = uids.iter().map(|u| i64::from(*u)).collect();
+    clean.sort_unstable();
+    clean.dedup();
+    let mut out = Vec::with_capacity(clean.len());
+    for chunk in clean.chunks(900) {
+        let placeholders = vec!["?"; chunk.len()].join(",");
+        let mut stmt = db.conn().prepare(&format!(
+            "select {COMPACT_COLUMNS} from messages
+              where folder_id = ? and uid in ({placeholders}) and {HIDDEN}
+              order by uid"
+        ))?;
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(chunk.len() + 1);
+        params.push(&folder_id);
+        params.extend(chunk.iter().map(|u| u as &dyn rusqlite::ToSql));
+        for row in stmt.query_map(params.as_slice(), compact_row)? {
+            out.push(row?);
+        }
+    }
+    Ok(out)
+}
+
+/// The columns [`compact_row`] reads, in its order.
+const COMPACT_COLUMNS: &str =
+    "uid, subject, from_addr, from_name, date, snippet, is_read, is_starred, has_attachments";
+
+fn compact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CompactMessage> {
+    Ok(CompactMessage {
+        uid: crate::store::int_col(row, 0)?,
+        subject: row.get(1)?,
+        from_addr: row.get(2)?,
+        from_name: row.get(3)?,
+        date: row.get(4)?,
+        snippet: row.get(5)?,
+        is_read: opt_bool(row.get::<_, i64>(6)?),
+        is_starred: opt_bool(row.get::<_, i64>(7)?),
+        has_attachments: opt_bool(row.get::<_, i64>(8)?),
+    })
 }
 
 /// Sender display name from a stored RFC 5322 header block, decoded

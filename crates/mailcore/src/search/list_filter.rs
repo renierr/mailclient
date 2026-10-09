@@ -1,11 +1,17 @@
-//! The message list's client-side filters: the quick filters (unread,
-//! starred, attachments, date range) AND-ed with the short typed filter,
-//! over rows the list already holds. They never fetch. Both frontends hand
-//! the whole row set over once and paint the rows this keeps.
+//! The message list's filters: the quick filters (unread, starred,
+//! attachments, date range) AND-ed with the short typed filter. They never
+//! touch the network. A folder's list asks [`keep_in_folder`] with the filter
+//! alone and the rows are read from the cache, so a keystroke costs the same
+//! however long the folder is; search hits, a short bounded set the frontend
+//! already holds, go through [`keep_json`].
 
 use serde::Deserialize;
 
 use super::{date_bounds_pass, normalise_date};
+use crate::db::Db;
+use crate::error::Result;
+use crate::feed::{is_trash_folder, NO_SENDER, NO_SUBJECT};
+use crate::store::messages::{self, CompactMessage};
 
 /// The active list filters. Empty strings and `false` are unset.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -37,6 +43,23 @@ pub struct ListRow {
     pub snippet: String,
 }
 
+impl ListRow {
+    /// The row as the folder list shows it (`feed::messages_list_json_paged`),
+    /// so a filter reads the same words the user sees.
+    fn shown(m: CompactMessage, is_trash: bool) -> Self {
+        Self {
+            date_raw: m.date,
+            unread: !is_trash && !m.is_read,
+            starred: m.is_starred,
+            has_attachments: m.has_attachments,
+            subject: m.subject.unwrap_or_else(|| NO_SUBJECT.to_string()),
+            from: m.from_addr.unwrap_or_else(|| NO_SENDER.to_string()),
+            from_name: m.from_name.unwrap_or_default(),
+            snippet: m.snippet.unwrap_or_default(),
+        }
+    }
+}
+
 impl ListFilter {
     /// Indexes of the `rows` that pass every active filter, in order.
     #[must_use]
@@ -63,10 +86,32 @@ impl ListFilter {
 
 /// [`ListFilter::keep`] over JSON: a filter object and an array of feed
 /// rows (extra fields are ignored) in, a JSON array of kept indexes out.
+/// For search hits; a folder's list uses [`keep_in_folder`].
 pub fn keep_json(filter_json: &str, rows_json: &str) -> serde_json::Result<String> {
     let filter: ListFilter = serde_json::from_str(filter_json)?;
     let rows: Vec<ListRow> = serde_json::from_str(rows_json)?;
     serde_json::to_string(&filter.keep(&rows))
+}
+
+/// The uids of `folder_id`'s listed rows that pass `filter`, ascending. The
+/// list keeps its own order and paints the rows whose uid is in here.
+pub fn keep_in_folder(db: &Db, folder_id: i64, filter: &ListFilter) -> Result<Vec<u32>> {
+    let is_trash = is_trash_folder(db, folder_id);
+    let (uids, rows): (Vec<u32>, Vec<ListRow>) = messages::list_compact_by_folder(db, folder_id)?
+        .into_iter()
+        .map(|m| (m.uid, ListRow::shown(m, is_trash)))
+        .unzip();
+    let mut kept: Vec<u32> = filter.keep(&rows).into_iter().map(|i| uids[i]).collect();
+    kept.sort_unstable();
+    Ok(kept)
+}
+
+/// [`keep_in_folder`] over JSON: a filter object in, a JSON array of uids out.
+pub fn keep_in_folder_json(db: &Db, folder_id: i64, filter_json: &str) -> Result<String> {
+    let filter: ListFilter = serde_json::from_str(filter_json)?;
+    Ok(serde_json::to_string(&keep_in_folder(
+        db, folder_id, &filter,
+    )?)?)
 }
 
 /// A custom date range as typed: both bounds normalised (`2026-9-1` reads
@@ -186,6 +231,70 @@ mod tests {
         let rows = r#"[{"uid":1,"subject":"a","unread":true},{"uid":2,"subject":"b"}]"#;
         assert_eq!(keep_json(r#"{"unread":true}"#, rows).unwrap(), "[0]");
         assert!(keep_json("{", rows).is_err());
+    }
+
+    #[test]
+    fn keep_in_folder_reads_the_rows_as_the_list_shows_them() {
+        use crate::store::pending_moves::{self, PendingAction};
+        use crate::sync::headless::tests::setup_db;
+        let (db, acc, inbox, trash) = setup_db();
+        let mut a = messages::sample_new(acc, inbox, 3);
+        a.subject = None;
+        a.is_starred = true;
+        messages::upsert(&db, &a).unwrap();
+        let mut b = messages::sample_new(acc, inbox, 1);
+        b.is_read = true;
+        messages::upsert(&db, &b).unwrap();
+        let hidden = messages::upsert(&db, &messages::sample_new(acc, inbox, 9)).unwrap();
+        pending_moves::queue(
+            &db,
+            &[hidden],
+            PendingAction::Trash,
+            None,
+            "b",
+            "2099-01-01T00:00:00Z",
+        )
+        .unwrap();
+        messages::upsert(&db, &messages::sample_new(acc, trash, 5)).unwrap();
+
+        let keep = |folder, filter: ListFilter| keep_in_folder(&db, folder, &filter).unwrap();
+        // Ascending uids; the pending move's row is not listed, so never kept.
+        assert_eq!(keep(inbox, ListFilter::default()), vec![1, 3]);
+        assert_eq!(
+            keep(
+                inbox,
+                ListFilter {
+                    unread: true,
+                    ..ListFilter::default()
+                }
+            ),
+            vec![3]
+        );
+        // The typed filter sees the fallback the row shows.
+        assert_eq!(
+            keep(
+                inbox,
+                ListFilter {
+                    text: "no subject".into(),
+                    ..ListFilter::default()
+                }
+            ),
+            vec![3]
+        );
+        // Nothing in Trash reads as unread, as in the feed.
+        assert!(keep(
+            trash,
+            ListFilter {
+                unread: true,
+                ..ListFilter::default()
+            }
+        )
+        .is_empty());
+        assert_eq!(
+            keep_in_folder_json(&db, inbox, r#"{"starred":true}"#).unwrap(),
+            "[3]"
+        );
+        assert!(keep_in_folder_json(&db, inbox, "{").is_err());
     }
 
     #[test]

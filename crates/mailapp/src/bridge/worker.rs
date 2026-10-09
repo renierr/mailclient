@@ -7,7 +7,7 @@ use cxx_qt::Threading;
 use cxx_qt_lib::QString;
 
 use crate::bridge::qobject;
-use crate::bridge::{push_feeds, qstring, shared_db};
+use crate::bridge::{feed_epoch, push_feeds, qstring, shared_db, Feeds};
 use mailcore::sync::pool::guard;
 
 /// What to refresh on the GUI after a job.
@@ -276,6 +276,15 @@ where
             Ok(done) => (done.status, done.refresh, done.outcome),
             Err(e) => (e, None, String::new()),
         };
+        // The whole folder as JSON is the expensive part of a refresh, so it
+        // is built here rather than on the GUI thread. It is a guess at what
+        // the GUI will show: used only when the selection resolves to it and
+        // nothing local changed the feeds since (`feed_epoch`).
+        let prebuilt = refresh.and_then(|r| {
+            let epoch = feed_epoch();
+            let db = shared_db().ok()?;
+            Some((epoch, Feeds::build(db, r.account_id, r.folder_id)))
+        });
         let queued = qt.queue(move |mut bridge| {
             if let Some(refresh) = refresh {
                 if let Some(limit) = refresh.message_limit {
@@ -286,8 +295,18 @@ where
                     folder_id: *bridge.current_folder_id(),
                 };
                 let target = refresh.resolve(started, live);
-                if let Ok(db) = shared_db() {
-                    push_feeds(&mut bridge, db, target.account_id, target.folder_id);
+                match prebuilt {
+                    Some((epoch, feeds))
+                        if epoch == feed_epoch()
+                            && feeds.shows(target.account_id, target.folder_id) =>
+                    {
+                        feeds.apply(&mut bridge);
+                    }
+                    _ => {
+                        if let Ok(db) = shared_db() {
+                            push_feeds(&mut bridge, db, target.account_id, target.folder_id);
+                        }
+                    }
                 }
             }
             bridge.as_mut().set_busy(false);

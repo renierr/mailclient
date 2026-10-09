@@ -183,6 +183,8 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
         internal set
     var shownHits: List<MessageRow> by mutableStateOf(emptyList())
         internal set
+    // The running filter pass of [recomputeShown]; a newer one cancels it.
+    internal var filterJob: Job? = null
     // List scroll memory (Qt keeps per-folder scroll by UID, Flutter by
     // PageStorageKey): first-visible index + offset per folder, so leaving
     // for the reader and coming back lands where you left. Search scroll

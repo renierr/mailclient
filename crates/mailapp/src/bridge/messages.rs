@@ -1,5 +1,6 @@
 use std::pin::Pin;
 
+use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
 use mailcore::feed;
 use mailcore::html::reader;
@@ -9,7 +10,7 @@ use mailcore::undo::MoveTarget;
 
 use crate::bridge::qobject;
 use crate::bridge::worker::{spawn_flag_push, spawn_job};
-use crate::bridge::{push_feeds, qstring, shared_db, MAX_MESSAGE_LIMIT};
+use crate::bridge::{push_feeds, push_flag_change, qstring, shared_db, MAX_MESSAGE_LIMIT};
 
 mod bulk;
 mod files;
@@ -334,6 +335,42 @@ impl qobject::Bridge {
         }))
     }
 
+    pub fn list_filter_uids(&self, folder_id: i64, filter_json: &QString) -> QString {
+        let kept = shared_db().and_then(|db| {
+            mailcore::search::list_filter::keep_in_folder_json(
+                db,
+                folder_id,
+                &filter_json.to_string(),
+            )
+            .map_err(|e| e.to_string())
+        });
+        qstring(&kept.unwrap_or_else(|e| {
+            log::warn!("list filter: {e}");
+            "null".to_string()
+        }))
+    }
+
+    pub fn message_rows_json(&self, folder_id: i64, uids_json: &QString) -> QString {
+        let rows = shared_db().and_then(|db| {
+            let uids = parse_uids_json(&uids_json.to_string())?;
+            feed::message_rows_json(db, folder_id, &uids).map_err(|e| e.to_string())
+        });
+        qstring(&rows.unwrap_or_else(|e| {
+            log::warn!("message rows: {e}");
+            "[]".to_string()
+        }))
+    }
+
+    pub fn refresh_messages_if_stale(mut self: Pin<&mut Self>) {
+        if !self.rust().messages_stale {
+            return;
+        }
+        if let Ok(db) = shared_db() {
+            let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+            push_feeds(&mut self, db, acc_id, folder_id);
+        }
+    }
+
     pub fn date_range_check_json(&self, after: &QString, before: &QString) -> QString {
         let r = mailcore::search::list_filter::date_range_check(
             &after.to_string(),
@@ -516,11 +553,9 @@ impl qobject::Bridge {
             // next sync), so closing the app right after reading loses nothing.
             spawn_flag_push(acc_id);
         }
-        // Refresh the QML-bound feeds so the follow-up reloadMessages() /
-        // reloadFolders() in QML see the cleared unread flag immediately.
-        // Without this messages_json/folders_json stay stale and the marker
-        // only clears on the next folder switch (which pushes feeds).
-        push_feeds(&mut self, db, acc_id, folder_id);
+        // The unread counts move; the row itself is patched by QML
+        // (`message_rows_json`), so the folder feed is not rebuilt.
+        push_flag_change(&mut self, db, acc_id);
         result
     }
 
@@ -536,7 +571,7 @@ impl qobject::Bridge {
         // Queued locally, pushed promptly in the background (see open_message).
         let result = save_flags(db, msg.id, read, msg.is_starred);
         spawn_flag_push(acc_id);
-        push_feeds(&mut self, db, acc_id, folder_id);
+        push_flag_change(&mut self, db, acc_id);
         result
     }
 
@@ -552,7 +587,7 @@ impl qobject::Bridge {
         // Queued locally, pushed promptly in the background (see open_message).
         let result = save_flags(db, msg.id, msg.is_read, !msg.is_starred);
         spawn_flag_push(acc_id);
-        push_feeds(&mut self, db, acc_id, folder_id);
+        push_flag_change(&mut self, db, acc_id);
         result
     }
 
