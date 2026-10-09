@@ -105,6 +105,8 @@ the "not fixed" column before assuming a finding is closed.
 | **A17** (contacts bullet) | `af18a03` | One `row_to_contact` instead of three copies | Settings and undo bullets open |
 | **B2** | `65bbae6` | Each IMAP command (and the greeting) is capped at 10 min overall on top of the 30 s per-read timeout | IDLE keeps its caller-side bound; no per-kind caps |
 | **B3** | `019f509` | A transport failure marks the session broken: no further commands, no fallbacks, not pooled, sweep stops | Errors are still one `StoreError::Network` kind; callers branch on the session state instead |
+| **B15** | `61acc33` | Push tasks leave at safe points through a per-task flag instead of being aborted | A check in flight still finishes, so it may notify at quiet-hours start |
+| **B16** | `61acc33` | Shutdown awaits tasks for at most 10 s, then aborts the rest | — |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -513,7 +515,7 @@ drops it. A session that only saw a server `NO` is still checked back in, which 
 `checkin()` (`pool.rs:101-112`) does `drop(pool)` **before** `s.disconnect()`, and the `Drop` impl
 (`pool.rs:127-137`) never holds the mutex at all. `disconnect()` only clears the stored session. No action.
 
-### B15 · medium · `task.abort()` can stop a push account mid-`push_check`
+### B15 · medium · `task.abort()` can stop a push account mid-`push_check` — **FIXED** `[fixed]`
 `sync/push.rs:181-192`
 
 ```rust
@@ -524,11 +526,27 @@ Abort lands at an await point inside `push_check` → `sync_account`, which may 
 `mark_checked`. Nothing is surfaced; the lock / `ImapSync` drop is the only cleanup.
 **Fix:** abort only when idle, or keep a cancellation flag the task honours at a safe point.
 
-### B16 · low · shutdown waits for tasks with no bound
+**Fixed in `61acc33` with the flag.** Each task gets its own `watch::channel(false)` "leave" flag. The supervisor
+sets it for an account no longer in `push_account_ids` (switched off push, quiet hours, deleted), and clears it
+again if the account is back before the task has gone. The task leaves only at a safe point: the top of
+`run_account`'s loop, the top of `serve_session`'s loop between checks, and inside every wait (IDLE, the
+non-IDLE wait, offline, backoff). It leaves through `Exit::Stop`, so the session logs out cleanly. In the
+usual case the task is parked in IDLE and leaves at once. Test: an offline task ignores a keep-alive, leaves
+when asked, and releases `busy` on the way out; `until_leave` never fires for a dropped supervisor.
+**Trade-offs:** an account that leaves in the middle of a check finishes that check first. At quiet-hours
+start that check can still post a notification. An account re-added just after its task has left gets a new
+task only at the next signal, not at once.
+
+### B16 · low · shutdown waits for tasks with no bound — **FIXED** `[fixed]`
 `sync/push.rs:196-199` — `for (_, task) in tasks { let _ = task.await; }`. Tasks are asked to stop, never
 aborted. A task stuck in the no-timeout SMTP send (B1) or a 30 s-per-read IMAP command (B2) keeps the push
 thread alive for minutes.
 **Fix:** `abort()` then `await` with a timeout.
+
+**Fixed in `61acc33`, in the other order.** Aborting first would reintroduce B15 at every shutdown. The tasks see
+`stop` at their next safe point, so the supervisor awaits them against one shared 10 s deadline
+(`SHUTDOWN_GRACE`) and aborts only what is still running after it. With B1 and B2, the work that can still be
+running is bounded anyway: 30 s per SMTP operation, 10 min per IMAP command.
 
 ### B17 · low · send-path failures do not feed the backoff `[corrected]`
 `sync/push.rs:373-382`
