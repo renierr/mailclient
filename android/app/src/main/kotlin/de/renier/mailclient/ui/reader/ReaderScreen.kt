@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -288,14 +287,18 @@ fun ReaderScreen(
             // its own WebView and cannot scroll out from under an overlay).
             if (m != null) {
                 Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
+                    // Equal thirds: unweighted, the row measured the actions in
+                    // turn and squeezed the last one to nothing at 360dp and
+                    // 150% text. The labels ellipsize inside their third.
                     Row(
-                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        ReplyAction(R.drawable.ic_reply, "Reply") { onCompose(ComposeMode.Reply) }
-                        ReplyAction(R.drawable.ic_reply_all, "Reply all") { onCompose(ComposeMode.ReplyAll) }
-                        ReplyAction(R.drawable.ic_forward, "Forward") { onCompose(ComposeMode.Forward) }
+                        val third = Modifier.weight(1f)
+                        ReplyAction(R.drawable.ic_reply, "Reply", third) { onCompose(ComposeMode.Reply) }
+                        ReplyAction(R.drawable.ic_reply_all, "Reply all", third) { onCompose(ComposeMode.ReplyAll) }
+                        ReplyAction(R.drawable.ic_forward, "Forward", third) { onCompose(ComposeMode.Forward) }
                     }
                 }
             }
@@ -553,8 +556,8 @@ fun ReaderScreen(
 }
 
 @Composable
-private fun ReplyAction(icon: Int, label: String, onClick: () -> Unit) {
-    TextButton(onClick = onClick, contentPadding = PaddingValues(horizontal = 12.dp)) {
+private fun ReplyAction(icon: Int, label: String, modifier: Modifier, onClick: () -> Unit) {
+    TextButton(onClick = onClick, modifier = modifier, contentPadding = PaddingValues(horizontal = 12.dp)) {
         Icon(painterResource(icon), null, modifier = Modifier.size(18.dp))
         Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 6.dp))
     }
