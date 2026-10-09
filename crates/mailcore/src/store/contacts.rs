@@ -382,36 +382,51 @@ pub fn suggest(db: &Db, query: &str, limit: u64) -> Result<Vec<Contact>> {
              order by sent_count desc, times_seen desc, last_seen_at desc limit ?1",
         )?;
         let rows = stmt
-            .query_map([limit as i64], |row| {
-                Ok(Contact {
-                    address: row.get(0)?,
-                    name: row.get(1)?,
-                    alias: row.get(2)?,
-                    times_seen: row.get::<_, i64>(3)? as u64,
-                    sent_count: row.get::<_, i64>(4)? as u64,
-                    last_seen_at: row.get(5)?,
-                })
-            })?
+            .query_map([limit as i64], row_to_contact)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         return Ok(rows);
     }
 
-    let mut stmt = db.conn().prepare(
-        "select address, name, alias, times_seen, sent_count, last_seen_at from contacts",
-    )?;
+    // Every match `score_field` accepts needs the query to be a subsequence
+    // of the alias, name or address, so this keeps exactly the rows that can
+    // score instead of reading the whole table per keystroke (A15). SQLite
+    // folds case for ASCII only, so a row with any other character always
+    // goes through to the scorer, which lowercases Unicode itself.
+    let mut stmt = db.conn().prepare(&format!(
+        "select {CONTACT_COLS} from contacts
+          where address like ?1 escape '\\'
+             or name like ?1 escape '\\'
+             or alias like ?1 escape '\\'
+             or (address || coalesce(name, '') || coalesce(alias, '')) glob '*[^ -~]*'"
+    ))?;
     let candidates = stmt
-        .query_map([], |row| {
-            Ok(Contact {
-                address: row.get(0)?,
-                name: row.get(1)?,
-                alias: row.get(2)?,
-                times_seen: row.get::<_, i64>(3)? as u64,
-                sent_count: row.get::<_, i64>(4)? as u64,
-                last_seen_at: row.get(5)?,
-            })
-        })?
+        .query_map([subsequence_pattern(q)], row_to_contact)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rank(q, candidates, limit))
+}
 
+/// `like` pattern matching every string `query` is a case-insensitive
+/// subsequence of (`abc` → `%a%b%c%`). Wildcards in the query are escaped;
+/// a non-ASCII character becomes `_`, since `like` would compare it
+/// case-sensitively.
+fn subsequence_pattern(query: &str) -> String {
+    let mut p = String::from("%");
+    for c in query.to_lowercase().chars() {
+        match c {
+            '%' | '_' | '\\' => {
+                p.push('\\');
+                p.push(c);
+            }
+            c if c.is_ascii() => p.push(c),
+            _ => p.push('_'),
+        }
+        p.push('%');
+    }
+    p
+}
+
+/// Score, sort and cut `candidates` for a non-empty `q`.
+fn rank(q: &str, candidates: Vec<Contact>, limit: u64) -> Vec<Contact> {
     let mut scored: Vec<(i64, Contact)> = candidates
         .into_iter()
         .filter_map(|c| match_score(q, &c).map(|score| (score, c)))
@@ -423,13 +438,24 @@ pub fn suggest(db: &Db, query: &str, limit: u64) -> Result<Vec<Contact>> {
             .then_with(|| c2.last_seen_at.cmp(&c1.last_seen_at))
     });
 
-    let results = scored
+    scored
         .into_iter()
         .take(limit as usize)
         .map(|(_, c)| c)
-        .collect();
+        .collect()
+}
 
-    Ok(results)
+const CONTACT_COLS: &str = "address, name, alias, times_seen, sent_count, last_seen_at";
+
+fn row_to_contact(row: &rusqlite::Row<'_>) -> rusqlite::Result<Contact> {
+    Ok(Contact {
+        address: row.get(0)?,
+        name: row.get(1)?,
+        alias: row.get(2)?,
+        times_seen: row.get::<_, i64>(3)? as u64,
+        sent_count: row.get::<_, i64>(4)? as u64,
+        last_seen_at: row.get(5)?,
+    })
 }
 
 /// List known contacts, most frequently used first.
@@ -474,16 +500,7 @@ pub fn cleanup_candidates(db: &Db, limit: u64) -> Result<Vec<CleanupCandidate>> 
           order by last_seen_at desc",
     )?;
     let rows = stmt
-        .query_map([], |row| {
-            Ok(Contact {
-                address: row.get(0)?,
-                name: row.get(1)?,
-                alias: row.get(2)?,
-                times_seen: row.get::<_, i64>(3)? as u64,
-                sent_count: row.get::<_, i64>(4)? as u64,
-                last_seen_at: row.get(5)?,
-            })
-        })?
+        .query_map([], row_to_contact)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
     let mut out = Vec::new();
@@ -577,6 +594,53 @@ mod tests {
             recipient_entry(&c(Some("Doe, Ann"), Some(" "))),
             "Doe  Ann <a@example.com>"
         );
+    }
+
+    #[test]
+    fn the_prefilter_keeps_every_contact_that_can_score() {
+        // `suggest` reads only the rows its `like` prefilter lets through;
+        // ranking every contact in Rust must give the same answer.
+        let db = Db::open_in_memory().unwrap();
+        for (addr, name) in [
+            ("axbxc@example.com", None),
+            ("ann.lee@example.org", Some("Ann Lee")),
+            ("juergen@example.com", Some("Jürgen Müller")),
+            ("STAFF@EXAMPLE.COM", Some("Ops Team")),
+            ("deal@example.net", Some("100%_off \\ deals")),
+            // Only Rust's Unicode lowercasing matches these (KELVIN SIGN
+            // → `k`, `İ` → `i̇`), and their addresses do not, so they
+            // reach the scorer only through the non-ASCII pass-through.
+            ("kv@example.com", Some("\u{212A}elvin")),
+            ("ip@example.com", Some("İpek")),
+            ("other@example.org", Some("Nobody")),
+        ] {
+            seen(&db, addr, name).unwrap();
+        }
+        set_alias(&db, "other@example.org", Some("Zed")).unwrap();
+        let all: Vec<Contact> = db
+            .conn()
+            .prepare(&format!("select {CONTACT_COLS} from contacts"))
+            .unwrap()
+            .query_map([], row_to_contact)
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        for q in [
+            "abc", "ann", "AL", "jür", "MÜLLER", "staff", "%_", "\\", "0%", "kelv", "ipek", "zed",
+            "x", "q",
+        ] {
+            let fast: Vec<String> = suggest(&db, q, 50)
+                .unwrap()
+                .into_iter()
+                .map(|c| c.address)
+                .collect();
+            let full: Vec<String> = rank(q, all.clone(), 50)
+                .into_iter()
+                .map(|c| c.address)
+                .collect();
+            assert_eq!(fast, full, "query {q:?}");
+        }
+        assert_eq!(subsequence_pattern("a%ü"), "%a%\\%%_%");
     }
 
     #[test]
