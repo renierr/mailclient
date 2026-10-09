@@ -109,6 +109,9 @@ the "not fixed" column before assuming a finding is closed.
 | **B16** | `61acc33` | Shutdown awaits tasks for at most 10 s, then aborts the rest | — |
 | **B9** | `2e5e88a` | Trash sweep moves only the read flag, of clean rows | — |
 | **B10** | `2e5e88a` | A failed Trash STORE queues the rows for the flag push instead of leaving them clean | — |
+| **C10** | — | No change: the 6 MB per-message inline budget already bounds the document | Budget size is a product call |
+| **C11** | `42354d8` | `BodyImages` scans the body once per message, not once per attachment | — |
+| **C12** | `ade5928` | Sender-tier similarity scan prefiltered by a `like` on the normalized subject | Non-ASCII subjects are still all scanned |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -841,24 +844,44 @@ ends a bogus comment at the first `>`. Input `<p>ok</p><?x ><p>rest</p>` → `re
 *(Done as "always the first `>`": that already ends `<?xml … ?>` correctly, and a `?>` search first would let
 an unterminated `<?` stretch to an unrelated `?>` further down.)*
 
-### C10 · low · inline-image expansion escapes `MAX_OUT_BYTES` — confirmed
+### C10 · low · inline-image expansion escapes `MAX_OUT_BYTES` — confirmed — **no change** `[corrected]`
 `html/inline.rs:120-160` — `MAX_INLINE_BYTES_PER_MESSAGE` is 6 MB of raw bytes, and each `cid:` hit appends
 `base64_encode(&img.data)` (~4/3 → ~8 MB) directly to `out` with no `MAX_OUT_BYTES` re-check (unlike
 `sanitize`'s `push_capped`). Four 1.5 MB inline PNGs referenced from `<img src="cid:…">` produce an ~8 MB
 document that `reader::document` embeds.
 **Fix:** count the produced length against `MAX_OUT_BYTES` (or a document budget) and stop substituting.
 
-### C11 · low · `is_body_referenced` re-lowercases the whole body once per attachment — confirmed
+**Not changed, on purpose.** The expansion is already bounded: `MAX_INLINE_BYTES_PER_MESSAGE` (6 MB raw,
+counted per substitution, so repeating one image spends the budget each time) is the document budget the fix
+asks for. `MAX_OUT_BYTES` (768 KB) bounds the sanitizer's *text* output. Applying it to images would drop a
+single 1 MB inline photo, which is ordinary mail. Shrinking the 6 MB budget is a product decision (how big
+an inline image the reader should show), not a defect. The real cost of an ~8 MB document sits in the
+frontends' WebEngine and WebView loading, which D16 covers.
+
+### C11 · low · `is_body_referenced` re-lowercases the whole body once per attachment — confirmed — **FIXED** `[fixed]`
 `feed.rs:691-695` — `is_body_referenced` → `img_cid_references(html)` → `html.to_ascii_lowercase()`
 (`html/inline.rs:66`), a full copy + scan of the body **per attachment** (up to 50). 512 KB × 50 ≈ 25 MB of
 copy+scan per message open. Much worse now that C2 is known to apply to the same path.
 **Fix:** compute `let refs = html::img_cid_references(body_html)` once outside the filter and test `refs.contains(...)`.
 
-### C12 · low · unbounded Tier-2 similarity scan, no SQL `LIMIT` — confirmed
+**Fixed in `42354d8`.** `is_body_referenced` is replaced by `html::BodyImages`: `BodyImages::of(body_html)`
+scans the body once, and `.shows(content_id)` checks a part against it. All three per-part loops use it: the
+feed's `listed_attachments`, sync's `extract_attachments`, and the v20 migration's repair. The old function
+is gone rather than kept as a wrapper, since nothing else called it. Its test was retargeted.
+
+### C12 · low · unbounded Tier-2 similarity scan, no SQL `LIMIT` — confirmed — **FIXED** `[fixed]`
 `similar.rs:263-275` — `let mut rows = stmt.query(params![account_id, target_from])?;` with no limit, and
 every row's subject normalized in Rust. The loop only breaks once enough *matching* ids are collected, so a
 sender with a large history and no matches walks the whole set on the feed thread.
 **Fix:** add `limit ?N` (a small multiple of `remaining`) or stream with an explicit cursor.
+
+**Fixed in `ade5928` with a prefilter instead of a `limit`.** A `limit` would silently miss matches older than
+its window. `normalize_subject` only strips prefixes, trims and lowercases, so any subject that normalizes to
+the target *contains* it. `subject like '%…%'` (wildcards escaped) keeps the scan to those rows. As in A15,
+subjects with any non-ASCII character always pass (`glob '*[^ -~]*'`), since `like` folds case for ASCII
+only. Test: subjects of two-letter words (so the keyword tier contributes nothing) with an ASCII case change
+and an `İ`, whose lowercase is two characters. The `İ` case fails when the pass-through is removed (checked
+by mutation).
 
 ### C13 · `[removed]` — documented decision, not a dead branch
 `mime.rs:288-311` — the identical `return None` arms look dead, but the comment above them states the rule:
