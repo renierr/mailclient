@@ -147,6 +147,7 @@ pub(crate) fn extract_attachments(
 ) -> Vec<NewAttachment> {
     use mail_parser::{MimeHeaders, PartType};
     let mut out = Vec::new();
+    let shown = crate::html::BodyImages::of(body_html);
     for part in parsed.attachments().take(MAX_ATTACHMENTS_PER_MESSAGE) {
         let len = match &part.body {
             PartType::Binary(b) | PartType::InlineBinary(b) => b.len(),
@@ -204,7 +205,7 @@ pub(crate) fn extract_attachments(
         // Same rule as `parse_to_new`, for callers holding no message row
         // (the on-demand download): a `cid:`-shown part must not flip back
         // to a listed file on re-fetch.
-        if !is_inline && crate::html::is_body_referenced(content_id.as_deref(), body_html) {
+        if !is_inline && shown.shows(content_id.as_deref()) {
             is_inline = true;
         }
         out.push(NewAttachment {

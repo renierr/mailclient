@@ -685,12 +685,11 @@ fn listed_attachments(
     message_id: i64,
     body_html: Option<&str>,
 ) -> Vec<crate::models::Attachment> {
+    let shown = crate::html::BodyImages::of(body_html);
     messages::list_attachments(db, message_id)
         .unwrap_or_default()
         .into_iter()
-        .filter(|a| {
-            !a.is_inline && !crate::html::is_body_referenced(a.content_id.as_deref(), body_html)
-        })
+        .filter(|a| !a.is_inline && !shown.shows(a.content_id.as_deref()))
         .collect()
 }
 

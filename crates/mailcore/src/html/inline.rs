@@ -97,19 +97,30 @@ pub fn img_cid_references(html: &str) -> Vec<String> {
     out
 }
 
-/// Whether a part's `Content-ID` is shown in the body: referenced from an
-/// `<img src="cid:…">`, in any spelling (see [`normalize_content_id`]).
-/// A part the body shows is a body part even when the sender declared it
-/// `Content-Disposition: attachment` (newsletters do this for logos).
-pub fn is_body_referenced(content_id: Option<&str>, html: Option<&str>) -> bool {
-    let (Some(cid), Some(html)) = (content_id, html) else {
-        return false;
-    };
-    let want = normalize_content_id(cid);
-    if want.is_empty() {
-        return false;
+/// The `cid:` ids a body shows through `<img src>` ([`img_cid_references`]),
+/// read once per body. A message is checked part by part, and finding the
+/// references re-lowercased and re-scanned the whole body for every part,
+/// up to 50 times per message open (C11).
+#[derive(Debug, Default)]
+pub struct BodyImages(Vec<String>);
+
+impl BodyImages {
+    pub fn of(html: Option<&str>) -> Self {
+        Self(html.map(img_cid_references).unwrap_or_default())
     }
-    img_cid_references(html).contains(&want)
+
+    /// Whether the part with `content_id` is one of the body's images, in
+    /// any spelling (see [`normalize_content_id`]). Such a part is a body
+    /// part even when the sender declared it `Content-Disposition:
+    /// attachment` (newsletters do this for logos). A link
+    /// (`<a href="cid:…">`) does not count.
+    pub fn shows(&self, content_id: Option<&str>) -> bool {
+        let Some(cid) = content_id else {
+            return false;
+        };
+        let want = normalize_content_id(cid);
+        !want.is_empty() && self.0.contains(&want)
+    }
 }
 /// Replace every `<img src="cid:…">` in sanitized HTML with a `data:` URI
 /// from `images`. Returns the new HTML and how many references had no
@@ -329,14 +340,15 @@ mod tests {
     #[test]
     fn body_references_cover_sender_spellings() {
         let html = "<p><IMG SRC=cid:yellowLogo><img src='cid:bannerLogo'/></p>";
-        assert!(is_body_referenced(Some("yellowLogo"), Some(html)));
-        assert!(is_body_referenced(Some("<bannerLogo>"), Some(html)));
-        assert!(!is_body_referenced(Some("other"), Some(html)));
-        assert!(!is_body_referenced(None, Some(html)));
-        assert!(!is_body_referenced(Some("yellowLogo"), None));
+        let shown = BodyImages::of(Some(html));
+        assert!(shown.shows(Some("yellowLogo")));
+        assert!(shown.shows(Some("<bannerLogo>")));
+        assert!(!shown.shows(Some("other")));
+        assert!(!shown.shows(None));
+        assert!(!BodyImages::of(None).shows(Some("yellowLogo")));
         // A linked file is not a body image: only <img src> counts.
         let linked = "<p><a href=\"cid:report\">report</a></p>";
-        assert!(!is_body_referenced(Some("report"), Some(linked)));
+        assert!(!BodyImages::of(Some(linked)).shows(Some("report")));
     }
 
     #[test]

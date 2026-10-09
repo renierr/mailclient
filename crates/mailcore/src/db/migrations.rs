@@ -550,8 +550,9 @@ fn migrate_cid_inline_attachments(conn: &Connection) -> Result<()> {
             )?
             .query_map([id], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
+        let shown = crate::html::BodyImages::of(Some(html));
         for (aid, cid) in &parts {
-            if crate::html::is_body_referenced(cid.as_deref(), Some(html)) {
+            if shown.shows(cid.as_deref()) {
                 conn.execute("update attachments set is_inline = 1 where id = ?1", [aid])?;
                 marked += 1;
             }

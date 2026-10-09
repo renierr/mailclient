@@ -43,7 +43,7 @@ pub(crate) use entities::escape_attr;
 pub use entities::{decode_entities, escape_text};
 pub(crate) use inline::{base64_decode, base64_encode};
 pub use inline::{
-    img_cid_references, inline_cid_images, is_body_referenced, is_inline_image_mime, InlineImage,
+    img_cid_references, inline_cid_images, is_inline_image_mime, BodyImages, InlineImage,
     MAX_INLINE_BYTES_PER_MESSAGE, MAX_INLINE_IMAGE_BYTES,
 };
 pub use sanitize::{sanitize, sanitize_for_send};
