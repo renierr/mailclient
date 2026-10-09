@@ -112,6 +112,8 @@ the "not fixed" column before assuming a finding is closed.
 | **C10** | — | No change: the 6 MB per-message inline budget already bounds the document | Budget size is a product call |
 | **C11** | `42354d8` | `BodyImages` scans the body once per message, not once per attachment | — |
 | **C12** | `ade5928` | Sender-tier similarity scan prefiltered by a `like` on the normalized subject | Non-ASCII subjects are still all scanned |
+| **A9** | `6ebe8bd` | `store::atomic` makes the multi-row deletes/updates all-or-nothing | — |
+| **A10** | `6ebe8bd` | `set_sort` and `set_pending_open` write both keys atomically | — |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -276,13 +278,20 @@ the value, which holds addresses. Used for `to/cc/bcc_addrs`, `keywords` and `en
 `contacts.rs:543` (`to_value` of a plain struct, cannot fail) and `choices.rs:81` (parses the compiled-in
 defaults table) read no stored data, so they are left as they are.
 
-### A9 · low · "transactional" deletes that are not — confirmed as written
+### A9 · low · "transactional" deletes that are not — confirmed as written — **FIXED** `[fixed]`
 `store/contacts.rs:449-463` — `delete_many` is documented/aliased as transactional but issues one implicit
 transaction per address; a mid-list failure leaves a partial delete. Same in `pending_moves::record_failure`/
 `remove` (`:159-178`) and `bridge/messages/bulk.rs` `set_read` (`store/messages/bulk.rs:44-48`).
 **Fix:** wrap in `unchecked_transaction()` or collapse to `where address in (?,…)`.
 
-### A10 · low · multi-statement mutations outside the tx helper `[corrected]`
+**Fixed in `6ebe8bd`.** One helper, `store::atomic(db, f)`, instead of a hand-rolled transaction at each site. It
+opens an `IMMEDIATE` transaction (no read-then-upgrade `BUSY`, as in A2), or joins the caller's when one is
+already open, since `unchecked_transaction()` would fail with "cannot start a transaction within a
+transaction" there. Used by `contacts::delete_many`, `pending_moves::record_failure`/`remove`, and both of
+`bulk::set_read`/`set_starred` (the `bulk.rs` cited is `mailcore/src/bulk.rs`, not `store/messages/bulk.rs`).
+Test: an error rolls back the earlier write; inside an open transaction it joins.
+
+### A10 · low · multi-statement mutations outside the tx helper `[corrected]` — **FIXED** `[fixed]`
 `store/settings.rs:266-268` (`set_pending_open` calls `set` twice), `:394-395` (`set_sort` calls `set` twice),
 while `set_many` (`:175-202`) does it in one transaction.
 **Fix (partly blocked):** `set_many` rejects any key without an entry in `defaults()`
@@ -290,6 +299,9 @@ while `set_many` (`:175-202`) does it in one transaction.
 none. So `set_pending_open` cannot use it until those keys are added to `defaults()` (they are take-once,
 with no default). **`set_sort` can be converted today.**
 **Fix for `set_pending_open`:** wrap the two `set` calls in one `unchecked_transaction()`.
+
+**Fixed in `6ebe8bd`.** Both `set_sort` and `set_pending_open` run their two writes through `store::atomic`
+(see A9), so `set_pending_open` needed no new `defaults()` keys.
 
 ### A11 · low · a *newer* version stamp is silently rewound — **FIXED** (refuses) `[fixed]`
 `db/migrations.rs:327-332` — `[verify]` a DB stamped `99` opens "successfully" and is rewritten to the current
