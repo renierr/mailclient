@@ -302,7 +302,6 @@ and need no Qt twin unless noted.
 | Home-screen widget (unread count / newest mail) | Android | Plain `RemoteViews` needs nothing new; Jetpack Glance would be a dependency decision |
 | Quick Settings tile "Check mail" | Android | `TileService` running the existing background check |
 | Keyboard shortcuts with a hardware keyboard | Android | Today touch has none by design (§9); the key map could follow Qt's |
-| Predictive back | Android | `enableOnBackInvokedCallback`; the shell already walks its route stack |
 | Autofill hints on the account form | Android | Content types on the login fields so password managers fill IMAP/SMTP credentials |
 | Per-app language | Android | `localeConfig`; only worth it once strings are translated |
 | App lock (fingerprint / face) | Android | Framework `BiometricPrompt` (Android 9+, no dependency), opt-in setting |
@@ -385,6 +384,7 @@ the open Qt ↔ native differences are listed at the end.
 | Outbox pill + dialog | ✅ | ✅ | ✅ page | Pill words from `outbox::status_json` (`label`); native opens a full page from the status-strip chip: rows with the core's state line and error, Sync now (only while something is retryable), forget a dead row after a confirm |
 | Undo offer (snackbar/toast; Ctrl+Z where a keyboard exists) | ✅ | ✅ | ✅ | The bar lasts the core's `UNDO_GRACE_SECS` everywhere; native takes Ctrl+Z from a hardware keyboard outside the composer |
 | Keyboard shortcuts | ✅ | ✅ | — | Touch: no shortcuts by design |
+| Predictive back gesture | — | — | ✅ | Android 13+: `android:enableOnBackInvokedCallback` on `<application>`; every screen already routes back through Compose `BackHandler`, so the system animation is a pure opt-in. In-app pane transitions stay as they are (no per-pane `PredictiveBackHandler` animation) |
 | Sync on start, account switch, resume | ✅ (start + switch; no resume on desktop) | ✅ | ✅ | Resume syncs only with auto-sync on and no sync of the account finished within the core's grace period (`mailcore::sync::resume`, 5 minutes); Flutter keeps its own one-minute gap. Start, switch, timer and manual syncs are never held back |
 | Start view on narrow layouts (`start_view`: folder list or the last used account's inbox) | ✅ (narrow window, cold start) | — | ✅ (one pane, cold start) | Returning from the background keeps what was open |
 | Auto-sync timer, quiet hours | ✅ | ✅ | ✅ | Native timer runs only while the app is in the foreground, so quiet hours (which gate unattended ticks) never apply there |

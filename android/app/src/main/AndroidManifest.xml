@@ -32,6 +32,12 @@
          Rust sockets, which this flag never sees (plaintext there is the
          per-account opt-in). So "true" lets a mail's http:// remote images
          load once the user allowed remote images, as the Qt reader does. -->
+    <!-- Predictive back (Android 13+): the back gesture drives the system
+         animation through the OnBackInvokedDispatcher, which replaces the
+         deprecated onBackPressed dispatch below targetSdk 33. Every screen
+         already routes back through Compose's BackHandler, which follows
+         the platform dispatcher on the current activity-compose, so this
+         is a pure opt-in with no code behind it. -->
     <application
         android:name=".MailApplication"
         android:label="mailclient"
@@ -39,7 +45,8 @@
         android:theme="@style/Theme.Mailclient"
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"
-        android:usesCleartextTraffic="true">
+        android:usesCleartextTraffic="true"
+        android:enableOnBackInvokedCallback="true">
         <!-- The one activity: the Compose shell, reader included. -->
         <activity
             android:name=".MainActivity"
