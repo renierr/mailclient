@@ -367,7 +367,10 @@ fn save_edit(
     smtp_password: &str,
 ) -> Result<()> {
     // Secrets first: if the keyring refuses, nothing has changed yet, instead
-    // of new connection details sitting next to the old password.
+    // of new connection details sitting next to the old password. If the row
+    // then fails, the previous secrets go back (below).
+    let mut previous: Option<AccountSecrets> = None;
+    let mut replaced = false;
     if !password.is_empty() || !smtp_password.is_empty() {
         // Each blank field keeps its stored value. An unreadable entry only
         // matters when the IMAP password is not being replaced.
@@ -385,13 +388,40 @@ fn save_edit(
             password.to_string()
         };
         let smtp = if smtp_password.is_empty() {
-            stored.map(|s| s.smtp_password).unwrap_or_default()
+            stored
+                .as_ref()
+                .map(|s| s.smtp_password.clone())
+                .unwrap_or_default()
         } else {
             smtp_password.to_string()
         };
+        previous = stored.ok();
         secrets.save(&existing.auth_vault_key, &imap, &smtp)?;
+        replaced = true;
     }
-    accounts::update_connection(db, existing.id, draft)?;
+    if let Err(e) = accounts::update_connection(db, existing.id, draft) {
+        // The vault key belongs to a working account, so deleting the entry
+        // (as `create_new` does) would wipe its credentials. Put the old
+        // passwords back instead, so the old host and user keep theirs.
+        if replaced {
+            match &previous {
+                Some(old) => {
+                    if let Err(e) = secrets.save(
+                        &existing.auth_vault_key,
+                        &old.imap_password,
+                        &old.smtp_password,
+                    ) {
+                        log::warn!("account {}: old passwords not restored: {e}", existing.id);
+                    }
+                }
+                None => log::warn!(
+                    "account {}: connection not saved, the new password stays",
+                    existing.id
+                ),
+            }
+        }
+        return Err(e);
+    }
     // Host, user or password may have changed: drop the pooled session so
     // the next action connects with the new values.
     pool::evict_session(existing.id);
@@ -504,6 +534,33 @@ mod tests {
         let imap_only = form(&format!(r#","id":{id},"password":"new""#));
         save(&db, &imap_only, &mut secrets).unwrap();
         assert_eq!(stored(&db, &secrets, id), ("new".into(), "smtp2".into()));
+    }
+
+    #[test]
+    fn a_failed_edit_puts_the_old_passwords_back() {
+        let db = Db::open_in_memory().unwrap();
+        let mut secrets = Memory::default();
+        let id = save(&db, &form(r#","smtp_password":"smtp1""#), &mut secrets).unwrap();
+        db.conn()
+            .execute_batch(
+                "create trigger refuse before update on accounts
+                 begin select raise(abort, 'refused'); end;",
+            )
+            .unwrap();
+
+        let edited = form(&format!(
+            r#","id":{id},"imap_host":"new.example.com","password":"new","smtp_password":"smtp2""#
+        ));
+        assert!(save(&db, &edited, &mut secrets).is_err());
+        assert_eq!(
+            accounts::get(&db, id).unwrap().imap_host,
+            "imap.example.com"
+        );
+        assert_eq!(
+            stored(&db, &secrets, id),
+            ("s3cret".into(), "smtp1".into()),
+            "the old host must keep the old passwords, not lose them"
+        );
     }
 
     #[test]
