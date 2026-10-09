@@ -386,3 +386,18 @@ fn nesting_exactly_at_the_cap_still_parses() {
     );
     assert!(parse_ics(&at_cap).is_some());
 }
+
+#[test]
+fn an_oversized_calendar_is_not_parsed() {
+    // Padding before the event, so only the size decides: under the cap it
+    // parses, one byte over it is an ordinary attachment.
+    let event = wrap("UID:x@example.com\r\nDTSTART:20260101T100000Z\r\nSUMMARY:Big\r\n");
+    let pad = |n: usize| format!("X-PAD:{}\r\n", "a".repeat(n - 8));
+    let at_cap = format!("{}{event}", pad(MAX_ICS_BYTES - event.len()));
+    assert_eq!(at_cap.len(), MAX_ICS_BYTES);
+    assert!(parse_ics(&at_cap).is_some());
+    assert!(parse_ics_bytes(at_cap.as_bytes()).is_some());
+    let over = format!("{}{event}", pad(MAX_ICS_BYTES + 1 - event.len()));
+    assert_eq!(parse_ics(&over), None);
+    assert_eq!(parse_ics_bytes(over.as_bytes()), None);
+}

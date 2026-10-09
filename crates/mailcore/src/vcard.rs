@@ -14,6 +14,13 @@ use crate::content_line::{parse_content_line, unescape_text, unfold, ContentLine
 /// Entries per list kept on the card; a card is a preview, not an editor.
 const MAX_ENTRIES: usize = 8;
 
+/// Largest `.vcf` parsed for a preview card. An explicit download stores
+/// parts up to 25 MiB and the feed re-parses them on every open; this
+/// still takes an address-book export of a few thousand cards. A larger
+/// file stays an ordinary attachment (truncating it would miscount
+/// `more_cards`).
+const MAX_VCARD_BYTES: usize = 4 * 1024 * 1024;
+
 /// One e-mail address or phone number with its kind (`Work`, `Mobile`,
 /// `Home fax`, …), when the card names one.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -96,11 +103,17 @@ pub fn is_vcard_attachment(filename: Option<&str>, mime: Option<&str>) -> bool {
 /// Parse vCard bytes. UTF-8 is expected; anything else is read as Latin-1,
 /// which old phone exports use.
 pub fn parse_vcard_bytes(bytes: &[u8]) -> Option<ContactCard> {
+    if bytes.len() > MAX_VCARD_BYTES {
+        return None;
+    }
     parse_vcard(&decode_text(bytes))
 }
 
 /// Parse the first `VCARD` of `data`. `None` when there is none.
 pub fn parse_vcard(data: &str) -> Option<ContactCard> {
+    if data.len() > MAX_VCARD_BYTES {
+        return None;
+    }
     let unfolded = unfold(data);
     let mut lines = unfolded.lines();
     let mut depth = 0usize;

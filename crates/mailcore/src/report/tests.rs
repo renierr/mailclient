@@ -160,3 +160,30 @@ fn tones_follow_the_action() {
     )));
     assert!(!is_disposition_part(Some("message/delivery-status")));
 }
+
+#[test]
+fn recipients_are_capped() {
+    let mut text = String::from("Reporting-MTA: dns; mx.example.org\r\n\r\n");
+    for i in 0..200 {
+        text.push_str(&format!(
+            "Final-Recipient: rfc822; u{i}@example.net\r\nAction: failed\r\n\r\n"
+        ));
+    }
+    let dsn = parse_dsn(&text).unwrap();
+    assert_eq!(dsn.recipients.len(), MAX_DSN_RECIPIENTS);
+    assert_eq!(dsn.recipients[0].address, "u0@example.net");
+}
+
+#[test]
+fn only_the_report_prefix_is_read() {
+    // A recipient past the byte cap is never reached, and the cut lands on
+    // a character boundary rather than panicking inside one.
+    let filler = "é".repeat(MAX_REPORT_BYTES);
+    let text = format!(
+        "Final-Recipient: rfc822; first@example.net\r\n\r\nX-Note: {filler}\r\n\r\n\
+         Final-Recipient: rfc822; late@example.net\r\n"
+    );
+    let dsn = parse_dsn(&text).unwrap();
+    let addrs: Vec<_> = dsn.recipients.iter().map(|r| r.address.as_str()).collect();
+    assert_eq!(addrs, ["first@example.net"]);
+}

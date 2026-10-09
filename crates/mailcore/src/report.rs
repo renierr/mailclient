@@ -115,11 +115,29 @@ pub fn is_headers_part(mime: Option<&str>) -> bool {
     )
 }
 
+/// Largest report text read. A status part is a few hundred bytes per
+/// recipient, but an explicit download stores parts up to 25 MiB and the
+/// feed re-parses them on every open; past this the rest is ignored.
+const MAX_REPORT_BYTES: usize = 256 * 1024;
+
+/// Recipients kept from one delivery report, as the vCard card keeps a
+/// bounded list: the card is a summary, and each one is serialised into
+/// the message feed.
+const MAX_DSN_RECIPIENTS: usize = 50;
+
+/// `text` cut to [`MAX_REPORT_BYTES`] on a character boundary.
+fn report_prefix(text: &str) -> &str {
+    &text[..text.floor_char_boundary(MAX_REPORT_BYTES)]
+}
+
 /// Parse a `message/delivery-status` body. `None` when it names no
 /// recipient.
 pub fn parse_dsn(text: &str) -> Option<Dsn> {
     let mut dsn = Dsn::default();
-    for block in blocks(text) {
+    for block in blocks(report_prefix(text)) {
+        if dsn.recipients.len() >= MAX_DSN_RECIPIENTS {
+            break;
+        }
         let field = |name: &str| {
             block
                 .iter()
@@ -178,7 +196,7 @@ pub struct Mdn {
 /// Parse a `message/disposition-notification` body. `None` without a
 /// recipient or a disposition.
 pub fn parse_mdn(text: &str) -> Option<Mdn> {
-    let fields: Vec<(String, String)> = blocks(text).into_iter().flatten().collect();
+    let fields: Vec<(String, String)> = blocks(report_prefix(text)).into_iter().flatten().collect();
     let field = |name: &str| {
         fields
             .iter()

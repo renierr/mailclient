@@ -149,6 +149,13 @@ pub fn parse_ics(ics_data: &str) -> Option<CalendarEvent> {
     parse(ics_data).map(|p| p.event)
 }
 
+/// Largest iCalendar text parsed for a preview card. Sync pre-caches only
+/// parts up to 64 KB, but an explicit download stores parts up to 25 MiB
+/// and the feed re-parses them on every open. Real invitations, even
+/// Outlook's with an HTML description, stay far below this; a larger file
+/// stays an ordinary attachment.
+const MAX_ICS_BYTES: usize = 1024 * 1024;
+
 /// Deepest component nesting the parser tolerates.
 ///
 /// iCalendar nests at most VCALENDAR -> VEVENT -> VALARM (RFC 5545), so a
@@ -163,6 +170,9 @@ pub fn parse_ics(ics_data: &str) -> Option<CalendarEvent> {
 const MAX_DEPTH: usize = 32;
 
 fn parse(ics_data: &str) -> Option<Parsed> {
+    if ics_data.len() > MAX_ICS_BYTES {
+        return None;
+    }
     let unfolded = unfold(ics_data);
     // Open components, innermost last. Properties are only read where the
     // innermost component is the one they belong to, so a VALARM's
@@ -343,6 +353,10 @@ fn parse(ics_data: &str) -> Option<Parsed> {
 /// Parse an iCalendar byte slice into a `CalendarEvent`. Invalid UTF-8 is
 /// replaced rather than rejecting the whole invitation.
 pub fn parse_ics_bytes(bytes: &[u8]) -> Option<CalendarEvent> {
+    // Checked before the lossy copy, which would duplicate an oversized file.
+    if bytes.len() > MAX_ICS_BYTES {
+        return None;
+    }
     parse_ics(&String::from_utf8_lossy(bytes))
 }
 

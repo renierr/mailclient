@@ -179,3 +179,15 @@ fn a_phone_kind_is_capitalised_without_slicing_bytes() {
     assert_eq!(f.label.as_deref(), Some("Mobile"));
     assert_eq!(f.value, "+1 555 0100");
 }
+
+#[test]
+fn an_oversized_vcard_is_not_parsed() {
+    let card = "BEGIN:VCARD\r\nFN:Big\r\nEND:VCARD\r\n";
+    let pad = |n: usize| format!("X-PAD:{}\r\n", "a".repeat(n - 8));
+    let at_cap = format!("{card}{}", pad(MAX_VCARD_BYTES - card.len()));
+    assert_eq!(at_cap.len(), MAX_VCARD_BYTES);
+    assert_eq!(parse_vcard_bytes(at_cap.as_bytes()).unwrap().name, "Big");
+    let over = format!("{card}{}", pad(MAX_VCARD_BYTES + 1 - card.len()));
+    assert_eq!(parse_vcard(&over), None);
+    assert_eq!(parse_vcard_bytes(over.as_bytes()), None);
+}
