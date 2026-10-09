@@ -61,6 +61,7 @@ import de.renier.mailclient.ui.common.writeBytes
 import de.renier.mailclient.ui.folders.MoveToDialog
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.state.afterReaderChange
+import de.renier.mailclient.ui.state.afterReaderFlags
 import de.renier.mailclient.ui.state.deletePrompt
 import de.renier.mailclient.ui.state.findSimilar
 import de.renier.mailclient.ui.state.offerUndo
