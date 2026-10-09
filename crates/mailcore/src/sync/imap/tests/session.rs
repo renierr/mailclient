@@ -233,6 +233,72 @@ async fn uid_expunge_falls_back_without_uidplus() {
 }
 
 #[tokio::test]
+async fn the_mailbox_wide_fallback_spares_other_deleted_mail() {
+    // B11b: without UIDPLUS the only EXPUNGE is mailbox-wide, which would
+    // also destroy mail another client flagged \Deleted (uid 9 here).
+    let server = MockImapServer::start("IMAP4rev1", |tag, rest| {
+        let upper = rest.to_ascii_uppercase();
+        if upper.starts_with("SELECT") {
+            vec![
+                "* 3 EXISTS\r\n".to_string(),
+                format!("{tag} OK [READ-WRITE] SELECT completed\r\n"),
+            ]
+        } else if upper.starts_with("UID SEARCH") {
+            vec![
+                "* SEARCH 5 9\r\n".to_string(),
+                format!("{tag} OK SEARCH completed\r\n"),
+            ]
+        } else {
+            vec![format!("{tag} OK completed\r\n")]
+        }
+    })
+    .await;
+    let account = test_mock_account(server.port);
+    let mut sync = ImapSync::new(&account);
+    sync.connect("secret").await.unwrap();
+    let session = sync.session().unwrap();
+    session.select("INBOX", None).await.unwrap();
+    let err = session.uid_expunge(&[5]).await.unwrap_err();
+    assert!(err.to_string().contains("1 other message"), "{err}");
+
+    let cmds = server.received.lock().await.clone();
+    assert!(
+        cmds.iter()
+            .any(|c| c.to_ascii_uppercase().contains("SEARCH DELETED")),
+        "{cmds:?}"
+    );
+    assert!(!cmds.iter().any(|c| is_bare_expunge(c)), "{cmds:?}");
+}
+
+#[tokio::test]
+async fn a_copy_fallback_whose_cleanup_fails_is_still_one_move() {
+    // B11: COPY landed, then STORE \Deleted failed. Reporting that as a failed
+    // move made the caller retry it, copying once more per attempt.
+    let server = MockImapServer::start("IMAP4rev1", |tag, rest| {
+        let upper = rest.to_ascii_uppercase();
+        if upper.starts_with("UID STORE") {
+            vec![format!("{tag} NO [CANNOT] flags are read-only\r\n")]
+        } else {
+            vec![format!("{tag} OK completed\r\n")]
+        }
+    })
+    .await;
+    let account = test_mock_account(server.port);
+    let mut sync = ImapSync::new(&account);
+    sync.connect("secret").await.unwrap();
+    let session = sync.session().unwrap();
+    session.uid_move(&[5], "Archive").await.unwrap();
+
+    let cmds = server.received.lock().await.clone();
+    let copies = cmds
+        .iter()
+        .filter(|c| c.to_ascii_uppercase().contains("UID COPY"))
+        .count();
+    assert_eq!(copies, 1, "{cmds:?}");
+    assert!(!cmds.iter().any(|c| is_bare_expunge(c)), "{cmds:?}");
+}
+
+#[tokio::test]
 async fn uid_expunge_of_nothing_stays_off_the_wire() {
     let server = expunge_server("IMAP4rev1 UIDPLUS").await;
     let account = test_mock_account(server.port);

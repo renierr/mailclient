@@ -3,6 +3,11 @@
 //!
 //! Destroying messages is the delicate one -- see [`ImapSession::uid_expunge`].
 
+use std::collections::HashSet;
+
+use imap_types::sequence::SequenceSet;
+
+use super::super::types::vec1;
 use super::super::utf7::mailbox_for_wire;
 use super::*;
 
@@ -59,21 +64,44 @@ impl ImapSession {
                 uid: true,
             };
             if let Err(e) = self.execute(body).await {
+                if self.is_broken() {
+                    return Err(e);
+                }
                 log::warn!("imap: UID MOVE failed ({e}), falling back to COPY + STORE + EXPUNGE");
-                let body = CommandBody::copy(sequence_set, mailbox, true)
-                    .map_err(|e| StoreError::InvalidInput(format!("copy args: {e}")))?;
-                self.execute(body).await?;
-                self.uid_store_flags(uids, StoreType::Add, vec![Flag::Deleted])
-                    .await?;
-                self.uid_expunge(uids).await?;
+                self.copy_then_remove(uids, sequence_set, mailbox).await?;
             }
         } else {
-            let body = CommandBody::copy(sequence_set, mailbox, true)
-                .map_err(|e| StoreError::InvalidInput(format!("copy args: {e}")))?;
-            self.execute(body).await?;
-            self.uid_store_flags(uids, StoreType::Add, vec![Flag::Deleted])
-                .await?;
-            self.uid_expunge(uids).await?;
+            self.copy_then_remove(uids, sequence_set, mailbox).await?;
+        }
+        Ok(())
+    }
+
+    /// MOVE for servers without it: COPY, then flag and expunge the source.
+    ///
+    /// Once the COPY landed the move has happened for the user, so a failing
+    /// STORE or EXPUNGE afterwards is logged, not returned. Returning it made
+    /// the caller retry the whole move, and every retry copied again: one more
+    /// duplicate in the destination per attempt (B11). The worst case now is
+    /// the source copy staying behind, which the next sync shows and the user
+    /// can delete.
+    async fn copy_then_remove(
+        &mut self,
+        uids: &[u32],
+        sequence_set: SequenceSet,
+        mailbox: Mailbox<'static>,
+    ) -> Result<()> {
+        let body = CommandBody::copy(sequence_set, mailbox, true)
+            .map_err(|e| StoreError::InvalidInput(format!("copy args: {e}")))?;
+        self.execute(body).await?;
+        let removed = match self
+            .uid_store_flags(uids, StoreType::Add, vec![Flag::Deleted])
+            .await
+        {
+            Ok(()) => self.uid_expunge(uids).await,
+            Err(e) => Err(e),
+        };
+        if let Err(e) = removed {
+            log::warn!("imap: copied, but the source copies were not removed: {e}");
         }
         Ok(())
     }
@@ -103,18 +131,41 @@ impl ImapSession {
         }
         if !self.has_capability("uidplus") {
             log::debug!("imap: no UIDPLUS, falling back to mailbox-wide EXPUNGE");
-            return self.expunge().await;
+            return self.expunge_only(uids).await;
         }
         let sequence_set = uids_to_sequence_set(uids)?;
         match self.execute(CommandBody::ExpungeUid { sequence_set }).await {
             Ok(_) => Ok(()),
+            Err(e) if self.is_broken() => Err(e),
             Err(e) => {
                 // Advertised but refused: the messages are already flagged
                 // `\Deleted`, so leaving them is the wrong outcome too.
                 log::warn!("imap: UID EXPUNGE failed ({e}), falling back to EXPUNGE");
-                self.expunge().await
+                self.expunge_only(uids).await
             }
         }
+    }
+
+    /// The mailbox-wide EXPUNGE, but only when it destroys nothing beyond
+    /// `uids`. It removes every `\Deleted` message, including ones another
+    /// client flagged and has not expunged yet (B11b), so it first asks the
+    /// server which are flagged. Anything else flagged: refuse, and leave
+    /// ours flagged for a later expunge.
+    async fn expunge_only(&mut self, uids: &[u32]) -> Result<()> {
+        let ours: HashSet<u32> = uids.iter().copied().collect();
+        let others = self
+            .uid_search(vec1![SearchKey::Deleted])
+            .await?
+            .into_iter()
+            .filter(|u| !ours.contains(u))
+            .count();
+        if others > 0 {
+            return Err(StoreError::Network(format!(
+                "not expunged: {others} other message(s) in this folder are marked deleted, \
+                 and the server cannot expunge by UID"
+            )));
+        }
+        self.expunge().await
     }
 
     /// APPEND.
