@@ -37,10 +37,13 @@ pub(crate) fn parse_uids_json(raw: &str) -> Result<Vec<u32>, String> {
     }
     let mut out = Vec::with_capacity(arr.len());
     for x in arr {
-        let uid = x.as_u64().ok_or_else(|| "invalid selection".to_string())? as u32;
-        if uid == 0 {
-            return Err("invalid selection".to_string());
-        }
+        // `try_from`, not `as u32`: a wrapped uid would act on a different
+        // message, and these feed deletes and moves.
+        let uid = x
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .filter(|&n| n != 0)
+            .ok_or_else(|| "invalid selection".to_string())?;
         out.push(uid);
     }
     out.sort_unstable();
@@ -610,5 +613,15 @@ mod tests {
         assert!(parse_hits_json("[3]").is_err());
         assert!(parse_hits_json(r#"[{"folder":"","uid":3}]"#).is_err());
         assert!(parse_hits_json(r#"[{"folder":"INBOX","uid":0}]"#).is_err());
+    }
+
+    #[test]
+    fn uids_reject_values_that_would_wrap() {
+        assert_eq!(parse_uids_json("[3,1,3]").unwrap(), vec![1, 3]);
+        assert_eq!(parse_uids_json("[4294967295]").unwrap(), vec![u32::MAX]);
+        // 2^32 + 5 used to wrap to uid 5, a different message.
+        assert!(parse_uids_json("[4294967301]").is_err());
+        assert!(parse_uids_json("[0]").is_err());
+        assert!(parse_uids_json("[-1]").is_err());
     }
 }
