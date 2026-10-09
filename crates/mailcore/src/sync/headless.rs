@@ -282,7 +282,16 @@ pub async fn sync_account(
                     unread: messages::count_unread(db, f.id).unwrap_or(0),
                 });
             }
-            Err(e) => out.errors.push(format!("{}: {e}", f.path)),
+            Err(e) => {
+                out.errors.push(format!("{}: {e}", f.path));
+                // A dead connection fails every remaining folder the same
+                // way; stop so the next run reconnects instead (B3).
+                if !imap.is_connected() {
+                    out.errors
+                        .push("connection lost, remaining folders skipped".to_string());
+                    break;
+                }
+            }
         }
     }
 

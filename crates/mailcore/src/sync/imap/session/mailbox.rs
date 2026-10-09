@@ -62,7 +62,10 @@ impl ImapSession {
 
         let res = match self.execute(body).await {
             Ok(r) => r,
-            Err(e) if has_extension => {
+            // Only a server refusal earns the fallback: after a timeout or a
+            // dead socket a second SELECT cannot work, and turning CONDSTORE
+            // off for the session over a connection blip would be wrong.
+            Err(e) if has_extension && !self.is_broken() => {
                 log::warn!(
                     "imap: SELECT with extension failed ({e}), falling back to standard SELECT"
                 );
@@ -161,7 +164,7 @@ impl ImapSession {
 
         let res = match self.execute(body).await {
             Ok(r) => r,
-            Err(e) if has_modifiers => {
+            Err(e) if has_modifiers && !self.is_broken() => {
                 log::warn!(
                     "imap: UID FETCH CHANGEDSINCE failed ({e}), falling back to standard UID FETCH"
                 );

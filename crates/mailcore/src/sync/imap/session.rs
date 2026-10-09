@@ -51,6 +51,10 @@ pub struct ImapSession {
     pub(crate) condstore_enabled: bool,
     pub(crate) qresync_enabled: bool,
     pub(crate) last_idle: IdleStats,
+    /// Why the connection can no longer be trusted (timeout, stream error,
+    /// `BYE`), once that happened. A late reply to an abandoned command
+    /// would otherwise land in the next command's data (B3).
+    broken: Option<String>,
 }
 
 impl ImapSession {
@@ -65,7 +69,22 @@ impl ImapSession {
             condstore_enabled: false,
             qresync_enabled: false,
             last_idle: IdleStats::default(),
+            broken: None,
         }
+    }
+
+    /// Whether the transport failed. A server `NO`/`BAD` does not count: the
+    /// connection is still in step then and may take a fallback command.
+    pub(crate) fn is_broken(&self) -> bool {
+        self.broken.is_some()
+    }
+
+    /// Record a transport-level failure and hand the error back.
+    fn fail(&mut self, e: StoreError) -> StoreError {
+        if self.broken.is_none() {
+            self.broken = Some(e.to_string());
+        }
+        e
     }
 
     /// Next command tag. The counter only grows — past `A9999` the tag simply
@@ -117,6 +136,11 @@ impl ImapSession {
     /// `stream.next()` forever; every wait is bounded by [`read_budget`]:
     /// 30 s per read and [`COMMAND_MAX`] for the whole command.
     pub(crate) async fn execute(&mut self, body: CommandBody<'static>) -> Result<CommandResult> {
+        if let Some(why) = &self.broken {
+            return Err(StoreError::Network(format!(
+                "connection unusable after an earlier failure: {why}"
+            )));
+        }
         let tag = self.next_tag();
         let cmd = Command::new(tag.clone(), body)
             .map_err(|e| StoreError::InvalidInput(format!("invalid command: {e}")))?;
@@ -127,18 +151,24 @@ impl ImapSession {
 
         let started = tokio::time::Instant::now();
         loop {
-            let budget = read_budget(started, tokio::time::Instant::now()).ok_or_else(|| {
-                StoreError::Network(format!(
+            let Some(budget) = read_budget(started, tokio::time::Instant::now()) else {
+                return Err(self.fail(StoreError::Network(format!(
                     "{tag:?} took longer than {}s overall",
                     COMMAND_MAX.as_secs()
-                ))
-            })?;
-            let event = tokio::time::timeout(budget, self.stream.next(&mut self.client))
-                .await
-                .map_err(|_| {
-                    StoreError::Network(format!("timed out waiting for server reply to {tag:?}"))
-                })?
-                .map_err(|e| StoreError::Network(format!("stream error: {e}")))?;
+                ))));
+            };
+            let event = match tokio::time::timeout(budget, self.stream.next(&mut self.client)).await
+            {
+                Ok(Ok(event)) => event,
+                Ok(Err(e)) => {
+                    return Err(self.fail(StoreError::Network(format!("stream error: {e}"))));
+                }
+                Err(_) => {
+                    return Err(self.fail(StoreError::Network(format!(
+                        "timed out waiting for server reply to {tag:?}"
+                    ))));
+                }
+            };
 
             match event {
                 Event::CommandSent { handle: h, .. } if h == handle => {
@@ -177,10 +207,10 @@ impl ImapSession {
                         untagged_statuses.push(untagged.into_static());
                     }
                     Status::Bye(bye) => {
-                        return Err(StoreError::Network(format!(
+                        return Err(self.fail(StoreError::Network(format!(
                             "server sent BYE during {tag:?}: {}",
                             bye.text
-                        )));
+                        ))));
                     }
                 },
                 Event::ContinuationRequestReceived { .. }

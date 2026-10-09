@@ -232,6 +232,64 @@ async fn bye_during_command_is_an_error_not_a_hang() {
 }
 
 #[tokio::test]
+async fn a_dead_connection_takes_no_fallback_and_no_further_commands() {
+    // B3: after a BYE the SELECT fallback used to fire on the broken
+    // stream and switch CONDSTORE off for the session over it.
+    let server = MockImapServer::start("IMAP4rev1 CONDSTORE", |tag, rest| {
+        if rest.to_ascii_uppercase().starts_with("SELECT") {
+            vec!["* BYE going away\r\n".to_string()]
+        } else {
+            vec![format!("{tag} OK completed\r\n")]
+        }
+    })
+    .await;
+    let account = test_mock_account(server.port);
+    let mut sync = ImapSync::new(&account);
+    sync.connect("secret").await.unwrap();
+    assert!(sync.is_connected());
+
+    let session = sync.session.as_mut().unwrap();
+    let err = session.select("INBOX", None).await.unwrap_err();
+    assert!(err.to_string().contains("BYE"), "{err}");
+    assert!(
+        session.condstore_enabled,
+        "a blip must not disable CONDSTORE"
+    );
+    let err = session.noop().await.unwrap_err();
+    assert!(err.to_string().contains("unusable"), "{err}");
+
+    let cmds = server.received.lock().await.clone();
+    assert_eq!(
+        cmds.iter().filter(|c| c.contains("SELECT")).count(),
+        1,
+        "no fallback SELECT: {cmds:?}"
+    );
+    assert!(!cmds.iter().any(|c| c.contains("NOOP")), "{cmds:?}");
+    // The pool's checkin test: a broken session is not put back.
+    assert!(!sync.is_connected());
+    assert!(!sync.is_healthy().await);
+}
+
+#[tokio::test]
+async fn a_server_refusal_keeps_the_connection_usable() {
+    let server = MockImapServer::start("IMAP4rev1", |tag, rest| {
+        if rest.to_ascii_uppercase().starts_with("SELECT") {
+            vec![format!("{tag} NO no such mailbox\r\n")]
+        } else {
+            vec![format!("{tag} OK completed\r\n")]
+        }
+    })
+    .await;
+    let account = test_mock_account(server.port);
+    let mut sync = ImapSync::new(&account);
+    sync.connect("secret").await.unwrap();
+    let session = sync.session.as_mut().unwrap();
+    assert!(session.select("Missing", None).await.is_err());
+    session.noop().await.unwrap();
+    assert!(sync.is_connected());
+}
+
+#[tokio::test]
 async fn bye_greeting_fails_connect_fast() {
     let server = MockImapServer::start_with_greeting(
         "IMAP4rev1",

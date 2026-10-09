@@ -190,16 +190,17 @@ impl ImapSync {
     /// session and connect fresh rather than send real work into it.
     pub async fn is_healthy(&mut self) -> bool {
         match self.session.as_mut() {
-            Some(s) => s.noop().await.is_ok(),
+            Some(s) => !s.is_broken() && s.noop().await.is_ok(),
             None => false,
         }
     }
 
     /// Cheap synchronous presence check for `Drop`/`checkin` paths that
-    /// cannot await a NOOP round-trip. Staleness is detected at checkout
-    /// via [`Self::is_healthy`].
+    /// cannot await a NOOP round-trip: a session, and one whose transport has
+    /// not already failed. Other staleness is detected at checkout via
+    /// [`Self::is_healthy`].
     pub fn is_connected(&self) -> bool {
-        self.session.is_some()
+        self.session.as_ref().is_some_and(|s| !s.is_broken())
     }
 
     pub async fn capabilities_list(&mut self) -> Result<Vec<String>> {
