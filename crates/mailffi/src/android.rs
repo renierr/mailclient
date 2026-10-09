@@ -91,20 +91,27 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_init<'caller>(
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-/// `MailNative.check(trigger)`: one scheduled check (sync every inbox, then
+/// `MailNative.check(trigger, now)`: one check (sync every inbox, then
 /// report), as the `BackgroundReport` JSON. Blocks for the network run, so
-/// only a worker thread calls it.
+/// only a worker thread calls it. `now` is the explicit check
+/// (`background_check_now`): every account, quiet hours included — what the
+/// "Check mail" Quick Settings tile taps.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_de_renier_mailclient_MailNative_check<'caller>(
     mut unowned: EnvUnowned<'caller>,
     _class: JClass<'caller>,
     trigger: JString<'caller>,
+    now: jni::sys::jboolean,
 ) -> JString<'caller> {
     unowned
         .with_env(|env| -> Result<JString<'caller>> {
             let trigger = string(env, &trigger)?;
             let db = crate::db::shared_db()?;
-            let report = background::background_check_blocking(db, &crate::db::db_path(), &trigger);
+            let report = if now {
+                background::background_check_now_blocking(db, &crate::db::db_path(), &trigger)
+            } else {
+                background::background_check_blocking(db, &crate::db::db_path(), &trigger)
+            };
             Ok(env.new_string(serde_json::to_string(&report)?)?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()

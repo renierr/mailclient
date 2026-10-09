@@ -32,7 +32,10 @@ object MailNative {
     @JvmStatic external fun backgroundPlan(): String
 
     // One scheduled check; blocks for the network run. BackgroundReport JSON.
-    @JvmStatic external fun check(trigger: String): String
+    // One background check: `now` is an explicit one (the "Check mail"
+    // Quick Settings tile), so every account is checked, quiet hours
+    // included. Blocks for the network run; workers only. Report as JSON.
+    @JvmStatic external fun check(trigger: String, now: Boolean): String
 
     // NotificationPlan JSON for a report. `shown`: JSON object of the mail
     // notifications on screen, tag -> {"title", "body"} as read back; the

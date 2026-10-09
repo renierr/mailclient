@@ -243,15 +243,38 @@ pub fn record_outcome(db: &Db, started_at: &str, outcome: &str) {
 /// keep this off the GUI's pooled sessions, so a worker run can never steal
 /// or stall the session the user is reading through.
 pub async fn background_check(db: &Db, db_path: &Path, trigger: &str) -> BackgroundReport {
+    check(db, db_path, trigger, TickAccounts::Scheduled).await
+}
+
+/// The check an explicit "check mail" asks for — the Quick Settings tile
+/// ("Check mail"), and anything else the user set off themselves: every
+/// account, manual and quiet ones included. Quiet hours gate unattended
+/// checks (something that wakes a sleeping phone); a tap is like pressing
+/// Sync in the app, so it never waits for one. History and reports look
+/// the same as [`background_check`]'s, so the Settings background status
+/// shows the tap too.
+pub async fn background_check_now(db: &Db, db_path: &Path, trigger: &str) -> BackgroundReport {
+    check(db, db_path, trigger, TickAccounts::All).await
+}
+
+async fn check(db: &Db, db_path: &Path, trigger: &str, accounts: TickAccounts) -> BackgroundReport {
     let run = LastRun::started(Utc::now(), trigger);
     save_run(db, &run);
-    let mut report = background_tick(db, db_path).await;
+    let mut report = background_tick(db, db_path, accounts).await;
     report.run = run.started_at.clone();
     save_run(db, &run.finish(Utc::now(), &report));
     report
 }
 
-async fn background_tick(db: &Db, db_path: &Path) -> BackgroundReport {
+/// Which accounts one tick serves: what the scheduler owes, or every one
+/// of them (see [`background_check_now`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TickAccounts {
+    Scheduled,
+    All,
+}
+
+async fn background_tick(db: &Db, db_path: &Path, accounts: TickAccounts) -> BackgroundReport {
     let _lock = match acquire_sync_lock(db_path) {
         Ok(Some(guard)) => guard,
         Ok(None) => {
@@ -272,7 +295,17 @@ async fn background_tick(db: &Db, db_path: &Path) -> BackgroundReport {
     };
     // NB: `skipped` stays false here — losing the lock returns above.
     let started = Utc::now();
-    let due = schedule::due_accounts(db, started);
+    let due = match check_accounts(db, accounts, started) {
+        Ok(due) => due,
+        Err(e) => {
+            return BackgroundReport {
+                skipped: false,
+                total_unread: cached_total_unread(db),
+                errors: vec![format!("accounts: {e}")],
+                ..Default::default()
+            };
+        }
+    };
     let report = sync_accounts(db, &due, SyncScope::InboxOnly).await;
     for result in report.accounts.iter().filter(|r| r.inbox_checked()) {
         schedule::mark_checked(db, result.account_id, started);
@@ -287,6 +320,20 @@ async fn background_tick(db: &Db, db_path: &Path) -> BackgroundReport {
         errors: report.errors,
         run: String::new(),
     }
+}
+
+/// The accounts a tick serves at `started`. [`TickAccounts::Scheduled`]
+/// follows [`schedule::due_accounts`] (quiet accounts are never due);
+/// [`TickAccounts::All`] takes every account in the database.
+fn check_accounts(
+    db: &Db,
+    accounts: TickAccounts,
+    started: DateTime<Utc>,
+) -> crate::error::Result<Vec<Account>> {
+    Ok(match accounts {
+        TickAccounts::Scheduled => schedule::due_accounts(db, started),
+        TickAccounts::All => crate::store::accounts::list(db)?,
+    })
 }
 
 /// How often [`push_check`] retries for the sync lock, and how long it waits
@@ -366,6 +413,16 @@ pub fn background_check_blocking(db: &Db, db_path: &Path, trigger: &str) -> Back
         .build()
         .expect("tokio runtime for background check");
     rt.block_on(background_check(db, db_path, trigger))
+}
+
+/// [`background_check_blocking`] for [`background_check_now`]: every
+/// account, quiet hours included.
+pub fn background_check_now_blocking(db: &Db, db_path: &Path, trigger: &str) -> BackgroundReport {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime for background check");
+    rt.block_on(background_check_now(db, db_path, trigger))
 }
 
 /// Unread inbox mail first seen since the marks were last committed.
@@ -529,7 +586,7 @@ fn cached_total_unread(db: &Db) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::messages;
+    use crate::store::{account_settings, accounts, messages};
     use crate::sync::headless::tests::setup_db;
 
     /// One background run whose notification succeeded.
@@ -651,6 +708,60 @@ mod tests {
         let run = last_run(&db).unwrap();
         assert!(run.skipped);
         assert!(run.finished_at.is_some());
+    }
+
+    /// Two accounts in one database: one that checks in the background (its
+    /// own interval) and one that stays manual (the app-wide setting is
+    /// "manually only"). Returns their ids in creation order.
+    fn scheduled_and_manual() -> (Db, i64, i64) {
+        let (db, scheduled, _, _) = setup_db();
+        account_settings::set_overrides(
+            &db,
+            scheduled,
+            &[(
+                settings::SYNC_INTERVAL_MINUTES.to_string(),
+                "15".to_string(),
+            )],
+        )
+        .unwrap();
+        let manual = accounts::create(
+            &db,
+            &crate::models::NewAccount {
+                name: "manual".to_string(),
+                email_address: "manual@example.com".to_string(),
+                from_name: String::new(),
+                imap_host: "h".to_string(),
+                imap_port: 993,
+                imap_security: "tls".to_string(),
+                imap_username: "u".to_string(),
+                smtp_host: "h".to_string(),
+                smtp_port: 465,
+                smtp_security: "tls".to_string(),
+                smtp_username: "u".to_string(),
+                auth_vault_key: "k".to_string(),
+                check_interval_secs: 300,
+            },
+        )
+        .unwrap();
+        (db, scheduled, manual)
+    }
+
+    #[test]
+    fn an_explicit_check_serves_the_accounts_the_scheduler_skips() {
+        let (db, scheduled, manual) = scheduled_and_manual();
+        let now = Utc::now();
+        let due = check_accounts(&db, TickAccounts::Scheduled, now).unwrap();
+        assert_eq!(
+            due.iter().map(|a| a.id).collect::<Vec<_>>(),
+            vec![scheduled],
+            "nothing is scheduled for the manual account, so no tick touches it"
+        );
+        let all = check_accounts(&db, TickAccounts::All, now).unwrap();
+        assert_eq!(
+            all.iter().map(|a| a.id).collect::<Vec<_>>(),
+            vec![scheduled, manual],
+            "an explicit check takes every account, quiet or manual"
+        );
     }
 
     #[test]

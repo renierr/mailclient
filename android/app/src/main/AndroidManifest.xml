@@ -111,6 +111,21 @@
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:theme="@android:style/Theme.NoDisplay" />
+        <!-- "Check mail" in the Quick Settings shade
+             (MailCheckTileService.kt): the same check the schedulers run,
+             started by hand and marked explicit, so it covers manual and
+             quiet accounts too. The user adds the tile through the shade's
+             edit mode; from then on it lives there. -->
+        <service
+            android:name=".MailCheckTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_mail_tile"
+            android:label="@string/tile_check_mail"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
         <!-- Viewer copies of attachments for ACTION_VIEW.
              Cache-private; the URI grant hands one file to the viewer. -->
         <provider

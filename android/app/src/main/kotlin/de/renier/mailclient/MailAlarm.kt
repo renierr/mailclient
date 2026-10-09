@@ -12,6 +12,7 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequest
 import androidx.work.OutOfQuotaPolicy
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 
 // The on-time background mail check: a self-rearming exact one-shot alarm
@@ -50,9 +51,9 @@ object MailAlarm {
         if (minutes > 0) schedule(context, minutes)
     }
 
-    fun enqueueCheck(context: Context, trigger: String = "alarm") {
+    fun enqueueCheck(context: Context, trigger: String = "alarm", now: Boolean = false) {
         val request = OneTimeWorkRequest.Builder(MailCheckWorker::class.java)
-            .setInputData(MailCheckWorker.input(trigger))
+            .setInputData(MailCheckWorker.input(trigger, now))
             .setConstraints(
                 Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),
             )
@@ -66,6 +67,19 @@ object MailAlarm {
         WorkManager.getInstance(context)
             .enqueueUniqueWork(CHECK_TASK, ExistingWorkPolicy.KEEP, request)
     }
+
+    /**
+     * A check is queued or running — the one-shot alarm/tile checks and the
+     * periodic poll — so the "Check mail" Quick Settings tile can show
+     * itself busy. Blocks on WorkManager, so call it off the main thread.
+     */
+    fun checkRunning(context: Context): Boolean = runCatching {
+        val work = WorkManager.getInstance(context)
+        fun busy(name: String) =
+            work.getWorkInfosForUniqueWork(name).get()
+                .any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
+        busy(CHECK_TASK) || busy(MailCheckWorker.PERIODIC)
+    }.getOrDefault(false)
 
     // Exact when allowed; otherwise AllowWhileIdle still fires in Doze, just
     // not at the exact minute.

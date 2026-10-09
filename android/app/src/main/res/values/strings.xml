@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Label of the Quick Settings "Check mail" tile; the manifest needs a
+         resource, not a literal. -->
+    <string name="tile_check_mail">Check mail</string>
+</resources>

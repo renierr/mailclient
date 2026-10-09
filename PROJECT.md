@@ -298,7 +298,6 @@ and need no Qt twin unless noted.
 |---|---|---|
 | Desktop `mailto:` handler | Qt | `mailcore::compose::prefill` already parses the link; needs a `mailapp` entry (e.g. a `--compose <uri>` flag) and `MimeType=x-scheme-handler/mailto` in the `.desktop` file |
 | Home-screen widget (unread count / newest mail) | Android | Plain `RemoteViews` needs nothing new; Jetpack Glance would be a dependency decision |
-| Quick Settings tile "Check mail" | Android | `TileService` running the existing background check |
 | Keyboard shortcuts with a hardware keyboard | Android | Today touch has none by design (§9); the key map could follow Qt's |
 | Autofill hints on the account form | Android | Content types on the login fields so password managers fill IMAP/SMTP credentials |
 | Per-app language | Android | `localeConfig`; only worth it once strings are translated |
@@ -483,6 +482,7 @@ the open Qt ↔ native differences are listed at the end.
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
 | Poll / push / alarm schedulers, quiet hours | — | ✅ | ✅ | Shared `mailcore::sync::background`; desktop uses poll timer. Both re-plan on start, after account changes and after a settings save (plus boot/update/clock) |
+| "Check mail" Quick Settings tile | — | — | ✅ | Android only (`TileService`, like the launcher shortcuts): one tap runs the same check, marked explicit (`background_check_now`), so it also serves the accounts the scheduler skips — manual ones and any inside their quiet hours. Quiet hours gate unattended checks; a tap is the user asking. The tile shows itself ready, checking, or (no accounts) what to do; the user adds it once through the shade's edit mode |
 | Notification permission prompt (Android 13+) | — | ✅ | ✅ | Asked when the core's plan says something checks in the background (`any`, from `BackgroundPlan::view`) |
 | Clear notifications on resume; no alert while open | — | ✅ | ✅ | Open app: a background check refreshes the list instead of alerting |
 | Background status (permissions, battery, run history, heartbeat warning, test notification) | — | ✅ | ✅ | Run lines, standby-bucket name and heartbeat wording from `mailcore::sync::background::describe` on native; Flutter still words them in Dart (SHARED-CORE.md) |
