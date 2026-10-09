@@ -120,6 +120,8 @@ the "not fixed" column before assuming a finding is closed.
 | **B17** | — | No change: send retries are already capped at 5 per row; backoff stays IMAP-only | — |
 | **B18** | `36a877d` | Sync lock is an OS file lock; no stale-pid reaping, no recursion | A live but hung holder now keeps the lock until it exits |
 | **B11** | `18817de` | A landed COPY is not retried into duplicates; the mailbox-wide EXPUNGE only runs when nothing else is flagged | A source copy can stay behind after a failed cleanup |
+| **B5** (transport) | `8d0df35` | One SMTP transport per outbox flush; recipients no longer logged | Bridge net queue still unbounded |
+| **B4**, **B19** | — | No change: imap-next's 100 MiB response cap bounds one message | — |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -470,16 +472,24 @@ Tests: a `BYE` during SELECT sends no fallback SELECT and no later NOOP, leaves 
 reads as not connected and not healthy. A server `NO` keeps the session usable. The sweep stop has no test of
 its own: the mock serves one connection with canned replies, and `sync_account` needs the folder list first.
 
-### B4 · medium · unbounded accumulation of one command's response
+### B4 · medium · unbounded accumulation of one command's response — **no change** (see B19)
 `sync/imap/session.rs:139-141` + `sync/imap/types.rs:18,44` — `uid_fetch_messages` asks for `FETCH_CHUNK = 100`
 full `BODY.PEEK[]` bodies in one command. See B19 for the transport-level cap and the corrected scope of this.
 
-### B5 · low · unbounded net-job queue; one pool thread per send
+### B5 · low · unbounded net-job queue; one pool thread per send — **PARTLY FIXED** `[fixed]`
 `mailapp/src/bridge/worker.rs:143-172` (`mpsc::channel()` is unbounded; `spawn_flag_push`'s
 `let _ = net_tx().send(..)` never coalesces) and `sync/sender/client.rs:403-434` — every `submit_raw` builds a
 throwaway `SmtpTransport`, spawning a `lettre-connection-pool` thread that lives up to its 60 s `idle_timeout`.
 A 50-row outbox flush spawns 50 threads.
 **Fix:** build the transport once per flush; cap/coalesce the net queue.
+
+**Transport half fixed in `8d0df35`.** `flush_outbox` passes one lazily built `SmtpTransport` to every row
+(`submit_claimed_via`), so a 50-row flush starts one lettre pool thread, not 50. A single interactive send
+still builds its own, as before. DSN rows keep their own connection, because they need the raw
+`SmtpConnection`. No test: it needs an SMTP server, and `cargo test` stays offline. **Found on the way and
+fixed in the same commit:** `submit_raw` logged the recipient addresses at `info` (`sent to {to:?}`),
+which AGENTS §6 forbids. It logs the count and the reply code now. **Still open:** the bridge half, the
+unbounded `mpsc` net queue and uncoalesced `spawn_flag_push` in `mailapp` (and D8/E10's thread per undo).
 
 ### B6 · `[removed]` — same as D8
 One sleeping OS thread per undoable action. Kept as **D8**, which covers both frontends
@@ -647,7 +657,7 @@ reaping let a second run start next to it. With B1/B2 every network wait is boun
 not a slow server. Tests: held vs released; a leftover empty, garbage or old-format file does not block. Not
 run on a device: the Android cross-check needs the NDK's clang for the bundled SQLite.
 
-### B19 · low · per-message attachment budget is only part-count × 25 MiB `[corrected]`
+### B19 · low · per-message attachment budget is only part-count × 25 MiB `[corrected]` — **no change**
 `sync/imap/parse.rs:150,157-159` + `sync/imap/engine/sync.rs:439-470` — `fetch_attachments` parses with
 `with_bytes = true` and stores up to `MAX_ATTACHMENTS_PER_MESSAGE` (50) parts × `MAX_ATTACHMENT_BYTES`
 (25 MiB) = 1.25 GiB into SQLite for a single message. Only *inline* images have a per-message budget
@@ -657,6 +667,12 @@ already caps each response (`imap-next/src/client.rs:53`, `max_response_size: 10
 real exposure is 100 MiB resident per response before parsing, not unbounded.
 **Fix:** a per-message byte budget for the download path (see C4), and rely on the imap-next cap for the
 transport side.
+
+**Not changed: the transport cap already is the per-message budget.** The parts are decoded from one
+fetched message, and imap-next refuses any response over 100 MiB, so 50 × 25 MiB cannot be reached. Base64
+parts decode to about three quarters of their encoded size, so the stored total is bounded near 75 MiB, and
+only for a message the user explicitly downloaded. A smaller cap would make a large but legitimate
+attachment set impossible to open. C4 already bounds what the feed parses out of those bytes.
 
 ### B20 · low · systemic blocking SQLite on the async runtime
 Every `messages::upsert` / `set_flags_by_uid` inside `sync_folder_window`'s loops
