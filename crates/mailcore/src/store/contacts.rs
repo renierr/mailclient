@@ -1,5 +1,8 @@
 //! `contacts` for address autocomplete with alias support and fuzzy search.
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +53,28 @@ pub fn is_automated_address(address: &str) -> bool {
     }
     AUTOMATED_LOCAL_PARTS.contains(&local.as_str()) || local.starts_with("bounce")
 }
+
+/// One entry of the phone's own contact list: a name saved there and one
+/// of its e-mail addresses. Android reads them from ContactsContract
+/// behind `READ_CONTACTS` and hands the snapshot over
+/// ([`set_phone_contacts`]); the other frontends have none.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PhoneEntry {
+    pub address: String,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// A match on the phone's own list outranks the same match on an address
+/// mail merely carried: the person is there on purpose. Sized above the
+/// whole frequency bonus [`match_score`] can add, far below a better text
+/// match, so match quality decides first.
+const PHONE_WEIGHT: i64 = 400;
+
+/// The current phone-book snapshot (see [`PhoneEntry`]). Process-wide: each
+/// process holds its own, the recipient field is all it ever feeds, and
+/// nothing of it reaches the database.
+static PHONE: Mutex<Vec<Contact>> = Mutex::new(Vec::new());
 
 /// One contact the cleanup review suggests removing, with machine-readable
 /// reasons (`"automated"`, `"stale"`) the frontends map to localized text.
@@ -425,20 +450,29 @@ fn subsequence_pattern(query: &str) -> String {
     p
 }
 
-/// Score, sort and cut `candidates` for a non-empty `q`.
-fn rank(q: &str, candidates: Vec<Contact>, limit: u64) -> Vec<Contact> {
+/// Score and sort `candidates` for a non-empty `q`; `from_phone` adds the
+/// phone-book weight, which makes a saved person beat a harvested address.
+fn ranked(q: &str, candidates: Vec<Contact>, from_phone: bool) -> Vec<(i64, Contact)> {
     let mut scored: Vec<(i64, Contact)> = candidates
         .into_iter()
-        .filter_map(|c| match_score(q, &c).map(|score| (score, c)))
+        .filter_map(|c| {
+            match_score(q, &c).map(|score| (score + if from_phone { PHONE_WEIGHT } else { 0 }, c))
+        })
         .collect();
-
-    scored.sort_by(|(s1, c1), (s2, c2)| {
-        s2.cmp(s1)
-            .then_with(|| c2.times_seen.cmp(&c1.times_seen))
-            .then_with(|| c2.last_seen_at.cmp(&c1.last_seen_at))
-    });
-
+    scored.sort_by(by_score_then_use);
     scored
+}
+
+/// Best candidate first: score, then how often and how recently seen.
+fn by_score_then_use((s1, c1): &(i64, Contact), (s2, c2): &(i64, Contact)) -> std::cmp::Ordering {
+    s2.cmp(s1)
+        .then_with(|| c2.times_seen.cmp(&c1.times_seen))
+        .then_with(|| c2.last_seen_at.cmp(&c1.last_seen_at))
+}
+
+/// Score, sort and cut `candidates` for a non-empty `q`.
+fn rank(q: &str, candidates: Vec<Contact>, limit: u64) -> Vec<Contact> {
+    ranked(q, candidates, false)
         .into_iter()
         .take(limit as usize)
         .map(|(_, c)| c)
@@ -558,6 +592,17 @@ pub fn contacts_json(db: &Db, prefix: &str) -> Result<String> {
     } else {
         suggest(db, prefix, 10)?
     };
+    Ok(rows_json(&list))
+}
+
+/// Composer suggestions as the frontends read them: [`suggest_with_phone`]
+/// (mail contacts with the phone's own list merged in), each row carrying
+/// `entry` ([`recipient_entry`]).
+pub fn recipient_json(db: &Db, prefix: &str) -> Result<String> {
+    Ok(rows_json(&suggest_with_phone(db, prefix, 10)?))
+}
+
+fn rows_json(list: &[Contact]) -> String {
     let rows: Vec<serde_json::Value> = list
         .iter()
         .map(|c| {
@@ -568,7 +613,128 @@ pub fn contacts_json(db: &Db, prefix: &str) -> Result<String> {
             v
         })
         .collect();
-    Ok(serde_json::Value::Array(rows).to_string())
+    serde_json::Value::Array(rows).to_string()
+}
+
+/// Replace the phone-book snapshot. Entries that carry no usable e-mail
+/// address and automated senders ([`is_automated_address`]) are dropped;
+/// the first entry per address wins, a later one only fills a missing
+/// name. Returns how many entries were kept.
+pub fn set_phone_contacts(entries: &[PhoneEntry]) -> usize {
+    let mut kept: Vec<Contact> = Vec::new();
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for entry in entries {
+        let address = entry.address.trim();
+        if !is_mail_address(address) || is_automated_address(address) {
+            continue;
+        }
+        let name = entry
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        match seen.get(&address.to_ascii_lowercase()) {
+            Some(&i) => {
+                if kept[i].name.is_none() {
+                    kept[i].name = name.map(str::to_string);
+                }
+            }
+            None => {
+                seen.insert(address.to_ascii_lowercase(), kept.len());
+                kept.push(Contact {
+                    address: address.to_string(),
+                    name: name.map(str::to_string),
+                    alias: None,
+                    times_seen: 0,
+                    sent_count: 0,
+                    last_seen_at: String::new(),
+                });
+            }
+        }
+    }
+    let kept_count = kept.len();
+    *PHONE.lock().unwrap_or_else(|p| p.into_inner()) = kept;
+    kept_count
+}
+
+/// Drop the phone-book snapshot (the setting behind it was switched off):
+/// device data stays only while the feature is on.
+pub fn clear_phone_contacts() {
+    PHONE.lock().unwrap_or_else(|p| p.into_inner()).clear();
+}
+
+/// The stored snapshot, for tests.
+pub fn phone_contacts() -> Vec<Contact> {
+    PHONE.lock().unwrap_or_else(|p| p.into_inner()).clone()
+}
+
+/// Something that looks like an e-mail address: one `@`, both sides
+/// non-empty, no whitespace inside.
+fn is_mail_address(address: &str) -> bool {
+    let Some((local, domain)) = address.split_once('@') else {
+        return false;
+    };
+    !local.is_empty()
+        && !domain.is_empty()
+        && !address.chars().any(char::is_whitespace)
+        && !local.starts_with('@')
+}
+
+/// Suggestions for the composer's recipient field with the phone's own
+/// list merged in: the mail-collected contacts for `query`, plus every
+/// snapshot entry that matches. A phone match outranks the same match on
+/// harvested mail (see `PHONE_WEIGHT`); an address both sources know keeps
+/// the mail row's alias and history, gains the phone weight as well, and
+/// only takes the phone's name when it has none. An empty `query` is the
+/// manager's listing and stays mail-only.
+pub fn suggest_with_phone(db: &Db, query: &str, limit: u64) -> Result<Vec<Contact>> {
+    let q = query.trim();
+    if q.is_empty() {
+        return list(db, limit);
+    }
+    let phone = phone_contacts();
+    if phone.is_empty() {
+        return suggest(db, q, limit);
+    }
+    Ok(merge_phone(
+        ranked(q, suggest(db, q, limit)?, false),
+        ranked(q, phone, true),
+        limit as usize,
+    ))
+}
+
+/// Fold the ranked phone rows into the ranked mail rows, best first.
+fn merge_phone(
+    mail: Vec<(i64, Contact)>,
+    phone: Vec<(i64, Contact)>,
+    limit: usize,
+) -> Vec<Contact> {
+    let mut merged = mail;
+    let mut index: HashMap<String, usize> = merged
+        .iter()
+        .enumerate()
+        .map(|(i, (_, c))| (c.address.to_ascii_lowercase(), i))
+        .collect();
+    for (score, phone_row) in phone {
+        let key = phone_row.address.to_ascii_lowercase();
+        match index.get(&key).copied() {
+            Some(i) => {
+                // Known to both sources: the mail row's alias, spelling
+                // and history stay; the person's phone entry is a further
+                // reason to rank high, and fills a missing name.
+                merged[i].0 += PHONE_WEIGHT;
+                if merged[i].1.name.is_none() {
+                    merged[i].1.name = phone_row.name;
+                }
+            }
+            None => {
+                index.insert(key, merged.len());
+                merged.push((score, phone_row));
+            }
+        }
+    }
+    merged.sort_by(by_score_then_use);
+    merged.into_iter().take(limit).map(|(_, c)| c).collect()
 }
 
 #[cfg(test)]
@@ -1015,5 +1181,148 @@ mod tests {
         assert_eq!(alice.len(), 1);
         assert_eq!(alice[0].address, "alice@example.com");
         assert_eq!(alice[0].alias.as_deref(), Some("Alice Wonderland"));
+    }
+
+    fn harvested(address: &str) -> Contact {
+        Contact {
+            address: address.to_string(),
+            name: None,
+            alias: None,
+            times_seen: 0,
+            sent_count: 0,
+            last_seen_at: String::new(),
+        }
+    }
+
+    fn phone_row(name: &str, address: &str) -> PhoneEntry {
+        PhoneEntry {
+            address: address.to_string(),
+            name: Some(name.to_string()),
+        }
+    }
+
+    #[test]
+    fn a_saved_person_beats_a_harvested_one_at_equal_match_quality() {
+        let mut mail = harvested("ann@example.com");
+        // Mailed to again and again — that used to outrank everything.
+        mail.times_seen = 9;
+        mail.name = Some("Harvested Ann".to_string());
+        let phone = Contact {
+            address: "ann@example.org".to_string(),
+            name: Some("Ann Saved".to_string()),
+            ..harvested("ann@example.org")
+        };
+        let out = merge_phone(
+            ranked("ann", vec![mail], false),
+            ranked("ann", vec![phone], true),
+            10,
+        );
+        let order: Vec<&str> = out.iter().map(|c| c.address.as_str()).collect();
+        assert_eq!(order, vec!["ann@example.org", "ann@example.com"]);
+        // A weaker match on a heavily used address still loses to a saved
+        // person's better match.
+        let weak = Contact {
+            address: "contact@ann.example".to_string(),
+            times_seen: 50,
+            ..harvested("contact@ann.example")
+        };
+        let out = merge_phone(
+            ranked("ann", vec![weak], false),
+            ranked(
+                "ann",
+                vec![Contact {
+                    name: Some("Ann Saved".to_string()),
+                    ..harvested("ann@example.org")
+                }],
+                true,
+            ),
+            10,
+        );
+        assert_eq!(out[0].address, "ann@example.org");
+    }
+
+    #[test]
+    fn an_address_known_to_both_sources_keeps_the_mail_rows_data() {
+        let db = Db::open_in_memory().unwrap();
+        seen_sent(&db, "ann@example.com", Some("Harvested Ann")).unwrap();
+        for _ in 0..5 {
+            seen(&db, "ann@example.com", None).unwrap();
+        }
+        // Without a snapshot the mail contacts answer alone.
+        let before = suggest(&db, "ann", 10).unwrap();
+        assert_eq!(before.len(), 1);
+        assert_eq!(
+            suggest_with_phone(&db, "ann", 10).unwrap().len(),
+            before.len()
+        );
+
+        set_phone_contacts(&[
+            phone_row("Newer Ann", "ann@example.com"),
+            phone_row("Ann Saved", "ann@example.org"),
+        ]);
+        let merged = suggest_with_phone(&db, "ann", 10).unwrap();
+        // Both sources know `ann@example.com`: it keeps the alias, name and
+        // history of the mail row — the phone only adds a name when the row
+        // has none — and gains the phone weight as well.
+        let both = merged
+            .iter()
+            .find(|c| c.address == "ann@example.com")
+            .unwrap();
+        assert_eq!(both.name.as_deref(), Some("Harvested Ann"));
+        // The phone-only row would be invisible without the merge.
+        assert!(merged.iter().any(|c| c.address == "ann@example.org"));
+        assert_eq!(
+            merged[0].address, "ann@example.com",
+            "known to both sources, so it ranks first"
+        );
+        // The manager's listing (empty prefix) stays mail-only.
+        assert_eq!(
+            suggest_with_phone(&db, "", 10)
+                .unwrap()
+                .iter()
+                .map(|c| c.address.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ann@example.com"]
+        );
+    }
+
+    #[test]
+    fn the_phone_snapshot_keeps_usable_addresses_only() {
+        // The one test that touches the process-wide snapshot.
+        let kept = set_phone_contacts(&[
+            phone_row("", "ann@example.com"),
+            phone_row("Ann Curated", "ANN@example.com"),
+            phone_row("Ann Other", "ann@example.com"),
+            phone_row("Nobody", "no-at-sign"),
+            phone_row("Nobody", "spaced @example.com"),
+            phone_row("Nobody", "noreply@example.com"),
+            phone_row("Nobody", "bounce-7@x.example.com"),
+            phone_row("Bob", "bob@example.org"),
+        ]);
+        assert_eq!(kept, 2);
+        let snap = phone_contacts();
+        let ann = snap
+            .iter()
+            .find(|c| c.address == "ann@example.com")
+            .unwrap();
+        // Duplicates collapse to one row; the first name-less entry takes
+        // the later one's name, and a third never replaces it.
+        assert_eq!(ann.name.as_deref(), Some("Ann Curated"));
+        assert_eq!(snap.len(), 2);
+
+        clear_phone_contacts();
+        assert!(phone_contacts().is_empty());
+    }
+
+    #[test]
+    fn recipient_json_merges_the_phone_book() {
+        let db = Db::open_in_memory().unwrap();
+        seen(&db, "ann@example.com", Some("Harvested Ann")).unwrap();
+        set_phone_contacts(&[phone_row("Ann Saved", "ann@example.org")]);
+        let rows: serde_json::Value =
+            serde_json::from_str(&recipient_json(&db, "ann").unwrap()).unwrap();
+        assert_eq!(rows.as_array().unwrap().len(), 2);
+        assert_eq!(rows[0]["entry"], "Ann Saved <ann@example.org>");
+        clear_phone_contacts();
     }
 }

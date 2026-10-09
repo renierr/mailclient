@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::{JByteArray, JClass, JObject, JString};
 use jni::refs::Global;
+use jni::sys::jint;
 use jni::vm::JavaVM;
 use jni::{jni_sig, jni_str, Env, EnvUnowned, JValue};
 use mailcore::sync::background::{self, notify, BackgroundReport, SeenMark};
@@ -2676,6 +2677,56 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_contactsJson<'caller
     unowned
         .with_env(|env| -> Result<JString<'caller>> {
             Ok(env.new_string(crate::api::contacts::contacts_json(string(env, &prefix)?)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.setPhoneContacts(json)`: hand the phone's own contact list
+/// to the core (`[{"name", "address"}]`), which merges it into the
+/// recipient field's suggestions with phone matches ranked first. Returns
+/// how many of the entries were kept.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_setPhoneContacts<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    json: JString<'caller>,
+) -> jint {
+    unowned
+        .with_env(|env| -> Result<jint> {
+            Ok(crate::api::contacts::set_phone_contacts(string(env, &json)?)? as jint)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.clearPhoneContacts()`: forget the snapshot the core holds,
+/// called when the setting behind it is switched off.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_clearPhoneContacts<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) {
+    unowned
+        .with_env(|_env| -> Result<()> {
+            crate::api::contacts::clear_phone_contacts();
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.recipientJson(segment)`: the composer's recipient
+/// suggestions — `contactsJson` merged with the phone's own list, so a
+/// saved person outranks an address mail merely carried.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_recipientJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    segment: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::contacts::recipient_json(string(
+                env, &segment,
+            )?)?)?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }

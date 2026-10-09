@@ -1,7 +1,10 @@
 package de.renier.mailclient.ui.settings
 
+import android.Manifest
 import android.app.TimePickerDialog
 import android.text.format.DateFormat
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -15,13 +18,16 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.MailNative
+import de.renier.mailclient.PhoneContacts
 import de.renier.mailclient.R
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 private const val INTERVAL = "sync_interval_minutes"
@@ -29,6 +35,7 @@ private const val PUSH = "push_enabled"
 private const val QUIET = "quiet_hours_enabled"
 private const val QUIET_START = "quiet_hours_start"
 private const val QUIET_END = "quiet_hours_end"
+private const val PHONE_CONTACTS = "suggest_phone_contacts"
 
 /**
  * The two ends of a quiet-hours window, each a button opening the system
@@ -79,8 +86,33 @@ private fun TimeButton(label: String, value: String, fallback: String, onPick: (
  */
 @Composable
 fun GlobalSyncSettings(draft: SettingsDraft, choices: JSONObject, onTestNotification: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     SettingSwitch("Save a copy of sent mail in Sent", draft.flag("sent_copy_enabled"), { draft.setFlag("sent_copy_enabled", it) })
     SettingSwitch("Suggest recipients from sent mail", draft.flag("collect_sent_contacts"), { draft.setFlag("collect_sent_contacts", it) })
+    // The phone's own list only helps with READ_CONTACTS, so the switch
+    // stays off until that is granted; denying it leaves nothing behind.
+    val contactsPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        draft.setFlag(PHONE_CONTACTS, granted)
+        scope.launch {
+            if (granted) PhoneContacts.loadOnce(context) else PhoneContacts.dropSnapshot()
+        }
+    }
+    SettingSwitch(
+        title = "Suggest recipients from the phone's contacts",
+        checked = draft.flag(PHONE_CONTACTS),
+        help = "Contacts saved on this phone join the collected ones and are suggested first.",
+        onChange = { on: Boolean ->
+            if (on && !PhoneContacts.granted(context)) {
+                contactsPermission.launch(Manifest.permission.READ_CONTACTS)
+                return@SettingSwitch
+            }
+            draft.setFlag(PHONE_CONTACTS, on)
+            scope.launch {
+                if (on) PhoneContacts.loadOnce(context) else PhoneContacts.dropSnapshot()
+            }
+        },
+    )
     SettingChoice(
         title = "Check for new mail",
         value = draft[INTERVAL],

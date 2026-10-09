@@ -291,6 +291,11 @@ object MailNative {
     @JvmStatic external fun similarJson(accountId: Long, folderId: Long, uid: Int): String
     @JvmStatic external fun similarSubject(accountId: Long, folderId: Long, uid: Int): String
     @JvmStatic external fun contactsJson(prefix: String): String
+    // The composer's recipient suggestions: mail contacts with the phone's
+    // own list merged in (setPhoneContacts), saved people ranked first.
+    @JvmStatic external fun recipientJson(segment: String): String
+    @JvmStatic external fun setPhoneContacts(json: String): Int
+    @JvmStatic external fun clearPhoneContacts()
     @JvmStatic external fun setContactAlias(address: String, alias: String)
     @JvmStatic external fun deleteContact(address: String)
     @JvmStatic external fun deleteContacts(addresses: String): String

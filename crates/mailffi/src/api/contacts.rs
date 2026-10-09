@@ -18,6 +18,28 @@ pub fn set_contact_alias(address: String, alias: String) -> anyhow::Result<()> {
     Ok(contacts::set_alias(shared_db()?, address.trim(), alias)?)
 }
 
+/// Replace the phone's own contact list snapshot (Android passes what it
+/// read from ContactsContract behind `READ_CONTACTS`, as
+/// `[{"name": …, "address": …}]`). Merged into the recipient field's
+/// suggestions, phone matches ranked first. Returns how many entries were
+/// kept.
+pub fn set_phone_contacts(json: String) -> anyhow::Result<u32> {
+    let entries: Vec<contacts::PhoneEntry> = serde_json::from_str(&json)?;
+    Ok(contacts::set_phone_contacts(&entries) as u32)
+}
+
+/// Drop the snapshot: the setting behind it was switched off, so the phone
+/// book is not held in memory any longer.
+pub fn clear_phone_contacts() {
+    contacts::clear_phone_contacts();
+}
+
+/// Composer recipient suggestions as JSON: the mail-collected contacts with
+/// the phone's own list merged in (`set_phone_contacts`).
+pub fn recipient_json(prefix: String) -> anyhow::Result<String> {
+    Ok(contacts::recipient_json(shared_db()?, &prefix)?)
+}
+
 /// Forget one auto-collected recipient.
 pub fn delete_contact(address: String) -> anyhow::Result<()> {
     Ok(contacts::delete(shared_db()?, address.trim())?)

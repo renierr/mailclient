@@ -67,7 +67,7 @@ Future<void> setAccountSettings({
 );
 
 /// What the Android host should run in the background, as JSON
-/// (`push`, `poll_minutes`, `poll_scheduler`).
+/// (`push`, `poll_minutes`, `poll_scheduler`, …, `any`).
 Future<String> backgroundPlanJson() =>
     MailCoreApi.instance.api.crateApiSettingsBackgroundPlanJson();
 

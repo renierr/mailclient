@@ -46,7 +46,13 @@ pub fn settings_json() -> anyhow::Result<String> {
     });
     // Added after the literal: one more key exceeds `json!`'s macro
     // recursion limit.
-    for key in [s::REQUEST_MDN, s::REQUEST_DSN] {
+    for key in [
+        s::REQUEST_MDN,
+        s::REQUEST_DSN,
+        // Android-only (READ_CONTACTS), like NOTIFICATION_ACTION; the
+        // other frontends have no phone book to offer.
+        s::SUGGEST_PHONE_CONTACTS,
+    ] {
         out[key] = flag(key).into();
     }
     out[s::NOTIFICATION_ACTION] = s::get_notification_action(db).into();

@@ -32,6 +32,11 @@ pub const MARK_READ_DELAY_SECS: &str = "mark_read_delay_secs";
 /// Collect recipients of successfully sent mail for address suggestions
 /// (default: on).
 pub const COLLECT_SENT_CONTACTS: &str = "collect_sent_contacts";
+/// Offer the phone's own contact list in the recipient field (Android:
+/// ContactsContract behind `READ_CONTACTS`), merged with the collected ones
+/// and ranked first (default: off — the permission comes first). Desktop
+/// never reads it; the Qt bridge only touches the keys it displays.
+pub const SUGGEST_PHONE_CONTACTS: &str = "suggest_phone_contacts";
 /// Message list sort field: `date` (default) | `from` | `subject`.
 /// Unknown/empty values fall back to `date`.
 pub const MESSAGE_SORT_FIELD: &str = "message_sort_field";
@@ -122,6 +127,7 @@ pub fn defaults(key: &str) -> Option<&'static str> {
         AUTO_MARK_READ => Some("1"),
         MARK_READ_DELAY_SECS => Some("0"),
         COLLECT_SENT_CONTACTS => Some("1"),
+        SUGGEST_PHONE_CONTACTS => Some("0"),
         MESSAGE_SORT_FIELD => Some("date"),
         MESSAGE_SORT_DESC => Some("1"),
         CONFIRM_DELETE => Some("1"),

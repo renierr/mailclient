@@ -22,6 +22,24 @@ Future<void> setContactAlias({
   alias: alias,
 );
 
+/// Replace the phone's own contact list snapshot (Android passes what it
+/// read from ContactsContract behind `READ_CONTACTS`, as
+/// `[{"name": …, "address": …}]`). Merged into the recipient field's
+/// suggestions, phone matches ranked first. Returns how many entries were
+/// kept.
+Future<int> setPhoneContacts({required String json}) =>
+    MailCoreApi.instance.api.crateApiContactsSetPhoneContacts(json: json);
+
+/// Drop the snapshot: the setting behind it was switched off, so the phone
+/// book is not held in memory any longer.
+Future<void> clearPhoneContacts() =>
+    MailCoreApi.instance.api.crateApiContactsClearPhoneContacts();
+
+/// Composer recipient suggestions as JSON: the mail-collected contacts with
+/// the phone's own list merged in (`set_phone_contacts`).
+Future<String> recipientJson({required String prefix}) =>
+    MailCoreApi.instance.api.crateApiContactsRecipientJson(prefix: prefix);
+
 /// Forget one auto-collected recipient.
 Future<void> deleteContact({required String address}) =>
     MailCoreApi.instance.api.crateApiContactsDeleteContact(address: address);

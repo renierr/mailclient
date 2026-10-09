@@ -21,6 +21,12 @@
          to the "Alarms & reminders" screen to allow it. Without the grant
          the alarm still fires via AllowWhileIdle, just not exact. -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <!-- Runtime-prompted when the user switches on "Suggest recipients from
+         the phone's contacts" (Settings): the composer's recipient field
+         then merges the phone book into the mail-collected suggestions. The
+         snapshot stays in the core process while the setting is on and is
+         dropped when it is switched off. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS"/>
     <!-- Needed by the alarm scheduler and push: WorkManager and the push
          service keep the CPU awake while a check runs, and alarms and the
          push service come back after a reboot. -->

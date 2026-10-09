@@ -146,6 +146,9 @@ fun ComposerScreen(
     var offerMdn by remember { mutableStateOf(false) }
     var offerDsn by remember { mutableStateOf(false) }
     var suggestContacts by remember { mutableStateOf(true) }
+    // The phone's own contact list, merged into the suggestions when on
+    // (READ_CONTACTS); off, the mail-collected contacts answer alone.
+    var suggestPhone by remember { mutableStateOf(false) }
     val working = sending || savingDraft || deletingDraft
     // Like Qt: nothing to send to, nothing to press. The core checks the
     // addresses themselves when Send runs.
@@ -181,6 +184,7 @@ fun ComposerScreen(
         if (o != null) {
             sendFormat = o.optString("compose_send_format", DEFAULT_SEND_FORMAT).ifEmpty { DEFAULT_SEND_FORMAT }
             suggestContacts = o.optBoolean("collect_sent_contacts", true)
+            suggestPhone = o.optBoolean("suggest_phone_contacts", false)
         }
         val receipts = withContext(Dispatchers.IO) { runCatching { JSONObject(MailNative.receiptToggles()) }.getOrNull() }
         if (receipts != null) {
@@ -498,14 +502,16 @@ fun ComposerScreen(
                         ComposerToggle("Bcc", bccShown) { showBcc = !bccShown }
                     },
                 ) {
-                    RecipientField(to, { edit(to, it) { v -> to = v } }, suggestContacts)
+                    RecipientField(to, { edit(to, it) { v -> to = v } }, suggestContacts, suggestPhone = suggestPhone)
                 }
                 if (ccShown) {
-                    ComposerHeaderRow("Cc") { RecipientField(cc, { edit(cc, it) { v -> cc = v } }, suggestContacts) }
+                    ComposerHeaderRow("Cc") {
+                        RecipientField(cc, { edit(cc, it) { v -> cc = v } }, suggestContacts, suggestPhone = suggestPhone)
+                    }
                 }
                 if (bccShown) {
                     ComposerHeaderRow("Bcc") {
-                        RecipientField(bcc, { edit(bcc, it) { v -> bcc = v } }, suggestContacts, "Hidden from the other recipients")
+                        RecipientField(bcc, { edit(bcc, it) { v -> bcc = v } }, suggestContacts, "Hidden from the other recipients", suggestPhone)
                     }
                 }
                 if (replyToShown) {

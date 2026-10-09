@@ -37,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
@@ -46,6 +47,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.MailNative
+import de.renier.mailclient.PhoneContacts
 import de.renier.mailclient.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -119,6 +121,10 @@ private data class Suggestion(val address: String, val label: String)
  * being typed is completed (the core finds and replaces it), so a
  * half-typed list is never clobbered.
  *
+ * `suggestPhone` adds the phone's own contact list to the suggestions (the
+ * setting, `READ_CONTACTS`): the core merges both sources and ranks a saved
+ * person first, so the snapshot is read once per process here.
+ *
  * The matches render as a small list *below* the field, in the page flow:
  * no popup, so nothing floats over the input and there is no popup window
  * for the keyboard to leave without room (the crash seen with many matches
@@ -131,7 +137,9 @@ fun RecipientField(
     onValueChange: (TextFieldValue) -> Unit,
     suggest: Boolean,
     placeholder: String = "",
+    suggestPhone: Boolean = false,
 ) {
+    val context = LocalContext.current
     var focused by remember { mutableStateOf(false) }
     var suggestions by remember { mutableStateOf(emptyList<Suggestion>()) }
     // The text as last inserted by a pick: do not immediately suggest for
@@ -139,7 +147,7 @@ fun RecipientField(
     // edits, while this effect would rerun for the programmatic change).
     var picked by remember { mutableStateOf<String?>(null) }
     val text = value.text
-    LaunchedEffect(text, focused, suggest) {
+    LaunchedEffect(text, focused, suggest, suggestPhone) {
         if (!suggest || !focused) {
             suggestions = emptyList()
             return@LaunchedEffect
@@ -154,7 +162,9 @@ fun RecipientField(
             runCatching {
                 val segment = MailNative.recipientSegment(text)
                 if (segment.isBlank()) return@runCatching emptyList()
-                val arr = JSONArray(MailNative.contactsJson(segment))
+                if (suggestPhone) PhoneContacts.loadOnce(context)
+                val json = if (suggestPhone) MailNative.recipientJson(segment) else MailNative.contactsJson(segment)
+                val arr = JSONArray(json)
                 List(arr.length()) { i ->
                     val c = arr.getJSONObject(i)
                     val address = c.optString("address")

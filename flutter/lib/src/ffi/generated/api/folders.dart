@@ -15,6 +15,18 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 Future<String> foldersJson({required PlatformInt64 accountId}) =>
     MailCoreApi.instance.api.crateApiFoldersFoldersJson(accountId: accountId);
 
+/// Painted sidebar rows as JSON: `[{id, collapsible, expanded, unread,
+/// total}]` for `expanded` (expanded folder ids, empty = all collapsed).
+/// The single implementation of the sidebar fold both frontends paint
+/// (`mailcore::feed::sidebar_rows`).
+Future<String> sidebarRowsJson({
+  required PlatformInt64 accountId,
+  required String expandedJson,
+}) => MailCoreApi.instance.api.crateApiFoldersSidebarRowsJson(
+  accountId: accountId,
+  expandedJson: expandedJson,
+);
+
 /// Resolve a folder path to its local id, for a UI that navigated by path.
 Future<PlatformInt64> folderIdForPath({
   required PlatformInt64 accountId,
