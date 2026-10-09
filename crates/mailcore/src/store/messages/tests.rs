@@ -170,6 +170,17 @@ fn json_vec_helper() {
 }
 
 #[test]
+fn ids_by_uids_skips_missing_and_crosses_the_chunk_boundary() {
+    let (db, acc, f) = setup();
+    let a = upsert(&db, &sample_new(acc, f, 3)).unwrap();
+    let b = upsert(&db, &sample_new(acc, f, 1200)).unwrap();
+    let mut asked: Vec<u32> = (1..=2000).collect();
+    asked.push(3);
+    assert_eq!(ids_by_uids(&db, f, &asked).unwrap(), vec![a, b]);
+    assert!(ids_by_uids(&db, f, &[]).unwrap().is_empty());
+}
+
+#[test]
 fn read_clean_moves_only_the_read_flag_of_clean_rows() {
     // B9: the Trash sweep used `set_flags_by_uid(.., true, false, false)`,
     // which also cleared a starred row's star and a draft's flag.

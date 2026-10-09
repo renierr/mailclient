@@ -278,6 +278,31 @@ pub fn get_by_uid(db: &Db, folder_id: i64, uid: u32) -> Result<Message> {
         .ok_or_else(|| StoreError::NotFound(format!("message uid {uid} in folder {folder_id}")))
 }
 
+/// Row ids of the cached messages among `uids` in `folder_id`, in uid
+/// order; uids not cached are skipped. One query per 900 uids instead of a
+/// full row (bodies included) per uid.
+pub fn ids_by_uids(db: &Db, folder_id: i64, uids: &[u32]) -> Result<Vec<i64>> {
+    let mut clean: Vec<i64> = uids.iter().map(|u| i64::from(*u)).collect();
+    clean.sort_unstable();
+    clean.dedup();
+    let mut ids = Vec::with_capacity(clean.len());
+    for chunk in clean.chunks(900) {
+        let placeholders = vec!["?"; chunk.len()].join(",");
+        let mut stmt = db.conn().prepare(&format!(
+            "select id from messages where folder_id = ? and uid in ({placeholders})
+              order by uid"
+        ))?;
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(chunk.len() + 1);
+        params.push(&folder_id);
+        params.extend(chunk.iter().map(|u| u as &dyn rusqlite::ToSql));
+        let rows = stmt.query_map(params.as_slice(), |r| r.get(0))?;
+        for id in rows {
+            ids.push(id?);
+        }
+    }
+    Ok(ids)
+}
+
 /// A cached message of `account_id` by its Message-ID (with or without the
 /// angle brackets), the copy in a Sent folder first. `None` when none is
 /// cached.

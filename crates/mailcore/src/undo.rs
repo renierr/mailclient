@@ -171,11 +171,7 @@ pub(crate) fn queue_into(
             (PendingAction::Move, Some(dest.id), dest.path.clone())
         }
     };
-    let ids: Vec<i64> = uids
-        .iter()
-        .filter_map(|uid| messages::get_by_uid(db, folder_id, *uid).ok())
-        .map(|m| m.id)
-        .collect();
+    let ids = messages::ids_by_uids(db, folder_id, uids).map_err(|e| e.to_string())?;
     if ids.is_empty() {
         return Err("message is no longer available".to_string());
     }

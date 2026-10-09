@@ -2,6 +2,12 @@
 //!
 //! Rule (see AGENT.md): never edit a released migration in place —
 //! add a new `migrate_vN` and bump [`SCHEMA_VERSION`].
+//!
+//! Column order: `alter table … add column` always appends, so an upgraded
+//! database has every added column (`accounts.from_name`,
+//! `messages.from_name`, `attachments.data`, …) at the end of its table, not
+//! where `schema.sql` lists it. Harmless as long as no query relies on
+//! position: never `select *`, and every row mapper names its columns.
 
 use rusqlite::{Connection, OptionalExtension};
 

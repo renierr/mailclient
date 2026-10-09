@@ -316,19 +316,24 @@ pub fn normalize_delay_secs(raw: i64) -> i64 {
 /// Delay in seconds before an opened message counts as read.
 /// Unset/unparseable values fall back to the built-in default.
 pub fn get_delay_secs(db: &Db, key: &str) -> i64 {
+    get_number(db, key, normalize_delay_secs)
+}
+
+/// A stored number passed through `normalize`; an unset or unparseable
+/// value gives the key's built-in default (not normalized: the defaults
+/// table is already in range).
+fn get_number(db: &Db, key: &str, normalize: fn(i64) -> i64) -> i64 {
+    let default = || {
+        defaults(key)
+            .and_then(|d| d.parse::<i64>().ok())
+            .unwrap_or(0)
+    };
     match get(db, key) {
         Ok(Some(v)) => v
             .trim()
             .parse::<i64>()
-            .map(normalize_delay_secs)
-            .unwrap_or_else(|_| {
-                defaults(key)
-                    .and_then(|d| d.parse::<i64>().ok())
-                    .unwrap_or(0)
-            }),
-        _ => defaults(key)
-            .and_then(|d| d.parse::<i64>().ok())
-            .unwrap_or(0),
+            .map_or_else(|_| default(), normalize),
+        _ => default(),
     }
 }
 
@@ -491,20 +496,7 @@ pub fn normalize_sync_interval(raw: i64) -> i64 {
 /// Automatic mail-check interval in minutes (`0` = manually only).
 /// Unset/unparseable values fall back to the built-in default.
 pub fn get_sync_interval(db: &Db) -> i64 {
-    match get(db, SYNC_INTERVAL_MINUTES) {
-        Ok(Some(v)) => v
-            .trim()
-            .parse::<i64>()
-            .map(normalize_sync_interval)
-            .unwrap_or_else(|_| {
-                defaults(SYNC_INTERVAL_MINUTES)
-                    .and_then(|d| d.parse::<i64>().ok())
-                    .unwrap_or(0)
-            }),
-        _ => defaults(SYNC_INTERVAL_MINUTES)
-            .and_then(|d| d.parse::<i64>().ok())
-            .unwrap_or(0),
-    }
+    get_number(db, SYNC_INTERVAL_MINUTES, normalize_sync_interval)
 }
 
 /// Store an auto-check interval (normalized first).
