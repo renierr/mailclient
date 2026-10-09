@@ -310,6 +310,20 @@ impl SmtpSender {
     /// `sending` through the SMTP round-trip, so a crash leaves it for
     /// [`queue::requeue_interrupted`] to retry with the same bytes.
     pub fn submit_claimed(&self, db: &Db, queue_id: i64, password: &str) -> Result<Submitted> {
+        self.submit_claimed_via(db, queue_id, password, &mut None)
+    }
+
+    /// [`Self::submit_claimed`] over `transport`, built on first use and then
+    /// kept by the caller. Every built transport starts lettre's pool thread,
+    /// which lives for its idle timeout, so a flush that built one per row
+    /// left one thread per message behind (B5).
+    fn submit_claimed_via(
+        &self,
+        db: &Db,
+        queue_id: i64,
+        password: &str,
+        transport: &mut Option<SmtpTransport>,
+    ) -> Result<Submitted> {
         let row = queue::get(db, queue_id)?;
         let raw = row
             .raw_mime
@@ -328,7 +342,14 @@ impl SmtpSender {
                 "queued send has no envelope recipients".into(),
             ));
         }
-        match self.submit_raw(from, &row.envelope_to, raw, password, row.request_dsn) {
+        match self.submit_raw(
+            from,
+            &row.envelope_to,
+            raw,
+            password,
+            row.request_dsn,
+            transport,
+        ) {
             Ok(submitted) => {
                 // The server accepted it, so it IS sent. A bookkeeping failure
                 // (the row vanished with its account mid-send) must not turn
@@ -368,6 +389,7 @@ impl SmtpSender {
         let _ = queue::prune_sent(db);
         let mut sent = 0u64;
         let mut first_error = None;
+        let mut transport = None;
         for row in queue::list_submittable(db, account_id)? {
             match queue::claim(db, row.id) {
                 Ok(true) => {}
@@ -377,7 +399,7 @@ impl SmtpSender {
                     continue;
                 }
             }
-            match self.submit_claimed(db, row.id, password) {
+            match self.submit_claimed_via(db, row.id, password, &mut transport) {
                 Ok(_) => {
                     sent += 1;
                     if account_settings::get_bool(db, account_id, settings::COLLECT_SENT_CONTACTS) {
@@ -417,6 +439,7 @@ impl SmtpSender {
         raw: &[u8],
         password: &str,
         request_dsn: bool,
+        transport: &mut Option<SmtpTransport>,
     ) -> Result<Submitted> {
         let from_addr: Address = from.parse()?;
         let rcpts: Vec<Address> = to
@@ -427,18 +450,26 @@ impl SmtpSender {
             .map_err(|e| StoreError::InvalidInput(format!("smtp envelope: {e}")))?;
         if request_dsn {
             let dsn = send_with_dsn(&self.connect_params(password)?, &envelope, raw)?;
+            // A count, not the addresses: recipients are mail data (AGENTS §6).
             log::info!(
-                "smtp: sent to {to:?} via {} (delivery confirmation: {dsn})",
+                "smtp: sent to {} recipient(s) via {} (delivery confirmation: {dsn})",
+                to.len(),
                 self.endpoint.addr
             );
             return Ok(Submitted {
                 dsn_unsupported: !dsn,
             });
         }
-        let response = self.transport(password)?.send_raw(&envelope, raw)?;
+        let transport = match transport {
+            Some(t) => t,
+            None => transport.insert(self.transport(password)?),
+        };
+        let response = transport.send_raw(&envelope, raw)?;
         log::info!(
-            "smtp: sent to {to:?} via {}: {response:?}",
-            self.endpoint.addr
+            "smtp: sent to {} recipient(s) via {}: {}",
+            to.len(),
+            self.endpoint.addr,
+            response.code()
         );
         Ok(Submitted::default())
     }
