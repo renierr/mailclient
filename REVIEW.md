@@ -117,6 +117,8 @@ the "not fixed" column before assuming a finding is closed.
 | **A14** | `63fe609` | Row casts go through `int_col`: out of range reads as 0 with a warning | `highest_modseq` keeps its round-trip cast; `outbox.rs:68` still casts |
 | **A17** (rest) | `a7f6526` | Settings number getters shared; undo looks ids up in one query per 900 uids | — |
 | **A18** | `a7f6526` | Column-order caveat documented in the migrations header | No table rebuild |
+| **B17** | — | No change: send retries are already capped at 5 per row; backoff stays IMAP-only | — |
+| **B18** | `36a877d` | Sync lock is an OS file lock; no stale-pid reaping, no recursion | A live but hung holder now keeps the lock until it exits |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -592,7 +594,7 @@ thread alive for minutes.
 (`SHUTDOWN_GRACE`) and aborts only what is still running after it. With B1 and B2, the work that can still be
 running is bounded anyway: 30 s per SMTP operation, 10 min per IMAP command.
 
-### B17 · low · send-path failures do not feed the backoff `[corrected]`
+### B17 · low · send-path failures do not feed the backoff `[corrected]` — **no change**
 `sync/push.rs:373-382`
 
 ```rust
@@ -606,12 +608,29 @@ increments the account's failure counter via the NOOP branch, so a permanently f
 enters the 30 s→15 min backoff for that account and is retried at full rate instead.
 **Fix:** let `report.errors` count towards the witness failure tally.
 
-### B18 · low-medium · sync lock is TOCTOU-racy and recursively unbounded — confirmed
+**Not changed, on purpose.** "Retried at full rate" is bounded already: the outbox skips a row once it has
+`MAX_SEND_RETRIES` (5) attempts (`queue::list_pending`), so a permanently failing send stops after five push
+checks. Feeding SMTP errors into the account's backoff would also hold back IMAP push for an inbox that works,
+up to 15 minutes. That trades a bounded retry for late mail. The backoff stays tied to the IMAP session's
+health (the NOOP probe).
+
+### B18 · low-medium · sync lock is TOCTOU-racy and recursively unbounded — confirmed — **FIXED** `[fixed]`
 `sync/headless.rs:498-527` — an empty or partially-written pid file parses to nothing → `is_none_or(...)`
 yields "stale" → `remove_file` → retry. Two processes can each conclude the lock is stale and each hold it;
 `acquire_sync_lock` also recurses without a depth bound (stack overflow if the path keeps coming back
 "stale", e.g. a directory at that path).
 **Fix:** `flock` / atomic create-and-verify, and a bounded loop instead of recursion.
+
+**Fixed in `36a877d` with an OS lock.** `acquire_sync_lock` opens `.sync.lock` (create, no truncate) and calls
+`std::fs::File::try_lock()`. That is `flock(LOCK_EX|LOCK_NB)` on Linux and Android (checked against std's
+own target list for this toolchain) and `LockFileEx` on Windows. `WouldBlock` means skip the run. The kernel
+releases the lock when the holder exits or dies, so the pid/age staleness guessing, `pid_alive`, `lock_age`
+and the recursion are gone. The file is never deleted: deleting it would let one run hold a lock on the
+unlinked file while the next locks a fresh one. The pid is still written, as a hint for a human.
+**Trade-off:** a holder that hangs while still alive now keeps the lock until it exits. The old 15-minute
+reaping let a second run start next to it. With B1/B2 every network wait is bounded, so a hang means a bug,
+not a slow server. Tests: held vs released; a leftover empty, garbage or old-format file does not block. Not
+run on a device: the Android cross-check needs the NDK's clang for the bundled SQLite.
 
 ### B19 · low · per-message attachment budget is only part-count × 25 MiB `[corrected]`
 `sync/imap/parse.rs:150,157-159` + `sync/imap/engine/sync.rs:439-470` — `fetch_attachments` parses with
