@@ -114,6 +114,7 @@ the "not fixed" column before assuming a finding is closed.
 | **C12** | `ade5928` | Sender-tier similarity scan prefiltered by a `like` on the normalized subject | Non-ASCII subjects are still all scanned |
 | **A9** | `6ebe8bd` | `store::atomic` makes the multi-row deletes/updates all-or-nothing | — |
 | **A10** | `6ebe8bd` | `set_sort` and `set_pending_open` write both keys atomically | — |
+| **A14** | `63fe609` | Row casts go through `int_col`: out of range reads as 0 with a warning | `highest_modseq` keeps its round-trip cast; `outbox.rs:68` still casts |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -331,11 +332,18 @@ new password stays. Test: an edit refused by a trigger keeps both the old host a
 wrapper with only its own tests as callers and the FRB pool unavailable to it.
 **Fix:** delete it, or drop the `db` parameter.
 
-### A14 · low · silent truncation casts — confirmed
+### A14 · low · silent truncation casts — confirmed — **FIXED** `[fixed]`
 `store/accounts.rs:17,20`, `store/folders.rs:18-21`, `store/messages.rs:42,61`, `store/queue.rs:72` —
 `row.get::<_, i64>(5)? as u16` / `as u32` / `as u64` on every port / uid / count. A port stored as 70000
 reads back as 4464; a negative `size` reads back as 1.8e19.
 **Fix:** `u16::try_from(v).unwrap_or_default()` or a checked conversion with a warning.
+
+**Fixed in `63fe609`** with both halves: `store::int_col(row, idx)` / `opt_int_col` convert with `try_from`, and an
+out-of-range value reads as 0 with a warning naming the column. Applied to every `as u16/u32/u64` row cast
+in `store/` (accounts, messages, compact list rows, contacts, queue, attachments, and the folder sync
+state). **Kept on purpose:** `folders.highest_modseq`. Modseqs are written with a bit-preserving `as i64`
+because they may exceed `i64::MAX`, so `as u64` is the exact inverse, and a checked read would turn a real
+large modseq into 0. Test: 993 / 70 000 / −1 / NULL across `u16`, `u32`, `u64` and `Option`.
 
 ### A15 · medium · full-table scan + full Rust sort on every keystroke `[corrected]` — **FIXED** `[fixed]`
 `store/contacts.rs:399-415` — `suggest(db, prefix, 10)` reads **every** contact and fuzzy-scores it in
