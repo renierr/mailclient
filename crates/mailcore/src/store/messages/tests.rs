@@ -159,8 +159,30 @@ fn count_and_max_uid_track_cache() {
 
 #[test]
 fn json_vec_helper() {
+    use crate::store::{json_vec, json_vec_logged};
     assert_eq!(json_vec("[]").unwrap(), Vec::<String>::new());
     assert_eq!(json_vec("").unwrap(), Vec::<String>::new());
+    assert!(json_vec("not json").is_err());
+    assert_eq!(
+        json_vec_logged("not json", "message", "to_addrs", 1),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_corrupt_address_column_still_reads_the_row() {
+    // The row stays readable (one bad column must not hide the message);
+    // the column reads as empty with a warning instead of an error.
+    let (db, acc, f) = setup();
+    let id = upsert(&db, &sample_new(acc, f, 4)).unwrap();
+    db.conn()
+        .execute(
+            "update messages set to_addrs = 'not json' where id = ?1",
+            [id],
+        )
+        .unwrap();
+    let m = get_by_uid(&db, f, 4).unwrap();
+    assert!(m.to_addrs.is_empty());
 }
 
 #[test]

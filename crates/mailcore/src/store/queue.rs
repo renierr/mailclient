@@ -5,7 +5,7 @@ use rusqlite::{params, OptionalExtension};
 use crate::db::Db;
 use crate::error::{Result, StoreError};
 use crate::models::{QueueStatus, QueuedSend};
-use crate::store::{json_vec, now};
+use crate::store::{json_vec_logged, now};
 
 /// How often an outbox row may be retried before it is left alone. A row that
 /// keeps failing is a permanent rejection (bad recipient, blocked sender), not
@@ -63,8 +63,9 @@ pub fn enqueue_mime(
 fn row_to_queued(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueuedSend> {
     let status: String = row.get(3)?;
     let to_raw: String = row.get(8)?;
+    let id: i64 = row.get(0)?;
     Ok(QueuedSend {
-        id: row.get(0)?,
+        id,
         account_id: row.get(1)?,
         message_id: row.get(2)?,
         status: QueueStatus::parse_status(&status),
@@ -72,7 +73,9 @@ fn row_to_queued(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueuedSend> {
         retries: row.get::<_, i64>(5)? as u64,
         raw_mime: row.get(6)?,
         envelope_from: row.get(7)?,
-        envelope_to: json_vec(&to_raw).unwrap_or_default(),
+        // Read as empty when corrupt, which `submit_claimed` refuses ("no
+        // envelope recipients"): never sent to a guessed list.
+        envelope_to: json_vec_logged(&to_raw, "queue entry", "envelope_to", id),
         created_at: row.get(9)?,
         updated_at: row.get(10)?,
         request_dsn: row.get(11)?,

@@ -27,15 +27,17 @@ use crate::db::Db;
 use crate::error::{Result, StoreError};
 use crate::models::{Message, NewMessage};
 use crate::store::pending_moves::HIDDEN;
-use crate::store::{json_vec, now, opt_bool};
+use crate::store::{json_vec_logged, now, opt_bool};
 
 pub(super) fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
     let to: String = row.get(8)?;
     let cc: String = row.get(9)?;
     let bcc: String = row.get(10)?;
     let kw: String = row.get(18)?;
+    let id: i64 = row.get(0)?;
+    let list = |raw: &str, column: &str| json_vec_logged(raw, "message", column, id);
     Ok(Message {
-        id: row.get(0)?,
+        id,
         account_id: row.get(1)?,
         folder_id: row.get(2)?,
         uid: row.get::<_, i64>(3)? as u32,
@@ -43,9 +45,9 @@ pub(super) fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Messag
         thread_id: row.get(5)?,
         subject: row.get(6)?,
         from_addr: row.get(7)?,
-        to_addrs: json_vec(&to).unwrap_or_default(),
-        cc_addrs: json_vec(&cc).unwrap_or_default(),
-        bcc_addrs: json_vec(&bcc).unwrap_or_default(),
+        to_addrs: list(&to, "to_addrs"),
+        cc_addrs: list(&cc, "cc_addrs"),
+        bcc_addrs: list(&bcc, "bcc_addrs"),
         reply_to: row.get(11)?,
         date: row.get(12)?,
         snippet: row.get(13)?,
@@ -56,7 +58,7 @@ pub(super) fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Messag
         is_starred: opt_bool(row.get::<_, i64>(19)?),
         is_draft: opt_bool(row.get::<_, i64>(20)?),
         has_attachments: opt_bool(row.get::<_, i64>(21)?),
-        keywords: json_vec(&kw).unwrap_or_default(),
+        keywords: list(&kw, "keywords"),
         size: row.get::<_, i64>(22)? as u64,
         downloaded_full: opt_bool(row.get::<_, i64>(23)?),
         from_name: row.get(24)?,

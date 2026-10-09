@@ -26,6 +26,16 @@ pub(crate) fn json_vec(raw: &str) -> Result<Vec<String>> {
     Ok(serde_json::from_str(raw)?)
 }
 
+/// [`json_vec`] for a row mapper: a column that does not parse reads as
+/// empty, with a warning naming the row and column. Silently empty hid a
+/// corrupt row (A8). The value is not logged: these columns hold addresses.
+pub(crate) fn json_vec_logged(raw: &str, table: &str, column: &str, id: i64) -> Vec<String> {
+    json_vec(raw).unwrap_or_else(|e| {
+        log::warn!("{table} {id}: {column} is not a JSON list, read as empty: {e}");
+        Vec::new()
+    })
+}
+
 #[must_use]
 pub(crate) fn opt_bool(v: i64) -> bool {
     v != 0
