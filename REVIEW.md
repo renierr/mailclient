@@ -101,6 +101,8 @@ the "not fixed" column before assuming a finding is closed.
 | **A12** | `77d8de1` | A failed edit re-saves the previous secrets instead of leaving new passwords on the old row | Not restorable when the old entry was unreadable; logged |
 | **C3** | `6def2f8` | Negative margins and opacity below 0.15 dropped from inline styles | `display:block` + size on links kept on purpose (newsletter buttons) |
 | **A8** | `be8becb` | Unparseable JSON list columns warn (table, id, column; never the value) | `outbox::list_json` still reads `envelope_to` with a silent default for display |
+| **A15** | `af18a03` | `suggest` prefilters in SQL with a subsequence `like`, exact for every query | Rows with non-ASCII text are always scored in Rust |
+| **A17** (contacts bullet) | `af18a03` | One `row_to_contact` instead of three copies | Settings and undo bullets open |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -314,7 +316,7 @@ wrapper with only its own tests as callers and the FRB pool unavailable to it.
 reads back as 4464; a negative `size` reads back as 1.8e19.
 **Fix:** `u16::try_from(v).unwrap_or_default()` or a checked conversion with a warning.
 
-### A15 · medium · full-table scan + full Rust sort on every keystroke `[corrected]`
+### A15 · medium · full-table scan + full Rust sort on every keystroke `[corrected]` — **FIXED** `[fixed]`
 `store/contacts.rs:399-415` — `suggest(db, prefix, 10)` reads **every** contact and fuzzy-scores it in
 memory via `match_score` (`contacts.rs:341`); `idx_contacts_seen` is only used by the empty-query branch
 (`:382`). `cleanup_candidates` (`:472-487`) is the same.
@@ -323,6 +325,17 @@ memory via `match_score` (`contacts.rs:341`); `idx_contacts_seen` is only used b
 from the query itself (`like '%a%b%c%'`, preserving subsequence semantics) or memoize the contact list
 between keystrokes.
 
+**Fixed in `af18a03` with the subsequence pattern.** Every match `score_field` accepts (equal, prefix, word
+prefix, substring, subsequence) implies that the lowercased query is a subsequence of the alias, name or
+address. So `like '%a%b%c%'` on those three columns drops only rows that could never score. `%`, `_` and
+`\` in the query are escaped. Unicode needed one more step: SQLite folds case for ASCII only, while the
+scorer lowercases Unicode (`İpek` matches `ipek`, the KELVIN SIGN matches `k`). So a non-ASCII query
+character becomes `_`, and a row with any character outside printable ASCII (`glob '*[^ -~]*'`) always goes
+through to the scorer. The prefilter is therefore exact. A test ranks every contact in Rust and asserts
+`suggest` returns the same list for a set of queries. It fails when the non-ASCII pass-through is removed
+(checked by mutating it). Not memoized: the remaining scan is the non-ASCII rows plus the real matches.
+`cleanup_candidates` still reads every contact, which is its job and is not per keystroke.
+
 ### A16 · `[removed]` — not a bug
 `db/migrations.rs:470-476`'s `where path like '%&%-%'` + `decode_modified_utf7` is correct: before v12 every
 stored path was raw server form, so decoding it is the right operation. The suggested guard
@@ -330,7 +343,8 @@ stored path was raw server form, so decoding it is the right operation. The sugg
 was meant to prevent. No action.
 
 ### A17 · low · duplication and dead code
-- `store/contacts.rs:380-396`, `:399-413`, `:472-487` — three copies of the same query + row mapping.
+- ~~`store/contacts.rs:380-396`, `:399-413`, `:472-487` — three copies of the same query + row mapping.~~
+  **Row mapping shared** (`row_to_contact`, `af18a03`). The three queries differ in filter and order, so they stay.
 - `store/settings.rs:314-329` vs `:487-502` — `get_delay_secs` / `get_sync_interval` are one function twice.
 - ~~`store/messages/attachments.rs:212-218` `delete_attachments_for_message` — **verified** no non-test callers.
   Dead per AGENTS.md; delete it and its test.~~ **Deleted**.
