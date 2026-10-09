@@ -476,16 +476,20 @@ pub fn delete_many(db: &Db, addresses: &[&str]) -> Result<u64> {
     if addresses.is_empty() {
         return Ok(0);
     }
-    let tx_guard = db.conn();
-    let mut removed = 0u64;
-    for addr in addresses {
-        let clean = addr.trim();
-        if clean.is_empty() {
-            continue;
+    crate::store::atomic(db, || {
+        let mut removed = 0u64;
+        for addr in addresses {
+            let clean = addr.trim();
+            if clean.is_empty() {
+                continue;
+            }
+            removed += db
+                .conn()
+                .execute("delete from contacts where address = ?1", [clean])?
+                as u64;
         }
-        removed += tx_guard.execute("delete from contacts where address = ?1", [clean])? as u64;
-    }
-    Ok(removed)
+        Ok(removed)
+    })
 }
 
 /// Contacts worth reviewing for removal: automated senders collected before

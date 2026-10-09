@@ -263,8 +263,12 @@ pub fn set_last_full_discovery(db: &Db, account_id: i64, unix_secs: i64) -> Resu
 /// Queue a GUI jump request (`mailapp --open`): account id plus optional
 /// folder path (empty = that account's inbox).
 pub fn set_pending_open(db: &Db, account_id: i64, folder: &str) -> Result<()> {
-    set(db, PENDING_OPEN_ACCOUNT_ID, &account_id.max(0).to_string())?;
-    set(db, PENDING_OPEN_FOLDER, folder.trim())
+    // Together or not at all: a half-written request would jump to the new
+    // account's id with the previous request's folder.
+    crate::store::atomic(db, || {
+        set(db, PENDING_OPEN_ACCOUNT_ID, &account_id.max(0).to_string())?;
+        set(db, PENDING_OPEN_FOLDER, folder.trim())
+    })
 }
 
 /// Take a queued jump request, clearing it so each click jumps exactly
@@ -391,8 +395,10 @@ pub fn get_sort_descending(db: &Db) -> bool {
 
 /// Persist the message-list sort (`field` is normalized first).
 pub fn set_sort(db: &Db, field: &str, descending: bool) -> Result<()> {
-    set(db, MESSAGE_SORT_FIELD, normalize_sort_field(field))?;
-    set_bool(db, MESSAGE_SORT_DESC, descending)
+    crate::store::atomic(db, || {
+        set(db, MESSAGE_SORT_FIELD, normalize_sort_field(field))?;
+        set_bool(db, MESSAGE_SORT_DESC, descending)
+    })
 }
 
 /// Validated list density: `comfortable` | `compact`.

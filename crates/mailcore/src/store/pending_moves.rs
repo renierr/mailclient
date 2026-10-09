@@ -158,23 +158,27 @@ pub fn any_for_account(db: &Db, account_id: i64) -> Result<bool> {
 /// Count a failed push attempt.
 pub fn record_failure(db: &Db, message_ids: &[i64]) -> Result<()> {
     let ts = now();
-    for id in message_ids {
-        db.conn().execute(
-            "update pending_moves set attempts = attempts + 1, updated_at = ?2
-             where message_id = ?1",
-            params![id, ts],
-        )?;
-    }
-    Ok(())
+    crate::store::atomic(db, || {
+        for id in message_ids {
+            db.conn().execute(
+                "update pending_moves set attempts = attempts + 1, updated_at = ?2
+                 where message_id = ?1",
+                params![id, ts],
+            )?;
+        }
+        Ok(())
+    })
 }
 
 /// Give up on rows: the messages show again where they were.
 pub fn remove(db: &Db, message_ids: &[i64]) -> Result<()> {
-    for id in message_ids {
-        db.conn()
-            .execute("delete from pending_moves where message_id = ?1", [id])?;
-    }
-    Ok(())
+    crate::store::atomic(db, || {
+        for id in message_ids {
+            db.conn()
+                .execute("delete from pending_moves where message_id = ?1", [id])?;
+        }
+        Ok(())
+    })
 }
 
 #[cfg(test)]

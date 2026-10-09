@@ -40,20 +40,24 @@ pub fn resolve_hits(db: &Db, account_id: i64, hits: &[(String, u32)]) -> Result<
 
 /// Mark every message of `groups` read or unread; how many changed.
 pub fn set_read(db: &Db, groups: &Groups, read: bool) -> crate::Result<u64> {
-    let mut n = 0;
-    for (folder_id, uids) in groups {
-        n += messages::set_read_many_by_uids(db, *folder_id, uids, read)?;
-    }
-    Ok(n)
+    crate::store::atomic(db, || {
+        let mut n = 0;
+        for (folder_id, uids) in groups {
+            n += messages::set_read_many_by_uids(db, *folder_id, uids, read)?;
+        }
+        Ok(n)
+    })
 }
 
 /// Star or unstar every message of `groups`; how many changed.
 pub fn set_starred(db: &Db, groups: &Groups, starred: bool) -> crate::Result<u64> {
-    let mut n = 0;
-    for (folder_id, uids) in groups {
-        n += messages::set_star_many_by_uids(db, *folder_id, uids, starred)?;
-    }
-    Ok(n)
+    crate::store::atomic(db, || {
+        let mut n = 0;
+        for (folder_id, uids) in groups {
+            n += messages::set_star_many_by_uids(db, *folder_id, uids, starred)?;
+        }
+        Ok(n)
+    })
 }
 
 /// What a move across folders came to.
