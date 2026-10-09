@@ -287,6 +287,26 @@ UI iteration: `./dev.sh` runs the app against live `crates/mailapp/qml/` (embedd
 - Windows: keep all paths via `directories`, no Linux-only calls outside `mailapp` platform shim.
 - Completed: CONDSTORE/QRESYNC delta sync, the `imap-next` tokio migration, capability guards, fallbacks, and trash seen sync — see §5a, which is the full record. A separate background daemon is explicitly dropped, IDLE on the desktop too (Android push uses it, F26); UIDPLUS is used for `UID EXPUNGE` and nothing else (§5a).
 
+### 7a. Possible future enhancements (optional)
+
+Ideas, not commitments: none is required for parity or a milestone. Pick
+one up only on request, and build it core-first like any feature (§5 of
+`AGENTS.md`). Android ones are OS integration, like the launcher shortcuts,
+and need no Qt twin unless noted.
+
+| Idea | Side | What it would take |
+|---|---|---|
+| Desktop `mailto:` handler | Qt | `mailcore::compose::prefill` already parses the link; needs a `mailapp` entry (e.g. a `--compose <uri>` flag) and `MimeType=x-scheme-handler/mailto` in the `.desktop` file |
+| Add to calendar from the event card | Android (Qt: an `.ics` hand-off) | `CalendarContract` insert intent, no permission; the event fields come from `mailcore::calendar` |
+| Recipient suggestions from the phone's contacts | Android | `READ_CONTACTS` permission; merging them with mail-derived contacts belongs in `mailcore` |
+| Home-screen widget (unread count / newest mail) | Android | Plain `RemoteViews` needs nothing new; Jetpack Glance would be a dependency decision |
+| Quick Settings tile "Check mail" | Android | `TileService` running the existing background check |
+| Keyboard shortcuts with a hardware keyboard | Android | Today touch has none by design (§9); the key map could follow Qt's |
+| Predictive back | Android | `enableOnBackInvokedCallback`; the shell already walks its route stack |
+| Autofill hints on the account form | Android | Content types on the login fields so password managers fill IMAP/SMTP credentials |
+| Per-app language | Android | `localeConfig`; only worth it once strings are translated |
+| App lock (fingerprint / face) | Android | Framework `BiometricPrompt` (Android 9+, no dependency), opt-in setting |
+
 ## 8. Known Flaws & Repair List (user-reported)
 
 F1–F17 below; all currently closed.
