@@ -123,6 +123,7 @@ the "not fixed" column before assuming a finding is closed.
 | **B5** (transport) | `8d0df35` | One SMTP transport per outbox flush; recipients no longer logged | Bridge net queue still unbounded |
 | **B4**, **B19** | — | No change: imap-next's 100 MiB response cap bounds one message | — |
 | **D8** / **E10** | `d199c25` | One shared undo timer thread in `mailcore` with per-account coalescing replaces a thread per action in both adapters | Per-toggle `spawn_flag_push` is still one queued job per click |
+| **D16** (part) | `43f898b` | `message_json` no longer carries a third copy of the body | Re-fetch frequency and caching go with D5 |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -1254,7 +1255,7 @@ Folders.qml:156, Outbox.qml:127-169, MessageView.qml:830, Settings.qml:1189, Acc
 
 **Fixed in `83875ab`** — initial geometry floored at `Math.max(380/460, …)`.
 
-### D16 · medium-high · the reader payload copies each body three times — confirmed, severity trimmed
+### D16 · medium-high · the reader payload copies each body three times — confirmed, severity trimmed — **PARTLY FIXED** `[fixed]`
 `mailcore/src/feed.rs:562-565`
 
 ```rust
@@ -1268,6 +1269,13 @@ the whole payload after every job finish, star toggle, bulk action and sort chan
 `message_html` route (bridge.rs:216-220 documents why). Real memory cost scales with mail size, so medium-high
 rather than critical.
 **Fix:** drop `legacy_body`, paged the feed, and cache the reader document per message.
+
+**`legacy_body` dropped in `43f898b`.** No frontend read it: Qt, native Android and Flutter all take
+`body_html`/`body_text` (checked by searching every QML, Kotlin and Dart reader of the payload). A large HTML
+mail now crosses the bridge once as HTML plus once as its plain twin, not three times. The test asserts the
+key is gone. **Left for the D5 discussion:** paging the feed, the re-fetch after every job, and caching the
+reader document. Those change when and how the payload is requested, which is the GUI-thread work set aside
+with D5.
 
 ### D17 · `[removed]` — merged into D5
 Same as `bridge.rs:873`; see the note at the end of D5.
