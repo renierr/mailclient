@@ -127,7 +127,9 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_backgroundPlan<'call
 
 /// `MailNative.plan(report, permitted, foreground, shown)`: what to do with
 /// the notifications for a report, as `NotificationPlan` JSON. `shown` is a
-/// JSON object of the app's notifications on screen, tag → signature.
+/// JSON object of the app's notifications on screen, tag →
+/// `{"title", "body"}` as read back from each ([`notify::shown_of`] builds
+/// the signatures).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_de_renier_mailclient_MailNative_plan<'caller>(
     mut unowned: EnvUnowned<'caller>,
@@ -140,7 +142,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_plan<'caller>(
     unowned
         .with_env(|env| -> Result<JString<'caller>> {
             let report: BackgroundReport = serde_json::from_str(&string(env, &report)?)?;
-            let shown: notify::Shown = serde_json::from_str(&string(env, &shown)?)?;
+            let shown = notify::shown_of(serde_json::from_str(&string(env, &shown)?)?);
             let db = crate::db::shared_db()?;
             let plan = notify::plan_for(db, &report, permitted, foreground, &shown);
             Ok(env.new_string(serde_json::to_string(&plan)?)?)
@@ -163,6 +165,21 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_markRead<'caller>(
             let target: notify::ReadTarget = serde_json::from_str(&string(env, &target)?)?;
             let report = notify::mark_read(crate::db::shared_db()?, &target)?;
             Ok(env.new_string(serde_json::to_string(&report)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.readTargetAccount(target)`: the account of a "Mark read"
+/// button's `ReadTarget` JSON.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_readTargetAccount<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    target: JString<'caller>,
+) -> i64 {
+    unowned
+        .with_env(|env| -> Result<i64> {
+            Ok(notify::ReadTarget::account_of(&string(env, &target)?)?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }

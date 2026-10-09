@@ -105,8 +105,9 @@ object MailNotifier {
 
     private fun isMine(tag: String) = TAG_PREFIXES.any { tag.startsWith(it) }
 
-    // The mail notifications on screen, tag → title and body as the plan
-    // compares them. Swiped-away ones are gone from here.
+    // The mail notifications on screen, tag → title and body as read back;
+    // the core turns them into the signatures it compares. Swiped-away ones
+    // are gone from here.
     private fun shown(manager: NotificationManager): JSONObject {
         val out = JSONObject()
         for (n in manager.activeNotifications) {
@@ -115,7 +116,7 @@ object MailNotifier {
             val extras = n.notification.extras
             val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
             val body = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
-            out.put(tag, "$title\n$body")
+            out.put(tag, JSONObject().put("title", title).put("body", body))
         }
         return out
     }

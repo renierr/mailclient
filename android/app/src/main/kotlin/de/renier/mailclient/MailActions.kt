@@ -14,7 +14,6 @@ import androidx.work.OneTimeWorkRequest
 import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
-import org.json.JSONObject
 
 // The notifications' "Mark read" / "Mark all read" buttons. Marks the cache
 // at once and re-plans the notifications (the read mail drops out of them),
@@ -30,7 +29,7 @@ class MailActionReceiver : BroadcastReceiver() {
                 MailNative.ensureInit(app)
                 MailNotifier.deliver(app, MailNative.markRead(target))
                 MailNotifier.onMailChanged?.invoke()
-                MailFlagWorker.enqueue(app, JSONObject(target).getLong("account_id"))
+                MailFlagWorker.enqueue(app, MailNative.readTargetAccount(target))
             } catch (e: RuntimeException) {
                 Log.w("mailclient", "mark read from notification failed", e)
             } finally {

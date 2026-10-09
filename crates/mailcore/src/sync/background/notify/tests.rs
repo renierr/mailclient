@@ -328,3 +328,32 @@ fn mark_read_takes_the_mail_out_of_what_is_pending() {
     assert_eq!(dirty.len(), 1, "queued for the server");
     assert!(dirty[0].is_read);
 }
+
+#[test]
+fn shown_is_built_from_what_the_host_reads_back() {
+    // E20: the host sends title and body; the signature format stays here.
+    let posted: HashMap<String, Posted> = serde_json::from_str(
+        r#"{"mail:1:2:3": {"title": "Ann", "body": "Hello"}, "account:1": {"title": "2 new"},
+            "mail:1:2:4": "Bob\nHi"}"#,
+    )
+    .unwrap();
+    let shown = shown_of(posted);
+    assert_eq!(shown["mail:1:2:3"], signature_of("Ann", "Hello"));
+    assert_eq!(shown["account:1"], signature_of("2 new", ""));
+    // The Flutter host's pre-built signature passes through as it was.
+    assert_eq!(shown["mail:1:2:4"], signature_of("Bob", "Hi"));
+}
+
+#[test]
+fn a_read_target_names_its_account() {
+    let json = serde_json::to_string(&ReadTarget {
+        account_id: 7,
+        mails: vec![ReadMail {
+            folder_id: 2,
+            uid: 3,
+        }],
+    })
+    .unwrap();
+    assert_eq!(ReadTarget::account_of(&json).unwrap(), 7);
+    assert!(ReadTarget::account_of("not json").is_err());
+}

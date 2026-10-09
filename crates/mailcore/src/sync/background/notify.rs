@@ -127,11 +127,57 @@ pub fn signature_of(title: &str, body: &str) -> String {
 /// The app's notifications on screen: tag → [`signature_of`].
 pub type Shown = HashMap<String, String>;
 
+/// What the host reads back from one posted notification.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum Posted {
+    /// Title and body as Android reports them; the native app sends this.
+    Parts {
+        #[serde(default)]
+        title: String,
+        #[serde(default)]
+        body: String,
+    },
+    /// A signature the host built itself: the retired Flutter host still
+    /// sends this, so it keeps working unchanged.
+    Signature(String),
+}
+
+/// [`Shown`] from what the host read back, tag → [`Posted`]. The native host
+/// hands over the raw title and body instead of building the signature
+/// itself, so the format lives in [`signature_of`] only: a Kotlin twin had
+/// to match it byte for byte or every notification read as changed (E20).
+#[must_use]
+pub fn shown_of(posted: HashMap<String, Posted>) -> Shown {
+    posted
+        .into_iter()
+        .map(|(tag, p)| {
+            let signature = match p {
+                Posted::Parts { title, body } => signature_of(&title, &body),
+                Posted::Signature(s) => s,
+            };
+            (tag, signature)
+        })
+        .collect()
+}
+
 /// Mail a "Mark read" button marks: one mail, or a whole account group.
+/// Hosts treat it as opaque JSON; [`ReadTarget::account_of`] answers the one
+/// thing they need from it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReadTarget {
     pub account_id: i64,
     pub mails: Vec<ReadMail>,
+}
+
+impl ReadTarget {
+    /// The account a `ReadTarget` JSON (from a notification's button)
+    /// belongs to, so the host can queue its flag push without knowing the
+    /// struct's fields (E22).
+    pub fn account_of(json: &str) -> Result<i64> {
+        let target: Self = serde_json::from_str(json)?;
+        Ok(target.account_id)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -35,12 +35,16 @@ object MailNative {
     @JvmStatic external fun check(trigger: String): String
 
     // NotificationPlan JSON for a report. `shown`: JSON object of the mail
-    // notifications on screen, tag -> signature.
+    // notifications on screen, tag -> {"title", "body"} as read back; the
+    // core builds the signatures it compares.
     @JvmStatic external fun plan(report: String, permitted: Boolean, foreground: Boolean, shown: String): String
 
     // A "Mark read" button: mark the ReadTarget JSON read in the cache, no
     // network. BackgroundReport JSON of what is still pending, for plan().
     @JvmStatic external fun markRead(target: String): String
+
+    // The account a ReadTarget JSON belongs to; the JSON stays opaque here.
+    @JvmStatic external fun readTargetAccount(target: String): Long
 
     // Send an account's queued flag changes; blocks for the network, throws
     // when the server cannot be reached.
