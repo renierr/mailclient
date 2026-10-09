@@ -80,6 +80,25 @@ pub fn normalize_subject(subject: &str) -> String {
     s.to_lowercase()
 }
 
+/// `like` pattern for "contains `text`", case-insensitively for ASCII.
+/// Wildcards are escaped; a non-ASCII character becomes `_` (no ASCII-only
+/// subject can normalize to it anyway).
+fn contains_pattern(text: &str) -> String {
+    let mut p = String::from("%");
+    for c in text.chars() {
+        match c {
+            '%' | '_' | '\\' => {
+                p.push('\\');
+                p.push(c);
+            }
+            c if c.is_ascii() => p.push(c),
+            _ => p.push('_'),
+        }
+    }
+    p.push('%');
+    p
+}
+
 /// Extract up to 5 meaningful keyword tokens from the subject for FTS searching.
 #[must_use]
 pub fn extract_keywords(normalized: &str) -> Vec<String> {
@@ -251,16 +270,26 @@ pub fn similar_json(
     // rows for the matches.
     if !found.full() && !target_from.is_empty() && !target_norm.is_empty() {
         let ids: Vec<i64> = {
+            // `normalize_subject` only strips prefixes, trims and lowercases,
+            // so a subject that normalizes to the target contains it. The
+            // `like` keeps the scan to those instead of a busy sender's
+            // whole history (C12). SQLite folds case for ASCII only, so a
+            // subject with any other character always goes through.
             let mut stmt = conn.prepare(
                 "select m.id, m.subject
                    from messages m
                   where m.account_id = ?1
                     and m.from_addr = ?2
+                    and (m.subject like ?3 escape '\\' or m.subject glob '*[^ -~]*')
                     and m.id not in (select message_id from pending_moves)
                   order by m.date desc, m.id desc",
             )?;
             let mut ids = Vec::new();
-            let mut rows = stmt.query(params![account_id, target_from])?;
+            let mut rows = stmt.query(params![
+                account_id,
+                target_from,
+                contains_pattern(&target_norm)
+            ])?;
             while let Some(r) = rows.next()? {
                 let id: i64 = r.get(0)?;
                 let subject: Option<String> = r.get(1)?;
@@ -449,6 +478,30 @@ mod tests {
             uids(&similar_json(&db, acc, folder, 1, 50).unwrap()),
             vec![3]
         );
+    }
+
+    #[test]
+    fn the_sender_tier_prefilter_keeps_every_match() {
+        // Words under three letters give the keyword tier nothing, so each
+        // hit here comes from the sender tier's `like` prefilter (C12).
+        let (db, acc, folder) = setup_test_db();
+        add(&db, acc, folder, 1, "Up 50% go", "a@example.com");
+        add(&db, acc, folder, 2, "RE: UP 50% GO", "a@example.com");
+        add(&db, acc, folder, 3, "Up 50x go", "a@example.com");
+        add(&db, acc, folder, 4, "Up 50% go", "b@example.com");
+        assert_eq!(
+            uids(&similar_json(&db, acc, folder, 1, 50).unwrap()),
+            vec![2]
+        );
+        // `İ` lowercases to two characters, which `like` cannot follow; the
+        // non-ASCII pass-through keeps the match.
+        add(&db, acc, folder, 10, "İx", "c@example.com");
+        add(&db, acc, folder, 11, "AW: İX", "c@example.com");
+        assert_eq!(
+            uids(&similar_json(&db, acc, folder, 10, 50).unwrap()),
+            vec![11]
+        );
+        assert_eq!(contains_pattern("50%_ü\\"), "%50\\%\\__\\\\%");
     }
 
     #[test]
