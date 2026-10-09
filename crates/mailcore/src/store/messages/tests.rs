@@ -170,6 +170,50 @@ fn json_vec_helper() {
 }
 
 #[test]
+fn read_clean_moves_only_the_read_flag_of_clean_rows() {
+    // B9: the Trash sweep used `set_flags_by_uid(.., true, false, false)`,
+    // which also cleared a starred row's star and a draft's flag.
+    let (db, acc, f) = setup();
+    let mut starred = sample_new(acc, f, 1);
+    starred.is_read = false;
+    starred.is_starred = true;
+    upsert(&db, &starred).unwrap();
+    let mut plain = sample_new(acc, f, 2);
+    plain.is_read = false;
+    upsert(&db, &plain).unwrap();
+    let mut kept_unread = sample_new(acc, f, 3);
+    kept_unread.is_read = false;
+    upsert(&db, &kept_unread).unwrap();
+    // The user marked 3 unread locally: a pending change of its own.
+    set_read_many_by_uids(&db, f, &[3], false).unwrap();
+
+    assert_eq!(set_read_clean_by_uids(&db, f, &[1, 3], false).unwrap(), 1);
+    let one = get_by_uid(&db, f, 1).unwrap();
+    assert!(one.is_read && one.is_starred, "the star survives");
+    assert!(
+        !get_by_uid(&db, f, 3).unwrap().is_read,
+        "a dirty row is left alone"
+    );
+    let dirty: Vec<u32> = list_flags_dirty(&db, acc)
+        .unwrap()
+        .iter()
+        .map(|m| m.uid)
+        .collect();
+    assert_eq!(dirty, vec![3], "a pushed STORE leaves nothing to push");
+
+    // B10: when the STORE failed, the row is queued for the flag push.
+    assert_eq!(set_read_clean_by_uids(&db, f, &[2], true).unwrap(), 1);
+    assert!(get_by_uid(&db, f, 2).unwrap().is_read);
+    let mut dirty: Vec<u32> = list_flags_dirty(&db, acc)
+        .unwrap()
+        .iter()
+        .map(|m| m.uid)
+        .collect();
+    dirty.sort_unstable();
+    assert_eq!(dirty, vec![2, 3]);
+}
+
+#[test]
 fn a_corrupt_address_column_still_reads_the_row() {
     // The row stays readable (one bad column must not hide the message);
     // the column reads as empty with a warning instead of an error.

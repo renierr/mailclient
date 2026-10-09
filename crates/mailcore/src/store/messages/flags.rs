@@ -174,6 +174,27 @@ pub fn set_read_many_by_uids(db: &Db, folder_id: i64, uids: &[u32], read: bool) 
     )
 }
 
+/// Mark clean unread rows read, touching no other flag (starred and draft
+/// stay, B9). Rows with a pending local change are left to that change's
+/// push. `queue_push` marks the touched rows `flags_dirty` so the flag push
+/// sends `\Seen` later: for when the server did not take it now (B10).
+/// Returns rows touched.
+pub fn set_read_clean_by_uids(
+    db: &Db,
+    folder_id: i64,
+    uids: &[u32],
+    queue_push: bool,
+) -> Result<u64> {
+    let now = now();
+    execute_over_uids(
+        db,
+        "update messages set is_read = 1, flags_dirty = ?1, updated_at = ?2
+         where folder_id = ?3 and is_read = 0 and flags_dirty = 0 and",
+        &[&i64::from(queue_push), &now, &folder_id],
+        uids,
+    )
+}
+
 /// Bulk star/unstar for one folder (local-only, queued). Only the starred
 /// flag moves — read state is preserved. Returns rows touched.
 pub fn set_star_many_by_uids(db: &Db, folder_id: i64, uids: &[u32], starred: bool) -> Result<u64> {

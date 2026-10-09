@@ -42,20 +42,27 @@ impl ImapSync {
     /// Trash "always seen": mark locally-unread Trash rows `\Seen` on the
     /// server. Local-driven and cheap (one STORE only when needed), so the
     /// unchanged fast path below keeps it instead of skipping it.
-    async fn sweep_trash_seen(&mut self, db: &Db, account_id: i64, folder_id: i64) -> Result<()> {
+    ///
+    /// Only the read flag of clean rows moves locally (it used to clear
+    /// starred and draft too, B9). When the STORE fails those rows are
+    /// marked read *and* dirty, so the regular flag push retries them
+    /// instead of leaving the server unread behind a clean local row (B10).
+    async fn sweep_trash_seen(&mut self, db: &Db, folder_id: i64) -> Result<()> {
         let session = self.session()?;
         if let Ok(unread_uids) = messages::list_unread_uids(db, folder_id) {
             if !unread_uids.is_empty() {
-                if let Err(e) = session
+                let stored = session
                     .uid_store_flags(&unread_uids, StoreType::Add, vec![Flag::Seen])
-                    .await
-                {
-                    log::warn!("imap: trash seen sweep failed: {e}");
-                }
-                for uid in &unread_uids {
-                    let _ = messages::set_flags_by_uid(
-                        db, account_id, folder_id, *uid, true, false, false,
-                    );
+                    .await;
+                let local = match stored {
+                    Ok(_) => messages::set_read_clean_by_uids(db, folder_id, &unread_uids, false),
+                    Err(e) => {
+                        log::warn!("imap: trash seen sweep failed, queued for the flag push: {e}");
+                        messages::set_read_clean_by_uids(db, folder_id, &unread_uids, true)
+                    }
+                };
+                if let Err(e) = local {
+                    log::warn!("imap: trash seen sweep not saved locally: {e}");
                 }
             }
         }
@@ -151,7 +158,7 @@ impl ImapSync {
         {
             log::debug!("imap: {} unchanged, skipping window sync", folder.path);
             if folder.role == FolderRole::Trash {
-                self.sweep_trash_seen(db, account.id, folder_id).await?;
+                self.sweep_trash_seen(db, folder_id).await?;
             }
             folders::set_sync_state(
                 db,
@@ -310,7 +317,7 @@ impl ImapSync {
 
         // 6. If this is Trash, ensure any unread messages in local DB are marked \Seen on server.
         if is_trash {
-            self.sweep_trash_seen(db, account.id, folder_id).await?;
+            self.sweep_trash_seen(db, folder_id).await?;
         }
 
         let validity = mb.uid_validity.unwrap_or(folder.uid_validity.unwrap_or(0));

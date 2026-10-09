@@ -16,7 +16,7 @@ pub use attachments::{
 };
 pub use flags::{
     clear_flags_dirty, delete_many_by_uids, list_flags_dirty, set_flags, set_flags_by_uid,
-    set_read_many_by_uids, set_star_many_by_uids,
+    set_read_clean_by_uids, set_read_many_by_uids, set_star_many_by_uids,
 };
 
 use std::collections::HashMap;
