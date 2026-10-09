@@ -104,6 +104,7 @@ the "not fixed" column before assuming a finding is closed.
 | **A15** | `af18a03` | `suggest` prefilters in SQL with a subsequence `like`, exact for every query | Rows with non-ASCII text are always scored in Rust |
 | **A17** (contacts bullet) | `af18a03` | One `row_to_contact` instead of three copies | Settings and undo bullets open |
 | **B2** | `65bbae6` | Each IMAP command (and the greeting) is capped at 10 min overall on top of the 30 s per-read timeout | IDLE keeps its caller-side bound; no per-kind caps |
+| **B3** | `019f509` | A transport failure marks the session broken: no further commands, no fallbacks, not pooled, sweep stops | Errors are still one `StoreError::Network` kind; callers branch on the session state instead |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -402,7 +403,7 @@ still extend a read, on purpose: RFC 9585 `INPROGRESS` updates on a long SEARCH 
 5 s before the cap and past it. The mock server answers immediately, so a timed noise drip cannot be staged
 against it. Interacts with B16: a shutdown now waits at most `COMMAND_MAX` per stuck command, not forever.
 
-### B3 · medium · no error classification; a dead session is reused
+### B3 · medium · no error classification; a dead session is reused — **FIXED** `[fixed]`
 `sync/imap/session.rs:151-156,163-171`, `session/mailbox.rs:63-77,162-181`, `sync/headless.rs:285`
 Timeouts, `BYE`, stream errors and a mere `NO`/`BAD` all come back as `StoreError::Network`. (a) After a timeout
 the abandoned command's late reply is delivered into the *next* command's `collected_data`
@@ -413,6 +414,22 @@ error — including a dead socket — re-issuing a command on a broken stream an
 continues with the same session on the next folder.
 **Fix:** distinguish transport-fatal from server-`NO`, mark the session dead on the former, stop the sweep to
 force a reconnect.
+
+**Fixed in `019f509`.** No new error type was needed. The session itself remembers it is dead:
+- `ImapSession::broken` is set by a read timeout, the B2 overall cap, a stream error or `BYE` (tagged or
+  untagged). A tagged `NO`/`BAD` or a rejected command leaves the session usable.
+- Once broken, `execute` refuses every further command without writing to the stream ("connection unusable
+  after an earlier failure: …"). So (a) cannot happen: no later command exists to receive the late reply.
+- The SELECT and CHANGEDSINCE fallbacks fire only on a server refusal, so a blip no longer clears
+  `condstore`/`qresync` for the session.
+- `is_connected()` is false for a broken session, so `SessionLease::checkin` drops it instead of pooling
+  it (the error-path half of B13). `is_healthy()` answers without a NOOP.
+- `sync_account` stops the folder sweep with "connection lost, remaining folders skipped" instead of failing
+  each remaining folder on the same dead session.
+
+Tests: a `BYE` during SELECT sends no fallback SELECT and no later NOOP, leaves CONDSTORE on, and the session
+reads as not connected and not healthy. A server `NO` keeps the session usable. The sweep stop has no test of
+its own: the mock serves one connection with canned replies, and `sync_account` needs the folder list first.
 
 ### B4 · medium · unbounded accumulation of one command's response
 `sync/imap/session.rs:139-141` + `sync/imap/types.rs:18,44` — `uid_fetch_messages` asks for `FETCH_CHUNK = 100`
@@ -488,6 +505,9 @@ next flag refresh corrects. No action.
 completion should drop the session, but `imap.checkin()` also runs on the error path. It self-heals via
 `is_healthy()`, but a timed-out session goes back with stale reply data pending.
 **Fix:** `drop(imap)` / explicit discard on the error path.
+
+**Partly fixed by B3 (`019f509`):** a session whose transport failed now reads as not connected, so `checkin`
+drops it. A session that only saw a server `NO` is still checked back in, which is correct: it is in step.
 
 ### B14 · `[removed]` — no lock is held
 `checkin()` (`pool.rs:101-112`) does `drop(pool)` **before** `s.disconnect()`, and the `Drop` impl
