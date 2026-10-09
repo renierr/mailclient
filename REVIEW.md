@@ -122,6 +122,7 @@ the "not fixed" column before assuming a finding is closed.
 | **B11** | `18817de` | A landed COPY is not retried into duplicates; the mailbox-wide EXPUNGE only runs when nothing else is flagged | A source copy can stay behind after a failed cleanup |
 | **B5** (transport) | `8d0df35` | One SMTP transport per outbox flush; recipients no longer logged | Bridge net queue still unbounded |
 | **B4**, **B19** | — | No change: imap-next's 100 MiB response cap bounds one message | — |
+| **D8** / **E10** | `d199c25` | One shared undo timer thread in `mailcore` with per-account coalescing replaces a thread per action in both adapters | Per-toggle `spawn_flag_push` is still one queued job per click |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -1155,12 +1156,21 @@ from Settings. Leaving them on the GUI thread means a hung gnome-keyring can sti
 `syncSettingsRevision++` (Settings.qml:1866). Severity is medium only in that it is a small indexed read.
 **Fix:** cache the value in `SettingsBridge` behind the existing revision counter.
 
-### D8 · medium · a new OS thread per undoable action
+### D8 · medium · a new OS thread per undoable action — **FIXED** `[fixed]`
 `bridge/worker.rs:135-141` `spawn_push_after_grace` and `crates/mailffi/src/net.rs:288-294`
 `spawn_push_after_grace` each `std::thread::spawn` a sleeper per undoable action
 (`api/mutate.rs:106,194` calls it). N deletes in one session = N sleeping threads plus N queued IMAP pushes,
 unbounded by any cap. *(This replaces first-draft B6.)*
 **Fix:** coalesce into one sleeping task keyed on the existing in-flight table (E10).
+
+**Fixed in `d199c25`, in `mailcore` instead of the in-flight table.** Both adapters had the same sleeper, so the
+fix is one shared piece (§1): `mailcore::undo::push_after_grace(account, due)` runs a single
+`mailclient-undo` timer thread with a deadline heap. An account's actions that fall due within 2 s of each
+other fire one push, since the push sends everything due for the account anyway. Both adapters'
+`spawn_push_after_grace` are one-line calls now, each passing its own `spawn_flag_push`. If the OS refuses
+the thread, the moves wait for the next sync, as they already did when the app quit early. The in-flight
+table was not used: it dedupes running jobs, not future deadlines. Test: five actions of one account and one
+of another, on a 40 ms timer, give exactly one push each.
 
 ### D9 · low · timer polling does a DB read
 `Main.qml:993-999` `pendingOpenTimer` (2 s repeat) calls `consume_pending_open()` → a SQLite settings read on
@@ -1427,10 +1437,13 @@ waiter registration and queue satisfies the create, so `FolderManagerScreen` sho
 unrelated failure) and clears it. Same class as E8.
 **Fix:** add a correlation token to the event and match it.
 
-### E10 · low · `spawn_flag_push` un-deduped; `spawn_push_after_grace` spawns an OS thread per action — confirmed
+### E10 · low · `spawn_flag_push` un-deduped; `spawn_push_after_grace` spawns an OS thread per action — confirmed — **PARTLY FIXED** `[fixed]`
 `crates/mailffi/src/net.rs:272-294` — `std::thread::spawn` + `sleep(grace+1)` per undoable action
 (`api/mutate.rs:106,194`). N rapid archives = N sleeping threads plus N queued IMAP pushes.
 **Fix:** coalesce on the existing in-flight table (same fix as D8).
+
+**The thread-per-action half is fixed by D8 (`d199c25`).** `spawn_flag_push` after a plain read/star toggle is
+still queued once per click; each push exits without touching the network when nothing is dirty.
 
 ### E11 · low · the list refresh is skipped while the shell is disposed `[corrected]`
 `ui/shell/MailShell.kt:353-359`
