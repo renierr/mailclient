@@ -27,9 +27,11 @@
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
-    <!-- Cleartext is opt-in per account (plaintext IMAP/SMTP), not the
-         default: every account uses TLS unless explicitly configured
-         otherwise, which is why the global flag stays on. -->
+    <!-- usesCleartextTraffic governs Android's own HTTP stacks only, which
+         here means the reader WebView. IMAP and SMTP run over the core's
+         Rust sockets, which this flag never sees (plaintext there is the
+         per-account opt-in). So "true" lets a mail's http:// remote images
+         load once the user allowed remote images, as the Qt reader does. -->
     <application
         android:name=".MailApplication"
         android:label="mailclient"
