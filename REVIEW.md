@@ -92,6 +92,8 @@ the "not fixed" column before assuming a finding is closed.
 | **E15** | `83875ab` | `StatusStrip` row uses `heightIn(min = 48.dp)`, meeting the touch-target floor | — |
 | **E16** | `83875ab` | Stale `@SuppressLint` removed from `MailWebView`; `mixedContentMode = NEVER_ALLOW` set explicitly on both WebViews with the `MCHost` contract commented | — |
 | **E23** (§2 only) | `83875ab` | Stale "Sync-on-resume gap" entry deleted from `SHARED-CORE.md` | The remaining E23 bullets were no-action by design (deliberate frontend-only wording) |
+| **C4** | `c5598e9` | Size caps inside the parsers: `.ics` refused above 1 MiB, `.vcf` above 4 MiB, report text read to 256 KiB | The attachment blob is still loaded from SQLite before the length check |
+| **C5** | `c5598e9` | DSN recipients capped at 50 | No "and N more" in the card; the cap is silent |
 | **C6** | `2cd9771` | An unclosed `<head>` ends where a parser ends it; drop tags tracked as a name stack, so a close only ends its own tag | An unclosed `<style>`/`<script>`/`<template>`/`<form>` still hides the rest, as in a browser (forms are dropped by design) |
 
 ## A. `mailcore` persistence layer — `db/`, `store/`, `models.rs`
@@ -581,7 +583,7 @@ point rather than a guaranteed one. Still in-page phishing with no script and no
 **Fix:** clamp `opacity` to a visible minimum (or drop the declaration below ~0.15), and refuse
 `display:block` + size on `a`.
 
-### C4 · medium · no parse-side size cap: a 25 MB `.ics`/`.vcf`/DSN is parsed on every open — confirmed
+### C4 · medium · no parse-side size cap: a 25 MB `.ics`/`.vcf`/DSN is parsed on every open — confirmed — **FIXED** `[fixed]`
 The caps only gate what sync *pre-caches* (`sync/imap/parse.rs:239-253`, 64 KB / 256 KB). On an explicit
 download `fetch_attachments` runs `extract_attachments(&parsed, true, …)` and `replace_attachments` stores
 **every part up to 25 MiB**; the feed then parses those bytes with no cap:
@@ -598,12 +600,29 @@ repeated on every message selection.
 **Fix:** re-apply the caps in the feed (`<= 64 * 1024` before `parse_ics_bytes`, `<= 256 * 1024` before
 `parse_vcard_bytes`/`parse_dsn`) and cap `calendar`'s component stack (C15).
 
-### C5 · medium · unbounded DSN recipient expansion — confirmed
+**Fixed in `c5598e9`, with different limits from the ones proposed.** The caps sit inside the parsers, not in
+the feed, so every caller is covered, including `parse_ics` on a message body. The sync pre-cache sizes
+(64 KB / 256 KB) were too tight. An Outlook invitation with an HTML description, or an address-book export,
+can be bigger, and the user explicitly downloaded it. Limits:
+- iCalendar: refused above 1 MiB (`MAX_ICS_BYTES`), checked in `parse` and before the lossy copy in
+  `parse_ics_bytes`.
+- vCard: refused above 4 MiB (`MAX_VCARD_BYTES`). It is refused rather than truncated, because a cut file
+  would miscount `more_cards`.
+- Report text: DSN and MDN read only the first 256 KiB (`MAX_REPORT_BYTES`), cut on a character boundary.
+  Here truncation is right: the recipient blocks come first, and refusing would show "not downloaded yet".
+
+A refused file stays an ordinary attachment. The blob is still loaded from SQLite before the check. A
+pre-check on `Attachment::size` was skipped because that is the declared size, not the stored one.
+
+### C5 · medium · unbounded DSN recipient expansion — confirmed — **FIXED** `[fixed]`
 `report.rs:152` — `parse_dsn` has no recipient cap (unlike `vcard.rs:15`'s `MAX_ENTRIES`). Every block with a
 `Final-Recipient` becomes a 7-field struct serialized into `message_json`. A 20 MB `message/delivery-status`
 part of ~600 000 `Final-Recipient:` blocks yields several hundred MB of `ReportRecipient`s plus a multi-MB
 JSON payload, on every message open.
 **Fix:** cap `dsn.recipients` (e.g. 50) as the vCard parser does.
+
+**Fixed in `c5598e9`.** Capped at 50 (`MAX_DSN_RECIPIENTS`), the first ones kept. The text cap from C4 also
+bounds the block list that `blocks()` builds before the loop.
 
 ### C6 · medium · an unclosed drop-content tag swallows the rest of the message `[corrected]` — **FIXED** `[fixed]`
 `html/sanitize.rs:44-58` — nothing but a matching close tag ever lowers `drop_depth`; not `</html>`, not
