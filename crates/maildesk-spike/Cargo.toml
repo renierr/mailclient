@@ -1,0 +1,20 @@
+[package]
+name = "maildesk-spike"
+version.workspace = true
+edition = "2021"
+
+# Throwaway Spike A scaffolding (EGUI-DESKTOP.md §9): an eframe/egui desktop
+# experiment over mailcore. Not wired into build.sh, dist/, or version bumps.
+# mailcore stays a read-only dependency — no core changes from this crate.
+
+[[bin]]
+name = "maildesk-spike"
+path = "src/main.rs"
+
+[dependencies]
+mailcore = { path = "../mailcore" }
+# Same major as WordCraft (proven on this machine, Wayland-native).
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "wgpu", "wayland", "x11", "links"] }
+egui = "0.36"
+# Approved per EGUI-DESKTOP.md §9.2 (PNG screenshots + data: image decode only).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }

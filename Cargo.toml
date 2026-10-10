@@ -4,6 +4,8 @@ members = [
     "crates/mailcore",
     "crates/mailapp",
     "crates/mailffi",
+    # Throwaway Spike A scaffolding (EGUI-DESKTOP.md §9), not a product crate.
+    "crates/maildesk-spike",
 ]
 
 # The single version number for the whole product. Crates inherit it via
