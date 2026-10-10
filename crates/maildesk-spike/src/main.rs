@@ -12,15 +12,19 @@
 //!   driving; the app advances itself and exits.
 //! - `--dump`: print every fixture's block tree to stdout, no GUI.
 
+mod compose;
+mod composer;
 mod fixture;
 mod paint;
 mod render;
 
 use std::path::PathBuf;
 
+use mailcore::compose::{answer_draft_for, blank_draft, AnswerMode, AnswerOptions};
 use mailcore::feed;
 use mailcore::html::reader::{self, Palette};
 use mailcore::html::{has_own_colors, inline_cid_images};
+use mailcore::models::Account;
 use mailcore::store::messages::CompactMessage;
 use mailcore::store::{accounts, folders, messages};
 use mailcore::{Db, Result};
@@ -137,6 +141,42 @@ fn theme_palette(dark: bool) -> Palette {
     }
 }
 
+fn dummy_account() -> Account {
+    Account {
+        id: -1,
+        name: "—".to_string(),
+        email_address: fixture::SPIKE_EMAIL.to_string(),
+        from_name: String::new(),
+        imap_host: "imap.example.com".to_string(),
+        imap_port: 993,
+        imap_security: "tls".to_string(),
+        imap_username: fixture::SPIKE_EMAIL.to_string(),
+        smtp_host: "smtp.example.com".to_string(),
+        smtp_port: 465,
+        smtp_security: "tls".to_string(),
+        smtp_username: fixture::SPIKE_EMAIL.to_string(),
+        auth_vault_key: "vault-spike-fixture".to_string(),
+        check_interval_secs: 300,
+        created_at: String::new(),
+        updated_at: String::new(),
+    }
+}
+
+/// Answer options from the stored settings (signature, bottom-posting),
+/// like the real adapters' `stored_options`.
+fn answer_opts(db: &Db, own: &str) -> AnswerOptions {
+    use mailcore::store::settings;
+    let sig_on = settings::get_bool(db, settings::SIGNATURE_ENABLED).unwrap_or(false);
+    let sig_text = settings::get(db, settings::SIGNATURE_TEXT)
+        .unwrap_or_default()
+        .unwrap_or_default();
+    AnswerOptions {
+        own_address: own.to_string(),
+        signature: (sig_on && !sig_text.trim().is_empty()).then_some(sig_text),
+        reply_below_quote: settings::get_bool(db, settings::REPLY_BELOW_QUOTE).unwrap_or(false),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
@@ -148,6 +188,7 @@ struct FolderEntry {
 
 struct MailApp {
     db: Db,
+    account: Account,
     account_name: String,
     folders: Vec<FolderEntry>,
     folder_id: i64,
@@ -158,8 +199,23 @@ struct MailApp {
     dark: bool,
     paint: paint::PaintState,
     status: String,
+    view: View,
     // Shot mode (scripted, self-advancing).
     shot: Option<ShotMode>,
+    shot_compose: Option<ShotCompose>,
+}
+
+/// `Box` on the composer: its state is ~216 bytes and the reader variant
+/// carries nothing, so the enum would otherwise be that size everywhere.
+enum View {
+    Read,
+    Compose(Box<composer::ComposerState>),
+}
+
+struct ShotCompose {
+    dir: PathBuf,
+    settle: u8,
+    shot_requested: bool,
 }
 
 struct ShotMode {
@@ -173,12 +229,16 @@ struct ShotMode {
 impl MailApp {
     fn new(db: Db, dark: bool, shot_dir: Option<PathBuf>) -> Result<Self> {
         fixture::seed(&db)?;
-        let account = accounts::list(&db)?
+        let stored = accounts::list(&db)?
             .into_iter()
-            .find(|a| a.email_address == fixture::SPIKE_EMAIL)
-            .map(|a| (a.id, a.name))
-            .unwrap_or((-1, "—".to_string()));
-        let folders: Vec<FolderEntry> = folders::list_by_account(&db, account.0)
+            .find(|a| a.email_address == fixture::SPIKE_EMAIL);
+        let account_id = stored.as_ref().map(|a| a.id).unwrap_or(-1);
+        let account_name = stored
+            .as_ref()
+            .map(|a| a.name.clone())
+            .unwrap_or_else(|| "—".to_string());
+        let account = stored.unwrap_or_else(dummy_account);
+        let folders: Vec<FolderEntry> = folders::list_by_account(&db, account_id)
             .unwrap_or_default()
             .into_iter()
             .map(|f| FolderEntry {
@@ -188,7 +248,8 @@ impl MailApp {
             .collect();
         let mut app = Self {
             db,
-            account_name: account.1,
+            account,
+            account_name,
             folders,
             folder_id: -1,
             rows: Vec::new(),
@@ -198,7 +259,9 @@ impl MailApp {
             dark,
             paint: paint::PaintState::new(),
             status: "offline spike — dev DB only".to_string(),
+            view: View::Read,
             shot: None,
+            shot_compose: None,
         };
         if let Some(first) = app.folders.first() {
             app.folder_id = first.id;
@@ -262,6 +325,28 @@ impl MailApp {
         self.reload_reader();
         self.status = "remote images allowed for this message only".to_string();
     }
+
+    fn open_compose_blank(&mut self) {
+        let opts = answer_opts(&self.db, &self.account.email_address);
+        self.view = View::Compose(Box::new(composer::ComposerState::from_answer(
+            &blank_draft(&opts),
+        )));
+        self.status = "composing (nothing is sent)".to_string();
+    }
+
+    fn open_reply(&mut self) {
+        let (Some(uid), folder_id) = (self.selected, self.folder_id) else {
+            self.status = "select a message first".to_string();
+            return;
+        };
+        match answer_draft_for(&self.db, folder_id, uid, AnswerMode::Reply) {
+            Ok(draft) => {
+                self.view = View::Compose(Box::new(composer::ComposerState::from_answer(&draft)));
+                self.status = "reply prefilled by mailcore::compose::answer".to_string();
+            }
+            Err(e) => self.status = format!("reply prefill: {e}"),
+        }
+    }
 }
 
 const LIST_ROW_H: f32 = 56.0;
@@ -301,6 +386,12 @@ impl eframe::App for MailApp {
                             shot.next = idx + 1;
                             shot.settle = 0;
                             shot.shot_requested = false;
+                        } else if idx == usize::MAX {
+                            // Compose shot: the MIME preview alongside the
+                            // window, for the composer grade.
+                            if let Some(sc) = &self.shot_compose {
+                                save_png(&sc.dir.join("compose-demo.png"), image);
+                            }
                         }
                     }
                 }
@@ -355,9 +446,28 @@ impl eframe::App for MailApp {
                 ctx.request_repaint();
             }
         }
+
+        // Compose shot driver: fill the demo once, settle, capture, quit.
+        if self.shot_compose.is_some() && !matches!(self.view, View::Compose(_)) {
+            let mut c = composer::ComposerState::blank();
+            c.preseed_demo(&self.account.clone());
+            self.view = View::Compose(Box::new(c));
+        }
+        if let Some(sc) = &mut self.shot_compose {
+            if sc.settle < 8 {
+                sc.settle += 1;
+                ctx.request_repaint();
+            } else if !sc.shot_requested {
+                sc.shot_requested = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(
+                    usize::MAX,
+                )));
+            }
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         egui::Panel::top("bar").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("maildesk-spike");
@@ -369,6 +479,12 @@ impl eframe::App for MailApp {
                 {
                     self.dark = !self.dark;
                     self.reload_reader();
+                }
+                if ui.button("compose").clicked() {
+                    self.open_compose_blank();
+                }
+                if matches!(self.view, View::Compose(_)) && ui.button("reader").clicked() {
+                    self.view = View::Read;
                 }
             });
         });
@@ -431,18 +547,35 @@ impl eframe::App for MailApp {
             );
         });
 
-        egui::CentralPanel::default().show(ui, |ui| {
-            if let Some(doc) = &self.reader {
-                let show_once = reader_ui(ui, doc, self.allow_remote_once, &mut self.paint);
-                if show_once {
-                    self.show_once();
+        let mut want_reply = false;
+        egui::CentralPanel::default().show(ui, |ui| match &mut self.view {
+            View::Compose(c) => {
+                let account = self.account.clone();
+                if c.show(ui, &ctx, &account, &mut self.paint) {
+                    self.view = View::Read;
                 }
-            } else {
-                ui.centered_and_justified(|ui| {
-                    ui.label("Select a message to read it");
-                });
+            }
+            View::Read => {
+                if let Some(doc) = &self.reader {
+                    ui.horizontal(|ui| {
+                        if ui.button("reply").clicked() {
+                            want_reply = true;
+                        }
+                    });
+                    let show_once = reader_ui(ui, doc, self.allow_remote_once, &mut self.paint);
+                    if show_once {
+                        self.show_once();
+                    }
+                } else {
+                    ui.centered_and_justified(|ui| {
+                        ui.label("Select a message to read it");
+                    });
+                }
             }
         });
+        if want_reply {
+            self.open_reply();
+        }
     }
 }
 
@@ -596,10 +729,24 @@ fn main() -> Result<()> {
         .windows(2)
         .find(|w| w[0] == "--shot")
         .map(|w| PathBuf::from(&w[1]));
+    let shot_compose = args
+        .windows(2)
+        .find(|w| w[0] == "--shot-compose")
+        .map(|w| PathBuf::from(&w[1]));
     let dark = args.iter().any(|a| a == "--dark");
 
     let db = open_dev_db()?;
-    let app = MailApp::new(db, dark, shot)?;
+    let mut app = MailApp::new(db, dark, shot)?;
+    if let Some(dir) = shot_compose {
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            mailcore::StoreError::InvalidInput(format!("cannot create {}: {e}", dir.display()))
+        })?;
+        app.shot_compose = Some(ShotCompose {
+            dir,
+            settle: 0,
+            shot_requested: false,
+        });
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("maildesk-spike (auto-closes in shot mode)")

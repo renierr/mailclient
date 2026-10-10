@@ -9,7 +9,9 @@ default `./data/dev.sqlite`) and refuses the platform mailbox.
 
 - **Spike A (reader): done.** 20 fixtures, 40 scripted screenshots
   (light + dark) with block-tree dumps, grades in §4 below.
-- **Spike B (composer): contract extracted (§3), prototype pending.**
+- **Spike B (composer): contract extracted (§3), prototype done** — egui
+  document model + toolbar + validate + MIME/draft path, covered by tests
+  and a scripted screenshot. Findings and remaining gaps in §7.
 
 ## 2. Reader protocol — what `MessageView.qml` consumes
 
@@ -183,20 +185,107 @@ full height (use `horizontal_wrapped`); `image::thumbnail` upscaling 1px
 dots to 1200² (downscale-only cap); UTF-8 tokenizer mojibake
 (`bytes[i] as char`); shared ScrollArea offset leaking across messages.
 
-## 5. Core change requests
+## 5. Composer API map (Spike B, as built)
 
-None required — every Spike A need was already public API
-(`sanitized_bodies`, `message_html`, `reader::{body, paint_for, palette,
-fit_below, has_own_colors}`, `link_info`, `inline_cid_images`, typed
-stores, `format_bytes`). Proposal for graduation (not needed now): a
-**typed reader payload struct** so same-process frontends stop parsing
-`message_json` strings (QML keeps the JSON shape).
+Everything the prototype touches, all already public in `mailcore`:
 
-## 6. Verification
+| Need | Call |
+|---|---|
+| new mail body | `compose::blank_draft(&opts)` → `AnswerDraft.body_html` |
+| reply/forward prefill | `compose::answer_draft_for(db, folder, uid, AnswerMode::Reply)` |
+| signature + bottom-posting | `AnswerOptions { own_address, signature, reply_below_quote }` (from `store::settings` keys `signature_enabled`/`signature_text`/`reply_below_quote`) |
+| form → validation | `compose::ComposeForm { .. }.require_recipient()` (`"add at least one recipient (To, Cc or Bcc)"`) |
+| header note | `compose::editor::send_format_note(format, html)` |
+| send-format decision | `html::needs_html_formatting(html)` + `sender::effective_format(Auto, needs, include_plain)` |
+| plain/html split + sanitize | `sender::resolve_bodies(text, Some(html), format)` |
+| MIME bytes (draft path) | `sender::format_draft(&account, &form.as_request(..))` |
+| build the send request | `ComposeForm::as_request(account, format, include_plain, receipts, policy)` |
+
+### 5.1 Two paths, not one — the trap a port must not fall into
+
+- **`format_draft` is the draft-save path and is always multipart/alternative
+  by design** ("drafts always preserve rich text when present, independently
+  of the user's send preference"). It is offline-safe and what the spike's
+  MIME preview builds. It is *not* what a Send submits.
+- **The send path is `compose::send::{prepare_send, deliver}`** — async, and
+  it applies `effective_format(...)` itself plus `load_outgoing_attachments`
+  and `split_inline_images` (`data:` images become `cid:` parts). Not
+  exercised offline; the spike says "not sent" instead of faking it.
+- A frontend must **not** pass `SendFormat::Auto` straight into
+  `as_request`: `resolve_bodies` documents that Auto behaves like Multipart
+  there. Resolve with `effective_format` (what `send_format_note` shows) and
+  pass the concrete format.
+
+### 5.2 Editor model (egui, `src/compose.rs`)
+
+`Vec<EditBlock> { kind: Para|Bullet|Quote, runs: Vec<EditRun{text, marks,
+link}> }`.
+
+- Per-block `TextEdit::singleline` shows `runs`' concatenated text; typing
+  is synced back with a **prefix/suffix char diff**, so marks survive edits.
+- Selection-scoped ops (`toggle_mark`, `set_link`, `clear_range`) split runs
+  at the boundaries, set/clear, then re-merge — the `execCommand` semantics
+  of repeated toggling (all-set → clear).
+- `Enter` splits a block, Backspace-at-0 merges into the previous one
+  (cursor restored via `TextEditState`), toolbar state reads the caret's run
+  directly — **no polling timer**, replacing QML's 200 ms `pollState`.
+- `to_html()` emits only tags the outgoing sanitizer keeps
+  (`<b>/<i>/<u>/<code>/<a>/<p>/<ul>/<li>/<blockquote>`); `from_html()` parses
+  back through the Spike A parser for source-toggle and reply prefills.
+
+### 5.3 What is NOT covered (Spike B gaps)
+
+| Gap | Why it matters |
+|---|---|
+| Inline image at caret | editor inserts `data:` URLs; the turn-into-`cid:` part is `sender::split_inline_images` on the send path |
+| Attachment list | paths only in the payload; picking files is a frontend file dialog |
+| Received-receipt toggles | `Receipts::offered(db)` decides which show; form carries `request_mdn/dsn` |
+| Send + server draft save + delete draft | async, network — needs a job thread (the real `mailapp` `mailclient-net` pattern) |
+| Dirty/discard guard | trivial state machine, not yet wired |
+| Multi-line paragraphs (soft wrap) | one block per line; Shift+Enter / wrapped paste needs `<br>` in runs |
+| `From` local-part + locked domain | `compose::{sender_parts, effective_from}`; domain rejection is the field validator |
+| Recipient autocomplete | `compose::{recipient_segment, replace_recipient_segment}` + contacts |
+| Reply-To notice banner | `AnswerDraft.notice` / `notice_addr`; dismissal rule is the frontend's |
+
+## 6. Spike B grades (20/20 reader in §4; composer graded by capability)
+
+| Capability (Composer.qml) | Spike B |
+|---|---|
+| header fields (From name / local part / To / Subject) | partial — To + Subject; From/Reply-To not wired |
+| B / I / U on a selection | done |
+| bullet / quote | done (block kinds, toggle) |
+| link insert / unlink / clear formatting | done |
+| HTML source toggle round-trip | done |
+| send-format note + Auto decision | done (core's own) |
+| validate before send | done (`require_recipient`) |
+| MIME preview of the request | done (draft path; send path marked offline) |
+| attachments (add/remove) | not covered |
+| inline image at caret | not covered |
+| receipt toggles | not covered |
+| signatures on new mail | covered via `AnswerOptions` (off in fixtures) |
+| reply/forward prefill from a real cached mail | covered (`answer_draft_for`) |
+| send / save draft / delete draft (server) | not covered (async) |
+| dirty + discard-confirm guard | not covered |
+| drag & drop files | not covered |
+| Quotes in replies (bottom posting) | covered by core's `body_html` (caret placement gutted: reader-style, not caret-in-slot) |
+
+## 7. Core change requests
+
+None required — every need in Spike A **and** B was already public API.
+Proposals for graduation (not needed for the spike to answer its question):
+
+1. **Typed reader payload struct** (§2) so same-process frontends stop
+   parsing `message_json` strings; QML keeps the JSON shape.
+2. **Typed `AnswerDraft` for same-process frontends** — `answer_draft_json`
+   / `blank_draft_json` exist for QML; a same-process port wants the struct
+   it already gets from `answer_draft_for`.
+
+## 8. Verification
 
 `cargo fmt --check`, `cargo clippy -p maildesk-spike --all-targets --
--D warnings`, `cargo test -p maildesk-spike` (12 passed, incl. headless
-egui layout probes) green; `cargo test -p mailcore` 648 passed
-(untouched). QML/Flutter/Android rows N/A (no changes there). No full
-`./build.sh` (packaging proves nothing here). Offline only; `image 0.25`
-PNG dep approved before use; nothing committed or pushed.
+-D warnings`, `cargo test -p maildesk-spike` (21 passed: parser, painter
+layout probes, document ops, and the MIME/send-format contracts) green;
+`cargo test -p mailcore` 648 passed (untouched). QML/Flutter/Android rows
+N/A (no changes there). No full `./build.sh` (packaging proves nothing
+here). Offline only; `image 0.25` PNG dep approved before use; Spike A
+committed as `1422fbd`, later work uncommitted.
