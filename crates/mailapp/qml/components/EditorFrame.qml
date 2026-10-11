@@ -24,6 +24,9 @@ Item {
     // Bridge building the document (Composer.qml sets it); the page's
     // colours, size and placeholder come from it.
     property var backend
+    // Reader text size (`reader_font_size` via Composer): scales the body
+    // like the reader, through the core's factor.
+    property string readerFont: "normal"
 
     // Live formatting state, polled from the document so the toolbar can
     // show what the caret is actually inside of.
@@ -33,9 +36,12 @@ Item {
     property bool listActive: false
     property bool quoteActive: false
     property bool ready: false
-    // Loaded once (a reload would drop the user's edits); a theme change
-    // mid-composer keeps the page it started with, like before.
-    property bool loaded: false
+    // The options the loaded page was built with. Settings (`appSettings`)
+    // load after the QML tree is created, so the first build still sees
+    // their defaults; the page is rebuilt with the live values on the next
+    // setHtml (every composer open seeds the body through it), never under
+    // typed text.
+    property string docOptions: ""
     // Body set before the document was ready; applied on load.
     property string pendingHtml: ""
 
@@ -43,29 +49,43 @@ Item {
 
     // The document around the empty editable body is mailcore's (CSP, base
     // CSS, `window.mc` script); only the scrollbar styling is Qt's
-    // (`extra_css`), like the reader (MessageView.wrapDoc).
-    function buildDocument() {
+    // (`extra_css`), like the reader (MessageView.wrapDoc). The body size
+    // is the reader's (14px times interface and reader-text scale), so the
+    // composer reads like the mail it answers.
+    function currentOptions() {
         if (!root.backend)
             return "";
-        return root.backend.editor_document(JSON.stringify({
-                                                               "paper": Theme.bg.toString(),
-                                                               "ink": Theme.text.toString(),
-                                                               "muted": Theme.textMuted.toString(),
-                                                               "accent": Theme.accent.toString(),
-                                                               "rule": Theme.border.toString(),
-                                                               "font_px": Math.round(14 * Theme.uiScale),
-                                                               "placeholder": qsTr("Write your message…"),
-                                                               "extra_css": Theme.webScrollbarCss()
-                                                           }));
+        var textScale = root.backend.reader_text_scale(root.readerFont);
+        if (!(textScale > 0))
+            textScale = 1;
+        return JSON.stringify({
+                                  "paper": Theme.bg.toString(),
+                                  "ink": Theme.text.toString(),
+                                  "muted": Theme.textMuted.toString(),
+                                  "accent": Theme.accent.toString(),
+                                  "rule": Theme.border.toString(),
+                                  "font_px": Math.round(14 * Theme.uiScale * textScale),
+                                  "placeholder": qsTr("Write your message…"),
+                                  "extra_css": Theme.webScrollbarCss()
+                              });
     }
 
     function ensureLoaded() {
-        if (root.loaded || !root.backend)
+        root.ensureDocument();
+    }
+
+    // (Re)build the page when the options moved. Every setHtml caller
+    // passes the full desired body, so replaying it after the reload loses
+    // nothing; anything typed meanwhile stays queued in pendingHtml.
+    function ensureDocument() {
+        var opts = root.currentOptions();
+        if (opts === "" || opts === root.docOptions)
             return;
-        var doc = root.buildDocument();
+        var doc = root.backend.editor_document(opts);
         if (doc === "")
             return;
-        root.loaded = true;
+        root.docOptions = opts;
+        root.ready = false;
         view.loadHtml(doc, "");
     }
 
@@ -125,6 +145,10 @@ Item {
     }
 
     function setHtml(html) {
+        // Settings arrive after the first build; a composer opened later
+        // must not keep the defaults' size or theme. Rebuilding here is
+        // safe: the caller passes the full body, replayed after the reload.
+        root.ensureDocument();
         if (!root.ready) {
             // Arrives before the document finished loading (openForReply on a
             // freshly created dialog); replay it once we are ready.

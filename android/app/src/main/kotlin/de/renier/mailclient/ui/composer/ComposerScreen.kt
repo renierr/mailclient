@@ -146,6 +146,9 @@ fun ComposerScreen(
     var offerMdn by remember { mutableStateOf(false) }
     var offerDsn by remember { mutableStateOf(false) }
     var suggestContacts by remember { mutableStateOf(true) }
+    // Reader text size, so the typed body matches the mail it answers
+    // (the core's factor, like the reader's text zoom).
+    var readerScale by remember { mutableStateOf(1f) }
     // The phone's own contact list, merged into the suggestions when on
     // (READ_CONTACTS); off, the mail-collected contacts answer alone.
     var suggestPhone by remember { mutableStateOf(false) }
@@ -177,12 +180,13 @@ fun ComposerScreen(
             MailNative.editorDocument(c[0], c[1], c[2], c[3], c[4], EDITOR_FONT_PX, "Write your message", editorBody)
         }
     }
-    val textZoom = (100 * LocalConfiguration.current.fontScale).toInt()
+    val textZoom = (100 * readerScale * LocalConfiguration.current.fontScale).toInt()
 
     LaunchedEffect(Unit) {
         val o = withContext(Dispatchers.IO) { runCatching { JSONObject(MailNative.settingsJson()) }.getOrNull() }
         if (o != null) {
             sendFormat = o.optString("compose_send_format", DEFAULT_SEND_FORMAT).ifEmpty { DEFAULT_SEND_FORMAT }
+            readerScale = runCatching { MailNative.readerTextScale(o.optString("reader_font_size")) }.getOrDefault(1f)
             suggestContacts = o.optBoolean("collect_sent_contacts", true)
             suggestPhone = o.optBoolean("suggest_phone_contacts", false)
         }

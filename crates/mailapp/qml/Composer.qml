@@ -90,6 +90,9 @@ Dialog {
     property string accountEmail: ""
     property string accountFromName: ""
     property string sendFormat: "auto"
+    // Reader text size (`reader_font_size` setting via Main): the composer
+    // body follows it like the reader, so typed text matches what was read.
+    property string readerFont: "normal"
     property var backend
     property bool collectContacts: true
     property bool sourceMode: false
@@ -758,6 +761,7 @@ Dialog {
                 anchors.margins: 1
                 visible: !root.sourceMode
                 backend: root.backend
+                readerFont: root.readerFont
                 onContentChanged: {
                     root.dirty = true;
                     formatNoteTimer.restart();

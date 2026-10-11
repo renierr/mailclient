@@ -75,7 +75,7 @@ still to promote") points here instead of keeping its own list.
 | Composer "sends as" line | `mailcore::compose::editor::send_format_note`; Qt `send_format_note`, native from the editor page |
 | Reply-To notice sentence | `AnswerDraft.notice` (shown while To still holds `notice_addr`) |
 | What a picked contact inserts | `mailcore::store::contacts::recipient_entry`, as `entry` on every row of `contacts::contacts_json` (both adapters call it) |
-| Reader text size factor | `mailcore::store::settings::reader_text_scale` |
+| Reader text size factor | `mailcore::store::settings::reader_text_scale` — both readers and both composers follow it (Qt scales the reader/editor documents' base size by it, native its reader/composer WebView text zoom) |
 | Empty message list words | `mailcore::search::empty_list_text` |
 | Draft files re-attached on reopen | `mailcore::compose::stage_draft_files` (was a `mailapp` helper); native stages through `MailNative.draftFiles` after fetching `missing_files` |
 | Folder sidebar fold: visible rows, collapse rule, hidden-count aggregation | `mailcore::feed::{sidebar_rows, sidebar_rows_json}` (`SidebarRow {id, collapsible, expanded, unread, total}`, expanded ids in, feed order kept); Qt via `sidebar_rows_json` invokable, native via `MailNative.sidebarRowsJson`; `Sidebar.qml` and Kotlin `collapseFolders` deleted |

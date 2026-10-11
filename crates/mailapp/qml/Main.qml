@@ -1616,6 +1616,7 @@ ApplicationWindow {
         accountEmail: backend.current_account_email
         accountFromName: backend.current_account_from_name
         sendFormat: appSettings.compose_send_format
+        readerFont: appSettings.reader_font_size
         backend: backend
         collectContacts: appSettings.collect_sent_contacts
         onStatusMessage: text => root.statusText = text
