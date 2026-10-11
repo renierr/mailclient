@@ -193,6 +193,119 @@ pub fn sanitize(raw: &str, allow_remote: bool) -> Sanitized {
     }
 }
 
+/// What the allow-list dropped from one body: tag/attribute *names* and
+/// counts only, never content. Safe to log at `debug` (no addresses,
+/// subjects or bodies) and cheap enough to run per opened message. Drives
+/// the reader's "simplified" notice and fidelity triage: a newsletter
+/// full of `<canvas>` reads differently from one that only lost classes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SanitizeReport {
+    /// Kept opening tags (scale context for the drop counts).
+    pub tags_seen: usize,
+    /// Dropped tags, most frequent first, capped [`REPORT_TOP_TAGS`].
+    pub dropped_tags: Vec<(String, usize)>,
+    /// Attributes stripped for non-design reasons (`class`/`id`/`on*` are
+    /// by-design and not counted).
+    pub dropped_attrs: usize,
+    /// `<img>` with an `http(s)` source (remote regardless of the allow flag).
+    pub remote_images: usize,
+    /// `<img>` with a `data:`/`cid:` source (mail content, always kept).
+    pub local_images: usize,
+    /// Links with a kept `href`.
+    pub links: usize,
+}
+
+/// How many dropped tag names [`SanitizeReport`] keeps.
+pub const REPORT_TOP_TAGS: usize = 8;
+
+/// One-line words for the reader status line, if anything worth naming was
+/// dropped (`<canvas> ×2 (unsupported)`), else empty.
+pub fn dropped_summary(report: &SanitizeReport) -> String {
+    report
+        .dropped_tags
+        .iter()
+        .take(3)
+        .map(|(name, n)| {
+            if *n > 1 {
+                format!("<{name}> ×{n}")
+            } else {
+                format!("<{name}>")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+pub fn sanitize_report(raw: &str, allow_remote: bool) -> SanitizeReport {
+    use std::collections::HashMap;
+
+    let raw = truncate_on_char_boundary(raw, MAX_HTML_BYTES);
+    let bytes = raw.as_bytes();
+    let mut rep = SanitizeReport::default();
+    let mut dropped: HashMap<String, usize> = HashMap::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let (tag, next) = parse_tag(bytes, i);
+        i = next;
+        let Some(t) = tag else { continue };
+        if t.closing {
+            continue;
+        }
+        if drop_content_name(&t.name).is_some() {
+            *dropped.entry(t.name.clone()).or_default() += 1;
+            continue;
+        }
+        if !allowed_tag(&t.name) {
+            *dropped.entry(t.name.clone()).or_default() += 1;
+            continue;
+        }
+        rep.tags_seen += 1;
+        if t.name == "a" {
+            if let Some((_, href)) = t.attrs.iter().find(|(k, _)| k == "href") {
+                if safe_href(href).is_some() {
+                    rep.links += 1;
+                }
+            }
+        }
+        if t.name == "img" {
+            if let Some((_, src)) = t.attrs.iter().find(|(k, _)| k == "src") {
+                let v = src.trim();
+                if v.starts_with("data:") || v.starts_with("cid:") {
+                    rep.local_images += 1;
+                } else if is_http_url(&urldecode_trim(v)) {
+                    rep.remote_images += 1;
+                }
+            }
+        }
+        for (k, v) in &t.attrs {
+            if k.starts_with("on") || k == "class" || k == "id" {
+                continue;
+            }
+            if presentational(&t.name, k, v).is_some() {
+                continue;
+            }
+            let kept = match t.name.as_str() {
+                "a" if k == "href" => safe_href(v).is_some(),
+                "img" if k == "src" => safe_img_src(v, allow_remote).is_some(),
+                "img" if k == "alt" => true,
+                _ => false,
+            };
+            if !kept {
+                rep.dropped_attrs += 1;
+            }
+        }
+    }
+    let mut dropped: Vec<(String, usize)> = dropped.into_iter().collect();
+    dropped.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    dropped.truncate(REPORT_TOP_TAGS);
+    rep.dropped_tags = dropped;
+    rep
+}
+
 /// Placeholder for a blocked or missing `<img>`: our own small badge.
 ///
 /// A `<details class="mc-blocked">` disclosure holding an inline SVG

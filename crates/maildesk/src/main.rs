@@ -309,7 +309,12 @@ impl MailApp {
             let dark = self.last_dark.unwrap_or(false);
             match reader::build_reader(&self.db, self.folder_id, uid, self.allow_remote_once, dark)
             {
-                Ok(doc) => self.reader = Some(doc),
+                Ok(doc) => {
+                    if !doc.dropped.is_empty() {
+                        self.status = format!("simplified rendering — dropped {}", doc.dropped);
+                    }
+                    self.reader = Some(doc);
+                }
                 Err(e) => self.status = format!("reader: {e}"),
             }
         }
@@ -709,6 +714,7 @@ fn row_ui(ui: &mut egui::Ui, r: &CompactMessage, sel: bool) -> egui::Response {
 }
 
 fn main() -> Result<()> {
+    let _ = env_logger::try_init();
     let db = open_dev_db()?;
     let mut app = MailApp::new(db)?;
     // Dev/testing hook (mirrors `mailapp --open`): open one message at

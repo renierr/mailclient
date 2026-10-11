@@ -46,7 +46,9 @@ pub use inline::{
     img_cid_references, inline_cid_images, is_inline_image_mime, BodyImages, InlineImage,
     MAX_INLINE_BYTES_PER_MESSAGE, MAX_INLINE_IMAGE_BYTES,
 };
-pub use sanitize::{sanitize, sanitize_for_send};
+pub use sanitize::{
+    dropped_summary, sanitize, sanitize_for_send, sanitize_report, SanitizeReport, REPORT_TOP_TAGS,
+};
 pub use text::{html_to_text, looks_like_html, needs_html_formatting, text_to_html};
 pub use urls::{link_info, LinkInfo};
 

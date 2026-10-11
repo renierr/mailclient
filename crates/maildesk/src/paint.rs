@@ -392,12 +392,14 @@ fn paint_para(
 
     match align {
         Align::Left => body(ui),
-        // Right alignment has no wrap-preserving primitive; center is exact,
-        // right falls back to left (noted fidelity gap).
         Align::Center => {
             ui.vertical_centered(body);
         }
-        Align::Right => body(ui),
+        // Right-to-left wrapping lays lines out from the right edge, which
+        // reads as right alignment for wrapped paragraphs.
+        Align::Right => {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), body);
+        }
     }
     ui.add_space(2.0);
 }

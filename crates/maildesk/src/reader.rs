@@ -10,7 +10,7 @@ use chrono::{DateTime, Local};
 use egui_extras::{Column, TableBuilder};
 use mailcore::feed;
 use mailcore::html::reader::{self, Palette};
-use mailcore::html::{has_own_colors, inline_cid_images};
+use mailcore::html::{dropped_summary, has_own_colors, inline_cid_images, sanitize_report};
 use mailcore::store::messages;
 use mailcore::{Db, Result};
 
@@ -30,6 +30,9 @@ pub struct ReaderDoc {
     pub paint: reader::Paint,
     pub blocks: Vec<render::Block>,
     pub attachments: Vec<AttachmentView>,
+    /// Sanitiser drop summary (`""` when faithful): tag names only, shown
+    /// in the status line so "simplified" rendering is never silent.
+    pub dropped: String,
 }
 
 pub struct AttachmentView {
@@ -46,6 +49,18 @@ pub fn build_reader(
     dark: bool,
 ) -> Result<ReaderDoc> {
     let m = messages::get_by_uid(db, folder_id, uid)?;
+    // Fidelity diagnostics: tag names and counts only, never content.
+    let report = sanitize_report(m.body_html.as_deref().unwrap_or_default(), allow_remote);
+    log::debug!(
+        "reader folder={folder_id} uid={uid} tags={} dropped={:?} dattrs={} remote_imgs={} local_imgs={} links={}",
+        report.tags_seen,
+        report.dropped_tags,
+        report.dropped_attrs,
+        report.remote_images,
+        report.local_images,
+        report.links,
+    );
+    let dropped = dropped_summary(&report);
     let (safe, had_remote, is_html, plain) =
         feed::sanitized_bodies(m.body_html.as_deref(), m.body_text.as_deref(), allow_remote);
     let (safe, missing_inline) = if is_html {
@@ -85,6 +100,7 @@ pub fn build_reader(
         paint,
         blocks,
         attachments,
+        dropped,
     })
 }
 

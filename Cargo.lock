@@ -2447,7 +2447,9 @@ dependencies = [
  "eframe",
  "egui",
  "egui_extras",
+ "env_logger",
  "image",
+ "log",
  "mailcore",
 ]
 

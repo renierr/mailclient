@@ -717,3 +717,37 @@ fn a_comment_without_an_end_still_drops_the_rest() {
     assert!(s.html.contains("before"));
     assert!(!s.html.contains("after"));
 }
+
+#[test]
+fn sanitize_report_counts_drops_without_content() {
+    let raw = "<p>Hello</p><script>evil()</script><canvas></canvas>\
+        <video src=\"x\"></video><canvas></canvas>\
+        <img src=\"https://example.com/t.png\" alt=\"t\">\
+        <img src=\"data:image/png;base64,AAAA\">\
+        <img src=\"cid:part1@example.com\">\
+        <a href=\"https://example.com\">docs</a>\
+        <a href=\"javascript:evil()\">x</a>\
+        <p style=\"color: red; background-image: url(x)\">styled</p>";
+    let rep = sanitize_report(raw, false);
+    // Tag names and counts only — the report must never carry content.
+    let dropped: Vec<(&str, usize)> = rep
+        .dropped_tags
+        .iter()
+        .map(|(n, c)| (n.as_str(), *c))
+        .collect();
+    assert!(dropped.contains(&("canvas", 2)), "{dropped:?}");
+    assert!(dropped.contains(&("script", 1)), "{dropped:?}");
+    assert!(dropped.contains(&("video", 1)), "{dropped:?}");
+    assert_eq!(rep.remote_images, 1);
+    assert_eq!(rep.local_images, 2);
+    assert_eq!(rep.links, 1);
+    assert!(rep.tags_seen > 0);
+    assert!(!format!("{rep:?}").contains("evil"), "no content in report");
+    assert!(
+        !format!("{rep:?}").contains("Hello"),
+        "no content in report"
+    );
+    let words = dropped_summary(&rep);
+    assert!(words.contains("<canvas>"), "{words}");
+    assert!(dropped_summary(&SanitizeReport::default()).is_empty());
+}

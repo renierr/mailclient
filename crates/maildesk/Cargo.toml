@@ -20,4 +20,6 @@ egui = "0.36"
 # reader/list, docking tabs for open messages.
 egui_extras = "0.36"
 chrono = "0.4"
+log = "0.4"
+env_logger = "0.11"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
