@@ -335,7 +335,9 @@ Rectangle {
                                                                       "top_space": Math.ceil(headerBlock.height),
                                                                       "allow_remote": root.effectiveAutoLoad(),
                                                                       // Reader text size on top of the interface scale.
-                                                                      "scale": Theme.uiScale * root.backend.reader_text_scale(root.readerFont),
+                                                                      "scale": Theme.uiScale
+                                                                               * root.backend.reader_text_scale(
+                                                                                   root.readerFont),
                                                                       "fit": root.fitLayout,
                                                                       "extra_css": Theme.webScrollbarCss()
                                                                   }));
@@ -681,7 +683,9 @@ Rectangle {
                                 onClicked: root.deleteRequested()
                             }
                             IconButton {
-                                visible: root.isHtml && root.htmlColored
+                                visible: root.backend ? root.backend.can_toggle_colors(root.isHtml, root.htmlColored,
+                                                                                       Theme.dark, root.fitBelow) :
+                                                        false
                                 text: root.originalColors ? Icons.darkMode : Icons.invertColors
                                 iconFont: true
                                 tooltip: root.originalColors ? (Theme.dark ? qsTr("Darken to match the theme") : qsTr(
@@ -818,8 +822,9 @@ Rectangle {
                         Label {
                             Layout.fillWidth: true
                             Layout.minimumWidth: 0
-                            text: inlineNotice.missing === 1 ? qsTr("1 inline image not downloaded")
-                                                             : qsTr("%1 inline images not downloaded").arg(inlineNotice.missing)
+                            text: inlineNotice.missing === 1 ? qsTr("1 inline image not downloaded") : qsTr(
+                                                                   "%1 inline images not downloaded").arg(
+                                                                   inlineNotice.missing)
                             color: Theme.text
                             wrapMode: Text.WordWrap
                         }

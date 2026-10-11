@@ -5,6 +5,7 @@ use mailcore::store::accounts;
 
 use crate::bridge::qobject;
 use crate::bridge::worker::spawn_job;
+use mailcore::sync::capabilities;
 use mailcore::sync::pool::{checkout_session, resolve_account};
 
 impl qobject::Bridge {
@@ -14,30 +15,17 @@ impl qobject::Bridge {
                 match accounts::get(db, account_id) {
                     Ok(a) => a,
                     Err(e) => {
-                        let payload = serde_json::json!({
-                            "account_id": account_id,
-                            "email": "",
-                            "imap_host": "",
-                            "imap_port": 0,
-                            "capabilities": Vec::<String>::new(),
-                            "error": e.to_string(),
-                        });
-                        return Ok((payload.to_string(), None));
+                        return Ok((
+                            capabilities::error_payload(account_id, &e.to_string()),
+                            None,
+                        ));
                     }
                 }
             } else {
                 match resolve_account(db, account_id) {
                     Ok(a) => a,
                     Err(e) => {
-                        let payload = serde_json::json!({
-                            "account_id": account_id,
-                            "email": "",
-                            "imap_host": "",
-                            "imap_port": 0,
-                            "capabilities": Vec::<String>::new(),
-                            "error": e,
-                        });
-                        return Ok((payload.to_string(), None));
+                        return Ok((capabilities::error_payload(account_id, &e), None));
                     }
                 }
             };
@@ -49,26 +37,12 @@ impl qobject::Bridge {
             }
             .await;
             let payload = match caps_res {
-                Ok(caps) => serde_json::json!({
-                    "account_id": acc.id,
-                    "email": acc.email_address,
-                    "imap_host": acc.imap_host,
-                    "imap_port": acc.imap_port,
-                    "capabilities": caps,
-                    "error": "",
-                }),
-                Err(e) => serde_json::json!({
-                    "account_id": acc.id,
-                    "email": acc.email_address,
-                    "imap_host": acc.imap_host,
-                    "imap_port": acc.imap_port,
-                    "capabilities": Vec::<String>::new(),
-                    "error": e,
-                }),
+                Ok(caps) => capabilities::payload(&acc, &caps),
+                Err(e) => capabilities::failed_payload(&acc, &e),
             };
             // Read-only: capabilities change nothing the feeds show, so the
             // list keeps its scroll position and selection.
-            Ok((payload.to_string(), None))
+            Ok((payload, None))
         })
     }
 }

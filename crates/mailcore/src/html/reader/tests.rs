@@ -46,6 +46,18 @@ fn a_designed_mail_darkens_in_a_dark_theme_unless_kept_original() {
 }
 
 #[test]
+fn the_colours_toggle_shows_only_where_flipping_changes_something() {
+    // Plain text and uncolored HTML never toggle.
+    assert!(!can_toggle_colors(false, false, true, 0));
+    assert!(!can_toggle_colors(true, false, true, 900));
+    // Dark theme: the paint itself switches, widths aside.
+    assert!(can_toggle_colors(true, true, true, 0));
+    // Light theme: only the layout switches, so fixed widths are required.
+    assert!(!can_toggle_colors(true, true, false, 0));
+    assert!(can_toggle_colors(true, true, false, 900));
+}
+
+#[test]
 fn inverting_flips_lightness_and_twice_gives_the_colour_back() {
     assert_eq!(Rgb(0xFFFFFF).inverted(), Rgb(0x000000));
     let grey = Rgb(0x333333).inverted();

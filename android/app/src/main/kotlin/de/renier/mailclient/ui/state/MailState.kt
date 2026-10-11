@@ -458,10 +458,18 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
             val caps = runCatching { JSONObject(text) }.getOrNull()
             if (caps != null) {
                 val id = caps.optLong("account_id", -1)
-                capabilities = capabilities + (id to caps)
-                capabilitiesError = capabilitiesError - id
-                status = "Server capabilities loaded"
-                statusError = false
+                // The job always finishes with the lookup failure in the
+                // payload, so the account match holds — same as Qt.
+                val failure = caps.optString("error")
+                if (failure.isNotEmpty()) {
+                    capabilities = capabilities - id
+                    capabilitiesError = capabilitiesError + (id to failure)
+                } else {
+                    capabilities = capabilities + (id to caps)
+                    capabilitiesError = capabilitiesError - id
+                    status = "Server capabilities loaded"
+                    statusError = false
+                }
             }
         } else if (text.isNotEmpty()) {
             status = text

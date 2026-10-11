@@ -76,6 +76,17 @@ pub fn paint_for(colored: bool, dark: bool, keep_original: bool) -> Paint {
     }
 }
 
+/// Whether the reader offers the colours/layout toggle for a message: only
+/// colored HTML, and only where flipping visibly changes something. In a
+/// dark theme the paint itself switches; in a light one only the layout
+/// does, so without fixed widths (`fit_below == 0`) the toggle would do
+/// nothing. Both readers gate their button on this (was a Kotlin-only twin;
+/// Qt showed the no-op toggle).
+#[must_use]
+pub fn can_toggle_colors(is_html: bool, html_colored: bool, dark: bool, fit_below: u32) -> bool {
+    is_html && html_colored && (dark || fit_below > 0)
+}
+
 /// An opaque colour, `0xRRGGBB`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgb(pub u32);

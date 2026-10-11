@@ -166,11 +166,7 @@ pub fn move_messages(
 /// status line text, also when it was too late.
 pub fn undo_move(batch: String) -> anyhow::Result<String> {
     let n = undo::undo(shared_db()?, &batch).map_err(anyhow::Error::msg)?;
-    Ok(match n {
-        0 => "Too late to undo — already done on the server".to_string(),
-        1 => "Undone: 1 message is back".to_string(),
-        n => format!("Undone: {n} messages are back"),
-    })
+    Ok(undo::undone_text(n))
 }
 
 /// Seconds an action stays undoable.

@@ -220,6 +220,18 @@ pub fn undo(db: &Db, batch: &str) -> Result<u64, String> {
     pending_moves::cancel_batch(db, batch).map_err(|e| e.to_string())
 }
 
+/// The status line after [`undo`]: how many messages came back, or that the
+/// server got there first. Both adapters phrase it through this (was a twin:
+/// `mailapp` and `mailffi` each worded the same three cases).
+#[must_use]
+pub fn undone_text(restored: u64) -> String {
+    match restored {
+        0 => "Too late to undo — already done on the server".to_string(),
+        1 => "Undone: 1 message is back".to_string(),
+        n => format!("Undone: {n} messages are back"),
+    }
+}
+
 /// What [`push_local_changes`] pushed.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Pushed {
@@ -285,6 +297,16 @@ mod tests {
         let p = delete_prompt(false, true, &[Some(false), None]);
         assert!(p.permanent, "an unknown folder counts as destroying");
         assert!(delete_prompt(false, false, &[]).permanent);
+    }
+
+    #[test]
+    fn undone_text_counts_what_came_back() {
+        assert_eq!(
+            undone_text(0),
+            "Too late to undo — already done on the server"
+        );
+        assert_eq!(undone_text(1), "Undone: 1 message is back");
+        assert_eq!(undone_text(7), "Undone: 7 messages are back");
     }
 
     #[test]

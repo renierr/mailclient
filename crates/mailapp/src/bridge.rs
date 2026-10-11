@@ -231,6 +231,18 @@ pub mod qobject {
         #[qinvokable]
         fn reader_paint(&self, colored: bool, dark: bool, keep_original: bool) -> QString;
 
+        /// Whether the reader offers its colours/layout toggle for a message
+        /// (`mailcore::html::reader::can_toggle_colors`): only colored HTML,
+        /// and only where flipping visibly changes something.
+        #[qinvokable]
+        fn can_toggle_colors(
+            &self,
+            is_html: bool,
+            html_colored: bool,
+            dark: bool,
+            fit_below: i32,
+        ) -> bool;
+
         /// The colours a reader page is written in, as JSON
         /// (`{paper, ink, link, quote, rule}`), for `paint` and the theme's
         /// colours (`theme_json`, the same keys as `#rrggbb`).

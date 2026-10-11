@@ -318,11 +318,13 @@ fun ReaderScreen(
                 CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 return@Box
             }
-            val canToggleColors = m.optBoolean("is_html") && m.optBoolean("html_colored") &&
-                // In a dark theme the paint itself switches; in a light one
-                // only the layout does, so without fixed widths the toggle
-                // would visibly do nothing.
-                (dark || fitBelow > 0)
+            // "As sent" per message, beside the actions: the core decides
+            // where flipping visibly changes something, so the button never
+            // offers a no-op. Tinted while on, so the state reads without
+            // tapping.
+            val canToggleColors = runCatching {
+                MailNative.canToggleColors(m.optBoolean("is_html"), m.optBoolean("html_colored"), dark, fitBelow)
+            }.getOrDefault(m.optBoolean("is_html") && m.optBoolean("html_colored"))
             val header: @Composable () -> Unit = {
                 ReaderHeader(
                     m = m,

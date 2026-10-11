@@ -48,7 +48,10 @@ Future<void> refreshFolders({required PlatformInt64 accountId}) =>
 /// Ask an account's IMAP server what it can do (the About view).
 ///
 /// The capability list arrives as the finishing event's `status`, JSON-encoded
-/// — the one place a job's status line is a payload rather than prose.
+/// — the one place a job's status line is a payload rather than prose. The
+/// job always finishes that way, with a lookup failure carried in the
+/// payload's `error` instead of failing the job (same shape as Qt, so the
+/// payload's `account_id` always matches the request).
 Future<void> refreshServerCapabilities({required PlatformInt64 accountId}) =>
     MailCoreApi.instance.api.crateApiSyncRefreshServerCapabilities(
       accountId: accountId,

@@ -3109,6 +3109,30 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_readerFitBelow<'call
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `MailNative.canToggleColors(isHtml, htmlColored, dark, fitBelow)`:
+/// whether the reader offers its colours/layout toggle
+/// (`mailcore::html::reader::can_toggle_colors`).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_canToggleColors<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    is_html: jni::sys::jboolean,
+    html_colored: jni::sys::jboolean,
+    dark: jni::sys::jboolean,
+    fit_below: i32,
+) -> bool {
+    unowned
+        .with_env(|_env| -> Result<bool> {
+            Ok(mailcore::html::reader::can_toggle_colors(
+                is_html != 0,
+                html_colored != 0,
+                dark != 0,
+                u32::try_from(fit_below.max(0)).unwrap_or(0),
+            ))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `MailNative.readerDocumentFull(body, paint, paper, ink, link, quote,
 /// rule, allowRemote, topSpace, scale, fit)`: the full document with every
 /// option — unlike `readerDocument`, which fixes `top_space: 0` for the

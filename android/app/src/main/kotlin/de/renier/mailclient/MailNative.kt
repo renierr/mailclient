@@ -315,6 +315,7 @@ object MailNative {
     @JvmStatic external fun setAccountSettings(accountId: Long, values: String): String
     @JvmStatic external fun backgroundPlanJson(): String
     @JvmStatic external fun readerPaint(colored: Boolean, dark: Boolean, keepOriginal: Boolean): String
+    @JvmStatic external fun canToggleColors(isHtml: Boolean, htmlColored: Boolean, dark: Boolean, fitBelow: Int): Boolean
     @JvmStatic external fun readerPalette(paint: String, paper: Int, ink: Int, link: Int, quote: Int, rule: Int): String
     @JvmStatic external fun readerFitBelow(body: String): String
     @JvmStatic external fun readerDocumentFull(body: String, paint: String, paper: Int, ink: Int, link: Int, quote: Int, rule: Int, allowRemote: Boolean, topSpace: Int, scale: Float, fit: Boolean): String

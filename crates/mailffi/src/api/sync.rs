@@ -158,24 +158,36 @@ pub fn refresh_folders(account_id: i64) -> anyhow::Result<()> {
 /// Ask an account's IMAP server what it can do (the About view).
 ///
 /// The capability list arrives as the finishing event's `status`, JSON-encoded
-/// — the one place a job's status line is a payload rather than prose.
+/// — the one place a job's status line is a payload rather than prose. The
+/// job always finishes that way, with a lookup failure carried in the
+/// payload's `error` instead of failing the job (same shape as Qt, so the
+/// payload's `account_id` always matches the request).
 pub fn refresh_server_capabilities(account_id: i64) -> anyhow::Result<()> {
     spawn(
         "Capabilities",
         format!("caps:{account_id}"),
         move |db, _progress| async move {
-            let acc = resolve_account(db, account_id)?;
-            let mut imap = checkout_session(&acc).await?;
-            let caps = imap.capabilities_list().await.map_err(|e| e.to_string())?;
-            imap.checkin();
-            let payload = serde_json::json!({
-                "account_id": acc.id,
-                "email": acc.email_address,
-                "imap_host": acc.imap_host,
-                "imap_port": acc.imap_port,
-                "capabilities": caps,
-            });
-            Ok((payload.to_string(), None))
+            let acc = match resolve_account(db, account_id) {
+                Ok(a) => a,
+                Err(e) => {
+                    return Ok((
+                        mailcore::sync::capabilities::error_payload(account_id, &e),
+                        None,
+                    ));
+                }
+            };
+            let caps = async {
+                let mut imap = checkout_session(&acc).await?;
+                let caps = imap.capabilities_list().await.map_err(|e| e.to_string())?;
+                imap.checkin();
+                Ok::<_, String>(caps)
+            }
+            .await;
+            let payload = match caps {
+                Ok(caps) => mailcore::sync::capabilities::payload(&acc, &caps),
+                Err(e) => mailcore::sync::capabilities::failed_payload(&acc, &e),
+            };
+            Ok((payload, None))
         },
     )
 }

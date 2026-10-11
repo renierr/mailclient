@@ -39,15 +39,6 @@ AppDialog {
         root.candidates = FeedJson.parse(root.backend.cleanup_candidates_json(), []);
     }
 
-    function reasonText(reasons) {
-        var parts = [];
-        if ((reasons || []).indexOf("automated") >= 0)
-            parts.push(qsTr("looks like an automated sender"));
-        if ((reasons || []).indexOf("stale") >= 0)
-            parts.push(qsTr("seen only once, long ago"));
-        return parts.join("; ");
-    }
-
     function enterReview() {
         root.reviewing = true;
         root.selectedAddresses = [];
@@ -341,7 +332,7 @@ AppDialog {
                 border.width: isEditing ? 1 : (ListView.isCurrentItem ? 1 : 0)
                 border.color: isEditing ? Theme.accent : Theme.border
 
-                // In review mode the model holds {contact, reasons}; otherwise the contact itself.
+                // In review mode the model holds {contact, reasons, reason_text}; otherwise the contact itself.
                 readonly property var entry: root.reviewing ? modelData.contact : modelData
                 readonly property string entryAddress: entry.address
                 readonly property bool entrySelected: root.selectedAddresses.indexOf(entryAddress) >= 0
@@ -422,7 +413,7 @@ AppDialog {
                             Layout.fillWidth: true
                             Layout.minimumWidth: 0
                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                            text: root.reasonText(modelData.reasons)
+                            text: modelData.reason_text || ""
                             color: Theme.textMuted
                             font.pixelSize: Theme.fontTiny
                             font.italic: true

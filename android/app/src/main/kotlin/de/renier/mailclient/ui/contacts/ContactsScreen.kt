@@ -73,18 +73,8 @@ private data class Contact(
     }
 }
 
-/** A cleanup suggestion: the contact and why (`automated`, `stale`). */
-private data class Candidate(val contact: Contact, val reasons: List<String>) {
-    // The machine reasons in the Qt and Flutter wording.
-    val reasonText: String
-        get() = reasons.joinToString("; ") {
-            when (it) {
-                "automated" -> "looks like an automated sender"
-                "stale" -> "seen only once, long ago"
-                else -> it
-            }
-        }
-}
+/** A cleanup suggestion: the contact and why, in words from the core. */
+private data class Candidate(val contact: Contact, val reasonText: String)
 
 private fun parseContacts(json: String): List<Contact> {
     val arr = JSONArray(json)
@@ -95,10 +85,10 @@ private fun parseCandidates(json: String): List<Candidate> {
     val arr = JSONArray(json)
     return (0 until arr.length()).mapNotNull { i ->
         val o = arr.optJSONObject(i) ?: return@mapNotNull null
-        Candidate(
-            contact = Contact.of(o.optJSONObject("contact") ?: return@mapNotNull null),
-            reasons = o.optJSONArray("reasons").strings(),
-        )
+            Candidate(
+                contact = Contact.of(o.optJSONObject("contact") ?: return@mapNotNull null),
+                reasonText = o.optString("reason_text"),
+            )
     }
 }
 

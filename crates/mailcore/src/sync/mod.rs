@@ -3,6 +3,7 @@
 
 pub mod attachments;
 pub mod background;
+pub mod capabilities;
 pub mod headless;
 pub mod imap;
 pub mod pool;

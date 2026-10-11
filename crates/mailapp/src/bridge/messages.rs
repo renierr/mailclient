@@ -243,6 +243,21 @@ impl qobject::Bridge {
         qstring(reader::paint_for(colored, dark, keep_original).as_str())
     }
 
+    pub fn can_toggle_colors(
+        &self,
+        is_html: bool,
+        html_colored: bool,
+        dark: bool,
+        fit_below: i32,
+    ) -> bool {
+        reader::can_toggle_colors(
+            is_html,
+            html_colored,
+            dark,
+            u32::try_from(fit_below.max(0)).unwrap_or(0),
+        )
+    }
+
     pub fn reader_palette_json(&self, paint: &QString, theme_json: &QString) -> QString {
         let theme =
             reader_theme(&serde_json::from_str(&theme_json.to_string()).unwrap_or_default());

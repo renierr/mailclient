@@ -262,15 +262,13 @@ impl qobject::Bridge {
             Err(e) => return qstring(&e),
         };
         match undo::undo(db, &batch.to_string()) {
-            Ok(0) => qstring("Too late to undo — already done on the server"),
             Ok(n) => {
-                let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
-                push_feeds(&mut self, db, acc_id, folder_id);
-                qstring(&if n == 1 {
-                    "Undone: 1 message is back".to_string()
-                } else {
-                    format!("Undone: {n} messages are back")
-                })
+                if n > 0 {
+                    let (acc_id, folder_id) =
+                        (*self.current_account_id(), *self.current_folder_id());
+                    push_feeds(&mut self, db, acc_id, folder_id);
+                }
+                qstring(&undo::undone_text(n))
             }
             Err(e) => qstring(&e),
         }

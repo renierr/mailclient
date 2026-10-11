@@ -77,11 +77,30 @@ const PHONE_WEIGHT: i64 = 400;
 static PHONE: Mutex<Vec<Contact>> = Mutex::new(Vec::new());
 
 /// One contact the cleanup review suggests removing, with machine-readable
-/// reasons (`"automated"`, `"stale"`) the frontends map to localized text.
+/// reasons (`"automated"`, `"stale"`) and the same reasons in words
+/// (`reason_text`, via [`cleanup_reason_text`]) for both frontends to show.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CleanupCandidate {
     pub contact: Contact,
     pub reasons: Vec<String>,
+    #[serde(default)]
+    pub reason_text: String,
+}
+
+/// The cleanup review's reason line for machine `reasons` (`"automated"`,
+/// `"stale"`), in words — both frontends show this (was a twin: QML wording
+/// plus a Kotlin twin). Unknown reasons are dropped: the set is closed, and
+/// a raw token is not UI text.
+#[must_use]
+pub fn cleanup_reason_text(reasons: &[String]) -> String {
+    let mut parts = Vec::new();
+    if reasons.iter().any(|r| r == "automated") {
+        parts.push("looks like an automated sender");
+    }
+    if reasons.iter().any(|r| r == "stale") {
+        parts.push("seen only once, long ago");
+    }
+    parts.join("; ")
 }
 
 /// Record having seen an address (insert or bump counter).
@@ -529,8 +548,8 @@ pub fn delete_many(db: &Db, addresses: &[&str]) -> Result<u64> {
 /// Contacts worth reviewing for removal: automated senders collected before
 /// the [`seen`] filter existed, and one-off addresses not seen for a long
 /// time. Each candidate carries machine-readable `reasons` (`"automated"`
-/// and/or `"stale"`); the frontends decide the wording. Most recently seen
-/// first, up to `limit`.
+/// and/or `"stale"`) and the same reasons in words (`reason_text`). Most
+/// recently seen first, up to `limit`.
 pub fn cleanup_candidates(db: &Db, limit: u64) -> Result<Vec<CleanupCandidate>> {
     let cutoff = chrono::Utc::now() - chrono::Duration::days(STALE_AFTER_DAYS);
     let mut stmt = db.conn().prepare(
@@ -560,7 +579,11 @@ pub fn cleanup_candidates(db: &Db, limit: u64) -> Result<Vec<CleanupCandidate>> 
             reasons.push("stale".to_string());
         }
         if !reasons.is_empty() {
-            out.push(CleanupCandidate { contact, reasons });
+            out.push(CleanupCandidate {
+                reason_text: cleanup_reason_text(&reasons),
+                contact,
+                reasons,
+            });
         }
     }
     Ok(out)
@@ -929,11 +952,24 @@ mod tests {
             .find(|c| c.contact.address == "noreply@example.com")
             .unwrap();
         assert_eq!(noreply.reasons, vec!["automated".to_string()]);
+        assert_eq!(noreply.reason_text, "looks like an automated sender");
         let once = cands
             .iter()
             .find(|c| c.contact.address == "once@example.com")
             .unwrap();
         assert_eq!(once.reasons, vec!["stale".to_string()]);
+        assert_eq!(once.reason_text, "seen only once, long ago");
+    }
+
+    #[test]
+    fn reason_text_joins_known_reasons_and_drops_unknown_ones() {
+        let s = |r: &str| r.to_string();
+        assert_eq!(
+            cleanup_reason_text(&[s("automated"), s("stale")]),
+            "looks like an automated sender; seen only once, long ago"
+        );
+        assert_eq!(cleanup_reason_text(&[s("bogus")]), "");
+        assert_eq!(cleanup_reason_text(&[]), "");
     }
 
     #[test]

@@ -80,21 +80,13 @@ still to promote") points here instead of keeping its own list.
 | Draft files re-attached on reopen | `mailcore::compose::stage_draft_files` (was a `mailapp` helper); native stages through `MailNative.draftFiles` after fetching `missing_files` |
 | Folder sidebar fold: visible rows, collapse rule, hidden-count aggregation | `mailcore::feed::{sidebar_rows, sidebar_rows_json}` (`SidebarRow {id, collapsible, expanded, unread, total}`, expanded ids in, feed order kept); Qt via `sidebar_rows_json` invokable, native via `MailNative.sidebarRowsJson`; `Sidebar.qml` and Kotlin `collapseFolders` deleted |
 | WYSIWYG editor document (was #3): page, CSP, `window.mc` script, caret slot | `mailcore::compose::editor::document` (+ `mc.set`); Qt `Bridge.editor_document` (theme colours, `font_px`, placeholder, `extra_css` for its scrollbars) and `EditorFrame.qml` drives only the `mc.*` API; native unchanged (`MailNative.editorDocument`) |
+| Small UI twins (was #8): cleanup reason wording, colours-toggle rule, undo result text, capabilities error shape | `contacts::cleanup_reason_text` as `reason_text` on every `CleanupCandidate`; `html::reader::can_toggle_colors` (Qt `Bridge.can_toggle_colors`, `MailNative.canToggleColors`); `undo::undone_text` in both adapters; `sync::capabilities::{payload, failed_payload, error_payload}` with the lookup failure in the payload on both sides |
 
 ## Open
 
 Ordered by priority; numbers stay as first assigned, so a done item leaves
-a gap (#3 closed into the Done table above). "Drift" says whether the two
-versions already behave differently.
-
-### 8. Small UI-flavoured twins
-
-Each small, each written in both frontends: contact cleanup reason wording
-(`Contacts.qml` / `ContactsScreen.kt`), when the colours toggle shows
-(Kotlin-only decision), the undo result text (`mailapp` and `mailffi`
-adapters), and the server-capabilities job (`mailapp` carries the error in
-the payload, `mailffi` fails the job). Fix: one `mailcore` function or feed
-field each.
+a gap (#3 and #8 closed into the Done table above). "Drift" says whether the
+two versions already behave differently.
 
 ### 9. Forward and reopened-draft file prefetch
 
