@@ -1,6 +1,5 @@
 //! The WYSIWYG body editor's document, for toolkits that edit HTML in a web
-//! view (native Android; Qt's `EditorFrame.qml` still builds its own, see
-//! SHARED-CORE.md).
+//! view (native Android and Qt's `EditorFrame.qml`).
 //!
 //! The document is ours, not mail, so it runs a small script: a
 //! `contentEditable` body driven by `document.execCommand` with
@@ -19,7 +18,7 @@
 //! formatting tags left empty, so an unused toggle sends nothing.
 //!
 //! The toolkit drives the page through `window.mc` (`exec`, `quote`, `link`,
-//! `save`, `html`, `top`, `state`, `focus`). The caret starts in the text
+//! `save`, `set`, `html`, `top`, `state`, `focus`). The caret starts in the text
 //! slot (the first empty top-level paragraph, `answer::TEXT_SLOT`), so a
 //! reply is typed above the quote, not into its attribution line. A host that can receive calls
 //! from the page exposes `window.MCHost` with `changed()` (the user edited)
@@ -137,6 +136,7 @@ if(r.collapsed){var a=document.createElement('a');a.href=u;a.textContent=u;r.ins
 else{document.execCommand('createLink',false,u);}
 edited();},
 save:function(){var r=sel();saved=inside(r)?r.cloneRange():null;},
+set:function(h){e.innerHTML=h;e.focus();start();},
 html:function(){var c=e.cloneNode(true);clean(c);return c.innerHTML;},
 top:function(px){spacer.style.height=px+'px';},
 state:state,
@@ -188,6 +188,24 @@ mod tests {
         let doc = document(&style(), "a\"><script>x()</script>", "");
         assert!(!doc.contains("<script>x()"));
         assert!(doc.contains("data-placeholder=\"a&quot;&gt;&lt;script&gt;"));
+    }
+
+    #[test]
+    fn document_exposes_the_toolkit_api() {
+        let doc = document(&style(), "", "");
+        for api in [
+            "exec:function",
+            "quote:function",
+            "link:function",
+            "save:function",
+            "set:function",
+            "html:function",
+            "top:function",
+            "state:state",
+            "focus:function",
+        ] {
+            assert!(doc.contains(api), "editor page lost {api}");
+        }
     }
 
     #[test]

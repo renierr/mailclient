@@ -299,7 +299,7 @@ and need no Qt twin unless noted.
 
 | Idea | Side | What it would take |
 |---|---|---|
-| Desktop `mailto:` handler | Qt | `mailcore::compose::prefill` already parses the link; needs a `mailapp` entry (e.g. a `--compose <uri>` flag) and `MimeType=x-scheme-handler/mailto` in the `.desktop` file |
+| ~~Desktop `mailto:` handler~~ | Qt | ❌ rejected — not needed |
 | Home-screen widget (unread count / newest mail) | Android | Plain `RemoteViews` needs nothing new; Jetpack Glance would be a dependency decision |
 | Keyboard shortcuts with a hardware keyboard | Android | Today touch has none by design (§9); the key map could follow Qt's |
 | Autofill hints on the account form | Android | Content types on the login fields so password managers fill IMAP/SMTP credentials |

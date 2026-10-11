@@ -79,23 +79,13 @@ still to promote") points here instead of keeping its own list.
 | Empty message list words | `mailcore::search::empty_list_text` |
 | Draft files re-attached on reopen | `mailcore::compose::stage_draft_files` (was a `mailapp` helper); native stages through `MailNative.draftFiles` after fetching `missing_files` |
 | Folder sidebar fold: visible rows, collapse rule, hidden-count aggregation | `mailcore::feed::{sidebar_rows, sidebar_rows_json}` (`SidebarRow {id, collapsible, expanded, unread, total}`, expanded ids in, feed order kept); Qt via `sidebar_rows_json` invokable, native via `MailNative.sidebarRowsJson`; `Sidebar.qml` and Kotlin `collapseFolders` deleted |
+| WYSIWYG editor document (was #3): page, CSP, `window.mc` script, caret slot | `mailcore::compose::editor::document` (+ `mc.set`); Qt `Bridge.editor_document` (theme colours, `font_px`, placeholder, `extra_css` for its scrollbars) and `EditorFrame.qml` drives only the `mc.*` API; native unchanged (`MailNative.editorDocument`) |
 
 ## Open
 
 Ordered by priority; numbers stay as first assigned, so a done item leaves
-a gap. "Drift" says whether the two versions already behave differently.
-
-### 3. WYSIWYG editor document
-
-`mailcore::compose::editor::document` builds the HTML editor page (CSS,
-nonce CSP, the `window.mc` script) that native Android loads. Qt's
-`EditorFrame.qml` still assembles its own page in QML and polls
-`queryCommandState` itself. Drift: small — native's page has a CSP and a
-header spacer, and quote toggling and links go through `mc.quote` /
-`mc.link`. Both start the caret in the text slot (first empty
-top-level `<p>`); Qt repeats that lookup in `setHtml`. Fix: give the Qt bridge the core document (its colours and
-scale as `EditorStyle`) and keep only the WebEngine wiring in QML; Qt polls
-`mc.state()` since it has no `MCHost`.
+a gap (#3 closed into the Done table above). "Drift" says whether the two
+versions already behave differently.
 
 ### 8. Small UI-flavoured twins
 

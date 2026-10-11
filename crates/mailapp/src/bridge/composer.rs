@@ -108,6 +108,44 @@ impl qobject::Bridge {
         ))
     }
 
+    pub fn editor_document(&self, options_json: &QString) -> QString {
+        use mailcore::html::reader::Rgb;
+        let o: serde_json::Value =
+            serde_json::from_str(&options_json.to_string()).unwrap_or_default();
+        let css = |k: &str, fallback: u32| {
+            o.get(k)
+                .and_then(|v| v.as_str())
+                .and_then(Rgb::parse)
+                .map_or(fallback, |c| c.0 & 0xFF_FFFF)
+        };
+        let style = compose::editor::EditorStyle {
+            paper: css("paper", 0xFF_FF_FF),
+            ink: css("ink", 0x1C_1F_23),
+            muted: css("muted", 0x6B_72_80),
+            accent: css("accent", 0x2F_6F_ED),
+            rule: css("rule", 0xE3_E6_EA),
+            font_px: o
+                .get("font_px")
+                .and_then(serde_json::Value::as_f64)
+                .map_or(14, |v| v.round().clamp(8.0, 48.0) as u32),
+        };
+        let placeholder = o
+            .get("placeholder")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        let mut doc = compose::editor::document(&style, placeholder, "");
+        let extra_css = o
+            .get("extra_css")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if !extra_css.is_empty() {
+            if let Some(pos) = doc.find("</style>") {
+                doc.insert_str(pos, extra_css);
+            }
+        }
+        qstring(&doc)
+    }
+
     pub fn forward_missing(&self, uid: i32) -> i32 {
         let Ok(db) = shared_db() else {
             return 0;

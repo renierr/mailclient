@@ -671,6 +671,16 @@ pub mod qobject {
         #[qinvokable]
         fn send_format_note(&self, format: &QString, html: &QString) -> QString;
 
+        /// The composer's WYSIWYG editor page
+        /// (`mailcore::compose::editor::document`), the same document the
+        /// native composer loads. `options_json`: `paper`, `ink`, `muted`,
+        /// `accent`, `rule` (`#rrggbb` theme colours), `font_px`,
+        /// `placeholder`, `extra_css` (Qt scrollbar styling, like the
+        /// reader's). The editable body starts empty; seed it through the
+        /// page's `mc.set` (see `EditorFrame.qml`).
+        #[qinvokable]
+        fn editor_document(&self, options_json: &QString) -> QString;
+
         /// Full Composer form for a draft in the current Drafts folder.
         /// Opening a draft explicitly downloads and materializes its files.
         #[qinvokable]

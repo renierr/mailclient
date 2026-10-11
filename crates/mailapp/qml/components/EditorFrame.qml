@@ -4,8 +4,10 @@ import QtWebEngine
 
 import Mailclient
 
-// WYSIWYG body editor: a `contentEditable` document in WebEngine, driven by
-// `document.execCommand`.
+// WYSIWYG body editor: the core's editor page
+// (`mailcore::compose::editor::document`, via `backend.editor_document`)
+// in WebEngine, driven through its `window.mc` API — the same document the
+// native composer loads, so formatting, caret and quote behaviour match.
 //
 // Why not TextArea: QML's rich-text TextArea has no API to format a
 // selection, so the toolbar could only insert literal "<b>" tags — no visual
@@ -19,6 +21,10 @@ import Mailclient
 Item {
     id: root
 
+    // Bridge building the document (Composer.qml sets it); the page's
+    // colours, size and placeholder come from it.
+    property var backend
+
     // Live formatting state, polled from the document so the toolbar can
     // show what the caret is actually inside of.
     property bool boldActive: false
@@ -27,41 +33,77 @@ Item {
     property bool listActive: false
     property bool quoteActive: false
     property bool ready: false
+    // Loaded once (a reload would drop the user's edits); a theme change
+    // mid-composer keeps the page it started with, like before.
+    property bool loaded: false
     // Body set before the document was ready; applied on load.
     property string pendingHtml: ""
 
     signal contentChanged
 
-    readonly property string documentHtml: "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>"
-                                           + "html,body{margin:0;padding:0;height:100%}"
-                                           + "#e{box-sizing:border-box;min-height:100%;padding:12px 14px;outline:none;"
-                                           + "font-family:sans-serif;font-size:" + Math.round(14 * Theme.uiScale)
-                                           + "px;line-height:1.55;" + "color:" + Theme.text + ";background:" + Theme.bg
-                                           + ";caret-color:" + Theme.accent + "}"
-                                           + "#e:empty:before{content:attr(data-placeholder);color:" + Theme.textMuted
-                                           + "}" + "img{max-width:100%;height:auto}"
-                                           + "blockquote{margin:8px 0;padding-left:12px;border-left:3px solid "
-                                           + Theme.border + ";color:" + Theme.textMuted + "}" + "a{color:"
-                                           + Theme.accent + "}" + Theme.webScrollbarCss()
-                                           + "</style></head><body><div id=\"e\" contenteditable=\"true\" "
-                                           + "data-placeholder=\"" + qsTr("Write your message…") + "\"></div>"
-                                           + "<script>"
-                                           + "document.execCommand('defaultParagraphSeparator', false, 'p');"
-                                           + "document.execCommand('styleWithCSS', false, false);"
-                                           + "var e = document.getElementById('e');" + "e.focus();"
-                                           + "</script></body></html>"
+    // The document around the empty editable body is mailcore's (CSP, base
+    // CSS, `window.mc` script); only the scrollbar styling is Qt's
+    // (`extra_css`), like the reader (MessageView.wrapDoc).
+    function buildDocument() {
+        if (!root.backend)
+            return "";
+        return root.backend.editor_document(JSON.stringify({
+                                                               "paper": Theme.bg.toString(),
+                                                               "ink": Theme.text.toString(),
+                                                               "muted": Theme.textMuted.toString(),
+                                                               "accent": Theme.accent.toString(),
+                                                               "rule": Theme.border.toString(),
+                                                               "font_px": Math.round(14 * Theme.uiScale),
+                                                               "placeholder": qsTr("Write your message…"),
+                                                               "extra_css": Theme.webScrollbarCss()
+                                                           }));
+    }
+
+    function ensureLoaded() {
+        if (root.loaded || !root.backend)
+            return;
+        var doc = root.buildDocument();
+        if (doc === "")
+            return;
+        root.loaded = true;
+        view.loadHtml(doc, "");
+    }
 
     function exec(command, value) {
         if (!root.ready)
             return;
         // JSON.stringify, not string concatenation: an apostrophe in the
         // value would otherwise close the JS string literal.
-        var arg = value === undefined ? "null" : JSON.stringify(value);
-        view.runJavaScript("document.getElementById('e').focus();" + "document.execCommand(" + JSON.stringify(command)
-                           + ", false, " + arg + ");", function () {
-                               root.pollState();
-                               root.contentChanged();
-                           });
+        var arg = value === undefined ? "" : "," + JSON.stringify(value);
+        view.runJavaScript("mc.exec(" + JSON.stringify(command) + arg + ");", function () {
+            root.pollState();
+            root.contentChanged();
+        });
+    }
+
+    function quote() {
+        if (!root.ready)
+            return;
+        view.runJavaScript("mc.quote();", function () {
+            root.pollState();
+            root.contentChanged();
+        });
+    }
+
+    // A link at the selection, or an inserted one when the caret is bare.
+    function insertLink(url) {
+        if (!root.ready)
+            return;
+        view.runJavaScript("mc.link(" + JSON.stringify(url) + ");", function () {
+            root.pollState();
+            root.contentChanged();
+        });
+    }
+
+    // Keep the selection across a picker or dialog that takes focus away.
+    function saveSelection() {
+        if (root.ready)
+            view.runJavaScript("mc.save();");
     }
 
     // Put an image (a `data:` URL, see Bridge.image_data_url) at the caret.
@@ -71,13 +113,15 @@ Item {
     }
 
     // Read the body back. Async by nature, so the caller passes a callback
-    // (Send collects the payload from it).
+    // (Send collects the payload from it). `mc.html` drops the caret
+    // placeholders and emptied formatting tags, so an unused toggle sends
+    // nothing.
     function fetchHtml(callback) {
         if (!root.ready) {
             callback("");
             return;
         }
-        view.runJavaScript("document.getElementById('e').innerHTML", callback);
+        view.runJavaScript("mc.html()", callback);
     }
 
     function setHtml(html) {
@@ -89,39 +133,32 @@ Item {
         }
         // The caret starts in the text slot, the first empty top-level
         // paragraph (`<p><br></p>`, mailcore's `compose::answer`), so a
-        // reply is typed above the quote — as the core editor page does.
+        // reply is typed above the quote — the core page places it.
         var body = JSON.stringify(html === undefined ? "" : html);
-        var js = "var e = document.getElementById('e');" + "e.innerHTML = " + body + ";" + "e.focus();"
-                + "var n = e.firstElementChild;"
-                + "while (n && !(n.nodeName === 'P' && n.textContent.trim() === '' && !n.querySelector('img')))"
-                + " n = n.nextElementSibling;" + "var r = document.createRange();" + "r.setStart(n || e, 0);"
-                + "r.collapse(true);" + "getSelection().removeAllRanges();" + "getSelection().addRange(r);";
-        view.runJavaScript(js);
+        view.runJavaScript("mc.set(" + body + ");");
     }
 
     function focusEditor() {
         if (root.ready)
-            view.runJavaScript("document.getElementById('e').focus();");
+            view.runJavaScript("mc.focus();");
     }
 
     function pollState() {
         if (!root.ready)
             return;
-        view.runJavaScript("JSON.stringify({" + "b: document.queryCommandState('bold'),"
-                           + "i: document.queryCommandState('italic')," + "u: document.queryCommandState('underline'),"
-                           + "l: document.queryCommandState('insertUnorderedList'),"
-                           + "q: !!document.queryCommandValue('formatBlock').match(/blockquote/i)" + "})", function (
-                               json) {
-                               if (!json)
-                                   return;
-                               var s = FeedJson.parse(json, ({}));
-                               root.boldActive = s.b === true;
-                               root.italicActive = s.i === true;
-                               root.underlineActive = s.u === true;
-                               root.listActive = s.l === true;
-                               root.quoteActive = s.q === true;
-                           });
+        view.runJavaScript("mc.state()", function (json) {
+            if (!json)
+                return;
+            var s = FeedJson.parse(json, ({}));
+            root.boldActive = s.b === true;
+            root.italicActive = s.i === true;
+            root.underlineActive = s.u === true;
+            root.listActive = s.l === true;
+            root.quoteActive = s.q === true;
+        });
     }
+
+    onBackendChanged: root.ensureLoaded()
 
     WebEngineView {
         id: view
@@ -158,7 +195,7 @@ Item {
                 request.reject();
         }
 
-        Component.onCompleted: view.loadHtml(root.documentHtml, "")
+        Component.onCompleted: root.ensureLoaded()
     }
 
     // Caret and selection changes have no QML signal, so the toolbar state is

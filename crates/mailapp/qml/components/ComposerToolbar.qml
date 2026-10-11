@@ -77,7 +77,7 @@ Rectangle {
             enabled: !root.sourceMode
             active: root.bodyEditor ? root.bodyEditor.quoteActive : false
             onClicked: if (root.bodyEditor)
-                           root.bodyEditor.exec("formatBlock", root.bodyEditor.quoteActive ? "p" : "blockquote")
+                           root.bodyEditor.quote()
         }
         IconButton {
             text: Icons.link

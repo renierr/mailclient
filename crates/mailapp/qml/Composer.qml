@@ -311,7 +311,8 @@ Dialog {
     function openForAnswer(uid, mode) {
         if (!root.readyForNew())
             return;
-        root.openAnswerDraft(root.backend && uid >= 0 ? FeedJson.parse(root.backend.answer_draft_json(uid, mode), ({})) : ({}));
+        root.openAnswerDraft(root.backend && uid >= 0 ? FeedJson.parse(root.backend.answer_draft_json(uid, mode), ({})) :
+                                                        ({}));
     }
 
     // A prepared answer draft; a forward's also carries the original's files
@@ -756,6 +757,7 @@ Dialog {
                 anchors.fill: parent
                 anchors.margins: 1
                 visible: !root.sourceMode
+                backend: root.backend
                 onContentChanged: {
                     root.dirty = true;
                     formatNoteTimer.restart();
@@ -804,8 +806,9 @@ Dialog {
                 text: Icons.markRead
                 iconFont: true
                 active: root.requestMdn
-                tooltip: root.requestMdn ? qsTr("Read receipt requested — the recipient's mail app may confirm opening")
-                                         : qsTr("Request a read receipt")
+                tooltip: root.requestMdn ? qsTr(
+                                               "Read receipt requested — the recipient's mail app may confirm opening") :
+                                           qsTr("Request a read receipt")
                 onClicked: root.requestMdn = !root.requestMdn
             }
             IconButton {
@@ -813,8 +816,9 @@ Dialog {
                 text: Icons.doneAll
                 iconFont: true
                 active: root.requestDsn
-                tooltip: root.requestDsn ? qsTr("Delivery confirmation requested — the receiving server reports delivery")
-                                         : qsTr("Request a delivery confirmation")
+                tooltip: root.requestDsn ? qsTr(
+                                               "Delivery confirmation requested — the receiving server reports delivery") :
+                                           qsTr("Request a delivery confirmation")
                 onClicked: root.requestDsn = !root.requestDsn
             }
             // Server drafts get an explicit delete: closing (Discard) only
@@ -962,7 +966,7 @@ Dialog {
                 text: qsTr("Insert")
                 intent: "primary"
                 onClicked: {
-                    bodyEditor.exec("createLink", urlField.text.trim());
+                    bodyEditor.insertLink(urlField.text.trim());
                     linkDialog.close();
                 }
             }
