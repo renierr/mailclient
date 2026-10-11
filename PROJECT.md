@@ -242,7 +242,7 @@ cache-only so they render immediately.
 ### Non-Blocking Composer & Delivery
 - Converted `save_sent_copy`, `flush_outbox`, and `send_raw` to fully `async` functions, removing `tokio::task::block_in_place` (which caused panics and UI lockups on Tokio's `current_thread` runtime).
 - Exactly-once delivery across processes: `enqueue_mime` inserts rows already claimed (`sending`), `flush_outbox` must win `queue::claim` (one conditional `update`) before any SMTP, and `requeue_interrupted` only recovers `sending` rows idle long enough to be crash orphans — never a live submit from the other process.
-- The GUI refuses a send while busy *before* the row exists, and drops the row's MIME on every failure before submit, so a message the user saw fail is never delivered later behind their back.
+- The GUI refuses a send while one runs *before* the row exists (other kinds only queue behind: a send starts during a sync), and drops the row's MIME on every failure before submit, so a message the user saw fail is never delivered later behind their back.
 - The single composer is guarded per composition: while a send awaits SMTP acceptance or a draft saves, new compositions are refused and editing is locked, and results only act on the composer while their own request is still pending.
 
 ### Dropped Features (And Why)
@@ -380,7 +380,7 @@ the open Qt ↔ native differences are listed at the end.
 | Resizable panes (drag dividers) | ✅ SplitView | ✅ `PaneDivider` | ✅ `PaneDivider` | Touch dividers keep a 24dp hit area; widths are not remembered across launches anywhere |
 | Compose, Sync, search field, tools | ✅ | ✅ | ✅ | Narrow Flutter and native collapse the tools into an overflow menu |
 | Folder-scoped search toggle | ✅ | ✅ | ✅ | Native: tools-menu checkbox |
-| Busy indicator (a job is queued or running) | ✅ | ✅ | ✅ | Qt: core `busy` flag; Flutter: `_busyKinds`; native: header progress line fed by the core's in-flight job table (`mailffi::net`, sent with every job event) — never a Kotlin-side flag |
+| Busy indicator (a job is queued or running) | ✅ | ✅ | ✅ | Qt: core `busy` flag (the spinner; refusals are per-kind, so a send queues behind a sync); Flutter: `_busyKinds`; native: header progress line fed by the core's in-flight job table (`mailffi::net`, sent with every job event) — never a Kotlin-side flag |
 | Status line + details + copy | ✅ | ✅ | ✅ | Native StatusStrip shows while a job runs (live progress), on error, with outbox mail, and keeps a job's result readable briefly after it ends; tapping the line opens it in full with Copy |
 | Outbox pill + dialog | ✅ | ✅ | ✅ page | Pill words from `outbox::status_json` (`label`); native opens a full page from the status-strip chip: rows with the core's state line and error, Sync now (only while something is retryable), forget a dead row after a confirm |
 | Undo offer (snackbar/toast; Ctrl+Z where a keyboard exists) | ✅ | ✅ | ✅ | The bar lasts the core's `UNDO_GRACE_SECS` everywhere; native takes Ctrl+Z from a hardware keyboard outside the composer |
@@ -504,4 +504,4 @@ deliberate or minor differences below.
 
 | # | Gap | Side | Kind |
 |---|---|---|---|
-| G15 | .eml export on native downloads on a throwaway runtime outside the job queue, with no progress line; Qt refuses Send and Save draft while any job (even a sync) runs, native only while that same job runs; an account switch re-runs an active search in Qt, clears it on native | both | minor |
+| G15 | .eml export on native downloads on a throwaway runtime outside the job queue, with no progress line; an account switch re-runs an active search in Qt, clears it on native (send/draft refusals unified: per-kind now, so a Qt send queues behind a sync like native) | both | minor |

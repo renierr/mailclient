@@ -6,6 +6,8 @@
 //! - [`qobject::SettingsBridge`]: user preferences backed by the
 //!   `mailcore` settings store, editable from the Settings dialog.
 
+use std::collections::HashSet;
+
 #[cxx_qt::bridge]
 pub mod qobject {
     unsafe extern "C++" {
@@ -868,6 +870,10 @@ pub struct BridgeRust {
     sort_field: QString,
     sort_descending: bool,
     busy: bool,
+    /// Kinds with a job queued or running (`"Sync"`, `"Send"`, …). The
+    /// `busy` property is their union for the spinner; refusals are per
+    /// kind, so a send queues behind a sync instead of being refused.
+    busy_kinds: HashSet<String>,
     app_version: QString,
     app_license: QString,
     /// `messages_json` predates a read/star change that only patched rows
@@ -900,6 +906,7 @@ impl Default for BridgeRust {
             sort_field: qstring("date"),
             sort_descending: true,
             busy: false,
+            busy_kinds: HashSet::new(),
             app_version: qstring(env!("CARGO_PKG_VERSION")),
             app_license: qstring(env!("CARGO_PKG_LICENSE")),
             messages_stale: false,

@@ -1,5 +1,6 @@
 use std::pin::Pin;
 
+use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
 use mailcore::compose::{self, ComposeForm};
 
@@ -18,10 +19,12 @@ impl qobject::Bridge {
             Ok(f) => f,
             Err(e) => return qstring(&e),
         };
-        // Refuse while busy *before* the outbox row exists: `spawn_job` would
-        // refuse too, but by then the message would sit queued and go out
-        // with the next sync behind a "busy" the user reads as "not sent".
-        if *self.busy() {
+        // Refuse while a send runs *before* the outbox row exists:
+        // `spawn_job` would refuse too, but by then the message would sit
+        // queued and go out with the next sync behind a "busy" the user
+        // reads as "not sent". Other kinds (a sync, say) only queue behind:
+        // the outbox claim keeps the overlap safe.
+        if self.rust().busy_kinds.contains("Send") {
             return qstring(BUSY_MESSAGE);
         }
         let wanted = *self.current_account_id();

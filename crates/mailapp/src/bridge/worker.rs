@@ -1,8 +1,10 @@
 //! Background network jobs. IMAP/SMTP never run on the Qt GUI thread.
 
+use std::collections::HashSet;
 use std::pin::Pin;
 use std::sync::{mpsc, OnceLock};
 
+use cxx_qt::CxxQtType;
 use cxx_qt::Threading;
 use cxx_qt_lib::QString;
 
@@ -214,17 +216,21 @@ impl Net {
 /// What [`spawn_job`] may proceed with: the queue to send the job on, or the
 /// message to show instead.
 ///
-/// A running job outranks a missing net thread: its message reads as "try in
-/// a moment", which is the more likely of the two from the user's chair. The
-/// net-thread reason is only surfaced once the latch is free, and it is never
-/// reported as the busy message — the two need different reactions, and
-/// latching `busy` for a job that cannot run would refuse every later click
-/// until restart.
+/// Only the same kind refuses: the net thread runs jobs one at a time and
+/// every job is self-consistent (the outbox claim keeps a queued send safe
+/// behind a sync, feed refreshes are epoch-guarded), so cross-kind queueing
+/// is a wait, not a hazard. A running job still outranks a missing net
+/// thread: its message reads as "try in a moment", which is the more likely
+/// of the two from the user's chair. The net-thread reason is only surfaced
+/// once no job of the kind runs, and it is never reported as the busy
+/// message — the two need different reactions, and latching `busy` for a job
+/// that cannot run would refuse every later click until restart.
 fn entry_gate<'a>(
-    busy: bool,
+    busy_kinds: &HashSet<String>,
+    kind: &str,
     net: Result<&'a mpsc::Sender<JobFn>, &str>,
 ) -> Result<&'a mpsc::Sender<JobFn>, String> {
-    if busy {
+    if busy_kinds.contains(kind) {
         return Err(BUSY_MESSAGE.to_string());
     }
     match net {
@@ -247,13 +253,18 @@ where
     Fut: std::future::Future<Output = Result<D, String>> + 'static,
     D: Into<JobDone>,
 {
-    // Everything that can refuse does so *before* `busy` is latched, so a job
-    // that will never run cannot leave the latch stuck and refuse every later
-    // click until restart.
-    let tx = match entry_gate(*bridge.busy(), net()) {
+    // Everything that can refuse does so *before* the kind is latched, so
+    // a job that will never run cannot leave the latch stuck and refuse
+    // every later click until restart.
+    let tx = match entry_gate(&bridge.as_ref().rust().busy_kinds, kind, net()) {
         Ok(tx) => tx,
         Err(message) => return qstring(&message),
     };
+    bridge
+        .as_mut()
+        .rust_mut()
+        .busy_kinds
+        .insert(kind.to_string());
     bridge.as_mut().set_busy(true);
     let started = Selection {
         account_id: *bridge.current_account_id(),
@@ -309,7 +320,9 @@ where
                     }
                 }
             }
-            bridge.as_mut().set_busy(false);
+            bridge.as_mut().rust_mut().busy_kinds.remove(&kind_owned);
+            let idle = bridge.as_ref().rust().busy_kinds.is_empty();
+            bridge.as_mut().set_busy(!idle);
             let kind = qstring(&kind_owned);
             let status = qstring(&status);
             let outcome = qstring(&job_outcome);
@@ -328,6 +341,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{entry_gate, net, JobFn, JobRefresh, Selection, BUSY_MESSAGE};
+    use std::collections::HashSet;
     use std::sync::mpsc;
 
     fn sel(account_id: i64, folder_id: i64) -> Selection {
@@ -371,19 +385,25 @@ mod tests {
     #[test]
     fn a_live_net_thread_lets_an_idle_click_through() {
         let (tx, _rx) = idle_channel();
-        assert!(entry_gate(false, Ok(&tx)).is_ok());
+        let kinds = HashSet::new();
+        assert!(entry_gate(&kinds, "Sync", Ok(&tx)).is_ok());
     }
 
     #[test]
-    fn a_running_job_outranks_a_missing_net_thread() {
+    fn only_the_running_kind_is_refused() {
         let (tx, _rx) = idle_channel();
+        let kinds = HashSet::from(["Sync".to_string()]);
         assert_eq!(
-            entry_gate(true, Ok(&tx)).expect_err("busy wins"),
+            entry_gate(&kinds, "Sync", Ok(&tx)).expect_err("busy wins"),
             BUSY_MESSAGE
         );
+        // A send queues behind a sync instead of being refused (G15): the
+        // outbox claim keeps the overlap safe.
+        assert!(entry_gate(&kinds, "Send", Ok(&tx)).is_ok());
         // Both conditions at once still reports the transient one.
         assert_eq!(
-            entry_gate(true, Err("cannot start the net thread: nope")).expect_err("busy wins"),
+            entry_gate(&kinds, "Sync", Err("cannot start the net thread: nope"))
+                .expect_err("busy wins"),
             BUSY_MESSAGE
         );
     }
@@ -393,8 +413,9 @@ mod tests {
         // A job refused for a missing net thread must not read as the busy
         // message: the user's next click would then be refused too, and the
         // only way out would be a restart.
-        let message =
-            entry_gate(false, Err("cannot start the net thread: nope")).expect_err("must refuse");
+        let kinds = HashSet::new();
+        let message = entry_gate(&kinds, "Sync", Err("cannot start the net thread: nope"))
+            .expect_err("must refuse");
         assert_ne!(message, BUSY_MESSAGE);
         assert!(
             message.contains("cannot start the net thread"),
