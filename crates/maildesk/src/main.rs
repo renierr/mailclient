@@ -30,11 +30,13 @@ fn dev_db_path() -> PathBuf {
 fn open_dev_db() -> Result<Db> {
     let path = dev_db_path();
     let s = path.to_string_lossy();
-    if s.contains(".local/share/mailclient")
-        || s.contains("mailclient.sqlite") && !s.contains("dev.sqlite")
-    {
+    // Hard guard: maildesk dev runs must never open the real platform
+    // mailbox. The filename alone is not the signal — a repo-local copy
+    // (e.g. ./data/mailclient.sqlite via .env) is a legitimate dev DB.
+    if s.contains(".local/share/mailclient") {
         return Err(mailcore::StoreError::InvalidInput(format!(
-            "refusing to open {s}: maildesk dev runs use the dev database only"
+            "refusing to open {s}: maildesk dev runs use a dev database only \
+             (override with MAILCLIENT_DB=./data/dev.sqlite)"
         )));
     }
     Db::open(&path)
