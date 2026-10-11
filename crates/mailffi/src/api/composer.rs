@@ -74,7 +74,14 @@ pub fn save_draft(account_id: i64, form: String) -> anyhow::Result<()> {
 /// them — the composer holds attachment ids and the bytes are fetched through
 /// [`crate::api::attachments`] on demand.
 pub fn draft_form(account_id: i64, uid: u32) -> anyhow::Result<String> {
-    let db = shared_db()?;
+    draft_form_in(shared_db()?, account_id, uid)
+}
+
+pub(crate) fn draft_form_in(
+    db: &mailcore::Db,
+    account_id: i64,
+    uid: u32,
+) -> anyhow::Result<String> {
     let drafts = compose::drafts_folder(db, account_id)
         .ok_or_else(|| anyhow::anyhow!("this account has no Drafts folder"))?;
     let m = compose::open_draft(db, drafts.id, uid).map_err(anyhow::Error::msg)?;

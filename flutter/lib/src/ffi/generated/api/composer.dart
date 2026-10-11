@@ -7,6 +7,8 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+// These functions are ignored because they are not marked as `pub`: `draft_form_in`
+
 /// Send a message from the composer's JSON form
 /// (`{to, cc?, bcc?, from?, from_name?, reply_to?, subject, body, body_html?,
 /// attachments?, draft_uid?}`).

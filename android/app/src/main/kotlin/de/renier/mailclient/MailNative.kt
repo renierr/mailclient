@@ -240,23 +240,20 @@ object MailNative {
     // mailclient-net (0b events); bad forms throw inline.
     @JvmStatic external fun sendMail(accountId: Long, folderId: Long, form: String)
     @JvmStatic external fun saveDraft(accountId: Long, form: String)
-    @JvmStatic external fun draftForm(accountId: Long, uid: Int): String
 
-    // The draft's own files staged under [dir] to re-attach: `[{path,name}]`.
-    // Throws while bytes are missing (`missing_files` in draftForm).
-    @JvmStatic external fun draftFiles(accountId: Long, uid: Int, dir: String): String
+    // "Open draft" as one core job (like Qt): missing bytes download, then
+    // the `{form, staged}` seed arrives as the finish event's status.
+    // `staged` is null when the files could not be staged.
+    @JvmStatic external fun draftFetch(accountId: Long, uid: Int, dir: String)
     @JvmStatic external fun deleteDraft(accountId: Long, uid: Int)
     @JvmStatic external fun answerDraft(folderId: Long, uid: Int, mode: String): String
 
-    // A forward's files: how many still need fetching, then the cached ones
-    // staged under [dir] as `{files: [{path,name}], missing, notice}`.
-    @JvmStatic external fun forwardMissing(folderId: Long, uid: Int): Int
-    @JvmStatic external fun forwardFiles(folderId: Long, uid: Int, dir: String): String
-
-    // "Edit & resend" of the bounce (folderId, uid): the same for the sent
-    // original it reports on (`answerDraft(.., "resend")` builds the draft).
-    @JvmStatic external fun resendMissing(folderId: Long, uid: Int): Int
-    @JvmStatic external fun resendFiles(folderId: Long, uid: Int, dir: String): String
+    // "Forward" as one core job (like Qt): the original's missing files
+    // download, then the `{draft, files}` seed arrives as the finish
+    // event's status. Resend is the same for the bounce's sent original
+    // (`answerDraft(.., "resend")` builds the draft).
+    @JvmStatic external fun forwardFetch(folderId: Long, uid: Int, dir: String)
+    @JvmStatic external fun resendFetch(folderId: Long, uid: Int, dir: String)
     @JvmStatic external fun blankDraft(): String
 
     // New mail begun outside the app (a mailto: link, a share): the

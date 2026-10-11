@@ -59,24 +59,23 @@ data class ComposerSeed(
             ComposerSeed(ComposeMode.Blank, bodyHtml = JSONObject(MailNative.blankDraft()).optString("body_html"))
 
         /**
-         * Reply, reply-all or forward: recipients, subject, quote prepared by
-         * the core. A forward also carries the original's files, staged under
-         * [stageDir] from the cache (fetch them first, `forwardMissing`).
-         * Resend ([uid] is a bounce) does the same for the sent original.
+         * Reply or reply-all: recipients, subject, quote prepared by the
+         * core. Blocking JNI read: call off the main thread. Forward,
+         * resend and draft opens go through the fetch jobs
+         * (`MailNative.forwardFetch` and friends) and assemble with
+         * [assembleAnswer]/[assembleDraft] — replies fetch nothing.
          */
-        fun answer(folderId: Long, uid: Int, mode: ComposeMode, stageDir: String): ComposerSeed {
-            val wire = when (mode) {
-                ComposeMode.ReplyAll -> "reply_all"
-                ComposeMode.Forward -> "forward"
-                ComposeMode.Resend -> "resend"
-                else -> "reply"
-            }
+        fun answer(folderId: Long, uid: Int, mode: ComposeMode): ComposerSeed {
+            val wire = if (mode == ComposeMode.ReplyAll) "reply_all" else "reply"
             val d = JSONObject(MailNative.answerDraft(folderId, uid, wire))
-            val fwd = when (mode) {
-                ComposeMode.Forward -> JSONObject(MailNative.forwardFiles(folderId, uid, stageDir))
-                ComposeMode.Resend -> JSONObject(MailNative.resendFiles(folderId, uid, stageDir))
-                else -> null
-            }
+            return assembleAnswer(mode, d, null)
+        }
+
+        /**
+         * The assembly behind [answer] and the forward/resend fetch jobs:
+         * the answer draft plus the staged files, if any.
+         */
+        fun assembleAnswer(mode: ComposeMode, d: JSONObject, fwd: JSONObject?): ComposerSeed {
             val files = fwd?.optJSONArray("files")
             return ComposerSeed(
                 mode = mode,
@@ -123,17 +122,12 @@ data class ComposerSeed(
         }
 
         /**
-         * Continue a stored draft of the Drafts folder. Its files are staged
-         * under [stageDir] and re-attached (Qt does the same); only when
-         * their bytes could not be fetched are they named instead, so saving
-         * does not drop them silently.
+         * Continue a stored draft of the Drafts folder, from a fetch job's
+         * `{form, staged}` seed: the form plus its files staged for
+         * re-attaching. A null `staged` names the server copy's files
+         * instead, so saving does not drop them silently.
          */
-        fun draft(accountId: Long, uid: Int, stageDir: String): ComposerSeed {
-            val f = JSONObject(MailNative.draftForm(accountId, uid))
-            val staged = runCatching {
-                val a = JSONArray(MailNative.draftFiles(accountId, uid, stageDir))
-                List(a.length()) { i -> a.getJSONObject(i).let { PickedFile(it.getString("path"), it.getString("name")) } }
-            }.getOrNull()
+        fun assembleDraft(f: JSONObject, uid: Int, staged: List<PickedFile>?): ComposerSeed {
             val files = f.optJSONArray("attachments")
             val names = if (staged != null) {
                 emptyList()

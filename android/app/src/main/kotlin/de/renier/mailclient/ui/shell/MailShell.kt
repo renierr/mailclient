@@ -65,16 +65,17 @@ import de.renier.mailclient.ui.accounts.AccountsScreen
 import de.renier.mailclient.ui.composer.ComposeMode
 import de.renier.mailclient.ui.composer.ComposerScreen
 import de.renier.mailclient.ui.composer.ComposerSeed
+import de.renier.mailclient.ui.composer.PickedFile
 import de.renier.mailclient.ui.contacts.ContactsScreen
 import de.renier.mailclient.ui.folders.FolderManagerScreen
 import de.renier.mailclient.ui.folders.FoldersScreen
 import de.renier.mailclient.ui.list.ListScreen
 import de.renier.mailclient.ui.outbox.OutboxScreen
-import de.renier.mailclient.ui.reader.ReaderFiles
 import de.renier.mailclient.ui.reader.ReaderScreen
 import de.renier.mailclient.ui.settings.SettingsScreen
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.state.clearSearch
+import de.renier.mailclient.ui.state.isAlreadyRunning
 import de.renier.mailclient.ui.state.openFolder
 import de.renier.mailclient.ui.state.refreshFolders
 import de.renier.mailclient.ui.state.selectAccount
@@ -117,6 +118,10 @@ private sealed interface Route {
 
 // Deepest route stack kept; older entries drop out, the root never does.
 private const val MAX_STACK = 8
+
+// How long a composer fetch job (forward/resend/draft seed) may take
+// before the open gives up; the reader's download waits use their own.
+private const val FETCH_WAIT_MS = 120_000L
 
 @Composable
 fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
@@ -192,56 +197,105 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
         }
     }
 
-    // Fetch the message's files first when [missing] (the core's count)
-    // says some are not cached, then open the composer on [load].
-    fun composeAfterFetch(accountId: Long, folderId: Long, uid: Int, missing: () -> Int, load: () -> ComposerSeed) {
-        scope.launch {
-            withContext(Dispatchers.IO) {
-                val n = runCatching {
-                    MailNative.ensureInit(context)
-                    missing()
-                }.getOrDefault(0)
-                if (n > 0) ReaderFiles.downloadAll(state, accountId, folderId, uid)
+    // A forward, resend or draft seed, fetched then opened: the download
+    // and the build are one core job (like Qt's "Forward"/"Open draft"),
+    // so the shell only opens the result. Null when the job failed, was
+    // refused, or timed out.
+    suspend fun fetchSeed(key: String, queue: () -> Unit): Pair<Boolean, String>? {
+        return try {
+            state.awaitFinished(key, FETCH_WAIT_MS, queue)
+        } catch (e: Exception) {
+            if (!e.isAlreadyRunning()) return null
+            // Ours is on its way already: wait for its finish below.
+            try {
+                state.awaitFinished(key, FETCH_WAIT_MS) {}
+            } catch (_: Exception) {
+                null
             }
-            startCompose(load)
         }
     }
 
-    // Reply, reply-all or forward. A forward keeps the original's files:
-    // any not cached yet are fetched first (like a reopened draft), and the
-    // core names whatever still could not be.
+    // The guards `startCompose` applies, for flows that open a fetched seed
+    // instead of a locally built one.
+    fun launchFetch(key: String, queue: () -> Unit, parse: (String) -> ComposerSeed?) {
+        val accountId = state.activeAccountId
+        val folderId = state.folderId
+        if (accountId < 0) return
+        // Qt: a send not yet accepted may still come back to the composer.
+        if (state.pendingSend != null) {
+            state.info("Still sending the last message…")
+            return
+        }
+        if (state.pendingDraft != null) {
+            state.info("Still saving the last draft…")
+            return
+        }
+        scope.launch {
+            val done = withContext(Dispatchers.IO) {
+                fetchSeed(key) {
+                    MailNative.ensureInit(context)
+                    queue()
+                }
+            }
+            if (done == null || !done.first) {
+                state.info(done?.second?.ifEmpty { null } ?: "This message is no longer available")
+                return@launch
+            }
+            val seed = runCatching { parse(done.second) }.getOrNull()
+            if (seed == null) {
+                state.info("This message is no longer available")
+            } else {
+                go(Route.Composer(seed, accountId, folderId))
+            }
+        }
+    }
+
+    // Reply, reply-all or forward. A forward's files download inside its
+    // fetch job; replies fetch nothing.
     fun answer(accountId: Long, folderId: Long, uid: Int, mode: ComposeMode) {
-        val stageDir = context.cacheDir.absolutePath
-        val load = { ComposerSeed.answer(folderId, uid, mode, stageDir) }
         if (mode == ComposeMode.Forward) {
-            composeAfterFetch(accountId, folderId, uid, { MailNative.forwardMissing(folderId, uid) }, load)
+            val stageDir = context.cacheDir.absolutePath
+            val key = "forward:$folderId:$uid"
+            launchFetch(key, { MailNative.forwardFetch(folderId, uid, stageDir) }) { status ->
+                val p = JSONObject(status)
+                ComposerSeed.assembleAnswer(mode, p.getJSONObject("draft"), p.getJSONObject("files"))
+            }
         } else {
-            startCompose(load)
+            startCompose { ComposerSeed.answer(folderId, uid, mode) }
         }
     }
 
-    // "Edit & resend" on a bounce's report card: the sent original
-    // (origFolderId, origUid, from the card) gets its files fetched, then
-    // the core builds the draft from the bounce (failed recipients only).
+    // "Edit & resend" on a bounce's report card: the sent original's files
+    // download inside its fetch job, then the core builds the draft from
+    // the bounce (failed recipients only).
     fun resend(accountId: Long, folderId: Long, uid: Int, origFolderId: Long, origUid: Int) {
         val stageDir = context.cacheDir.absolutePath
-        composeAfterFetch(accountId, origFolderId, origUid, { MailNative.resendMissing(folderId, uid) }) {
-            ComposerSeed.answer(folderId, uid, ComposeMode.Resend, stageDir)
+        val key = "resend:$folderId:$uid"
+        launchFetch(key, { MailNative.resendFetch(folderId, uid, stageDir) }) { status ->
+            val p = JSONObject(status)
+            ComposerSeed.assembleAnswer(ComposeMode.Resend, p.getJSONObject("draft"), p.getJSONObject("files"))
         }
     }
 
     // A row of the Drafts folder continues the draft instead of reading it.
-    // Files or inline images not cached yet are fetched first (Qt's "Open
-    // draft" job does the same), so the reopened draft keeps them.
+    // Missing bytes download inside its fetch job (Qt's "Open draft" does
+    // the same), so the reopened draft keeps its files.
     fun openRow(accountId: Long, folderId: Long, uid: Int) {
         if (state.folders.firstOrNull { it.id == folderId }?.role == "drafts") {
             val stageDir = context.cacheDir.absolutePath
-            composeAfterFetch(
-                accountId,
-                folderId,
-                uid,
-                { JSONObject(MailNative.draftForm(accountId, uid)).optInt("missing_files") },
-            ) { ComposerSeed.draft(accountId, uid, stageDir) }
+            val key = "open-draft:$accountId:$uid"
+            launchFetch(key, { MailNative.draftFetch(accountId, uid, stageDir) }) { status ->
+                val p = JSONObject(status)
+                val staged = if (p.isNull("staged")) {
+                    null
+                } else {
+                    val a = p.getJSONArray("staged")
+                    List(a.length()) { i ->
+                        a.getJSONObject(i).let { PickedFile(it.getString("path"), it.getString("name")) }
+                    }
+                }
+                ComposerSeed.assembleDraft(p.getJSONObject("form"), uid, staged)
+            }
         } else {
             openReader(Route.Reader(accountId, folderId, uid))
         }

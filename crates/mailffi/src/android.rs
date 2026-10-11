@@ -2124,52 +2124,6 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_saveDraft<'caller>(
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-/// `MailNative.draftFiles(accountId, uid, dir)`: the draft's own files
-/// staged under `dir` for the composer, `[{path, name}]`.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_de_renier_mailclient_MailNative_draftFiles<'caller>(
-    mut unowned: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-    account_id: i64,
-    uid: i32,
-    dir: JString<'caller>,
-) -> JString<'caller> {
-    unowned
-        .with_env(|env| -> Result<JString<'caller>> {
-            // JNI only: Flutter is retired, so no FRB surface (and codegen)
-            // for it.
-            let db = crate::db::shared_db()?;
-            let drafts = mailcore::compose::drafts_folder(db, account_id)
-                .ok_or_else(|| anyhow::anyhow!("this account has no Drafts folder"))?;
-            let m = mailcore::compose::open_draft(db, drafts.id, uid_arg(uid)?)
-                .map_err(anyhow::Error::msg)?;
-            let files = mailcore::compose::stage_draft_files(
-                db,
-                m.id,
-                std::path::Path::new(&string(env, &dir)?),
-            )
-            .map_err(anyhow::Error::msg)?;
-            Ok(env.new_string(serde_json::to_string(&files)?)?)
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
-}
-
-/// `MailNative.draftForm(accountId, uid)`: a stored draft back as an editable
-/// form (attachments as metadata, never paths).
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_de_renier_mailclient_MailNative_draftForm<'caller>(
-    mut unowned: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-    account_id: i64,
-    uid: i32,
-) -> JString<'caller> {
-    unowned
-        .with_env(|env| -> Result<JString<'caller>> {
-            Ok(env.new_string(crate::api::composer::draft_form(account_id, uid_arg(uid)?)?)?)
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
-}
-
 /// `MailNative.deleteDraft(accountId, uid)`: destroy a server draft
 /// (`\Deleted` + expunge) — what Discard means for a draft from Drafts.
 #[unsafe(no_mangle)]
@@ -2208,92 +2162,143 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_answerDraft<'caller>
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-/// `MailNative.forwardMissing(folderId, uid)`: how many of the original's
-/// files have no cached bytes yet — fetch them first when non-zero. Local read.
+/// `MailNative.forwardFetch(folderId, uid, dir)`: the whole "Forward" job —
+/// download the original's missing files, then build the forward seed —
+/// like Qt's `forward_fetch`. Queued on the net thread; the
+/// `{draft, files}` seed arrives as the finish event's status, so the shell
+/// only opens the result. JNI only: the seed is shaped for the native
+/// composer (no FRB surface, no codegen).
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_de_renier_mailclient_MailNative_forwardMissing<'caller>(
-    mut unowned: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-    folder_id: i64,
-    uid: i32,
-) -> i32 {
-    unowned
-        .with_env(|_env| -> Result<i32> {
-            let db = crate::db::shared_db()?;
-            let n = mailcore::compose::forward_missing(db, folder_id, uid_arg(uid)?)
-                .map_err(anyhow::Error::msg)?;
-            Ok(i32::try_from(n).unwrap_or(i32::MAX))
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
-}
-
-/// `MailNative.forwardFiles(folderId, uid, dir)`: the original's cached
-/// files staged under `dir` for a forward, `{files: [{path, name}], missing,
-/// notice}`. Local only, never fetches.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_de_renier_mailclient_MailNative_forwardFiles<'caller>(
+pub extern "system" fn Java_de_renier_mailclient_MailNative_forwardFetch<'caller>(
     mut unowned: EnvUnowned<'caller>,
     _class: JClass<'caller>,
     folder_id: i64,
     uid: i32,
     dir: JString<'caller>,
-) -> JString<'caller> {
+) {
     unowned
-        .with_env(|env| -> Result<JString<'caller>> {
-            let db = crate::db::shared_db()?;
-            let files = mailcore::compose::stage_forward_files(
-                db,
-                folder_id,
-                uid_arg(uid)?,
-                std::path::Path::new(&string(env, &dir)?),
+        .with_env(|env| -> Result<()> {
+            let uid = uid_arg(uid)?;
+            let dir = string(env, &dir)?;
+            crate::net::spawn(
+                "Forward",
+                format!("forward:{folder_id}:{uid}"),
+                move |db, progress| async move {
+                    if mailcore::compose::forward_missing(db, folder_id, uid).unwrap_or(0) > 0 {
+                        progress.report("Downloading…");
+                    }
+                    let files = mailcore::compose::forward_files(
+                        db,
+                        folder_id,
+                        uid,
+                        std::path::Path::new(&dir),
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                    let draft: serde_json::Value = serde_json::from_str(
+                        &mailcore::compose::answer_draft_json(db, folder_id, uid, "forward")
+                            .map_err(|e| e.to_string())?,
+                    )
+                    .map_err(|e| format!("json: {e}"))?;
+                    let seed = serde_json::json!({"draft": draft, "files": files});
+                    Ok((seed.to_string(), None))
+                },
             )
-            .map_err(anyhow::Error::msg)?;
-            Ok(env.new_string(serde_json::to_string(&files)?)?)
+            .map_err(BridgeError::from)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-/// `MailNative.resendMissing(folderId, uid)`: `forwardMissing` for "Edit &
-/// resend" of the bounce `(folderId, uid)` — counts the sent original's
-/// files with no cached bytes. Local read.
+/// `MailNative.resendFetch(folderId, uid, dir)`: `forwardFetch` for "Edit &
+/// resend" of the bounce `(folderId, uid)` — the sent original's files plus
+/// the resend draft. Same job shape, same finish-event seed.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_de_renier_mailclient_MailNative_resendMissing<'caller>(
-    mut unowned: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-    folder_id: i64,
-    uid: i32,
-) -> i32 {
-    unowned
-        .with_env(|_env| -> Result<i32> {
-            let db = crate::db::shared_db()?;
-            let n = mailcore::compose::resend_missing(db, folder_id, uid_arg(uid)?)
-                .map_err(anyhow::Error::msg)?;
-            Ok(i32::try_from(n).unwrap_or(i32::MAX))
-        })
-        .resolve::<ThrowRuntimeExAndDefault>()
-}
-
-/// `MailNative.resendFiles(folderId, uid, dir)`: `forwardFiles` for the
-/// sent original of the bounce `(folderId, uid)`. Local only.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_de_renier_mailclient_MailNative_resendFiles<'caller>(
+pub extern "system" fn Java_de_renier_mailclient_MailNative_resendFetch<'caller>(
     mut unowned: EnvUnowned<'caller>,
     _class: JClass<'caller>,
     folder_id: i64,
     uid: i32,
     dir: JString<'caller>,
-) -> JString<'caller> {
+) {
     unowned
-        .with_env(|env| -> Result<JString<'caller>> {
-            let db = crate::db::shared_db()?;
-            let files = mailcore::compose::stage_resend_files(
-                db,
-                folder_id,
-                uid_arg(uid)?,
-                std::path::Path::new(&string(env, &dir)?),
+        .with_env(|env| -> Result<()> {
+            let uid = uid_arg(uid)?;
+            let dir = string(env, &dir)?;
+            crate::net::spawn(
+                "Resend",
+                format!("resend:{folder_id}:{uid}"),
+                move |db, progress| async move {
+                    if mailcore::compose::resend_missing(db, folder_id, uid).unwrap_or(0) > 0 {
+                        progress.report("Downloading…");
+                    }
+                    let files = mailcore::compose::resend_files(
+                        db,
+                        folder_id,
+                        uid,
+                        std::path::Path::new(&dir),
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                    let draft: serde_json::Value = serde_json::from_str(
+                        &mailcore::compose::answer_draft_json(db, folder_id, uid, "resend")
+                            .map_err(|e| e.to_string())?,
+                    )
+                    .map_err(|e| format!("json: {e}"))?;
+                    let seed = serde_json::json!({"draft": draft, "files": files});
+                    Ok((seed.to_string(), None))
+                },
             )
-            .map_err(anyhow::Error::msg)?;
-            Ok(env.new_string(serde_json::to_string(&files)?)?)
+            .map_err(BridgeError::from)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.draftFetch(accountId, uid, dir)`: the whole "Open draft" job —
+/// download the draft's missing bytes, then build its seed — like Qt's
+/// `draft_form`. The `{form, staged}` seed arrives as the finish event's
+/// status; `staged` is null when the files could not be staged, and the
+/// composer then names them from the form instead of dropping them.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_draftFetch<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    uid: i32,
+    dir: JString<'caller>,
+) {
+    unowned
+        .with_env(|env| -> Result<()> {
+            let uid = uid_arg(uid)?;
+            let dir = string(env, &dir)?;
+            crate::net::spawn(
+                "Open draft",
+                format!("open-draft:{account_id}:{uid}"),
+                move |db, progress| async move {
+                    let drafts = mailcore::compose::drafts_folder(db, account_id)
+                        .ok_or_else(|| "this account has no Drafts folder".to_string())?;
+                    let m = mailcore::compose::open_draft(db, drafts.id, uid)
+                        .map_err(|e| e.to_string())?;
+                    if mailcore::sync::attachments::missing_count(db, m.id, true).unwrap_or(0) > 0 {
+                        progress.report("Downloading…");
+                    }
+                    mailcore::sync::attachments::ensure_cached(db, m.id, true)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    let staged =
+                        mailcore::compose::stage_draft_files(db, m.id, std::path::Path::new(&dir))
+                            .ok()
+                            .and_then(|files| serde_json::to_value(&files).ok())
+                            .unwrap_or(serde_json::Value::Null);
+                    let form: serde_json::Value = serde_json::from_str(
+                        &crate::api::composer::draft_form_in(db, account_id, uid)
+                            .map_err(|e| e.to_string())?,
+                    )
+                    .map_err(|e| format!("json: {e}"))?;
+                    let seed = serde_json::json!({"form": form, "staged": staged});
+                    Ok((seed.to_string(), None))
+                },
+            )
+            .map_err(BridgeError::from)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
