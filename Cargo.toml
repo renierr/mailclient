@@ -6,6 +6,8 @@ members = [
     "crates/mailffi",
     # Throwaway Spike A scaffolding (EGUI-DESKTOP.md §9), not a product crate.
     "crates/maildesk-spike",
+    # egui desktop client (product track; graduates the spike findings).
+    "crates/maildesk",
 ]
 
 # The single version number for the whole product. Crates inherit it via

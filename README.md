@@ -17,8 +17,10 @@ Details: [`PROJECT.md`](PROJECT.md) (goal, architecture, roadmap),
 
 ```sh
 ./dev.sh                # Qt debug build + run (uses ./crates/mailapp/qml live)
+./dev.sh --egui         # egui desktop debug build + run (uses ./data/dev.sqlite)
 ./dev.sh --flutter      # Flutter debug run (uses ./data/dev.sqlite)
 ./build.sh --qt         # Qt release bundle -> dist/mailclient/
+./build.sh --egui       # egui desktop release bundle -> dist/maildesk/ (no Qt)
 ./build.sh --flutter    # Flutter Linux release bundle -> dist/mailclient-flutter/
 ./build.sh --android    # signed native Android APK -> dist/mailclient-android/ (see android/README.md)
 ./build.sh --apk        # retired Flutter APK -> dist/mailclient-apk/ (see flutter/README.md)

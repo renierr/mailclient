@@ -14,7 +14,9 @@ A **full-featured, modern, responsive mail client** for **Omarchy Linux** first,
 
 ```text
 crates/mailapp/qml/ ─QtQuick UI (desktop)─▶ crates/mailapp (cxx-qt bridge, Qt models) ─┐
-                                                                                       │
+                                                                                        │
+crates/maildesk ───egui UI (desktop)──────▶ crates/mailcore (direct calls, no bridge) ───┤
+                                                                                        │
 android/ ─────────Compose UI (Android)───▶ crates/mailffi  JNI (src/android.rs) ───────┼─▶ crates/mailcore (db/store/sync/queue)
                                                                                        │
 flutter/lib/ ─────Flutter UI (retired)───▶ crates/mailffi  flutter_rust_bridge ────────┘
@@ -22,7 +24,9 @@ flutter/lib/ ─────Flutter UI (retired)───▶ crates/mailffi  flu
                                   SQLite (~/.local/share/mailclient/mailclient.sqlite)
 ```
 
-One core, two active frontends: **Qt/QML** on the desktop and **native
+One core, three active frontends: **egui** (new desktop track,
+`crates/maildesk`) and **Qt/QML** (legacy desktop, kept building and running
+until egui reaches named parity) plus **native
 Kotlin/Compose** on Android, kept feature-for-feature in sync (§9).
 `mailcore` is the base for all of them: behaviour lives there so every
 frontend inherits it, and each adapter crate only translates. **Flutter is
@@ -32,6 +36,10 @@ same database file, on purpose.
 
 - `crates/mailcore`: pure Rust. Modules: `error`, `models`, `compose` (composer send/drafts for both frontends), `undo` (undoable delete/archive/move), `db/{mod,schema,migrations}`, `store/{accounts,folders,messages,pending_moves,queue,contacts}`, `sync/{traits,imap,sender}`, `search`.
 - `crates/mailapp`: `cxx-qt` QObject bridge (`Bridge`, `SettingsBridge`, `AccountListModel`, `FolderTreeModel`, `MessageListModel`, composer controller) + `main.rs` loading `Main.qml` (embedded `Mailclient` module, filesystem override via `MAILCLIENT_QML_DIR`).
+- `crates/maildesk`: egui/eframe desktop client over `mailcore` (direct
+  `store::*` / `feed` / `html` calls, no JSON bridge, no Qt). Three-pane
+  shell, native reader over `html::reader::body`, background work over
+  Tokio channels + `request_repaint()`. See `EGUI-DESKTOP.md`.
 - `crates/mailapp/qml/`: `Main.qml`, `Sidebar.qml`, `MessageList.qml`, `MessageView.qml`, `Composer.qml`, `AccountSetup.qml`, `Settings.qml`, `components/*`.
 - `crates/mailffi`: `cdylib` over `mailcore` for the Android frontends —
   `android.rs` (JNI externs behind `MailNative.kt`) for native, and
@@ -97,6 +105,7 @@ Secrets live in the OS keyring keyed by `accounts.auth_vault_key`, never in SQLi
 | 12 | Calendar / ICS event preview card: pure-Rust RFC 5545 `VEVENT` parsing in `mailcore::calendar` (unfolding, quote-aware parameter & unescaping parsing, nested `VALARM` ignored, TZID labels / fixed-offset `VTIMEZONE`, exclusive all-day ends, formatted date ranges, cancellation detection), instant offline preview via small .ics sync caching in `store_attachment_meta`, reader event preview card with summary, date/time, location, organizer, cancellation badge and "Open in Calendar" / "Save .ics…" actions across Qt/QML (`EventCard.qml`) and Flutter (`EventCard`) | ✅ done |
 | 13 | Search refinements: structured query tokens (`is:unread`, `is:read`, `is:starred`, `is:flagged`, `has:attachment`, `after:YYYY-MM-DD`, `before:YYYY-MM-DD` and negations) in `mailcore::search` (`parse_query_full`, `SearchFilters`, `ParsedQuery`), filter-only non-FTS query execution & combined SQL filtering in `feed::search_json`, IMAP criteria translation in `imap_criteria` (only with a positive text term; flags/dates narrow it, `has:` stays local-only); quick filters stay in the list header's filter menu in both frontends | ✅ done |
 | 14 | Native Android frontend (Kotlin + Jetpack Compose, `android/`): the Android client, kept in step with Qt — same `mailcore` over JNI (`MailNative` ↔ `mailffi/src/android.rs`, package `de.renier.mailclient` is JNI-bound), native background checks, push and notifications, Compose BOM pinned in `android/app/build.gradle.kts`, `./build.sh --android` signed APK into `dist/mailclient-android/` | ✅ done — every screen of the Qt client exists (shell, folders, list, search, reader, composer, accounts, contacts, settings, outbox); remaining Qt ↔ native differences are tracked in §9 "Open Qt ↔ native gaps" |
+| 15 | egui desktop client (`crates/maildesk`, pure Rust, no Qt): three-pane shell over the dev DB, native reader over `html::reader::body`, constrained rich composer, settings/accounts/search/contacts/outbox to daily-driver parity with Qt; `./dev.sh --egui`, `./build.sh --egui` → `dist/maildesk/` | 🔄 in progress — step 1 done (scaffold: accounts + folder trees with unread pills + virtualised list with unread/star/attachment marks + relative dates + reader with remote-image banner + light/dark; dev-DB-only guard) |
 
 Milestone 7 detail — what works and what does not:
 - **Works**: the whole read path and the local write path. Accounts
@@ -261,8 +270,10 @@ cache-only so they render immediately.
 
 ```sh
 ./dev.sh                # Qt dev: debug build + run (uses ./crates/mailapp/qml live)
+./dev.sh --egui         # egui dev: debug build + run (uses ./data/dev.sqlite)
 ./dev.sh --flutter      # Flutter dev: flutter run -d linux (debug Dart, release Rust core)
 ./build.sh --qt         # Qt release build → dist/mailclient/{bin/mailapp,qml/,resources/}
+./build.sh --egui       # egui release build → dist/maildesk/{bin/maildesk} (no Qt)
 ./build.sh --flutter    # Flutter release build → dist/mailclient-flutter/{mailclient,lib/,data/}
 ./build.sh --apk        # signed Android APK → dist/mailclient-apk/mailclient-<version>-release.apk
 ./build.sh --all        # both desktop release bundles (Qt + Flutter Linux)

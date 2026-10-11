@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Dev loop: run the Qt/QML frontend (default) or the Flutter frontend.
+# Dev loop: run the Qt/QML frontend (default), the egui frontend, or Flutter.
 #
-# Usage: ./dev.sh [--qt|--flutter] [-- extra args...]
+# Usage: ./dev.sh [--qt|--egui|--flutter] [-- extra args...]
 #
-# Both frontends open the same local dev database (./data/dev.sqlite) so no
+# All frontends open the same local dev database (./data/dev.sqlite) so no
 # dev run ever touches the real mailbox in ~/.local/share. Override with
-# MAILCLIENT_DB for a throwaway file; the Flutter app reads the same variable
-# because its Rust core runs in-process.
+# MAILCLIENT_DB for a throwaway file; the egui and Flutter apps read the same
+# variable because their Rust core runs in-process.
 # Works on Linux and in MSYS2/Git Bash on Windows (Qt path, see scripts/qt-env.sh).
 set -euo pipefail
 cd "$(dirname "$0")"
 
 frontend="--qt"
 case "${1:-}" in
-    --qt | --flutter) frontend="$1"; shift ;;
+    --qt | --flutter | --egui) frontend="$1"; shift ;;
 esac
 
 # Local dev database, shared by both frontends. Absolute: the Flutter path
@@ -28,6 +28,11 @@ if [ -f .env ]; then
     # shellcheck disable=SC1091
     . ./.env
     set +a
+fi
+
+if [ "$frontend" = "--egui" ]; then
+    echo "==> cargo run -p maildesk (MAILCLIENT_DB=$MAILCLIENT_DB)"
+    exec cargo run -p maildesk -- "$@"
 fi
 
 if [ "$frontend" = "--flutter" ]; then

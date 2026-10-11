@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Release build + dist bundle assembly.
 #
-# Usage: ./build.sh --qt|--flutter|--apk|--aab|--android|--all  (no default:
+# Usage: ./build.sh --qt|--egui|--flutter|--apk|--aab|--android|--all  (no default:
 # bare invocation prints usage and builds nothing)
 #
 # --qt:      cargo build --release -p mailapp
 #            Output: dist/mailclient/{bin/mailapp,qml/,resources/,VERSION}
 # --flutter: flutter build linux --release (the Rust core builds as part of it)
 #            Output: dist/mailclient-flutter/{mailclient,lib/,data/,VERSION}
+# --egui:    cargo build --release -p maildesk (pure Rust, no Qt)
+#            Output: dist/maildesk/{bin/maildesk,VERSION}
 # --apk:     flutter build apk --release (signed; needs key.properties)
 #            Output: dist/mailclient-apk/mailclient-<version>-release.apk
 # --aab:     flutter build appbundle --release (signed; needs key.properties)
@@ -28,6 +30,8 @@ Usage: ./build.sh <target>
 Available targets:
   --qt, --qml                  Build Qt/QML release bundle
                                Output: dist/mailclient/
+  --egui, --maildesk           Build egui desktop release bundle (no Qt)
+                               Output: dist/maildesk/
   --flutter, --flutter-linux   Build Flutter Linux desktop release bundle
                                Output: dist/mailclient-flutter/
   --apk, --flutter-apk         Build signed Flutter Android APK
@@ -154,6 +158,27 @@ EOF
     fi
 }
 
+build_egui() {
+    echo "==> cargo build --release -p maildesk"
+    cargo build --release -p maildesk
+
+    echo "==> assembling dist/maildesk"
+    if ! rm -rf dist/maildesk 2>/dev/null; then
+        echo "cannot clear dist/maildesk -- files are in use." >&2
+        exit 1
+    fi
+    mkdir -p dist/maildesk/bin
+    cp target/release/maildesk dist/maildesk/bin/
+    write_version dist/maildesk
+
+    cat <<EOF
+Done. Run it with:
+    ./dist/maildesk/bin/maildesk
+Pure-Rust egui bundle (no Qt, no QML). Dev database override still applies:
+    MAILCLIENT_DB=\$PWD/data/dev.sqlite ./dist/maildesk/bin/maildesk
+EOF
+}
+
 build_flutter() {
     echo "==> flutter build linux --release"
     (cd flutter && flutter build linux --release)
@@ -256,6 +281,7 @@ EOF
 
 case "$target" in
     --qt | --qml) build_qt ;;
+    --egui | --maildesk) build_egui ;;
     --flutter | --flutter-linux) build_flutter ;;
     --apk | --flutter-apk) build_apk ;;
     --aab | --flutter-aab | --bundle) build_aab ;;

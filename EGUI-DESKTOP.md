@@ -5,7 +5,10 @@ egui/eframe frontend (same stack as WordCraft), keeping `mailcore` and the
 native Android client untouched. No decision taken yet; this file records
 what was examined and the proposed path forward.
 
-Status: investigation only. No code changed, nothing committed.
+Status: investigation done (Spikes A+B graded, see
+`crates/maildesk-spike/PROTOCOL.md`); product track started as
+`crates/maildesk` (PROJECT.md milestone 15). No core changes, nothing
+pushed, QML untouched.
 
 ## 1. Repo map (as found)
 

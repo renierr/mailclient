@@ -9,6 +9,8 @@ This file is normative for all coding agents (human or AI) working in this repo.
 - Backend: **Rust (stable, edition 2021)**, workspace in `crates/`.
   - `mailcore`: pure-Rust library — SQLite storage, models, IMAP/SMTP sync engine. **No Qt dependency.**
   - `mailapp`: thin Qt/QML bridge binary using **cxx-qt 0.9** + `mailcore`. Only crate allowed to depend on Qt.
+  - `maildesk`: egui/eframe desktop client over `mailcore` (the QML
+    replacement track). Pure Rust — must not depend on Qt, cxx-qt or QML.
   - `mailffi`: `cdylib` exposing `mailcore` to the Android frontends — JNI
     for native Android (`src/android.rs`, the `jni` crate) and
     **flutter_rust_bridge 2** (`dart:ffi`, in process) for Flutter. No Qt,
@@ -16,9 +18,15 @@ This file is normative for all coding agents (human or AI) working in this repo.
 - Frontends: all over `mailcore`, which is the base for everything. A
   behaviour change belongs in `mailcore` so every frontend gets it; a
   change made in one frontend's adapter alone must be a deliberate, stated
-  choice. Two frontends are active and kept in sync:
-  - **Qt/QML** (`crates/mailapp/qml/`) — the desktop client: Linux
-    (primary) and Windows.
+  choice. Three frontends are active, with egui on the path to replacing Qt:
+  - **egui desktop** (`crates/maildesk`) — the new desktop client
+    (Linux primary, same Windows story as Qt in time). Pure Rust, no web
+    view: the reader renders `mailcore::html::reader::body` output
+    natively. Until it reaches named parity, Qt stays fully working and
+    the Qt↔native parity rule still binds Qt.
+  - **Qt/QML** (`crates/mailapp/qml/`) — the legacy desktop client: Linux
+    (primary) and Windows. Kept building and running in parallel; no new
+    desktop features land here unless the egui client cannot take them yet.
   - **Native Android** (`android/`) — Kotlin + Jetpack Compose, the
     Android client. `./build.sh --android`. See `android/README.md`. The
     Kotlin package `de.renier.mailclient` is JNI-bound (Rust `Java_*`
@@ -176,7 +184,9 @@ cover storage (`rusqlite`, bundled), errors (`thiserror`), serialisation
 `tokio-rustls` and its `rustls-*` / `webpki-roots` trust roots), `lettre`,
 `mail-parser`, `keyring`, `directories`, `tempfile`, the Qt bridge (`cxx`,
 `cxx-qt`, `cxx-qt-lib`, `cxx-qt-build`) and `winresource` for the Windows
-executable resources. The Flutter bridge adds
+ executable resources. The egui desktop (`crates/maildesk`) adds
+ `eframe`/`egui` (0.36) plus `image` (PNG/JPEG/GIF decode for inline mail
+ images); `chrono` was already pinned. The Flutter bridge adds
 `flutter_rust_bridge` (pinned with `=`), `anyhow` and `android_logger`, plus
 `jni` for the Kotlin entry points on Android (`mailffi/src/android.rs`).
 
@@ -203,12 +213,13 @@ it needs the same ask.
 
 ## 5. Workflows
 
-- Build: `./build.sh --qt` (Qt release bundle into `dist/`), `./build.sh --flutter`
+- Build: `./build.sh --qt` (Qt release bundle into `dist/`), `./build.sh --egui`
+  (egui release bundle into `dist/maildesk/`), `./build.sh --flutter`
   (Flutter Linux bundle into `dist/mailclient-flutter/`), `./build.sh --apk`
   (signed Android APK into `dist/mailclient-apk/`), `./build.sh --android`
   (signed native Compose APK into `dist/mailclient-android/`), `./build.sh --all` (both
   desktop bundles). Dev loop: `./dev.sh`
-  (Qt) or `./dev.sh --flutter`. Both dev loops use `./data/dev.sqlite`
+  (Qt), `./dev.sh --egui` or `./dev.sh --flutter`. All dev loops use `./data/dev.sqlite`
   (`MAILCLIENT_DB` overrides). Install locally: `./scripts/install-local.sh` (`~/.local`). Never hand-roll `cargo build` output paths in docs; point to the scripts.
 - Flutter: `flutter run -d windows` / `-d linux` from `flutter/` (the Rust core builds as part of it). Regenerate FFI glue with `flutter_rust_bridge_codegen generate` from the repo root.
 - Native Android: `./scripts/android-dev.sh --run` (asks to boot the emulator when none is online, `installDebug`, launches; `--log` tails logcat, `--build` / `--dist` / `--emulator` / `--clean` / `--uninstall` are separate tasks; bare invocation prints help and runs nothing). Machine config via `ANDROID_SDK_ROOT` / `ANDROID_AVD` / `JAVA_HOME` env or gitignored `android/local.properties` (`sdk.dir`, `avd.name`) — never committed, so Linux and Windows checkouts differ safely. Raw form: `android/gradlew installDebug` on a device/emulator (the Rust core builds as part of it via cargo-ndk). Compose BOM / WorkManager / core-ktx versions are pinned in `android/app/build.gradle.kts`; anything beyond them needs approval like any other dependency.
@@ -269,6 +280,7 @@ signing), not a compile check: it costs minutes where these cost seconds.
 | Changed | Fast check |
 |---|---|
 | `mailcore` | item 1 |
+| `maildesk` (egui) | `cargo fmt --check`, `cargo clippy -p maildesk --all-targets -- -D warnings`, `cargo test -p maildesk` green |
 | `mailapp` Rust (bridge) | `cargo clippy -p mailapp -- -D warnings` + `cargo test -p mailapp` (needs qmake on `PATH`; on Windows `source scripts/qt-env.sh` in the same shell) |
 | QML | item 2 |
 | `mailffi`, shared and FRB code | `cargo clippy -p mailffi -- -D warnings` |
