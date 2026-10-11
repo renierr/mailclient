@@ -6,7 +6,8 @@
 //! Actions the tab cannot take itself (flag writes, doc rebuilds) come back
 //! as [`ReaderAction`] for the app to handle after the dock pass.
 
-use egui_extras::{Column, Size, StripBuilder, TableBuilder};
+use chrono::{DateTime, Local};
+use egui_extras::{Column, TableBuilder};
 use mailcore::feed;
 use mailcore::html::reader::{self, Palette};
 use mailcore::html::{has_own_colors, inline_cid_images};
@@ -87,6 +88,21 @@ pub fn build_reader(
     })
 }
 
+/// Reader header date: `1 Sep 2026, 10:00` in local time, raw fallback.
+fn full_date(raw: &str) -> String {
+    raw.parse::<DateTime<chrono::FixedOffset>>().map_or_else(
+        |_| raw.to_string(),
+        |dt| {
+            dt.with_timezone(&Local)
+                .format("%e %b %Y, %H:%M")
+                .to_string()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        },
+    )
+}
+
 pub fn theme_palette(dark: bool) -> Palette {
     if dark {
         Palette::from_css("#1b1d21", "#e8e8e8", "#7ab3ff", "#9aa0a6", "#3a3d42")
@@ -105,8 +121,7 @@ pub enum ReaderAction {
 }
 
 /// Paint one reader tab. Returns the action the app must take afterwards
-/// (flag writes and doc rebuilds borrow the app, so they cannot run inside
-/// the dock viewer's `&mut tab` pass... they run right after instead).
+/// (flag writes and doc rebuilds run after the paint pass).
 pub fn show(
     ui: &mut egui::Ui,
     doc: &ReaderDoc,
@@ -183,25 +198,32 @@ fn header_rows(ui: &mut egui::Ui, doc: &ReaderDoc) {
     } else {
         format!("{} <{}>", doc.from_name, doc.from_addr)
     };
-    let rows: &[(&str, &str)] = &[
-        ("From", &from),
-        ("To", &doc.to_line),
-        ("Cc", &doc.cc_line),
-        ("Date", &doc.date),
-    ];
-    for (label, value) in rows.iter().filter(|(_, v)| !v.is_empty()) {
-        StripBuilder::new(ui)
-            .size(Size::exact(48.0))
-            .size(Size::remainder())
-            .horizontal(|mut strip| {
-                strip.cell(|ui| {
-                    ui.label(egui::RichText::new(*label).weak());
-                });
-                strip.cell(|ui| {
-                    ui.label(*value);
-                });
-            });
+    let rows: Vec<(&str, String)> = [
+        ("From", from),
+        ("To", doc.to_line.clone()),
+        ("Cc", doc.cc_line.clone()),
+        ("Date", full_date(&doc.date)),
+    ]
+    .into_iter()
+    .filter(|(_, v)| !v.is_empty())
+    .collect();
+    if rows.is_empty() {
+        return;
     }
+    // A plain Grid, not StripBuilder: strip cells take the remainder of the
+    // available height, which is infinite inside a ScrollArea — the first
+    // strip would swallow the whole pane and push everything below it
+    // off-screen. Grid rows size to their content instead.
+    egui::Grid::new("headers")
+        .num_columns(2)
+        .spacing([8.0, 2.0])
+        .show(ui, |ui| {
+            for (label, value) in &rows {
+                ui.label(egui::RichText::new(*label).weak());
+                ui.label(value);
+                ui.end_row();
+            }
+        });
 }
 
 fn banners(ui: &mut egui::Ui, doc: &ReaderDoc, remote_allowed: bool, action: &mut ReaderAction) {

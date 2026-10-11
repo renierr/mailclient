@@ -19,6 +19,5 @@ egui = "0.36"
 # Same-version sibling crates (approved): layout strips + tables for the
 # reader/list, docking tabs for open messages.
 egui_extras = "0.36"
-egui_dock = "0.21"
 chrono = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }

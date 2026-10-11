@@ -74,6 +74,7 @@ const TABLE: &[(&str, Kind, &[&str])] = &[
     (QUIET_HOURS_ENABLED, Kind::Flag, &[]),
     (QUIET_HOURS_START, Kind::Text, &[]),
     (QUIET_HOURS_END, Kind::Text, &[]),
+    (THEME_MODE, Kind::Text, &["system", "light", "dark"]),
 ];
 
 fn typed(kind: Kind, raw: &str) -> Value {
@@ -133,6 +134,7 @@ mod tests {
                 START_VIEW => normalize_start_view(raw).into(),
                 BACKGROUND_SCHEDULER => normalize_background_scheduler(raw).into(),
                 NOTIFICATION_ACTION => normalize_notification_action(raw).into(),
+                THEME_MODE => normalize_theme_mode(raw).into(),
                 MARK_READ_DELAY_SECS => normalize_delay_secs(raw.parse().unwrap()).to_string(),
                 SYNC_INTERVAL_MINUTES => normalize_sync_interval(raw.parse().unwrap()).to_string(),
                 UI_SCALE => {

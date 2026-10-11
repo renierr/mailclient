@@ -79,6 +79,8 @@ still to promote") points here instead of keeping its own list.
 | Empty message list words | `mailcore::search::empty_list_text` |
 | Draft files re-attached on reopen | `mailcore::compose::stage_draft_files` (was a `mailapp` helper); native stages through `MailNative.draftFiles` after fetching `missing_files` |
 | Folder sidebar fold: visible rows, collapse rule, hidden-count aggregation | `mailcore::feed::{sidebar_rows, sidebar_rows_json}` (`SidebarRow {id, collapsible, expanded, unread, total}`, expanded ids in, feed order kept); Qt via `sidebar_rows_json` invokable, native via `MailNative.sidebarRowsJson`; `Sidebar.qml` and Kotlin `collapseFolders` deleted |
+| Colour theme preference | `mailcore::store::settings::{THEME_MODE, normalize_theme_mode, get_theme_mode}` (`system` default \| `light` \| `dark`, in `choices`); egui reads/applies it via `ThemePreference`, Qt/Android keep their current behaviour and can adopt the key later |
+| Last active folder across restarts | `mailcore::store::settings::LAST_ACTIVE_FOLDER_ID` (same contract as `LAST_ACTIVE_ACCOUNT_ID`); egui restores it at startup, Qt/Android can adopt it later |
 
 ## Open
 

@@ -186,8 +186,8 @@ cover storage (`rusqlite`, bundled), errors (`thiserror`), serialisation
 `cxx-qt`, `cxx-qt-lib`, `cxx-qt-build`) and `winresource` for the Windows
  executable resources. The egui desktop (`crates/maildesk`) adds
  `eframe`/`egui` (0.36) plus `image` (PNG/JPEG/GIF decode for inline mail
- images) and the same-version siblings `egui_extras` (strips/tables) and
- `egui_dock` 0.21 (message tabs); `chrono` was already pinned. The Flutter bridge adds
+ images) and the same-version sibling `egui_extras` (reader tables);
+ `chrono` was already pinned. The Flutter bridge adds
 `flutter_rust_bridge` (pinned with `=`), `anyhow` and `android_logger`, plus
 `jni` for the Kotlin entry points on Android (`mailffi/src/android.rs`).
 

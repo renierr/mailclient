@@ -1,24 +1,26 @@
 //! maildesk: egui desktop client over mailcore (product track).
 //!
-//! Offline-first shell: accounts + subscribed folder trees + virtualised
-//! message list + tabbed reader (draggable/resizable panes via egui_dock).
-//! Opens the dev database (`MAILCLIENT_DB`, default `./data/dev.sqlite`)
-//! and refuses the platform mailbox. No Qt, no cxx-qt, no QML. No fixture
-//! seeding: shows what is in the DB.
+//! Offline-first three-pane shell like the QML client: accounts +
+//! subscribed folder trees + virtualised message list + a single reading
+//! pane for the selected message. Opens the dev database (`MAILCLIENT_DB`,
+//! default `./data/dev.sqlite`) and refuses the platform mailbox. No Qt,
+//! no cxx-qt, no QML. No fixture seeding: shows what is in the DB.
+//!
+//! UI preferences live in `mailcore::store::settings` so every frontend
+//! shares them: theme mode, last active account and last active folder.
 
 mod paint;
 mod reader;
 mod render;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use chrono::{DateTime, Datelike, Local};
-use egui_dock::{DockArea, DockState, Style, TabViewer};
 use mailcore::feed;
 use mailcore::models::{Account, Folder};
 use mailcore::store::messages::CompactMessage;
-use mailcore::store::{accounts, folders, messages};
+use mailcore::store::{accounts, folders, messages, settings};
 use mailcore::{Db, Result};
 
 fn dev_db_path() -> PathBuf {
@@ -91,80 +93,6 @@ fn snippet_preview(snippet: Option<&str>, max_chars: usize) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Tabs
-// ---------------------------------------------------------------------------
-
-/// One open message. Equality is `(folder_id, uid)` only: title and star
-/// state are snapshots that change without the tab becoming a new tab.
-struct MsgTab {
-    folder_id: i64,
-    uid: u32,
-    title: String,
-    starred: bool,
-}
-
-impl PartialEq for MsgTab {
-    fn eq(&self, other: &Self) -> bool {
-        self.folder_id == other.folder_id && self.uid == other.uid
-    }
-}
-
-struct Viewer<'a> {
-    data: &'a mut Data,
-}
-
-impl TabViewer for Viewer<'_> {
-    type Tab = MsgTab;
-
-    fn id(&mut self, tab: &mut MsgTab) -> egui::Id {
-        egui::Id::new((tab.folder_id, tab.uid))
-    }
-
-    fn title(&mut self, tab: &mut MsgTab) -> egui::WidgetText {
-        tab.title.clone().into()
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut MsgTab) {
-        let key = (tab.folder_id, tab.uid);
-        let dark = self.data.dark;
-        if !self.data.docs.contains_key(&key) {
-            let allow_remote = self.data.remote_once.contains(&key);
-            match reader::build_reader(&self.data.db, tab.folder_id, tab.uid, allow_remote, dark) {
-                Ok(doc) => {
-                    self.data.docs.insert(key, doc);
-                }
-                Err(e) => {
-                    self.data.status = format!("reader: {e}");
-                    ui.centered_and_justified(|ui| {
-                        ui.label("Could not open this message.");
-                    });
-                    return;
-                }
-            }
-        }
-        let remote_allowed = self.data.remote_once.contains(&key);
-        let action = egui::ScrollArea::vertical()
-            .id_salt(("reader", tab.folder_id, tab.uid))
-            .auto_shrink(false)
-            .show(ui, |ui| {
-                // Scope the doc borrow to the paint pass; actions run after.
-                let doc = self.data.docs.get(&key).expect("just built");
-                reader::show(ui, doc, remote_allowed, tab.starred, &mut self.data.paint)
-            })
-            .inner;
-        match action {
-            reader::ReaderAction::None => {}
-            reader::ReaderAction::ToggleStar => self.data.toggle_star(tab),
-            reader::ReaderAction::MarkUnread => self.data.mark_unread(tab.folder_id, tab.uid),
-            reader::ReaderAction::ShowRemoteOnce => {
-                self.data.remote_once.insert(key);
-                self.data.docs.remove(&key);
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
 
@@ -175,10 +103,7 @@ struct FolderRow {
     leaf: String,
 }
 
-/// Everything except the dock tree. Kept separate so the dock pass can
-/// borrow `dock` and `data` mutably side by side (`DockArea::new(&mut
-/// dock).show_inside(ui, &mut Viewer { data })`).
-struct Data {
+struct MailApp {
     db: Db,
     accounts: Vec<Account>,
     account_id: i64,
@@ -186,25 +111,32 @@ struct Data {
     folder_id: i64,
     rows: Vec<CompactMessage>,
     unread_by_folder: HashMap<i64, u64>,
-    docs: HashMap<(i64, u32), reader::ReaderDoc>,
-    remote_once: HashSet<(i64, u32)>,
-    focused: Option<(i64, u32)>,
-    dark: bool,
+    selected: Option<u32>,
+    reader: Option<reader::ReaderDoc>,
+    allow_remote_once: bool,
+    theme: String,
+    applied_theme: String,
+    last_dark: Option<bool>,
     filter: String,
     paint: paint::PaintState,
     status: String,
 }
 
-struct MailApp {
-    data: Data,
-    dock: DockState<MsgTab>,
+fn stored_id(db: &Db, key: &str) -> Option<i64> {
+    settings::get(db, key)
+        .ok()?
+        .and_then(|v| v.trim().parse().ok())
 }
 
-impl Data {
-    fn new(db: Db, dark: bool) -> Result<Self> {
+impl MailApp {
+    fn new(db: Db) -> Result<Self> {
         let accounts = accounts::list(&db).unwrap_or_default();
-        let account_id = accounts.first().map(|a| a.id).unwrap_or(-1);
-        let mut data = Self {
+        let account_id = stored_id(&db, settings::LAST_ACTIVE_ACCOUNT_ID)
+            .filter(|id| accounts.iter().any(|a| a.id == *id))
+            .or_else(|| accounts.first().map(|a| a.id))
+            .unwrap_or(-1);
+        let theme = settings::get_theme_mode(&db);
+        let mut app = Self {
             db,
             accounts,
             account_id,
@@ -212,21 +144,30 @@ impl Data {
             folder_id: -1,
             rows: Vec::new(),
             unread_by_folder: HashMap::new(),
-            docs: HashMap::new(),
-            remote_once: HashSet::new(),
-            focused: None,
-            dark,
+            selected: None,
+            reader: None,
+            allow_remote_once: false,
+            theme,
+            applied_theme: String::new(),
+            last_dark: None,
             filter: String::new(),
             paint: paint::PaintState::new(),
             status: "offline — dev database".to_string(),
         };
-        data.reload_folders();
-        Ok(data)
+        app.reload_folders();
+        // Restore the persisted folder when it belongs to this account.
+        if let Some(fid) = stored_id(&app.db, settings::LAST_ACTIVE_FOLDER_ID) {
+            if app.folders.iter().any(|f| f.folder.id == fid) {
+                app.folder_id = fid;
+                app.reload_list();
+            }
+        }
+        Ok(app)
     }
 
     fn reload_folders(&mut self) {
         // Same visible subset as the other frontends: subscribed folders,
-        // folded and depth-indented (core computes depth/leaf).
+        // depth-indented (core computes depth/leaf).
         let list = folders::list_by_account(&self.db, self.account_id).unwrap_or_default();
         let counts = messages::counts_by_account(&self.db, self.account_id).unwrap_or_default();
         self.unread_by_folder = counts.iter().map(|(k, v)| (*k, v.unread)).collect();
@@ -247,81 +188,45 @@ impl Data {
             .collect();
         if !self.folders.iter().any(|f| f.folder.id == self.folder_id) {
             self.folder_id = self.folders.first().map(|f| f.folder.id).unwrap_or(-1);
+            self.selected = None;
+            self.reader = None;
         }
         self.reload_list();
     }
-}
-
-impl MailApp {
-    fn new(db: Db, dark: bool) -> Result<Self> {
-        Ok(Self {
-            data: Data::new(db, dark)?,
-            dock: DockState::new(vec![]),
-        })
-    }
 
     fn switch_account(&mut self, account_id: i64) {
-        self.data.account_id = account_id;
-        self.dock = DockState::new(vec![]);
-        self.data.docs.clear();
-        self.data.remote_once.clear();
-        self.data.focused = None;
-        self.data.filter.clear();
-        self.data.reload_folders();
-        self.data.status = "account switched".to_string();
-    }
-
-    fn open_tab(&mut self, folder_id: i64, uid: u32) {
-        // Local mark-read on open (offline write, pushed on next sync).
-        let _ = messages::set_read_many_by_uids(&self.data.db, folder_id, &[uid], true);
-        if folder_id == self.data.folder_id {
-            if let Some(r) = self.data.rows.iter_mut().find(|r| r.uid == uid) {
-                r.is_read = true;
+        self.account_id = account_id;
+        let _ = settings::set(
+            &self.db,
+            settings::LAST_ACTIVE_ACCOUNT_ID,
+            &account_id.to_string(),
+        );
+        self.selected = None;
+        self.reader = None;
+        self.filter.clear();
+        self.reload_folders();
+        // Keep the persisted folder when it belongs to the new account.
+        if let Some(fid) = stored_id(&self.db, settings::LAST_ACTIVE_FOLDER_ID) {
+            if self.folders.iter().any(|f| f.folder.id == fid) {
+                self.folder_id = fid;
+                self.reload_list();
             }
         }
-        self.data.refresh_pills(folder_id);
-        self.data.focused = Some((folder_id, uid));
-        let probe = MsgTab {
-            folder_id,
-            uid,
-            title: String::new(),
-            starred: false,
-        };
-        if let Some(path) = self.dock.find_tab(&probe) {
-            let _ = self.dock.set_active_tab(path);
-            return;
-        }
-        let row = (folder_id == self.data.folder_id)
-            .then(|| self.data.rows.iter().find(|r| r.uid == uid))
-            .flatten();
-        let title = row
-            .and_then(|r| r.subject.clone())
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| "(no subject)".to_string());
-        let starred = row.map(|r| r.is_starred).unwrap_or_else(|| {
-            messages::get_by_uid(&self.data.db, folder_id, uid)
-                .map(|m| m.is_starred)
-                .unwrap_or(false)
-        });
-        self.dock.push_to_focused_leaf(MsgTab {
-            folder_id,
-            uid,
-            title,
-            starred,
-        });
+        self.status = "account switched".to_string();
     }
 
-    fn prune_docs(&mut self) {
-        let open: HashSet<(i64, u32)> = self
-            .dock
-            .iter_all_tabs()
-            .map(|(_, t)| (t.folder_id, t.uid))
-            .collect();
-        self.data.docs.retain(|k, _| open.contains(k));
+    fn select_folder(&mut self, folder_id: i64) {
+        self.folder_id = folder_id;
+        self.selected = None;
+        self.reader = None;
+        let _ = settings::set(
+            &self.db,
+            settings::LAST_ACTIVE_FOLDER_ID,
+            &folder_id.to_string(),
+        );
+        self.reload_list();
     }
-}
 
-impl Data {
     fn reload_list(&mut self) {
         self.rows = messages::list_compact_by_folder_sorted(
             &self.db,
@@ -332,9 +237,10 @@ impl Data {
             true,
         )
         .unwrap_or_default();
-        if let Some((fid, uid)) = self.focused {
-            if fid != self.folder_id || !self.rows.iter().any(|r| r.uid == uid) {
-                self.focused = None;
+        if let Some(uid) = self.selected {
+            if !self.rows.iter().any(|r| r.uid == uid) {
+                self.selected = None;
+                self.reader = None;
             }
         }
     }
@@ -382,32 +288,88 @@ impl Data {
         }
     }
 
-    fn toggle_star(&mut self, tab: &mut MsgTab) {
-        let next = !tab.starred;
-        if messages::set_star_many_by_uids(&self.db, tab.folder_id, &[tab.uid], next).is_ok() {
-            tab.starred = next;
-            if tab.folder_id == self.folder_id {
-                if let Some(r) = self.rows.iter_mut().find(|r| r.uid == tab.uid) {
-                    r.is_starred = next;
-                }
+    /// QML-style: selecting a message shows it in the single reading pane.
+    fn select(&mut self, uid: u32) {
+        if self.selected == Some(uid) {
+            return;
+        }
+        self.selected = Some(uid);
+        self.allow_remote_once = false;
+        // Local mark-read on open (offline write, pushed on next sync).
+        let _ = messages::set_read_many_by_uids(&self.db, self.folder_id, &[uid], true);
+        if let Some(r) = self.rows.iter_mut().find(|r| r.uid == uid) {
+            r.is_read = true;
+        }
+        self.refresh_pills(self.folder_id);
+        self.reload_reader();
+    }
+
+    fn reload_reader(&mut self) {
+        if let Some(uid) = self.selected {
+            let dark = self.last_dark.unwrap_or(false);
+            match reader::build_reader(&self.db, self.folder_id, uid, self.allow_remote_once, dark)
+            {
+                Ok(doc) => self.reader = Some(doc),
+                Err(e) => self.status = format!("reader: {e}"),
             }
-            self.status = if next {
-                "starred".to_string()
-            } else {
-                "unstarred".to_string()
-            };
         }
     }
 
-    fn mark_unread(&mut self, folder_id: i64, uid: u32) {
-        if messages::set_read_many_by_uids(&self.db, folder_id, &[uid], false).is_ok() {
-            if folder_id == self.folder_id {
+    fn toggle_star_selected(&mut self) {
+        if let Some(uid) = self.selected {
+            let cur = self
+                .rows
+                .iter()
+                .find(|r| r.uid == uid)
+                .map(|r| r.is_starred)
+                .unwrap_or(false);
+            if messages::set_star_many_by_uids(&self.db, self.folder_id, &[uid], !cur).is_ok() {
+                if let Some(r) = self.rows.iter_mut().find(|r| r.uid == uid) {
+                    r.is_starred = !cur;
+                }
+                self.status = if cur {
+                    "unstarred".to_string()
+                } else {
+                    "starred".to_string()
+                };
+            }
+        }
+    }
+
+    fn mark_unread_selected(&mut self) {
+        if let Some(uid) = self.selected {
+            if messages::set_read_many_by_uids(&self.db, self.folder_id, &[uid], false).is_ok() {
                 if let Some(r) = self.rows.iter_mut().find(|r| r.uid == uid) {
                     r.is_read = false;
                 }
+                let fid = self.folder_id;
+                self.refresh_pills(fid);
+                self.status = "marked unread".to_string();
             }
-            self.refresh_pills(folder_id);
-            self.status = "marked unread".to_string();
+        }
+    }
+
+    fn cycle_theme(&mut self) {
+        self.theme = match self.theme.as_str() {
+            "light" => "dark",
+            "dark" => "system",
+            _ => "light",
+        }
+        .to_string();
+        let _ = settings::set(&self.db, settings::THEME_MODE, &self.theme);
+        self.reader = None;
+        self.reload_reader();
+        self.status = format!("theme: {}", self.theme);
+    }
+
+    fn apply_theme(&mut self, ctx: &egui::Context) {
+        if self.applied_theme != self.theme {
+            self.applied_theme = self.theme.clone();
+            ctx.set_theme(match self.theme.as_str() {
+                "light" => egui::ThemePreference::Light,
+                "dark" => egui::ThemePreference::Dark,
+                _ => egui::ThemePreference::System,
+            });
         }
     }
 }
@@ -416,11 +378,7 @@ const LIST_ROW_H: f32 = 74.0;
 
 impl eframe::App for MailApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        ctx.set_visuals(if self.data.dark {
-            egui::Visuals::dark()
-        } else {
-            egui::Visuals::light()
-        });
+        self.apply_theme(ctx);
         ctx.input(|i| {
             for ev in &i.events {
                 match ev {
@@ -429,19 +387,15 @@ impl eframe::App for MailApp {
                         pressed: true,
                         ..
                     } => {
-                        let ids: Vec<u32> = self.data.rows.iter().map(|r| r.uid).collect();
-                        let next = match self
-                            .data
-                            .focused
-                            .and_then(|(_, s)| ids.iter().position(|u| *u == s))
-                        {
-                            Some(pos) if pos + 1 < ids.len() => Some(ids[pos + 1]),
-                            None if !ids.is_empty() => Some(ids[0]),
-                            other => other.and_then(|p| ids.get(p).copied()),
-                        };
+                        let ids: Vec<u32> = self.rows.iter().map(|r| r.uid).collect();
+                        let next =
+                            match self.selected.and_then(|s| ids.iter().position(|u| *u == s)) {
+                                Some(pos) if pos + 1 < ids.len() => Some(ids[pos + 1]),
+                                None if !ids.is_empty() => Some(ids[0]),
+                                other => other.and_then(|p| ids.get(p).copied()),
+                            };
                         if let Some(uid) = next {
-                            let fid = self.data.folder_id;
-                            self.open_tab(fid, uid);
+                            self.select(uid);
                         }
                     }
                     egui::Event::Key {
@@ -449,20 +403,15 @@ impl eframe::App for MailApp {
                         pressed: true,
                         ..
                     } => {
-                        let ids: Vec<u32> = self.data.rows.iter().map(|r| r.uid).collect();
-                        if let Some((_, sel)) = self.data.focused.and_then(|(f, s)| {
-                            (f == self.data.folder_id)
-                                .then(|| ids.iter().position(|u| *u == s))
-                                .flatten()
-                                .map(|p| (f, p))
-                        }) {
-                            if sel > 0 {
-                                let fid = self.data.folder_id;
-                                self.open_tab(fid, ids[sel - 1]);
+                        let ids: Vec<u32> = self.rows.iter().map(|r| r.uid).collect();
+                        if let Some(pos) =
+                            self.selected.and_then(|s| ids.iter().position(|u| *u == s))
+                        {
+                            if pos > 0 {
+                                self.select(ids[pos - 1]);
                             }
                         } else if !ids.is_empty() {
-                            let fid = self.data.folder_id;
-                            self.open_tab(fid, ids[0]);
+                            self.select(ids[0]);
                         }
                     }
                     _ => {}
@@ -472,49 +421,66 @@ impl eframe::App for MailApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        if let Some(link) = self.data.paint.status.take() {
-            self.data.status = link;
+        if let Some(link) = self.paint.status.take() {
+            self.status = link;
+        }
+        // The OS theme can flip under `system`; the reader's dark rewrite
+        // must follow it, so rebuild once per change.
+        let dark_now = ui.visuals().dark_mode;
+        if self.last_dark != Some(dark_now) {
+            self.last_dark = Some(dark_now);
+            self.reader = None;
+            self.reload_reader();
         }
 
-        if let Some(id) = self.data.top_bar(ui) {
+        if let Some(id) = self.top_bar(ui) {
             self.switch_account(id);
         }
-        self.data.status_bar(ui);
-        self.data.folder_panel(ui);
+        self.status_bar(ui);
+        self.folder_panel(ui);
 
         let mut clicked: Option<u32> = None;
-        self.data.list_panel(ui, &mut clicked);
+        self.list_panel(ui, &mut clicked);
         if let Some(uid) = clicked {
-            let fid = self.data.folder_id;
-            self.open_tab(fid, uid);
+            self.select(uid);
         }
 
+        let mut action = reader::ReaderAction::None;
         egui::CentralPanel::default().show(ui, |ui| {
-            if self.dock.iter_all_tabs().next().is_none() {
+            if let Some(doc) = &self.reader {
+                let sel = self.selected;
+                let fid = self.folder_id;
+                action = egui::ScrollArea::vertical()
+                    .id_salt(("reader", fid, sel))
+                    .auto_shrink(false)
+                    .show(ui, |ui| {
+                        let starred = sel
+                            .and_then(|uid| {
+                                self.rows
+                                    .iter()
+                                    .find(|r| r.uid == uid)
+                                    .map(|r| r.is_starred)
+                            })
+                            .unwrap_or(false);
+                        reader::show(ui, doc, self.allow_remote_once, starred, &mut self.paint)
+                    })
+                    .inner;
+            } else {
                 ui.centered_and_justified(|ui| {
-                    ui.label(
-                        egui::RichText::new(
-                            "Select a message to read it\nTabs can be dragged, split and undocked.",
-                        )
-                        .weak(),
-                    );
+                    ui.label(egui::RichText::new("Select a message to read it").weak());
                 });
-                return;
             }
-            DockArea::new(&mut self.dock)
-                .style(Style::from_egui(ui.style()))
-                .show_close_buttons(true)
-                .show_add_buttons(false)
-                .draggable_tabs(true)
-                .show_leaf_close_all_buttons(true)
-                .show_inside(
-                    ui,
-                    &mut Viewer {
-                        data: &mut self.data,
-                    },
-                );
         });
-        self.prune_docs();
+        match action {
+            reader::ReaderAction::None => {}
+            reader::ReaderAction::ToggleStar => self.toggle_star_selected(),
+            reader::ReaderAction::MarkUnread => self.mark_unread_selected(),
+            reader::ReaderAction::ShowRemoteOnce => {
+                self.allow_remote_once = true;
+                self.reload_reader();
+                self.status = "remote images allowed for this message only".to_string();
+            }
+        }
     }
 }
 
@@ -522,7 +488,7 @@ impl eframe::App for MailApp {
 // Panels
 // ---------------------------------------------------------------------------
 
-impl Data {
+impl MailApp {
     /// Returns the newly picked account, if the user changed it.
     fn top_bar(&mut self, ui: &mut egui::Ui) -> Option<i64> {
         let mut switched = None;
@@ -549,7 +515,7 @@ impl Data {
                 let _ = combo;
                 if ui
                     .add_enabled(false, egui::Button::new("✎ compose"))
-                    .on_disabled_hover_text("The composer lands next — after this polish pass")
+                    .on_disabled_hover_text("The composer lands next")
                     .clicked()
                 {
                     // Unreachable while disabled; kept so enabling is one flag.
@@ -558,12 +524,8 @@ impl Data {
                     self.reload_folders();
                     self.status = "reloaded from dev database".to_string();
                 }
-                if ui
-                    .button(if self.dark { "☀ light" } else { "🌙 dark" })
-                    .clicked()
-                {
-                    self.dark = !self.dark;
-                    self.docs.clear();
+                if ui.button(format!("theme: {}", self.theme)).clicked() {
+                    self.cycle_theme();
                 }
                 ui.separator();
                 let search = egui::TextEdit::singleline(&mut self.filter)
@@ -639,8 +601,7 @@ impl Data {
                                     );
                                 }
                                 if resp.clicked() {
-                                    self.folder_id = id;
-                                    self.reload_list();
+                                    self.select_folder(id);
                                 }
                             });
                         }
@@ -680,7 +641,7 @@ impl Data {
                     |ui, range| {
                         for i in range {
                             let r = &visible[i];
-                            let sel = self.focused == Some((self.folder_id, r.uid));
+                            let sel = self.selected == Some(r.uid);
                             if row_ui(ui, r, sel).clicked() {
                                 *clicked = Some(r.uid);
                             }
@@ -748,9 +709,17 @@ fn row_ui(ui: &mut egui::Ui, r: &CompactMessage, sel: bool) -> egui::Response {
 }
 
 fn main() -> Result<()> {
-    let dark = std::env::args().any(|a| a == "--dark");
     let db = open_dev_db()?;
-    let app = MailApp::new(db, dark)?;
+    let mut app = MailApp::new(db)?;
+    // Dev/testing hook (mirrors `mailapp --open`): open one message at
+    // startup so screenshots and manual checks can land on the reader.
+    let select_uid = std::env::args()
+        .skip_while(|a| a != "--select-uid")
+        .nth(1)
+        .and_then(|v| v.parse::<u32>().ok());
+    if let Some(uid) = select_uid {
+        app.select(uid);
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("maildesk")
@@ -787,6 +756,7 @@ mod tests {
     fn snippet_preview_collapses_whitespace_and_truncates() {
         assert_eq!(snippet_preview(None, 10), "");
         assert_eq!(snippet_preview(Some("a  b\nc"), 10), "a b c");
+        assert_eq!(snippet_preview(Some("abcdefghij"), 10), "abcdefghij");
         assert_eq!(snippet_preview(Some("abcdefghij"), 5), "abcd…");
     }
 }

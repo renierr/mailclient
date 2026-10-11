@@ -105,6 +105,13 @@ pub const QUIET_HOURS_END: &str = "quiet_hours_end";
 /// Last account selected in the UI. Absent/invalid values deliberately leave
 /// startup selection to the normal first-account fallback.
 pub const LAST_ACTIVE_ACCOUNT_ID: &str = "last_active_account_id";
+/// Last folder selected in the UI (row id). Same contract as
+/// [`LAST_ACTIVE_ACCOUNT_ID`]: absent/invalid values fall back to the first
+/// folder. Written by every frontend on folder change, read at startup.
+pub const LAST_ACTIVE_FOLDER_ID: &str = "last_active_folder_id";
+/// Colour theme: `system` (default, follow the OS) | `light` | `dark`.
+/// Unknown/empty values fall back to `system`.
+pub const THEME_MODE: &str = "theme_mode";
 /// Prefix for per-account full-discovery timestamps (unix seconds, internal
 /// bookkeeping for the discovery throttle — not a user preference, no
 /// default): `last_full_discovery_{account_id}`.
@@ -148,6 +155,7 @@ pub fn defaults(key: &str) -> Option<&'static str> {
         QUIET_HOURS_ENABLED => Some("0"),
         QUIET_HOURS_START => Some("00:00"),
         QUIET_HOURS_END => Some("07:00"),
+        THEME_MODE => Some("system"),
         _ => None,
     }
 }
@@ -560,6 +568,24 @@ pub fn get_notification_action(db: &Db) -> String {
     }
 }
 
+/// Colour theme, resilient to unknown stored values.
+#[must_use]
+pub fn normalize_theme_mode(raw: &str) -> &'static str {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "light" => "light",
+        "dark" => "dark",
+        _ => "system",
+    }
+}
+
+/// Current colour theme (`system` when unset or unknown).
+pub fn get_theme_mode(db: &Db) -> String {
+    match get(db, THEME_MODE) {
+        Ok(Some(v)) => normalize_theme_mode(&v).to_string(),
+        _ => defaults(THEME_MODE).unwrap_or("system").to_string(),
+    }
+}
+
 /// Plain-text signature body (`""` when unset).
 pub fn get_signature_text(db: &Db) -> String {
     match get(db, SIGNATURE_TEXT) {
@@ -822,6 +848,26 @@ mod tests {
         assert_eq!(get_sync_interval(&db), 0);
         set(&db, SIGNATURE_TEXT, "Kind regards").unwrap();
         assert_eq!(get_signature_text(&db), "Kind regards");
+    }
+
+    #[test]
+    fn theme_mode_and_last_folder_roundtrip() {
+        assert_eq!(normalize_theme_mode("dark"), "dark");
+        assert_eq!(normalize_theme_mode(" LIGHT "), "light");
+        assert_eq!(normalize_theme_mode(""), "system");
+        assert_eq!(normalize_theme_mode("nonsense"), "system");
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(get_theme_mode(&db), "system");
+        set(&db, THEME_MODE, "dark").unwrap();
+        assert_eq!(get_theme_mode(&db), "dark");
+        set(&db, THEME_MODE, "nonsense").unwrap();
+        assert_eq!(get_theme_mode(&db), "system");
+        assert_eq!(get(&db, LAST_ACTIVE_FOLDER_ID).unwrap(), None);
+        set(&db, LAST_ACTIVE_FOLDER_ID, "42").unwrap();
+        assert_eq!(
+            get(&db, LAST_ACTIVE_FOLDER_ID).unwrap().as_deref(),
+            Some("42")
+        );
     }
 
     #[test]
