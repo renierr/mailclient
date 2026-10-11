@@ -1,20 +1,21 @@
 //! maildesk: egui desktop client over mailcore (product track).
 //!
-//! Offline-first three-pane shell: accounts + folder trees + virtualised
-//! message list + reader. Opens the dev database (`MAILCLIENT_DB`, default
-//! `./data/dev.sqlite`) and refuses the platform mailbox, like the spike.
-//! No Qt, no cxx-qt, no QML. No fixture seeding: shows what is in the DB.
+//! Offline-first shell: accounts + subscribed folder trees + virtualised
+//! message list + tabbed reader (draggable/resizable panes via egui_dock).
+//! Opens the dev database (`MAILCLIENT_DB`, default `./data/dev.sqlite`)
+//! and refuses the platform mailbox. No Qt, no cxx-qt, no QML. No fixture
+//! seeding: shows what is in the DB.
 
 mod paint;
+mod reader;
 mod render;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Datelike, Local};
+use egui_dock::{DockArea, DockState, Style, TabViewer};
 use mailcore::feed;
-use mailcore::html::reader::{self, Palette};
-use mailcore::html::{has_own_colors, inline_cid_images};
 use mailcore::models::{Account, Folder};
 use mailcore::store::messages::CompactMessage;
 use mailcore::store::{accounts, folders, messages};
@@ -70,91 +71,96 @@ fn relative_date(raw: Option<&str>) -> String {
     }
 }
 
-use chrono::Datelike;
-
-// ---------------------------------------------------------------------------
-// Reader document (same core pipeline as the spike: sanitise in core,
-// dark rewrite + fit in core, parse + paint here)
-// ---------------------------------------------------------------------------
-
-struct ReaderDoc {
-    uid: u32,
-    subject: String,
-    from_name: String,
-    from_addr: String,
-    to_line: String,
-    date: String,
-    is_html: bool,
-    plain: String,
-    had_remote: bool,
-    missing_inline: usize,
-    paint: reader::Paint,
-    blocks: Vec<render::Block>,
-    attachments: Vec<AttachmentView>,
+/// One-line snippet preview for the list delegate.
+fn snippet_preview(snippet: Option<&str>, max_chars: usize) -> String {
+    let s: String = snippet
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if s.chars().count() <= max_chars {
+        s
+    } else {
+        format!(
+            "{}…",
+            s.chars()
+                .take(max_chars.saturating_sub(1))
+                .collect::<String>()
+        )
+    }
 }
 
-struct AttachmentView {
-    name: String,
-    size_text: String,
-    cached: bool,
-}
+// ---------------------------------------------------------------------------
+// Tabs
+// ---------------------------------------------------------------------------
 
-fn build_reader(
-    db: &Db,
+/// One open message. Equality is `(folder_id, uid)` only: title and star
+/// state are snapshots that change without the tab becoming a new tab.
+struct MsgTab {
     folder_id: i64,
     uid: u32,
-    allow_remote: bool,
-    dark: bool,
-) -> Result<ReaderDoc> {
-    let m = messages::get_by_uid(db, folder_id, uid)?;
-    let (safe, had_remote, is_html, plain) =
-        feed::sanitized_bodies(m.body_html.as_deref(), m.body_text.as_deref(), allow_remote);
-    let (safe, missing_inline) = if is_html {
-        let imgs = messages::inline_images(db, m.id).unwrap_or_default();
-        inline_cid_images(&safe, &imgs)
-    } else {
-        (safe, 0)
-    };
-    let colored = has_own_colors(&safe);
-    let paint = reader::paint_for(colored, dark, false);
-    let body = reader::body(&safe, paint, false);
-    let blocks = render::parse(&body);
-    let to_line = m.to_addrs.join(", ");
-    let attachments = messages::list_attachments(db, m.id)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|a| !a.is_inline)
-        .map(|a| AttachmentView {
-            name: a
-                .filename
-                .clone()
-                .unwrap_or_else(|| "(unnamed)".to_string()),
-            size_text: mailcore::maintenance::format_bytes(a.size),
-            cached: a.data.as_ref().is_some_and(|d| !d.is_empty()),
-        })
-        .collect();
-    Ok(ReaderDoc {
-        uid,
-        subject: m.subject.clone().unwrap_or_default(),
-        from_name: m.from_name.clone().unwrap_or_default(),
-        from_addr: m.from_addr.clone().unwrap_or_default(),
-        to_line,
-        date: m.date.clone().unwrap_or_default(),
-        is_html,
-        plain,
-        had_remote,
-        missing_inline,
-        paint,
-        blocks,
-        attachments,
-    })
+    title: String,
+    starred: bool,
 }
 
-fn theme_palette(dark: bool) -> Palette {
-    if dark {
-        Palette::from_css("#1b1d21", "#e8e8e8", "#7ab3ff", "#9aa0a6", "#3a3d42")
-    } else {
-        Palette::from_css("#ffffff", "#202124", "#1a5fd0", "#5f6368", "#d0d4da")
+impl PartialEq for MsgTab {
+    fn eq(&self, other: &Self) -> bool {
+        self.folder_id == other.folder_id && self.uid == other.uid
+    }
+}
+
+struct Viewer<'a> {
+    data: &'a mut Data,
+}
+
+impl TabViewer for Viewer<'_> {
+    type Tab = MsgTab;
+
+    fn id(&mut self, tab: &mut MsgTab) -> egui::Id {
+        egui::Id::new((tab.folder_id, tab.uid))
+    }
+
+    fn title(&mut self, tab: &mut MsgTab) -> egui::WidgetText {
+        tab.title.clone().into()
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut MsgTab) {
+        let key = (tab.folder_id, tab.uid);
+        let dark = self.data.dark;
+        if !self.data.docs.contains_key(&key) {
+            let allow_remote = self.data.remote_once.contains(&key);
+            match reader::build_reader(&self.data.db, tab.folder_id, tab.uid, allow_remote, dark) {
+                Ok(doc) => {
+                    self.data.docs.insert(key, doc);
+                }
+                Err(e) => {
+                    self.data.status = format!("reader: {e}");
+                    ui.centered_and_justified(|ui| {
+                        ui.label("Could not open this message.");
+                    });
+                    return;
+                }
+            }
+        }
+        let remote_allowed = self.data.remote_once.contains(&key);
+        let action = egui::ScrollArea::vertical()
+            .id_salt(("reader", tab.folder_id, tab.uid))
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                // Scope the doc borrow to the paint pass; actions run after.
+                let doc = self.data.docs.get(&key).expect("just built");
+                reader::show(ui, doc, remote_allowed, tab.starred, &mut self.data.paint)
+            })
+            .inner;
+        match action {
+            reader::ReaderAction::None => {}
+            reader::ReaderAction::ToggleStar => self.data.toggle_star(tab),
+            reader::ReaderAction::MarkUnread => self.data.mark_unread(tab.folder_id, tab.uid),
+            reader::ReaderAction::ShowRemoteOnce => {
+                self.data.remote_once.insert(key);
+                self.data.docs.remove(&key);
+            }
+        }
     }
 }
 
@@ -165,9 +171,14 @@ fn theme_palette(dark: bool) -> Palette {
 struct FolderRow {
     folder: Folder,
     unread: u64,
+    depth: u64,
+    leaf: String,
 }
 
-struct MailApp {
+/// Everything except the dock tree. Kept separate so the dock pass can
+/// borrow `dock` and `data` mutably side by side (`DockArea::new(&mut
+/// dock).show_inside(ui, &mut Viewer { data })`).
+struct Data {
     db: Db,
     accounts: Vec<Account>,
     account_id: i64,
@@ -175,20 +186,25 @@ struct MailApp {
     folder_id: i64,
     rows: Vec<CompactMessage>,
     unread_by_folder: HashMap<i64, u64>,
-    selected: Option<u32>,
-    reader: Option<ReaderDoc>,
-    allow_remote_once: bool,
+    docs: HashMap<(i64, u32), reader::ReaderDoc>,
+    remote_once: HashSet<(i64, u32)>,
+    focused: Option<(i64, u32)>,
     dark: bool,
     filter: String,
     paint: paint::PaintState,
     status: String,
 }
 
-impl MailApp {
+struct MailApp {
+    data: Data,
+    dock: DockState<MsgTab>,
+}
+
+impl Data {
     fn new(db: Db, dark: bool) -> Result<Self> {
         let accounts = accounts::list(&db).unwrap_or_default();
         let account_id = accounts.first().map(|a| a.id).unwrap_or(-1);
-        let mut app = Self {
+        let mut data = Self {
             db,
             accounts,
             account_id,
@@ -196,37 +212,116 @@ impl MailApp {
             folder_id: -1,
             rows: Vec::new(),
             unread_by_folder: HashMap::new(),
-            selected: None,
-            reader: None,
-            allow_remote_once: false,
+            docs: HashMap::new(),
+            remote_once: HashSet::new(),
+            focused: None,
             dark,
             filter: String::new(),
             paint: paint::PaintState::new(),
             status: "offline — dev database".to_string(),
         };
-        app.reload_folders();
-        Ok(app)
+        data.reload_folders();
+        Ok(data)
     }
 
     fn reload_folders(&mut self) {
+        // Same visible subset as the other frontends: subscribed folders,
+        // folded and depth-indented (core computes depth/leaf).
         let list = folders::list_by_account(&self.db, self.account_id).unwrap_or_default();
         let counts = messages::counts_by_account(&self.db, self.account_id).unwrap_or_default();
         self.unread_by_folder = counts.iter().map(|(k, v)| (*k, v.unread)).collect();
         self.folders = list
             .into_iter()
+            .filter(|f| f.subscribed)
             .map(|f| {
                 let unread = self.unread_by_folder.get(&f.id).copied().unwrap_or(0);
-                FolderRow { folder: f, unread }
+                let depth = feed::folder_depth(&f.path, &f.delimiter);
+                let leaf = feed::folder_leaf(&f.path, &f.delimiter);
+                FolderRow {
+                    folder: f,
+                    unread,
+                    depth,
+                    leaf,
+                }
             })
             .collect();
         if !self.folders.iter().any(|f| f.folder.id == self.folder_id) {
             self.folder_id = self.folders.first().map(|f| f.folder.id).unwrap_or(-1);
-            self.selected = None;
-            self.reader = None;
         }
         self.reload_list();
     }
+}
 
+impl MailApp {
+    fn new(db: Db, dark: bool) -> Result<Self> {
+        Ok(Self {
+            data: Data::new(db, dark)?,
+            dock: DockState::new(vec![]),
+        })
+    }
+
+    fn switch_account(&mut self, account_id: i64) {
+        self.data.account_id = account_id;
+        self.dock = DockState::new(vec![]);
+        self.data.docs.clear();
+        self.data.remote_once.clear();
+        self.data.focused = None;
+        self.data.filter.clear();
+        self.data.reload_folders();
+        self.data.status = "account switched".to_string();
+    }
+
+    fn open_tab(&mut self, folder_id: i64, uid: u32) {
+        // Local mark-read on open (offline write, pushed on next sync).
+        let _ = messages::set_read_many_by_uids(&self.data.db, folder_id, &[uid], true);
+        if folder_id == self.data.folder_id {
+            if let Some(r) = self.data.rows.iter_mut().find(|r| r.uid == uid) {
+                r.is_read = true;
+            }
+        }
+        self.data.refresh_pills(folder_id);
+        self.data.focused = Some((folder_id, uid));
+        let probe = MsgTab {
+            folder_id,
+            uid,
+            title: String::new(),
+            starred: false,
+        };
+        if let Some(path) = self.dock.find_tab(&probe) {
+            let _ = self.dock.set_active_tab(path);
+            return;
+        }
+        let row = (folder_id == self.data.folder_id)
+            .then(|| self.data.rows.iter().find(|r| r.uid == uid))
+            .flatten();
+        let title = row
+            .and_then(|r| r.subject.clone())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "(no subject)".to_string());
+        let starred = row.map(|r| r.is_starred).unwrap_or_else(|| {
+            messages::get_by_uid(&self.data.db, folder_id, uid)
+                .map(|m| m.is_starred)
+                .unwrap_or(false)
+        });
+        self.dock.push_to_focused_leaf(MsgTab {
+            folder_id,
+            uid,
+            title,
+            starred,
+        });
+    }
+
+    fn prune_docs(&mut self) {
+        let open: HashSet<(i64, u32)> = self
+            .dock
+            .iter_all_tabs()
+            .map(|(_, t)| (t.folder_id, t.uid))
+            .collect();
+        self.data.docs.retain(|k, _| open.contains(k));
+    }
+}
+
+impl Data {
     fn reload_list(&mut self) {
         self.rows = messages::list_compact_by_folder_sorted(
             &self.db,
@@ -237,10 +332,9 @@ impl MailApp {
             true,
         )
         .unwrap_or_default();
-        if let Some(uid) = self.selected {
-            if !self.rows.iter().any(|r| r.uid == uid) {
-                self.selected = None;
-                self.reader = None;
+        if let Some((fid, uid)) = self.focused {
+            if fid != self.folder_id || !self.rows.iter().any(|r| r.uid == uid) {
+                self.focused = None;
             }
         }
     }
@@ -277,76 +371,56 @@ impl MailApp {
             .collect()
     }
 
-    fn select(&mut self, uid: u32) {
-        if self.selected == Some(uid) {
-            return;
-        }
-        self.selected = Some(uid);
-        self.allow_remote_once = false;
-        // Local mark-read on open (offline write, pushed on next sync).
-        let _ = messages::set_read_many_by_uids(&self.db, self.folder_id, &[uid], true);
-        if let Some(r) = self.rows.iter_mut().find(|r| r.uid == uid) {
-            r.is_read = true;
-        }
-        self.reload_reader();
-        // Refresh the pill without a full folder reload.
-        if let Ok(n) = messages::count_unread(&self.db, self.folder_id) {
-            self.unread_by_folder.insert(self.folder_id, n);
+    fn refresh_pills(&mut self, folder_id: i64) {
+        if let Ok(n) = messages::count_unread(&self.db, folder_id) {
+            self.unread_by_folder.insert(folder_id, n);
             for f in &mut self.folders {
-                if f.folder.id == self.folder_id {
+                if f.folder.id == folder_id {
                     f.unread = n;
                 }
             }
         }
     }
 
-    fn reload_reader(&mut self) {
-        if let Some(uid) = self.selected {
-            match build_reader(
-                &self.db,
-                self.folder_id,
-                uid,
-                self.allow_remote_once,
-                self.dark,
-            ) {
-                Ok(doc) => self.reader = Some(doc),
-                Err(e) => self.status = format!("reader: {e}"),
+    fn toggle_star(&mut self, tab: &mut MsgTab) {
+        let next = !tab.starred;
+        if messages::set_star_many_by_uids(&self.db, tab.folder_id, &[tab.uid], next).is_ok() {
+            tab.starred = next;
+            if tab.folder_id == self.folder_id {
+                if let Some(r) = self.rows.iter_mut().find(|r| r.uid == tab.uid) {
+                    r.is_starred = next;
+                }
             }
+            self.status = if next {
+                "starred".to_string()
+            } else {
+                "unstarred".to_string()
+            };
         }
     }
 
-    fn toggle_star_selected(&mut self) {
-        if let Some(uid) = self.selected {
-            let cur = self
-                .rows
-                .iter()
-                .find(|r| r.uid == uid)
-                .map(|r| r.is_starred)
-                .unwrap_or(false);
-            if messages::set_star_many_by_uids(&self.db, self.folder_id, &[uid], !cur).is_ok() {
+    fn mark_unread(&mut self, folder_id: i64, uid: u32) {
+        if messages::set_read_many_by_uids(&self.db, folder_id, &[uid], false).is_ok() {
+            if folder_id == self.folder_id {
                 if let Some(r) = self.rows.iter_mut().find(|r| r.uid == uid) {
-                    r.is_starred = !cur;
+                    r.is_read = false;
                 }
-                self.status = if cur {
-                    "unstarred".to_string()
-                } else {
-                    "starred".to_string()
-                };
             }
+            self.refresh_pills(folder_id);
+            self.status = "marked unread".to_string();
         }
     }
 }
 
-const LIST_ROW_H: f32 = 64.0;
+const LIST_ROW_H: f32 = 74.0;
 
 impl eframe::App for MailApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        ctx.set_visuals(if self.dark {
+        ctx.set_visuals(if self.data.dark {
             egui::Visuals::dark()
         } else {
             egui::Visuals::light()
         });
-        // Keyboard navigation in the list.
         ctx.input(|i| {
             for ev in &i.events {
                 match ev {
@@ -355,15 +429,19 @@ impl eframe::App for MailApp {
                         pressed: true,
                         ..
                     } => {
-                        let ids: Vec<u32> = self.rows.iter().map(|r| r.uid).collect();
-                        let next =
-                            match self.selected.and_then(|s| ids.iter().position(|u| *u == s)) {
-                                Some(pos) if pos + 1 < ids.len() => Some(ids[pos + 1]),
-                                None if !ids.is_empty() => Some(ids[0]),
-                                other => other.and_then(|p| ids.get(p).copied()),
-                            };
+                        let ids: Vec<u32> = self.data.rows.iter().map(|r| r.uid).collect();
+                        let next = match self
+                            .data
+                            .focused
+                            .and_then(|(_, s)| ids.iter().position(|u| *u == s))
+                        {
+                            Some(pos) if pos + 1 < ids.len() => Some(ids[pos + 1]),
+                            None if !ids.is_empty() => Some(ids[0]),
+                            other => other.and_then(|p| ids.get(p).copied()),
+                        };
                         if let Some(uid) = next {
-                            self.select(uid);
+                            let fid = self.data.folder_id;
+                            self.open_tab(fid, uid);
                         }
                     }
                     egui::Event::Key {
@@ -371,15 +449,20 @@ impl eframe::App for MailApp {
                         pressed: true,
                         ..
                     } => {
-                        let ids: Vec<u32> = self.rows.iter().map(|r| r.uid).collect();
-                        if let Some(sel) =
-                            self.selected.and_then(|s| ids.iter().position(|u| *u == s))
-                        {
+                        let ids: Vec<u32> = self.data.rows.iter().map(|r| r.uid).collect();
+                        if let Some((_, sel)) = self.data.focused.and_then(|(f, s)| {
+                            (f == self.data.folder_id)
+                                .then(|| ids.iter().position(|u| *u == s))
+                                .flatten()
+                                .map(|p| (f, p))
+                        }) {
                             if sel > 0 {
-                                self.select(ids[sel - 1]);
+                                let fid = self.data.folder_id;
+                                self.open_tab(fid, ids[sel - 1]);
                             }
                         } else if !ids.is_empty() {
-                            self.select(ids[0]);
+                            let fid = self.data.folder_id;
+                            self.open_tab(fid, ids[0]);
                         }
                     }
                     _ => {}
@@ -389,205 +472,279 @@ impl eframe::App for MailApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // Link-click feedback from the reader painter.
-        if let Some(link) = self.paint.status.take() {
-            self.status = link;
+        if let Some(link) = self.data.paint.status.take() {
+            self.data.status = link;
         }
 
+        if let Some(id) = self.data.top_bar(ui) {
+            self.switch_account(id);
+        }
+        self.data.status_bar(ui);
+        self.data.folder_panel(ui);
+
+        let mut clicked: Option<u32> = None;
+        self.data.list_panel(ui, &mut clicked);
+        if let Some(uid) = clicked {
+            let fid = self.data.folder_id;
+            self.open_tab(fid, uid);
+        }
+
+        egui::CentralPanel::default().show(ui, |ui| {
+            if self.dock.iter_all_tabs().next().is_none() {
+                ui.centered_and_justified(|ui| {
+                    ui.label(
+                        egui::RichText::new(
+                            "Select a message to read it\nTabs can be dragged, split and undocked.",
+                        )
+                        .weak(),
+                    );
+                });
+                return;
+            }
+            DockArea::new(&mut self.dock)
+                .style(Style::from_egui(ui.style()))
+                .show_close_buttons(true)
+                .show_add_buttons(false)
+                .draggable_tabs(true)
+                .show_leaf_close_all_buttons(true)
+                .show_inside(
+                    ui,
+                    &mut Viewer {
+                        data: &mut self.data,
+                    },
+                );
+        });
+        self.prune_docs();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Panels
+// ---------------------------------------------------------------------------
+
+impl Data {
+    /// Returns the newly picked account, if the user changed it.
+    fn top_bar(&mut self, ui: &mut egui::Ui) -> Option<i64> {
+        let mut switched = None;
         egui::Panel::top("bar").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("maildesk");
-                // Account picker over real accounts.
+                let mut picked = self.account_id;
                 let cur_name = self
                     .accounts
                     .iter()
-                    .find(|a| a.id == self.account_id)
+                    .find(|a| a.id == picked)
                     .map(|a| a.name.clone())
                     .unwrap_or_else(|| "—".to_string());
-                egui::ComboBox::from_id_salt("account")
+                let combo = egui::ComboBox::from_id_salt("account")
                     .selected_text(cur_name)
                     .show_ui(ui, |ui| {
                         for a in &self.accounts {
-                            ui.selectable_value(&mut self.account_id, a.id, &a.name);
+                            ui.selectable_value(&mut picked, a.id, &a.name);
                         }
                     });
+                if picked != self.account_id {
+                    switched = Some(picked);
+                }
+                let _ = combo;
+                if ui
+                    .add_enabled(false, egui::Button::new("✎ compose"))
+                    .on_disabled_hover_text("The composer lands next — after this polish pass")
+                    .clicked()
+                {
+                    // Unreachable while disabled; kept so enabling is one flag.
+                }
+                if ui.button("⟳ reload").clicked() {
+                    self.reload_folders();
+                    self.status = "reloaded from dev database".to_string();
+                }
                 if ui
                     .button(if self.dark { "☀ light" } else { "🌙 dark" })
                     .clicked()
                 {
                     self.dark = !self.dark;
-                    self.reload_reader();
+                    self.docs.clear();
                 }
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.filter)
-                        .hint_text("Search this folder…")
-                        .desired_width(180.0),
-                );
-                if ui.button("⟳ reload").clicked() {
-                    self.reload_folders();
-                    self.status = "reloaded from dev database".to_string();
+                ui.separator();
+                let search = egui::TextEdit::singleline(&mut self.filter)
+                    .hint_text("Search this folder…")
+                    .desired_width(200.0);
+                ui.add(search);
+                if !self.filter.is_empty() && ui.button("✕").clicked() {
+                    self.filter.clear();
                 }
             });
         });
+        switched
+    }
 
+    fn status_bar(&mut self, ui: &mut egui::Ui) {
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(&self.status);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let unread: u64 = self.rows.iter().filter(|r| !r.is_read).count() as u64;
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} messages · {} unread",
+                            self.rows.len(),
+                            unread
+                        ))
+                        .weak(),
+                    );
+                });
             });
         });
+    }
 
+    fn folder_panel(&mut self, ui: &mut egui::Ui) {
         egui::Panel::left("folders")
-            .exact_size(190.0)
+            .resizable(true)
+            .default_size(200.0)
+            .size_range(egui::Rangef::new(140.0, 340.0))
             .show(ui, |ui| {
                 ui.heading("Folders");
                 ui.separator();
                 if self.folders.is_empty() {
-                    ui.label("No folders in this database.");
+                    ui.label(egui::RichText::new("No subscribed folders.").weak());
+                    return;
                 }
-                for i in 0..self.folders.len() {
-                    let (id, path, unread) = {
-                        let f = &self.folders[i];
-                        (f.folder.id, f.folder.path.clone(), f.unread)
-                    };
-                    let sel = id == self.folder_id;
-                    ui.horizontal(|ui| {
-                        let label = if unread > 0 {
-                            format!("{path}  ({unread})")
-                        } else {
-                            path.clone()
-                        };
-                        if ui.selectable_label(sel, label).clicked() {
-                            self.folder_id = id;
-                            self.selected = None;
-                            self.reader = None;
-                            self.reload_list();
-                        }
-                    });
-                }
-            });
-
-        let visible: Vec<CompactMessage> = self.visible_rows().into_iter().cloned().collect();
-        let mut clicked: Option<u32> = None;
-        egui::Panel::left("list").exact_size(340.0).show(ui, |ui| {
-            ui.heading(format!("Messages ({})", visible.len()));
-            ui.separator();
-            egui::ScrollArea::vertical().auto_shrink(false).show_rows(
-                ui,
-                LIST_ROW_H,
-                visible.len(),
-                |ui, range| {
-                    for i in range {
-                        let r = &visible[i];
-                        let sel = self.selected == Some(r.uid);
-                        let from = r
-                            .from_name
-                            .clone()
-                            .or(r.from_addr.clone())
-                            .unwrap_or_else(|| "?".to_string());
-                        let subject = r
-                            .subject
-                            .clone()
-                            .unwrap_or_else(|| "(no subject)".to_string());
-                        let dot = if r.is_read { " " } else { "● " };
-                        let star = if r.is_starred { " ★" } else { "" };
-                        let clip = if r.has_attachments { " 📎" } else { "" };
-                        let date = relative_date(r.date.as_deref());
-                        let text = format!("{dot}{from}{star}{clip}\n{subject}\n{date}");
-                        let resp = ui.selectable_label(sel, text);
-                        if resp.clicked() {
-                            clicked = Some(r.uid);
-                        }
-                    }
-                },
-            );
-        });
-        if let Some(uid) = clicked {
-            self.select(uid);
-        }
-
-        let mut want_star = false;
-        let mut want_remote_once = false;
-        egui::CentralPanel::default().show(ui, |ui| {
-            if let Some(doc) = &self.reader {
-                let allow_remote_once = self.allow_remote_once;
                 egui::ScrollArea::vertical()
-                    .id_salt(("reader", doc.uid))
                     .auto_shrink(false)
                     .show(ui, |ui| {
-                        ui.heading(&doc.subject);
-                        ui.label(format!(
-                            "From: {} <{}>",
-                            if doc.from_name.is_empty() {
-                                "?"
-                            } else {
-                                &doc.from_name
-                            },
-                            doc.from_addr
-                        ));
-                        if !doc.to_line.is_empty() {
-                            ui.label(format!("To: {}", doc.to_line));
-                        }
-                        ui.label(&doc.date);
-                        if ui.button("☆ toggle star").clicked() {
-                            want_star = true;
-                        }
-                        ui.separator();
-                        if doc.is_html && doc.had_remote && !allow_remote_once {
+                        for i in 0..self.folders.len() {
+                            let (id, leaf, path, unread, depth) = {
+                                let f = &self.folders[i];
+                                (
+                                    f.folder.id,
+                                    f.leaf.clone(),
+                                    f.folder.path.clone(),
+                                    f.unread,
+                                    f.depth,
+                                )
+                            };
+                            let sel = id == self.folder_id;
                             ui.horizontal(|ui| {
-                                ui.label("Remote images blocked.");
-                                if ui.button("Show once").clicked() {
-                                    want_remote_once = true;
+                                ui.add_space(depth as f32 * 14.0);
+                                let mut label = egui::RichText::new(&leaf);
+                                if sel {
+                                    label = label.strong();
+                                }
+                                let resp = ui.selectable_label(sel, label).on_hover_text(path);
+                                if unread > 0 {
+                                    ui.label(
+                                        egui::RichText::new(format!("{unread}"))
+                                            .small()
+                                            .color(ui.visuals().weak_text_color()),
+                                    );
+                                }
+                                if resp.clicked() {
+                                    self.folder_id = id;
+                                    self.reload_list();
                                 }
                             });
                         }
-                        if doc.missing_inline > 0 {
-                            ui.label(format!(
-                                "{} inline image(s) not downloaded.",
-                                doc.missing_inline
-                            ));
-                        }
-                        if !doc.attachments.is_empty() {
-                            ui.collapsing(
-                                format!("Attachments ({})", doc.attachments.len()),
-                                |ui| {
-                                    for a in &doc.attachments {
-                                        ui.horizontal(|ui| {
-                                            ui.label(format!("{}  ({})", a.name, a.size_text));
-                                            ui.label(if a.cached { "cached" } else { "on server" });
-                                        });
-                                    }
-                                },
-                            );
-                        }
-                        ui.separator();
-                        if !doc.is_html {
-                            ui.label(&doc.plain);
-                        } else {
-                            let colors = if doc.paint == reader::Paint::Theme {
-                                paint::Colors::themed(ui)
-                            } else {
-                                paint::Colors::from_palette(&reader::palette(
-                                    doc.paint,
-                                    &theme_palette(ui.visuals().dark_mode),
-                                ))
-                            };
-                            paint::paint_blocks(ui, &doc.blocks, &colors, &mut self.paint);
-                        }
                     });
-            } else {
-                ui.centered_and_justified(|ui| {
-                    ui.label("Select a message to read it");
-                });
-            }
-        });
-        if want_star {
-            self.toggle_star_selected();
-        }
-        if want_remote_once {
-            self.allow_remote_once = true;
-            self.reload_reader();
-        }
+            });
     }
+
+    fn list_panel(&mut self, ui: &mut egui::Ui, clicked: &mut Option<u32>) {
+        let visible: Vec<CompactMessage> = self.visible_rows().into_iter().cloned().collect();
+        let folder_name = self
+            .folders
+            .iter()
+            .find(|f| f.folder.id == self.folder_id)
+            .map(|f| f.leaf.clone())
+            .unwrap_or_default();
+        egui::Panel::left("list")
+            .resizable(true)
+            .default_size(360.0)
+            .size_range(egui::Rangef::new(240.0, 560.0))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading(&folder_name);
+                    ui.label(egui::RichText::new(format!("({})", visible.len())).weak());
+                });
+                if self.filter.trim().len() >= 2 {
+                    ui.label(egui::RichText::new(format!("filter: {}", self.filter.trim())).weak());
+                }
+                ui.separator();
+                if visible.is_empty() {
+                    ui.label(egui::RichText::new("No messages.").weak());
+                    return;
+                }
+                egui::ScrollArea::vertical().auto_shrink(false).show_rows(
+                    ui,
+                    LIST_ROW_H,
+                    visible.len(),
+                    |ui, range| {
+                        for i in range {
+                            let r = &visible[i];
+                            let sel = self.focused == Some((self.folder_id, r.uid));
+                            if row_ui(ui, r, sel).clicked() {
+                                *clicked = Some(r.uid);
+                            }
+                            ui.separator();
+                        }
+                    },
+                );
+            });
+    }
+}
+
+/// One message row. Returns the click response.
+fn row_ui(ui: &mut egui::Ui, r: &CompactMessage, sel: bool) -> egui::Response {
+    use egui::text::{LayoutJob, TextFormat};
+
+    let from = r
+        .from_name
+        .clone()
+        .or(r.from_addr.clone())
+        .unwrap_or_else(|| "?".to_string());
+    let subject = r
+        .subject
+        .clone()
+        .unwrap_or_else(|| "(no subject)".to_string());
+    let date = relative_date(r.date.as_deref());
+    let marks = format!(
+        "{}{}{}",
+        if r.is_read { "" } else { "● " },
+        if r.is_starred { " ★" } else { "" },
+        if r.has_attachments { " 📎" } else { "" }
+    );
+
+    let accent = ui.visuals().strong_text_color();
+    let faint = ui.visuals().weak_text_color();
+    let mut job = LayoutJob::default();
+    job.append(
+        &format!("{marks}{from}"),
+        0.0,
+        TextFormat {
+            color: if r.is_read { faint } else { accent },
+            ..Default::default()
+        },
+    );
+    job.append("\n", 0.0, TextFormat::default());
+    job.append(
+        &subject,
+        0.0,
+        TextFormat {
+            color: accent,
+            ..Default::default()
+        },
+    );
+    job.append("\n", 0.0, TextFormat::default());
+    let tail = format!("{date} · {}", snippet_preview(r.snippet.as_deref(), 72));
+    job.append(
+        &tail,
+        0.0,
+        TextFormat {
+            color: faint,
+            ..Default::default()
+        },
+    );
+
+    ui.selectable_label(sel, job)
 }
 
 fn main() -> Result<()> {
@@ -597,7 +754,7 @@ fn main() -> Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("maildesk")
-            .with_inner_size([1280.0, 800.0]),
+            .with_inner_size([1360.0, 860.0]),
         ..Default::default()
     };
     eframe::run_native("maildesk", options, Box::new(|_cc| Ok(Box::new(app))))
@@ -624,5 +781,12 @@ mod tests {
             .and_local_timezone(Local)
             .unwrap();
         assert_eq!(relative_date(Some(&mid.to_rfc3339())), "Yesterday");
+    }
+
+    #[test]
+    fn snippet_preview_collapses_whitespace_and_truncates() {
+        assert_eq!(snippet_preview(None, 10), "");
+        assert_eq!(snippet_preview(Some("a  b\nc"), 10), "a b c");
+        assert_eq!(snippet_preview(Some("abcdefghij"), 5), "abcd…");
     }
 }
