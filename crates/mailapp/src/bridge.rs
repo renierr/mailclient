@@ -655,6 +655,27 @@ pub mod qobject {
         #[qinvokable]
         fn send_mail(self: Pin<&mut Self>, form: &QString) -> QString;
 
+        /// Hold a message for `send_at` (any RFC3339 instant, at least a
+        /// minute out) instead of sending now: same form as `send_mail`, kept
+        /// as a `scheduled` outbox row until its time. Returns `""` or an
+        /// error; the composer closes on success like a send. The composing
+        /// device owns the delivery (each device keeps its own outbox), so
+        /// the dialog says it must stay on and online.
+        #[qinvokable]
+        fn schedule_mail(self: Pin<&mut Self>, form: &QString, send_at: &QString) -> QString;
+
+        /// Submit due `scheduled` rows of every account (a due timer's job).
+        /// Returns `""` when queued, else why not; completion arrives via
+        /// `job_finished` with kind `"Send"`.
+        #[qinvokable]
+        fn flush_due_sends(self: Pin<&mut Self>) -> QString;
+
+        /// Milliseconds until the earliest held `scheduled` send across all
+        /// accounts (`-1` = none scheduled, `0` = already due). The due
+        /// timer arms from this.
+        #[qinvokable]
+        fn scheduled_due_ms(&self) -> i64;
+
         /// Append or replace an IMAP `\Draft` message from a Composer form.
         #[qinvokable]
         fn save_draft(self: Pin<&mut Self>, form: &QString) -> QString;
@@ -709,15 +730,16 @@ pub mod qobject {
         /// Unsent mail for the current account as JSON
         /// (`mailcore::outbox::list_json`: `[{id, status, state, last_error,
         /// retries, retryable, dismissable, has_bytes, envelope_from, envelope_to,
-        /// subject, created_at, updated_at}]`). Local SQLite read, no
-        /// network. Returns `"[]"` when nothing is queued.
+        /// subject, created_at, updated_at, send_at}]`; `send_at` is the UTC
+        /// instant a `scheduled` row waits for, `""` otherwise). Local SQLite
+        /// read, no network. Returns `"[]"` when nothing is queued.
         #[qinvokable]
         fn outbox_json(&self) -> QString;
 
         /// The current account's outbox counts as JSON
         /// (`mailcore::outbox::status`: `{queued, sending, failed,
-        /// retryable, pending, label, has_failures}`). Local read; `"{}"`
-        /// without an account.
+        /// scheduled, retryable, pending, label, has_failures}`). Local read;
+        /// `"{}"` without an account.
         #[qinvokable]
         fn outbox_status_json(&self) -> QString;
 
@@ -725,6 +747,16 @@ pub mod qobject {
         /// for, or a stale entry). Local-only; returns `""` or an error.
         #[qinvokable]
         fn dismiss_outbox(&self, id: i64) -> QString;
+
+        /// Move a held outbox row to a new future instant (`send_at` any
+        /// RFC3339 instant, at least a minute out). Returns `""` or an error.
+        #[qinvokable]
+        fn reschedule_outbox(&self, id: i64, send_at: &QString) -> QString;
+
+        /// Send a `scheduled` row with the next sync instead of at its time.
+        /// Returns `""` or an error.
+        #[qinvokable]
+        fn send_now_outbox(&self, id: i64) -> QString;
 
         /// Drop all pooled IMAP sessions (app quit). No LOGOUT round-trip,
         /// so quit never blocks on a dead connection — closing the sockets

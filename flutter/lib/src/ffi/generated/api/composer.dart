@@ -28,6 +28,24 @@ Future<void> sendMail({
   form: form,
 );
 
+/// Hold a message for `send_at` (any RFC3339 instant, at least a minute out)
+/// instead of sending now: same form as [`send_mail`], kept as a `scheduled`
+/// outbox row until its time. Validation, MIME assembly and holding happen
+/// **inline**, so a mistake (or a past time) throws with the composer open.
+/// No delivery job runs for it: the next check past its time submits it
+/// through the normal flush path. Returns the normalized UTC instant the row
+/// waits for, so the app can arm its exact alarm on it. The composing device
+/// owns the delivery (each device keeps its own outbox).
+Future<String> scheduleMail({
+  required PlatformInt64 accountId,
+  required String form,
+  required String sendAt,
+}) => MailCoreApi.instance.api.crateApiComposerScheduleMail(
+  accountId: accountId,
+  form: form,
+  sendAt: sendAt,
+);
+
 /// Append the composer's current text to Drafts, replacing what it was
 /// opened from. The Drafts folder is created server-side when missing.
 Future<void> saveDraft({

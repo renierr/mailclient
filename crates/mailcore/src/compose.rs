@@ -37,7 +37,10 @@ pub use prefill::{
 };
 pub use reply::{reply_address, ReplyAddress};
 pub use segments::{recipient_segment, replace_recipient_segment};
-pub use send::{abandon_send, deliver, prepare_send, PreparedSend, SendOutcome};
+pub use send::{
+    abandon_send, deliver, prepare_scheduled, prepare_send, PreparedSend, ScheduledSend,
+    SendOutcome,
+};
 
 /// Inline images: an editor shows an inserted image as a `data:` URL, which
 /// the sender turns into a `cid:` part (see `sync::sender::inline`).

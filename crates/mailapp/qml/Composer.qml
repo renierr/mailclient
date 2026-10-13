@@ -85,6 +85,7 @@ Dialog {
 
     signal statusMessage(string text)
     signal sendRequested(string payload)
+    signal scheduleRequested(string payload, string sendAt)
     signal saveDraftRequested(string payload)
 
     property string accountEmail: ""
@@ -463,6 +464,11 @@ Dialog {
     readonly property bool hasRecipients: toField.text.trim() !== "" || ccField.text.trim() !== "" || bccField.text.trim()
                                           !== ""
 
+    // Payload waiting for its time: read from the editor when "Send later"
+    // is pressed (async like Send), then handed over with the dialog's UTC
+    // instant once a time is picked.
+    property string pendingSchedulePayload: ""
+
     // Reading the document back is asynchronous, so Send finishes inside the
     // callback rather than returning a payload.
     function requestSend() {
@@ -485,6 +491,22 @@ Dialog {
         } else {
             bodyEditor.fetchHtml(function (html) {
                 root.saveDraftRequested(root.payloadFor(html));
+            });
+        }
+    }
+
+    function requestSchedule() {
+        if (!root.hasRecipients) {
+            root.statusMessage(qsTr("Add at least one recipient (To, Cc or Bcc)"));
+            return;
+        }
+        if (root.sourceMode) {
+            root.pendingSchedulePayload = root.payloadFor(sourceArea.text);
+            scheduleDialog.openFor("");
+        } else {
+            bodyEditor.fetchHtml(function (html) {
+                root.pendingSchedulePayload = root.payloadFor(html);
+                scheduleDialog.openFor("");
             });
         }
     }
@@ -844,6 +866,11 @@ Dialog {
                 onClicked: root.requestSaveDraft()
             }
             AppButton {
+                text: qsTr("Send later")
+                enabled: root.hasRecipients
+                onClicked: root.requestSchedule()
+            }
+            AppButton {
                 text: qsTr("Send")
                 intent: "primary"
                 enabled: root.hasRecipients
@@ -917,6 +944,11 @@ Dialog {
         id: imagePlacement
         onInlineChosen: urls => root.insertImages(urls)
         onAttachChosen: urls => root.addAttachments(urls)
+    }
+
+    ScheduleDialog {
+        id: scheduleDialog
+        onScheduleAccepted: sendAt => root.scheduleRequested(root.pendingSchedulePayload, sendAt)
     }
 
     // --- file picker ------------------------------------------------------

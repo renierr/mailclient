@@ -193,6 +193,10 @@ create table if not exists send_queue (
     raw_mime      blob,
     envelope_from text,
     envelope_to   text not null default '[]',
+    -- Scheduled send: submit no earlier than this UTC RFC3339 instant
+    -- (`NULL` = immediate). Rows with a future `send_at` wait as `scheduled`
+    -- until promotion moves them to `queued`.
+    send_at          text,
     -- Ask for a delivery confirmation (SMTP DSN) when submitting.
     request_dsn   integer not null default 0,
     created_at    text not null,
@@ -200,6 +204,8 @@ create table if not exists send_queue (
 );
 create index if not exists idx_send_queue_pending
     on send_queue (status, created_at);
+create index if not exists idx_send_queue_send_at
+    on send_queue (status, send_at);
 
 -- ------------------------------------------------------------ app settings
 -- Simple key/value store for user preferences (see store::settings for keys

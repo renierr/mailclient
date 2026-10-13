@@ -51,11 +51,14 @@ pub fn endpoint_for(account: &Account) -> SmtpEndpoint {
     }
 }
 /// What a successful submit learned on the way.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Submitted {
     /// A delivery confirmation was asked for, but the server does not
     /// offer DSN: the mail went without it and no confirmation will come.
     pub dsn_unsupported: bool,
+    /// The bytes as submitted: for a scheduled send the `Date:` header is
+    /// refreshed to the send time, so the Sent copy files the same bytes.
+    pub raw: Vec<u8>,
 }
 
 /// SMTP sender bound to one account's settings.
@@ -178,6 +181,19 @@ impl SmtpSender {
         account_id: i64,
         req: &SendRequest<'_>,
     ) -> Result<(i64, Vec<u8>)> {
+        self.enqueue_send_at(db, account_id, req, None)
+    }
+
+    /// [`Self::enqueue_send`] for a future instant (`Some` UTC RFC3339): the
+    /// row waits as `scheduled` until its time comes instead of submitting
+    /// with the next flush. `None` is the immediate path.
+    pub fn enqueue_send_at(
+        &self,
+        db: &Db,
+        account_id: i64,
+        req: &SendRequest<'_>,
+        send_at: Option<&str>,
+    ) -> Result<(i64, Vec<u8>)> {
         let to_boxes = valid_mailboxes(req.to);
         let cc_boxes = strict_mailboxes("Cc", req.cc)?;
         let bcc_boxes = strict_mailboxes("Bcc", req.bcc)?;
@@ -263,15 +279,29 @@ impl SmtpSender {
             req.request_mdn,
         )?;
         let raw = email.formatted();
-        let queue_id = queue::enqueue_mime(
-            db,
-            account_id,
-            None,
-            &raw,
-            from_addr,
-            &rcpts,
-            req.request_dsn,
-        )?;
+        let queue_id = match send_at {
+            Some(at) => queue::enqueue_scheduled_mime(
+                db,
+                account_id,
+                &queue::ScheduledMime {
+                    message_id: None,
+                    raw_mime: &raw,
+                    envelope_from: from_addr,
+                    envelope_to: &rcpts,
+                    request_dsn: req.request_dsn,
+                    send_at: at,
+                },
+            )?,
+            None => queue::enqueue_mime(
+                db,
+                account_id,
+                None,
+                &raw,
+                from_addr,
+                &rcpts,
+                req.request_dsn,
+            )?,
+        };
         Ok((queue_id, raw))
     }
 
@@ -325,13 +355,22 @@ impl SmtpSender {
         transport: &mut Option<SmtpTransport>,
     ) -> Result<Submitted> {
         let row = queue::get(db, queue_id)?;
-        let raw = row
+        let mut raw = row
             .raw_mime
-            .as_deref()
+            .clone()
             .filter(|b| !b.is_empty())
             .ok_or_else(|| {
                 StoreError::InvalidInput(format!("queue entry {queue_id} has no MIME bytes"))
             })?;
+        // A scheduled send's MIME was built when it was composed, days ago:
+        // refresh `Date:` to the actual send time so the recipient's list
+        // sorts it under today, not under composition day.
+        if row.send_at.is_some() {
+            raw = Self::refresh_date_header(&raw);
+            if let Err(e) = queue::update_raw_mime(db, queue_id, &raw) {
+                log::warn!("smtp: outbox entry {queue_id} date not refreshed: {e}");
+            }
+        }
         let from = row
             .envelope_from
             .as_deref()
@@ -345,18 +384,19 @@ impl SmtpSender {
         match self.submit_raw(
             from,
             &row.envelope_to,
-            raw,
+            &raw,
             password,
             row.request_dsn,
             transport,
         ) {
-            Ok(submitted) => {
+            Ok(mut submitted) => {
                 // The server accepted it, so it IS sent. A bookkeeping failure
                 // (the row vanished with its account mid-send) must not turn
                 // that into "send failed" and invite a duplicate resend.
                 if let Err(e) = queue::mark_sent(db, queue_id) {
                     log::warn!("smtp: sent, but outbox entry {queue_id} not updated: {e}");
                 }
+                submitted.raw = raw;
                 Ok(submitted)
             }
             Err(e) => {
@@ -386,6 +426,8 @@ impl SmtpSender {
         imap_password: Option<&str>,
     ) -> Result<u64> {
         let _ = queue::requeue_interrupted(db, account_id);
+        // Scheduled sends whose time has come join this flush.
+        let _ = queue::promote_due(db, account_id);
         let _ = queue::prune_sent(db);
         let mut sent = 0u64;
         let mut first_error = None;
@@ -400,7 +442,7 @@ impl SmtpSender {
                 }
             }
             match self.submit_claimed_via(db, row.id, password, &mut transport) {
-                Ok(_) => {
+                Ok(submitted) => {
                     sent += 1;
                     if account_settings::get_bool(db, account_id, settings::COLLECT_SENT_CONTACTS) {
                         // Envelope only: the display names lived in the
@@ -411,9 +453,9 @@ impl SmtpSender {
                             }
                         }
                     }
-                    if let Some(raw) = row.raw_mime.as_deref() {
+                    if !submitted.raw.is_empty() {
                         if let Err(e) = self
-                            .save_sent_copy(db, account_id, imap_password, raw)
+                            .save_sent_copy(db, account_id, imap_password, &submitted.raw)
                             .await
                         {
                             log::warn!("smtp: outbox sent copy failed: {e}");
@@ -432,6 +474,87 @@ impl SmtpSender {
         }
     }
 
+    /// Rewrite a stored MIME message's `Date:` header to now (RFC 5322), for a
+    /// scheduled send whose bytes were built at composition time: without this
+    /// the recipient's list would sort it under composition day. Byte surgery on
+    /// the header block only (before the blank line) — bodies, which may hold
+    /// non-UTF-8 attachment bytes, are never decoded. A folded `Date:` loses its
+    /// continuations; a missing one is prepended. Never fails the send:
+    /// anything unexpected goes out with its original bytes.
+    fn refresh_date_header(raw: &[u8]) -> Vec<u8> {
+        let now = chrono::Utc::now()
+            .format("%a, %d %b %Y %H:%M:%S %z")
+            .to_string();
+        let crlf = raw.windows(2).any(|w| w == b"\r\n");
+        let nl: &[u8] = if crlf { b"\r\n" } else { b"\n" };
+        let head_end = Self::find_slice(raw, b"\r\n\r\n")
+            .map(|i| i + 4)
+            .or_else(|| Self::find_slice(raw, b"\n\n").map(|i| i + 2))
+            .unwrap_or(raw.len());
+        let (head, body) = (raw[..head_end].to_vec(), &raw[head_end..]);
+        let is_date_line = |line: &[u8]| {
+            line.len() > 5 && line[4] == b':' && line[..4].eq_ignore_ascii_case(b"date")
+        };
+        let mut out: Vec<u8> = Vec::with_capacity(raw.len() + 64);
+        let mut replaced = false;
+        let mut skipping_fold = false;
+        // Split keeping endings: iterate on `\n`, re-emit the `\r` when present.
+        let mut start = 0;
+        for (i, b) in head.iter().enumerate() {
+            if *b != b'\n' {
+                continue;
+            }
+            let mut line = &head[start..i];
+            let had_cr = line.ends_with(b"\r");
+            if had_cr {
+                line = &line[..line.len() - 1];
+            }
+            let ending: &[u8] = if had_cr { b"\r\n" } else { b"\n" };
+            if skipping_fold {
+                if line.starts_with(b" ") || line.starts_with(b"\t") {
+                    start = i + 1;
+                    continue;
+                }
+                skipping_fold = false;
+            }
+            if !replaced && is_date_line(line) {
+                out.extend_from_slice(format!("Date: {now}").as_bytes());
+                out.extend_from_slice(ending);
+                replaced = true;
+                skipping_fold = true;
+            } else {
+                out.extend_from_slice(line);
+                out.extend_from_slice(ending);
+            }
+            start = i + 1;
+        }
+        // A header block without trailing newline (or no blank line at all):
+        // handle the tail the same way.
+        if start < head.len() {
+            let line = &head[start..];
+            if skipping_fold && (line.starts_with(b" ") || line.starts_with(b"\t")) {
+                // Folded tail of the replaced Date: dropped.
+            } else if !replaced && is_date_line(line) {
+                out.extend_from_slice(format!("Date: {now}").as_bytes());
+                replaced = true;
+            } else {
+                out.extend_from_slice(line);
+            }
+        }
+        if !replaced {
+            let mut with_date = format!("Date: {now}").into_bytes();
+            with_date.extend_from_slice(nl);
+            with_date.extend_from_slice(&out);
+            out = with_date;
+        }
+        out.extend_from_slice(body);
+        out
+    }
+
+    /// First index of `needle` in `haystack`, if present.
+    fn find_slice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack.windows(needle.len()).position(|w| w == needle)
+    }
     fn submit_raw(
         &self,
         from: &str,
@@ -458,6 +581,7 @@ impl SmtpSender {
             );
             return Ok(Submitted {
                 dsn_unsupported: !dsn,
+                raw: raw.to_vec(),
             });
         }
         let transport = match transport {
@@ -471,7 +595,10 @@ impl SmtpSender {
             self.endpoint.addr,
             response.code()
         );
-        Ok(Submitted::default())
+        Ok(Submitted {
+            dsn_unsupported: false,
+            raw: raw.to_vec(),
+        })
     }
 
     /// Where the Sent copy belongs, or `None` when the setting is off.
@@ -667,5 +794,104 @@ mod tests {
         let row = queue::get(&db, id).unwrap();
         assert!(row.raw_mime.as_deref().is_some_and(|b| !b.is_empty()));
         assert!(!row.envelope_to.is_empty());
+    }
+
+    #[test]
+    fn scheduled_enqueue_waits_and_date_refresh_keeps_the_body() {
+        let db = Db::open_in_memory().unwrap();
+        let account = test_account();
+        let sender = SmtpSender::new(&account);
+        let acc = crate::store::accounts::create(
+            &db,
+            &crate::models::NewAccount {
+                name: "t".to_string(),
+                email_address: account.email_address.clone(),
+                from_name: String::new(),
+                imap_host: "i".to_string(),
+                imap_port: 993,
+                imap_security: "tls".to_string(),
+                imap_username: "u".to_string(),
+                smtp_host: "s".to_string(),
+                smtp_port: 587,
+                smtp_security: "starttls".to_string(),
+                smtp_username: "u".to_string(),
+                auth_vault_key: "k".to_string(),
+                check_interval_secs: 300,
+            },
+        )
+        .unwrap();
+        let to = vec!["you@example.com".to_string()];
+        let none: Vec<String> = Vec::new();
+        let files = Vec::new();
+        let req = SendRequest {
+            to: &to,
+            cc: &none,
+            bcc: &none,
+            from: None,
+            from_name: None,
+            reply_to: None,
+            subject: "later",
+            body_text: "hello",
+            body_html: None,
+            attachments: &files,
+            format: SendFormat::Plain,
+            include_plain: true,
+            policy: &SendPolicy::Unrestricted,
+            password: "",
+            imap_password: None,
+            request_mdn: false,
+            request_dsn: false,
+        };
+        let at = (chrono::Utc::now() + chrono::Duration::hours(2))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let (id, _) = sender.enqueue_send_at(&db, acc, &req, Some(&at)).unwrap();
+        let row = queue::get(&db, id).unwrap();
+        assert_eq!(
+            row.status,
+            crate::models::QueueStatus::Scheduled,
+            "scheduled rows wait, they never submit early"
+        );
+        assert!(queue::list_submittable(&db, acc).unwrap().is_empty());
+    }
+
+    #[test]
+    fn date_refresh_rewrites_only_the_header() {
+        // Binary bodies (attachments) survive byte-identical; only Date moves.
+        let mut raw =
+            b"From: a@x.y\r\nDate: Mon, 01 Jan 2000 00:00:00 +0000\r\nSubject: hi\r\n\r\n".to_vec();
+        raw.extend_from_slice(&[0xFF, 0xFE, 0x00, 0x62, 0x6F, 0x64, 0x79]);
+        let out = SmtpSender::refresh_date_header(&raw);
+        assert!(
+            !out.windows(9).any(|w| w == b"01 Jan 200"),
+            "the stale date is gone"
+        );
+        assert!(out.starts_with(b"From: a@x.y\r\nDate: "));
+        assert!(
+            out.ends_with(&[0xFF, 0xFE, 0x00, 0x62, 0x6F, 0x64, 0x79]),
+            "body bytes are untouched"
+        );
+        // Exactly one Date header, still CRLF shaped.
+        assert_eq!(
+            out.windows(5)
+                .filter(|w| w.eq_ignore_ascii_case(b"date:"))
+                .count(),
+            1
+        );
+        // Missing Date: prepended, blank line kept.
+        let nodate = b"Subject: hi\r\n\r\nbody".to_vec();
+        let out = SmtpSender::refresh_date_header(&nodate);
+        assert!(out.starts_with(b"Date: "));
+        assert!(out.windows(4).any(|w| w == b"\r\n\r\n"));
+        // A folded Date loses its continuations, nothing else moves.
+        let folded = b"Date: Mon, 01 Jan\r\n 2000 +0000\r\nSubject: hi\r\n\r\nx".to_vec();
+        let out = SmtpSender::refresh_date_header(&folded);
+        let text = String::from_utf8(out).unwrap();
+        assert!(!text.contains("2000 +0000"), "folded tail dropped");
+        assert!(text.contains("Subject: hi"));
+        assert_eq!(
+            text.matches("Date:").count(),
+            1,
+            "still exactly one Date header"
+        );
     }
 }

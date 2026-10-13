@@ -110,6 +110,9 @@ class MailAlarmReceiver : BroadcastReceiver() {
                     MailAlarm.rearm(context)
                     MailPush.restore(context)
                 }
+                // Held scheduled sends re-arm from the outbox (past-due ones
+                // check at once).
+                MailSendAlarm.refresh(context)
             }
         }
     }

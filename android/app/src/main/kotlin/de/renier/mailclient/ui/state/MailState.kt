@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import de.renier.mailclient.JobEvents
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.MailSchedule
+import de.renier.mailclient.MailSendAlarm
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -381,6 +382,9 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
      */
     internal fun rescheduleBackground() = io {
         val plan = MailSchedule.refresh(appContext)
+        // Held scheduled sends arm their own exact shot (past-due ones
+        // check at once).
+        MailSendAlarm.refresh(appContext)
         withContext(Dispatchers.Main) { backgroundChecks = plan?.optBoolean("any") == true }
     }
 

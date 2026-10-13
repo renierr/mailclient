@@ -27,14 +27,18 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.MailNative
+import de.renier.mailclient.MailSendAlarm
 import de.renier.mailclient.R
 import de.renier.mailclient.ui.common.DeleteConfirmDialog
 import de.renier.mailclient.ui.common.strings
+import de.renier.mailclient.ui.composer.ScheduleDialog
+import de.renier.mailclient.ui.composer.formatSendAtLocal
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.state.refreshOutbox
 import de.renier.mailclient.ui.state.syncNow
@@ -46,12 +50,15 @@ import org.json.JSONArray
 /** One unsent mail, as `mailcore::outbox::list_json` describes it. */
 private data class OutboxEntry(
     val id: Long,
+    val status: String,
     val subject: String,
     val to: String,
     // The core's one-line state ("Queued — goes out with the next sync").
     val state: String,
     val error: String,
     val dismissable: Boolean,
+    // UTC instant a `scheduled` row waits for ("" otherwise).
+    val sendAt: String,
 )
 
 private fun parse(json: String): List<OutboxEntry> {
@@ -60,11 +67,13 @@ private fun parse(json: String): List<OutboxEntry> {
         val o = arr.optJSONObject(i) ?: return@mapNotNull null
         OutboxEntry(
             id = o.optLong("id"),
+            status = o.optString("status"),
             subject = o.optString("subject"),
             to = o.optJSONArray("envelope_to").strings().joinToString(", "),
             state = o.optString("state"),
             error = o.optString("last_error"),
             dismissable = o.optBoolean("dismissable"),
+            sendAt = o.optString("send_at"),
         )
     }
 }
@@ -79,11 +88,13 @@ private fun parse(json: String): List<OutboxEntry> {
 @Composable
 fun OutboxScreen(state: MailState) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val accountId = state.activeAccountId
     var entries by remember { mutableStateOf<List<OutboxEntry>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableIntStateOf(0) }
     var forget by remember { mutableStateOf<OutboxEntry?>(null) }
+    var reschedule by remember { mutableStateOf<OutboxEntry?>(null) }
 
     LaunchedEffect(accountId, reload, state.outboxPending, state.outboxFailed, state.outboxRetryable, state.syncing) {
         if (accountId < 0) {
@@ -95,11 +106,45 @@ fun OutboxScreen(state: MailState) {
             .onFailure { error = it.message ?: "Could not read the outbox" }
     }
 
+    // The held rows changed: the exact alarm plans from them again.
+    fun refreshAlarm() {
+        scope.launch {
+            withContext(Dispatchers.IO) { runCatching { MailSendAlarm.refresh(context) } }
+        }
+    }
+
     fun dismiss(e: OutboxEntry) {
         scope.launch {
             withContext(Dispatchers.IO) { runCatching { MailNative.dismissOutbox(accountId, e.id) } }
                 .onFailure { error = it.message ?: "Could not forget the entry" }
             state.refreshOutbox()
+            refreshAlarm()
+            reload++
+        }
+    }
+
+    fun sendNow(e: OutboxEntry) {
+        scope.launch {
+            withContext(Dispatchers.IO) { runCatching { MailNative.sendNowOutbox(accountId, e.id) } }
+                .onSuccess { state.info("Will go out with the next sync") }
+                .onFailure { error = it.message ?: "Could not queue for sending" }
+            state.refreshOutbox()
+            refreshAlarm()
+            reload++
+        }
+    }
+
+    fun rescheduled(sendAtUtc: String) {
+        val e = reschedule ?: return
+        reschedule = null
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                runCatching { MailNative.rescheduleOutbox(accountId, e.id, sendAtUtc) }
+            }
+                .onSuccess { state.info("Rescheduled") }
+                .onFailure { error = it.message ?: "Could not reschedule" }
+            state.refreshOutbox()
+            refreshAlarm()
             reload++
         }
     }
@@ -137,7 +182,12 @@ fun OutboxScreen(state: MailState) {
             }
             else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
                 items(list, key = { it.id }) { e ->
-                    OutboxRow(e, onForget = { forget = e })
+                    OutboxRow(
+                        e,
+                        onForget = { forget = e },
+                        onSendNow = { sendNow(e) },
+                        onReschedule = { reschedule = e },
+                    )
                     HorizontalDivider()
                 }
             }
@@ -156,10 +206,23 @@ fun OutboxScreen(state: MailState) {
             onDismiss = { forget = null },
         )
     }
+
+    reschedule?.let { e ->
+        ScheduleDialog(
+            initialSendAtUtc = e.sendAt,
+            onConfirm = { rescheduled(it) },
+            onDismiss = { reschedule = null },
+        )
+    }
 }
 
 @Composable
-private fun OutboxRow(e: OutboxEntry, onForget: () -> Unit) {
+private fun OutboxRow(
+    e: OutboxEntry,
+    onForget: () -> Unit,
+    onSendNow: () -> Unit,
+    onReschedule: () -> Unit,
+) {
     Row(
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -181,11 +244,24 @@ private fun OutboxRow(e: OutboxEntry, onForget: () -> Unit) {
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            if (e.sendAt.isNotEmpty()) {
+                Text(
+                    "Sends ${formatSendAtLocal(e.sendAt)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
             if (e.state.isNotEmpty()) {
                 Text(e.state, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (e.error.isNotEmpty()) {
                 Text(e.error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            if (e.status == "scheduled") {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onSendNow) { Text("Send now") }
+                    OutlinedButton(onClick = onReschedule) { Text("Reschedule") }
+                }
             }
         }
         // Never a row being sent: forgetting it would not stop the mail.

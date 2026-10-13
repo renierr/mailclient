@@ -243,6 +243,9 @@ pub enum QueueStatus {
     Sending,
     Sent,
     Failed,
+    /// Composed for a future time (`send_at`): held back from every submit
+    /// until [`crate::store::queue::promote_due`] moves it to `Queued`.
+    Scheduled,
 }
 
 impl QueueStatus {
@@ -253,6 +256,7 @@ impl QueueStatus {
             Self::Sending => "sending",
             Self::Sent => "sent",
             Self::Failed => "failed",
+            Self::Scheduled => "scheduled",
         }
     }
 
@@ -262,6 +266,7 @@ impl QueueStatus {
             "sending" => Self::Sending,
             "sent" => Self::Sent,
             "failed" => Self::Failed,
+            "scheduled" => Self::Scheduled,
             _ => Self::Queued,
         }
     }
@@ -290,6 +295,10 @@ pub struct QueuedSend {
     pub envelope_to: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// Submit no earlier than this UTC RFC3339 instant (`None` = now).
+    /// Set on `scheduled` rows and kept through promotion, so delivery can
+    /// refresh the MIME `Date:` to the actual send time.
+    pub send_at: Option<String>,
     /// Submit with DSN `NOTIFY=SUCCESS,FAILURE,DELAY`: a delivery
     /// confirmation was asked for.
     pub request_dsn: bool,

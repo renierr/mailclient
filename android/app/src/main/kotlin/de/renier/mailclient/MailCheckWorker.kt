@@ -24,6 +24,9 @@ class MailCheckWorker(context: Context, params: WorkerParameters) : Worker(conte
         // runs its own check, marked explicit, in the shade instead).
         val report = MailNative.check(trigger, now = false)
         MailNotifier.deliver(applicationContext, report)
+        // A due scheduled send may just have gone out (or failed): the next
+        // held row needs its alarm.
+        MailSendAlarm.refresh(applicationContext)
         // The tap answers even when it found nothing, so the user is not
         // left guessing whether the tile did anything at all.
         if (trigger == "tile") CheckFeedback.show(applicationContext, report)
@@ -34,6 +37,8 @@ class MailCheckWorker(context: Context, params: WorkerParameters) : Worker(conte
         if ((inputData.getString(KEY_TRIGGER) ?: "worker") == "tile") {
             CheckFeedback.showFailure(applicationContext)
         }
+        // The shot is spent either way: re-arm from what is still held.
+        runCatching { MailSendAlarm.refresh(applicationContext) }
         Result.failure()
     }
 

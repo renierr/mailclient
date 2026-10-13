@@ -14,7 +14,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 23;
+pub const SCHEMA_VERSION: u32 = 24;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -408,6 +408,19 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
             add_columns(
                 conn,
                 &["alter table send_queue add column request_dsn integer not null default 0;"],
+            )?;
+            Ok(())
+        })?;
+    }
+    if current < 24 {
+        step(conn, 24, |conn| {
+            // v24: `send_queue.send_at` — scheduled send holds a row as
+            // `scheduled` until its UTC instant arrives, then promotion
+            // moves it to `queued` for the normal submit path.
+            add_columns(conn, &["alter table send_queue add column send_at text;"])?;
+            conn.execute_batch(
+                "create index if not exists idx_send_queue_send_at
+                    on send_queue (status, send_at);",
             )?;
             Ok(())
         })?;
@@ -1340,5 +1353,35 @@ b<c",
         assert!(!has("half"), "the failed repair's write survived");
         assert!(has("after"));
         assert_eq!(version(&conn), "21");
+    }
+
+    #[test]
+    fn v24_migration_adds_send_at_column_and_index() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_FULL).unwrap();
+        conn.execute(
+            "insert into schema_meta (key, value) values ('version', '23')",
+            [],
+        )
+        .unwrap();
+        // A v23 database has neither the column nor the index: drop both to
+        // fake one (SQLite refuses to drop a column an index still names).
+        conn.execute_batch(
+            "drop index if exists idx_send_queue_send_at;
+             alter table send_queue drop column send_at;",
+        )
+        .unwrap();
+        ensure_schema(&conn).unwrap();
+
+        assert_eq!(version(&conn), SCHEMA_VERSION.to_string());
+        conn.execute("select send_at from send_queue", []).unwrap();
+        let idx: i64 = conn
+            .query_row(
+                "select count(*) from sqlite_master where name = 'idx_send_queue_send_at'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx, 1);
     }
 }

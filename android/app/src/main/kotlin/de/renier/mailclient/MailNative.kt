@@ -239,6 +239,11 @@ object MailNative {
     // Step 0d composer/send. Sends and draft saves queue onto
     // mailclient-net (0b events); bad forms throw inline.
     @JvmStatic external fun sendMail(accountId: Long, folderId: Long, form: String)
+    // Hold for a future instant instead of sending now: same form, kept as a
+    // `scheduled` row until its time. Returns the normalized UTC instant the
+    // row waits for (arm the exact alarm on it); throws on a bad form or a
+    // past time. Local-only, no job queued.
+    @JvmStatic external fun scheduleMail(accountId: Long, form: String, sendAt: String): String
     @JvmStatic external fun saveDraft(accountId: Long, form: String)
 
     // "Open draft" as one core job (like Qt): missing bytes download, then
@@ -318,6 +323,14 @@ object MailNative {
     @JvmStatic external fun readerDocumentFull(body: String, paint: String, paper: Int, ink: Int, link: Int, quote: Int, rule: Int, allowRemote: Boolean, topSpace: Int, scale: Float, fit: Boolean): String
     @JvmStatic external fun outboxJson(accountId: Long): String
     @JvmStatic external fun dismissOutbox(accountId: Long, id: Long)
+    // A held row to a new future instant (returns the normalized UTC time);
+    // send a scheduled row with the next sync; this account's earliest held
+    // instant (""); the earliest across all accounts ({"account_id","send_at"}
+    // or {}) for the exact alarm.
+    @JvmStatic external fun rescheduleOutbox(accountId: Long, id: Long, sendAt: String): String
+    @JvmStatic external fun sendNowOutbox(accountId: Long, id: Long)
+    @JvmStatic external fun nextScheduled(accountId: Long): String
+    @JvmStatic external fun nextSendDue(): String
     @JvmStatic external fun storageStatsJson(dbPath: String, tempDir: String): String
     @JvmStatic external fun cleanupTempFilesJson(tempDir: String): String
     @JvmStatic external fun pickStageDir(base: String): String

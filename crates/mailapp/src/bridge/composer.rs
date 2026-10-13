@@ -60,6 +60,118 @@ impl qobject::Bridge {
         queued
     }
 
+    pub fn schedule_mail(self: Pin<&mut Self>, form: &QString, send_at: &QString) -> QString {
+        let form = match ComposeForm::parse(&form.to_string()) {
+            Ok(f) => f,
+            Err(e) => return qstring(&e),
+        };
+        let send_at = send_at.to_string();
+        let wanted = *self.current_account_id();
+        let db = match crate::bridge::shared_db() {
+            Ok(d) => d,
+            Err(e) => return qstring(&e),
+        };
+        let draft_uid = form.draft_uid;
+        // Validate + build + hold synchronously, so mistakes report instantly
+        // with the composer still open. No delivery job: the row waits as
+        // `scheduled` until a sync past its time submits it.
+        let held = match compose::prepare_scheduled(db, wanted, form, &send_at) {
+            Ok(h) => h,
+            Err(e) => return qstring(&e),
+        };
+        if draft_uid >= 0 {
+            // The outbox row carries the mail now; the server draft it came
+            // from goes away in the background. A failure only notes itself
+            // on the status line — the scheduled send stands either way.
+            let account_id = held.account_id;
+            let current = *self.current_folder_id();
+            let queued = spawn_job(self, "Delete draft", move |db, _progress| async move {
+                let _drafts = compose::delete_draft(db, account_id, draft_uid as u32).await?;
+                Ok((String::new(), Some(JobRefresh::feeds(account_id, current))))
+            });
+            if !queued.is_empty() {
+                log::warn!("schedule: draft cleanup not queued: {queued}");
+            }
+        }
+        qstring("")
+    }
+
+    /// Milliseconds until the earliest held `scheduled` send (`-1` = none,
+    /// `0` = already due). The QML due timer arms from this.
+    pub fn scheduled_due_ms(&self) -> i64 {
+        match crate::bridge::shared_db() {
+            Ok(db) => mailcore::outbox::due_in_ms(db),
+            Err(_) => -1,
+        }
+    }
+
+    /// Submit due `scheduled` rows of every account (the due timer's job, or
+    /// "Sync now" from the outbox). Ordinary queued retries flush along —
+    /// that is what any sync would do. Kind `"Send"` serializes with
+    /// interactive sends; the QML finish handler only touches the composer
+    /// while a send is still pending, so a timer flush just updates the
+    /// status line and the outbox pill.
+    pub fn flush_due_sends(self: Pin<&mut Self>) -> QString {
+        let current_account = *self.current_account_id();
+        let current_folder = *self.current_folder_id();
+        spawn_job(self, "Send", move |db, _progress| async move {
+            let mut sent = 0u64;
+            let mut errors = Vec::new();
+            for acc in mailcore::store::accounts::list(db).map_err(|e| e.to_string())? {
+                // Promotion runs inside the flush too; this only skips
+                // accounts with nothing held or due without touching secrets.
+                let due =
+                    mailcore::store::queue::promote_due(db, acc.id).map_err(|e| e.to_string())?;
+                let waiting = mailcore::store::queue::list_submittable(db, acc.id)
+                    .map_err(|e| e.to_string())?;
+                if due == 0 && waiting.is_empty() {
+                    continue;
+                }
+                let secrets = mailcore::auth::load_account_secrets(&acc.auth_vault_key)
+                    .map_err(|e| format!("{}: {e}", acc.email_address))?;
+                match mailcore::sync::sender::SmtpSender::new(&acc)
+                    .flush_outbox(
+                        db,
+                        acc.id,
+                        &secrets.smtp_password,
+                        Some(secrets.imap_password.as_str()),
+                    )
+                    .await
+                {
+                    Ok(n) => sent += n,
+                    Err(e) => errors.push(format!("{}: {e}", acc.email_address)),
+                }
+            }
+            let refresh = JobRefresh::feeds(current_account, current_folder);
+            if sent == 0 && errors.is_empty() {
+                return Ok(JobDone {
+                    status: String::new(),
+                    refresh: Some(refresh),
+                    outcome: String::new(),
+                });
+            }
+            let mut status = if sent == 1 {
+                "Sent 1 scheduled message".to_string()
+            } else if sent > 1 {
+                format!("Sent {sent} scheduled messages")
+            } else {
+                "Scheduled send failed".to_string()
+            };
+            if !errors.is_empty() {
+                status.push_str(&format!("; {}", errors.join("; ")));
+            }
+            Ok(JobDone {
+                status,
+                refresh: Some(refresh),
+                outcome: if sent > 0 {
+                    "sent".to_string()
+                } else {
+                    String::new()
+                },
+            })
+        })
+    }
+
     pub fn save_draft(self: Pin<&mut Self>, form: &QString) -> QString {
         let form = match ComposeForm::parse(&form.to_string()) {
             Ok(f) => f,

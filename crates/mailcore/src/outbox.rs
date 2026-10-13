@@ -15,14 +15,15 @@ use crate::models::QueueStatus;
 use crate::store::queue;
 
 /// Per-account outbox counts for the status pill. `pending` is the pill's
-/// number (`queued + sending + failed`); `failed` drives the error styling;
-/// `retryable` (bytes present, retries left) says whether a sync could still
-/// deliver something.
+/// number (`queued + sending + failed + scheduled`); `failed` drives the
+/// error styling; `retryable` (bytes present, retries left, due) says whether
+/// a sync could still deliver something; `scheduled` waits for its time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct OutboxStatus {
     pub queued: u64,
     pub sending: u64,
     pub failed: u64,
+    pub scheduled: u64,
     pub retryable: u64,
     pub pending: u64,
 }
@@ -34,35 +35,43 @@ impl OutboxStatus {
         self.pending > 0
     }
 
-    /// The pill's words, phrased once for both frontends: `2 unsent` or
-    /// `2 unsent (1 failed)`.
+    /// The pill's words, phrased once for both frontends: `2 unsent`,
+    /// `2 unsent (1 failed)` or `2 unsent (1 scheduled)`.
     #[must_use]
     pub fn label(self) -> String {
+        let mut parts = Vec::new();
         if self.failed > 0 {
-            format!("{} unsent ({} failed)", self.pending, self.failed)
-        } else {
+            parts.push(format!("{} failed", self.failed));
+        }
+        if self.scheduled > 0 {
+            parts.push(format!("{} scheduled", self.scheduled));
+        }
+        if parts.is_empty() {
             format!("{} unsent", self.pending)
+        } else {
+            format!("{} unsent ({})", self.pending, parts.join(", "))
         }
     }
 }
 
-/// Count the account's outbox rows by status. Rows marked `queued` that have
-/// no MIME bytes left are counted under `failed`, since without bytes they can
-/// never be submitted.
+/// Count the account's outbox rows by status. Rows that can never submit
+/// (queued without MIME bytes) count under `failed`.
 pub fn status(db: &Db, account_id: i64) -> Result<OutboxStatus> {
     let mut queued = 0u64;
     let mut sending = 0u64;
     let mut failed = 0u64;
+    let mut scheduled = 0u64;
     {
         let mut stmt = db.conn().prepare(
             "select case
-                      when status = 'queued' and (raw_mime is null or length(raw_mime) = 0) then 'failed'
+                      when status in ('queued', 'scheduled')
+                           and (raw_mime is null or length(raw_mime) = 0) then 'failed'
                       else status
                     end,
                     count(*)
-               from send_queue
-              where account_id = ?1 and status in ('queued', 'sending', 'failed')
-              group by 1",
+                from send_queue
+               where account_id = ?1 and status in ('queued', 'sending', 'failed', 'scheduled')
+               group by 1",
         )?;
         let rows = stmt.query_map([account_id], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))
@@ -73,27 +82,36 @@ pub fn status(db: &Db, account_id: i64) -> Result<OutboxStatus> {
                 QueueStatus::Queued => queued = n,
                 QueueStatus::Sending => sending = n,
                 QueueStatus::Failed => failed = n,
+                QueueStatus::Scheduled => scheduled = n,
                 QueueStatus::Sent => {}
             }
         }
     }
     // Same conditions as `queue::list_submittable`, without loading the
-    // MIME bytes of every queued message.
+    // MIME bytes of every queued message. `now` comes from Rust in the same
+    // shape the column stores (SQLite's `datetime('now')` writes a different
+    // format that would compare wrong).
     let retryable = db.conn().query_row(
         "select count(*) from send_queue
           where account_id = ?1
             and status in ('queued', 'failed')
             and raw_mime is not null and length(raw_mime) > 0
-            and retries < ?2",
-        rusqlite::params![account_id, queue::MAX_SEND_RETRIES as i64],
+            and retries < ?2
+            and (send_at is null or send_at <= ?3)",
+        rusqlite::params![
+            account_id,
+            queue::MAX_SEND_RETRIES as i64,
+            crate::store::now()
+        ],
         |r| r.get::<_, i64>(0),
     )? as u64;
     Ok(OutboxStatus {
         queued,
         sending,
         failed,
+        scheduled,
         retryable,
-        pending: queued + sending + failed,
+        pending: queued + sending + failed + scheduled,
     })
 }
 
@@ -110,13 +128,14 @@ pub fn status_json(db: &Db, account_id: i64) -> Result<String> {
 /// One outbox row for the dialog: everything the UI shows, never the MIME
 /// bytes (like [`crate::feed`] keeps bodies out of list rows). `state` is
 /// the row's one-line state, phrased once here so both frontends show the
-/// same words (like [`crate::undo`]'s toast labels).
+/// same words (like [`crate::undo`]'s toast labels). Scheduled rows carry
+/// `send_at` (UTC RFC3339; `""` otherwise) for the picker's local display.
 pub fn list_json(db: &Db, account_id: i64) -> Result<String> {
     let mut stmt = db.conn().prepare(
         "select id, status, last_error, retries, raw_mime,
-                envelope_from, envelope_to, created_at, updated_at
+                envelope_from, envelope_to, created_at, updated_at, send_at
           from send_queue
-          where account_id = ?1 and status in ('queued', 'sending', 'failed')
+          where account_id = ?1 and status in ('queued', 'sending', 'failed', 'scheduled')
           order by created_at",
     )?;
     let mut arr = Vec::new();
@@ -131,14 +150,19 @@ pub fn list_json(db: &Db, account_id: i64) -> Result<String> {
             r.get::<_, String>(6)?,
             r.get::<_, String>(7)?,
             r.get::<_, String>(8)?,
+            r.get::<_, Option<String>>(9)?,
         ))
     })?;
     for row in rows {
-        let (id, status_raw, last_error, retries, raw, from, to_raw, created, updated) = row?;
+        let (id, status_raw, last_error, retries, raw, from, to_raw, created, updated, send_at) =
+            row?;
         let status = QueueStatus::parse_status(&status_raw);
         let has_bytes = raw.as_deref().is_some_and(|b| !b.is_empty());
         // `dismiss`'s rule: never a row being sent.
-        let dismissable = matches!(status, QueueStatus::Queued | QueueStatus::Failed);
+        let dismissable = matches!(
+            status,
+            QueueStatus::Queued | QueueStatus::Failed | QueueStatus::Scheduled
+        );
         let retryable = dismissable && has_bytes && (retries as u64) < queue::MAX_SEND_RETRIES;
         let to: Vec<String> = serde_json::from_str(&to_raw).unwrap_or_default();
         arr.push(json!({
@@ -158,20 +182,21 @@ pub fn list_json(db: &Db, account_id: i64) -> Result<String> {
                 .unwrap_or_else(|| "(no subject)".to_string()),
             "created_at": created,
             "updated_at": updated,
+            "send_at": send_at.unwrap_or_default(),
         }));
     }
     Ok(serde_json::to_string(&arr)?)
 }
 
 /// Forget one outbox row of this account (a failed send the user owns the
-/// retry for, or a stale entry). Fails with `NotFound` when the id is gone,
-/// belongs to another account, or is `sending` right now — deleting that
-/// would not stop the mail, only hide that it went out. `sent` rows are
-/// [`queue::prune_sent`]'s job.
+/// retry for, a scheduled send, or a stale entry). Fails with `NotFound` when
+/// the id is gone, belongs to another account, or is `sending` right now —
+/// deleting that would not stop the mail, only hide that it went out. `sent`
+/// rows are [`queue::prune_sent`]'s job.
 pub fn dismiss(db: &Db, account_id: i64, id: i64) -> Result<()> {
     let n = db.conn().execute(
         "delete from send_queue
-          where id = ?1 and account_id = ?2 and status in ('queued', 'failed')",
+          where id = ?1 and account_id = ?2 and status in ('queued', 'failed', 'scheduled')",
         rusqlite::params![id, account_id],
     )?;
     if n == 0 {
@@ -182,12 +207,54 @@ pub fn dismiss(db: &Db, account_id: i64, id: i64) -> Result<()> {
     Ok(())
 }
 
+/// Move a held row to a new future instant (outbox dialog's reschedule).
+/// Returns the normalized UTC instant the row now waits for.
+pub fn reschedule(db: &Db, account_id: i64, id: i64, send_at: &str) -> Result<String> {
+    let row = queue::get(db, id)?;
+    if row.account_id != account_id {
+        return Err(StoreError::NotFound("outbox entry".into()));
+    }
+    queue::reschedule(db, id, send_at)
+}
+
+/// Send a `scheduled` row with the next sync instead of at its time.
+pub fn send_now(db: &Db, account_id: i64, id: i64) -> Result<()> {
+    let row = queue::get(db, id)?;
+    if row.account_id != account_id {
+        return Err(StoreError::NotFound("outbox entry".into()));
+    }
+    queue::send_now(db, id)
+}
+
+/// Earliest held `scheduled` instant (UTC RFC3339) of this account, `None`
+/// when nothing waits. The due timer / exact alarm plans from this.
+pub fn next_scheduled(db: &Db, account_id: i64) -> Result<Option<String>> {
+    queue::next_due_for(db, account_id)
+}
+
+/// Milliseconds until the earliest held `scheduled` send across all accounts
+/// (`-1` = none scheduled, `0` = already due). Due timers and exact alarms
+/// arm from this.
+#[must_use]
+pub fn due_in_ms(db: &Db) -> i64 {
+    let Ok(Some((_, at))) = queue::next_due(db) else {
+        return -1;
+    };
+    let Ok(when) = chrono::DateTime::parse_from_rfc3339(&at) else {
+        return -1;
+    };
+    (when.to_utc() - chrono::Utc::now())
+        .num_milliseconds()
+        .max(0)
+}
+
 /// A row's one-line state from its status, whether a sync could still
 /// deliver it (bytes present, retries left), and whether raw MIME bytes exist.
 #[must_use]
 pub fn state_line(status: QueueStatus, retryable: bool, has_bytes: bool) -> &'static str {
     match status {
         QueueStatus::Sending => "Sending…",
+        QueueStatus::Scheduled => "Scheduled — sends automatically",
         QueueStatus::Queued if has_bytes => "Queued — goes out with the next sync",
         QueueStatus::Queued => "Incomplete — message data was discarded; dismiss this entry",
         QueueStatus::Failed if retryable => "Failed — will retry on the next sync",
@@ -285,6 +352,7 @@ mod tests {
                 queued: 0,
                 sending: 0,
                 failed: 0,
+                scheduled: 0,
                 retryable: 0,
                 pending: 0,
             }
@@ -310,9 +378,30 @@ mod tests {
         queue::discard_mime(&db, a).unwrap();
         let s = status(&db, acc).unwrap();
         assert_eq!((s.failed, s.retryable), (1, 0));
+        // A scheduled send counts apart from the retryable queue.
+        let at = (chrono::Utc::now() + chrono::Duration::hours(2))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let to = ["you@example.com".to_string()];
+        queue::enqueue_scheduled_mime(
+            &db,
+            acc,
+            &queue::ScheduledMime {
+                message_id: None,
+                raw_mime:
+                    b"From: me@example.com\r\nTo: you@example.com\r\nSubject: later\r\n\r\nbody",
+                envelope_from: "me@example.com",
+                envelope_to: &to,
+                request_dsn: false,
+                send_at: &at,
+            },
+        )
+        .unwrap();
+        let s = status(&db, acc).unwrap();
+        assert_eq!((s.scheduled, s.retryable, s.pending), (1, 0, 2));
+        assert_eq!(s.label(), "2 unsent (1 failed, 1 scheduled)");
         // Sent rows leave the counts.
         queue::mark_sent(&db, a).unwrap();
-        assert!(!status(&db, acc).unwrap().any());
+        assert!(status(&db, acc).unwrap().any());
     }
 
     #[test]
@@ -377,6 +466,64 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_rows_carry_send_at_and_reschedule() {
+        let db = Db::open_in_memory().unwrap();
+        let acc = account(&db);
+        let at = (chrono::Utc::now() + chrono::Duration::hours(2))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let to = ["you@example.com".to_string()];
+        let scheduled = |subject: &[u8], send_at: &str| {
+            queue::enqueue_scheduled_mime(
+                &db,
+                acc,
+                &queue::ScheduledMime {
+                    message_id: None,
+                    raw_mime: subject,
+                    envelope_from: "me@example.com",
+                    envelope_to: &to,
+                    request_dsn: false,
+                    send_at,
+                },
+            )
+            .unwrap()
+        };
+        let id = scheduled(
+            b"From: me@example.com\r\nTo: you@example.com\r\nSubject: later\r\n\r\nbody",
+            &at,
+        );
+        let list: serde_json::Value = serde_json::from_str(&list_json(&db, acc).unwrap()).unwrap();
+        assert_eq!(list[0]["status"], "scheduled");
+        assert_eq!(list[0]["state"], "Scheduled — sends automatically");
+        assert_eq!(list[0]["send_at"], at);
+        assert_eq!(list[0]["dismissable"], true);
+        assert_eq!(list[0]["retryable"], true);
+        assert_eq!(
+            next_scheduled(&db, acc).unwrap().as_deref(),
+            Some(at.as_str())
+        );
+        // Someone else's account cannot touch it.
+        assert!(reschedule(&db, acc + 99, id, &at).is_err());
+        assert!(send_now(&db, acc + 99, id).is_err());
+        // A new time moves it; Send now queues it for the next sync.
+        let later = (chrono::Utc::now() + chrono::Duration::hours(5))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        assert_eq!(reschedule(&db, acc, id, &later).unwrap(), later);
+        assert!(reschedule(&db, acc, id, "yesterday").is_err());
+        send_now(&db, acc, id).unwrap();
+        let list: serde_json::Value = serde_json::from_str(&list_json(&db, acc).unwrap()).unwrap();
+        assert_eq!(list[0]["status"], "queued");
+        assert_eq!(list[0]["send_at"], "");
+        assert_eq!(next_scheduled(&db, acc).unwrap(), None);
+        // And a scheduled row dismisses like any other held row.
+        let id2 = scheduled(
+            b"From: me@example.com\r\nTo: you@example.com\r\nSubject: never\r\n\r\nbody",
+            &later,
+        );
+        dismiss(&db, acc, id2).unwrap();
+        assert!(queue::get(&db, id2).is_err());
+    }
+
+    #[test]
     fn queued_without_bytes_counts_as_failed() {
         let db = Db::open_in_memory().unwrap();
         let acc = account(&db);
@@ -404,6 +551,10 @@ mod tests {
     fn state_line_names_retryable_and_dead_rows() {
         use QueueStatus::*;
         assert_eq!(state_line(Sending, false, true), "Sending…");
+        assert_eq!(
+            state_line(Scheduled, false, true),
+            "Scheduled — sends automatically"
+        );
         assert_eq!(
             state_line(Queued, true, true),
             "Queued — goes out with the next sync"
@@ -462,9 +613,16 @@ mod tests {
             queued: 1,
             sending: 0,
             failed: 0,
+            scheduled: 0,
             retryable: 1,
             pending: 1,
         };
         assert_eq!(one.label(), "1 unsent");
+        let sched = OutboxStatus {
+            scheduled: 2,
+            pending: 2,
+            ..one
+        };
+        assert_eq!(sched.label(), "2 unsent (2 scheduled)");
     }
 }

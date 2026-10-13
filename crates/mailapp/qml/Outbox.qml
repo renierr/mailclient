@@ -23,6 +23,10 @@ AppDialog {
     property var outboxStatus: ({})
     signal statusMessage(string text)
     signal syncRequested
+    signal scheduleChanged
+
+    // Row waiting for its reschedule pick.
+    property double rescheduleId: -1
 
     function reload() {
         root.rows = FeedJson.parse(root.backend.outbox_json(), []);
@@ -34,6 +38,27 @@ AppDialog {
         if (r !== "")
             root.statusMessage(r);
         root.reload();
+        root.scheduleChanged();
+    }
+
+    function sendNowRow(id) {
+        var r = root.backend.send_now_outbox(id);
+        if (r !== "") {
+            root.statusMessage(r);
+            return;
+        }
+        root.reload();
+        root.scheduleChanged();
+        root.statusMessage(qsTr("Will go out with the next sync"));
+    }
+
+    function localSendAt(sendAt) {
+        if (!sendAt)
+            return "";
+        var d = new Date(sendAt);
+        if (isNaN(d.getTime()))
+            return "";
+        return qsTr("Sends %1 at %2").arg(Qt.formatDate(d, "dddd, d MMMM")).arg(Qt.formatTime(d, "HH:mm"));
     }
 
     // A row's one-line state comes phrased from the core (`state`), so
@@ -153,6 +178,16 @@ AppDialog {
                             Layout.fillWidth: true
                             Layout.minimumWidth: 0
                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            color: Theme.accent
+                            font.pixelSize: Theme.fontSmall
+                            text: root.localSendAt(modelData.send_at)
+                            visible: (modelData.send_at || "") !== ""
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                             color: Theme.textMuted
                             font.pixelSize: Theme.fontSmall
                             text: modelData.state
@@ -169,6 +204,24 @@ AppDialog {
                         }
                     }
 
+                    ColumnLayout {
+                        Layout.alignment: Qt.AlignVCenter
+                        spacing: 2
+                        visible: modelData.status === "scheduled"
+
+                        AppButton {
+                            text: qsTr("Send now")
+                            onClicked: root.sendNowRow(modelData.id)
+                        }
+                        AppButton {
+                            text: qsTr("Reschedule")
+                            onClicked: {
+                                root.rescheduleId = modelData.id;
+                                rescheduleDialog.openFor(modelData.send_at || "");
+                            }
+                        }
+                    }
+
                     IconButton {
                         Layout.alignment: Qt.AlignVCenter
                         text: Icons.close
@@ -180,6 +233,20 @@ AppDialog {
                     }
                 }
             }
+        }
+    }
+
+    ScheduleDialog {
+        id: rescheduleDialog
+        onScheduleAccepted: sendAt => {
+            var r = root.backend.reschedule_outbox(root.rescheduleId, sendAt);
+            if (r !== "")
+                root.statusMessage(r);
+            else
+                root.statusMessage(qsTr("Rescheduled"));
+            root.rescheduleId = -1;
+            root.reload();
+            root.scheduleChanged();
         }
     }
 }

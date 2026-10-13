@@ -106,6 +106,7 @@ fn main() {
             .qml_file("qml/components/ReportCard.qml")
             .qml_file("qml/components/EventCard.qml")
             .qml_file("qml/components/EmlExportDialog.qml")
+            .qml_file("qml/components/ScheduleDialog.qml")
             .qml_file("qml/components/AppDialog.qml"),
     )
     .file("src/bridge.rs")

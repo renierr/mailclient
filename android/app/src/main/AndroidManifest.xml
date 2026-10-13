@@ -138,11 +138,18 @@
                 android:resource="@xml/reader_paths" />
         </provider>
         <!-- The mail reader's WebView must not phone home: Safe Browsing
-             sends URL lookups and list updates to Google, and metrics upload
-             usage. Mail content is already kept offline by the reader's CSP. -->
+              sends URL lookups and list updates to Google, and metrics upload
+              usage. Mail content is already kept offline by the reader's CSP. -->
         <meta-data
             android:name="android.webkit.WebView.EnableSafeBrowsing"
             android:value="false" />
+        <!-- Scheduled sends (MailSendAlarm.kt): one exact shot for the
+              earliest held `scheduled` outbox row, re-armed from the outbox
+              after every check. Boot and updates re-arm through
+              MailAlarmReceiver. -->
+        <receiver
+            android:name=".MailSendReceiver"
+            android:exported="false" />
         <!-- On-time background mail check (MailAlarm.kt): exact alarm shots,
              re-armed after a reboot or an app update. Only armed when
              Settings picks the alarm scheduler; otherwise it stays idle.

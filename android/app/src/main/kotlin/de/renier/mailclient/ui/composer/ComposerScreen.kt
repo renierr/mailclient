@@ -58,6 +58,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.MailNative
+import de.renier.mailclient.MailSendAlarm
 import de.renier.mailclient.R
 import de.renier.mailclient.ui.common.DeleteConfirmDialog
 import de.renier.mailclient.ui.common.FormDialog
@@ -131,6 +132,9 @@ fun ComposerScreen(
     // A send that failed after closing is unsent work again: Discard asks.
     var dirty by remember { mutableStateOf(seed.failure.isNotEmpty()) }
     var sending by remember { mutableStateOf(false) }
+    var scheduling by remember { mutableStateOf(false) }
+    var showSchedule by remember { mutableStateOf(false) }
+    var scheduleHtml by remember { mutableStateOf<String?>(null) }
     var savingDraft by remember { mutableStateOf(false) }
     var deletingDraft by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf(seed.failure.ifEmpty { null }) }
@@ -152,7 +156,7 @@ fun ComposerScreen(
     // The phone's own contact list, merged into the suggestions when on
     // (READ_CONTACTS); off, the mail-collected contacts answer alone.
     var suggestPhone by remember { mutableStateOf(false) }
-    val working = sending || savingDraft || deletingDraft
+    val working = sending || scheduling || savingDraft || deletingDraft
     // Like Qt: nothing to send to, nothing to press. The core checks the
     // addresses themselves when Send runs.
     val hasRecipient = to.text.isNotBlank() || cc.text.isNotBlank() || bcc.text.isNotBlank()
@@ -311,6 +315,45 @@ fun ComposerScreen(
         ) { MailNative.saveDraft(accountId, it) }
     }
 
+    // "Schedule send": read the body first (async like Send), then let the
+    // dialog pick the time; the confirm holds the row and arms its alarm.
+    fun schedule() {
+        if (working || !hasRecipient) return
+        error = null
+        scope.launch {
+            val html = currentHtml()
+            if (html == null) {
+                error = "The editor is still loading"
+                return@launch
+            }
+            scheduleHtml = html
+            showSchedule = true
+        }
+    }
+
+    fun confirmSchedule(sendAtUtc: String) {
+        val html = scheduleHtml ?: return
+        showSchedule = false
+        scheduling = true
+        error = null
+        scope.launch {
+            val f = form(html)
+            val failure = withContext(Dispatchers.IO) {
+                runCatching {
+                    MailNative.scheduleMail(accountId, f, sendAtUtc)
+                    MailSendAlarm.refresh(context)
+                }.exceptionOrNull()
+            }
+            if (failure == null) {
+                state.info("Scheduled — sends automatically")
+                onClose()
+            } else {
+                scheduling = false
+                error = failure.message ?: "Could not schedule"
+            }
+        }
+    }
+
     fun deleteDraft() {
         if (working) return
         deletingDraft = true
@@ -387,6 +430,13 @@ fun ComposerScreen(
                 CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
             } else {
                 Icon(painterResource(R.drawable.ic_save), "Save draft")
+            }
+        }
+        IconButton(onClick = ::schedule, enabled = !working && hasRecipient) {
+            if (scheduling) {
+                CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
+            } else {
+                Icon(painterResource(R.drawable.ic_schedule), "Schedule send")
             }
         }
         IconButton(onClick = ::send, enabled = !working && hasRecipient) {
@@ -676,6 +726,13 @@ fun ComposerScreen(
                 deleteDraft()
             },
             onDismiss = { confirmDeleteDraft = false },
+        )
+    }
+    if (showSchedule) {
+        ScheduleDialog(
+            initialSendAtUtc = "",
+            onConfirm = ::confirmSchedule,
+            onDismiss = { showSchedule = false },
         )
     }
 }

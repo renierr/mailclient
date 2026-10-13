@@ -916,6 +916,9 @@ ApplicationWindow {
                 reloadMessages();
             }
             reloadOutboxStatus();
+            // A due send may have gone out (or just been scheduled): the
+            // next held row needs its timer.
+            root.armDueTimer();
             // A sync can change what the index holds: re-run an active
             // search so results never go stale behind a fresh feed (local
             // re-query only — never re-arms the server debounce).
@@ -1031,6 +1034,29 @@ ApplicationWindow {
         onTriggered: root.consumePendingOpen()
     }
 
+    // Scheduled sends: one shot for the earliest held row across all
+    // accounts. Fires `flush_due_sends` (every account, not just the open
+    // one); the finish handler re-arms from the next held row.
+    Timer {
+        id: dueTimer
+        repeat: false
+        onTriggered: {
+            var r = backend.flush_due_sends();
+            if (r !== "")
+                root.statusText = r;
+        }
+    }
+
+    function armDueTimer() {
+        var ms = backend.scheduled_due_ms();
+        if (ms < 0) {
+            dueTimer.stop();
+            return;
+        }
+        dueTimer.interval = Math.min(Math.max(ms, 1000), 2147483647);
+        dueTimer.restart();
+    }
+
     // The open account's check interval: its own, or the app-wide default.
     // Re-read on account switch and after Settings saves (the revision).
     property int syncSettingsRevision: 0
@@ -1063,6 +1089,7 @@ ApplicationWindow {
         appSettings.load();
         root.narrowPane = appSettings.start_view === "inbox" ? "list" : "folders";
         var r = reloadAll();
+        root.armDueTimer();
         if (backend.account_count === 0) {
             root.statusText = qsTr("Add an account to start");
             accountSetup.openNew();
@@ -1644,6 +1671,22 @@ ApplicationWindow {
             else
                 composer.saving = true;
         }
+        onScheduleRequested: (payload, sendAt) => {
+            var r = backend.schedule_mail(payload, sendAt);
+            if (r !== "") {
+                root.statusText = r;
+            } else {
+                // Held in the outbox, nothing to wait for: close at once.
+                composer.markClean();
+                composer.close();
+                reloadOutboxStatus();
+                root.armDueTimer();
+                var when = new Date(sendAt);
+                root.statusText = isNaN(when.getTime()) ? qsTr("Scheduled — sends automatically") : qsTr(
+                                                              "Scheduled for %1").arg(Qt.formatDateTime(when,
+                                                                                                        "dddd, d MMMM HH:mm"));
+            }
+        }
     }
 
     AccountSetup {
@@ -1689,7 +1732,11 @@ ApplicationWindow {
         backend: backend
         onStatusMessage: text => root.statusText = text
         onSyncRequested: root.syncNow()
-        onClosed: root.reloadOutboxStatus()
+        onScheduleChanged: root.armDueTimer()
+        onClosed: {
+            root.reloadOutboxStatus();
+            root.armDueTimer();
+        }
     }
 
     Folders {

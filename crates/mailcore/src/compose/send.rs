@@ -81,6 +81,54 @@ impl SendOutcome {
     }
 }
 
+/// A validated message held for a future time, waiting in the outbox as
+/// `scheduled`. No delivery job runs for it: the next sync after its time
+/// submits it through the normal flush path.
+#[derive(Debug)]
+pub struct ScheduledSend {
+    pub queue_id: i64,
+    pub account_id: i64,
+    /// Normalized UTC instant the row waits for (what the outbox shows).
+    pub send_at: String,
+}
+
+/// Validate the form, build the MIME with the user's send settings and hold
+/// it for `send_at` (any RFC3339 instant, at least a minute out). No network,
+/// no secrets — like [`prepare_send`], mistakes come back before anything is
+/// stored. The composing device owns the delivery: it must be on and online
+/// at the time (each device keeps its own outbox, so no other client can
+/// send it).
+pub fn prepare_scheduled(
+    db: &Db,
+    account_id: i64,
+    form: ComposeForm,
+    send_at: &str,
+) -> Result<ScheduledSend, String> {
+    form.require_recipient()?;
+    let acc = resolve_account(db, account_id)?;
+    let format = SendFormat::parse(&settings::get_send_format(db));
+    let include_plain = settings::get_bool(db, settings::COMPOSE_INCLUDE_PLAIN).unwrap_or(true);
+    let receipts = form.receipts();
+    let policy = SendPolicy::Unrestricted;
+    let (queue_id, _) = SmtpSender::new(&acc)
+        .enqueue_send_at(
+            db,
+            acc.id,
+            &form.as_request(&acc, format, include_plain, receipts, &policy),
+            Some(send_at),
+        )
+        .map_err(|e| e.to_string())?;
+    let stored = queue::get(db, queue_id)
+        .map_err(|e| e.to_string())?
+        .send_at
+        .unwrap_or_default();
+    Ok(ScheduledSend {
+        queue_id,
+        account_id: acc.id,
+        send_at: stored,
+    })
+}
+
 /// Validate the form, build the MIME with the user's send settings and put
 /// it in the outbox. No network, no secrets.
 pub fn prepare_send(db: &Db, account_id: i64, form: ComposeForm) -> Result<PreparedSend, String> {
@@ -315,6 +363,31 @@ mod tests {
         let again = prepare_send(&db, id, form()).unwrap();
         abandon_send(&db, again.queue_id);
         assert!(queue::get(&db, again.queue_id).is_err());
+    }
+
+    #[test]
+    fn prepare_scheduled_holds_a_claimed_free_row_for_its_time() {
+        let db = Db::open_in_memory().unwrap();
+        let id = account(&db, "");
+        let form = || {
+            ComposeForm::parse(
+                r#"{"to":"you@example.com","subject":"later","body":"hello","draft_uid":-1}"#,
+            )
+            .unwrap()
+        };
+        // Past times never store anything: the form stays valid, the time does not.
+        assert!(prepare_scheduled(&db, id, form(), "2000-01-01T00:00:00+00:00").is_err());
+        assert!(queue::list_pending(&db).unwrap().is_empty());
+        let at = (chrono::Utc::now() + chrono::Duration::hours(3))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let held = prepare_scheduled(&db, id, form(), &at).unwrap();
+        assert_eq!(held.account_id, id);
+        assert_eq!(held.send_at, at);
+        let row = queue::get(&db, held.queue_id).unwrap();
+        assert_eq!(row.status, crate::models::QueueStatus::Scheduled);
+        assert!(row.raw_mime.as_deref().is_some_and(|b| !b.is_empty()));
+        // Nothing owns it: no claim needed, no submitter sees it yet.
+        assert!(queue::list_submittable(&db, id).unwrap().is_empty());
     }
 
     #[test]

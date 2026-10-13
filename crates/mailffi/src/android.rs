@@ -2107,6 +2107,30 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_sendMail<'caller>(
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `MailNative.scheduleMail(accountId, form, sendAt)`: validate + MIME +
+/// hold as a `scheduled` row. Returns the normalized UTC instant the row
+/// waits for, so the app can arm its exact alarm. Throws with the composer
+/// open on a bad form or a past time.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_scheduleMail<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    form: JString<'caller>,
+    send_at: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let at = crate::api::composer::schedule_mail(
+                account_id,
+                string(env, &form)?,
+                string(env, &send_at)?,
+            )?;
+            Ok(env.new_string(at)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `MailNative.saveDraft(accountId, form)`: append the current text to
 /// Drafts (created server-side when missing), replacing the opened version.
 #[unsafe(no_mangle)]
@@ -3211,6 +3235,71 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_dismissOutbox<'calle
         .with_env(|_env| -> Result<()> {
             crate::api::outbox::dismiss_outbox(account_id, id)?;
             Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.rescheduleOutbox(accountId, id, sendAt)`: move a held row to a
+/// new future instant. Returns the normalized UTC instant. Local-only.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_rescheduleOutbox<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    id: i64,
+    send_at: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let at = crate::api::outbox::reschedule_outbox(account_id, id, string(env, &send_at)?)?;
+            Ok(env.new_string(at)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.sendNowOutbox(accountId, id)`: send a `scheduled` row with the
+/// next sync instead of at its time. Local-only.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_sendNowOutbox<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    id: i64,
+) {
+    unowned
+        .with_env(|_env| -> Result<()> {
+            crate::api::outbox::send_now_outbox(account_id, id)?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.nextScheduled(accountId)`: this account's earliest held
+/// `scheduled` instant (UTC RFC3339), `""` when nothing waits. Local read.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_nextScheduled<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::outbox::next_scheduled(account_id)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.nextSendDue()`: earliest held `scheduled` send across all
+/// accounts as `{"account_id","send_at"}` (`{}` when nothing waits): what
+/// the exact alarm arms from. Local read.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_nextSendDue<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::outbox::next_send_due()?)?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
