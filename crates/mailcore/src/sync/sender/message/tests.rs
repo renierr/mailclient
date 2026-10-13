@@ -33,6 +33,7 @@ fn formatting_a_draft_does_not_submit_or_queue_it() {
         imap_password: None,
         request_mdn: false,
         request_dsn: false,
+        notify_self: false,
     };
     let raw = String::from_utf8(format_draft(&account, &request).unwrap()).unwrap();
     assert!(raw.contains("Subject: unfinished"));
@@ -66,6 +67,7 @@ fn a_draft_without_any_recipient_still_saves() {
         imap_password: None,
         request_mdn: false,
         request_dsn: false,
+        notify_self: false,
     };
     let raw = String::from_utf8(format_draft(&account, &request).unwrap()).unwrap();
     assert!(raw.contains("Subject: not yet addressed"));
@@ -350,6 +352,7 @@ fn a_draft_with_a_data_image_is_stored_with_a_cid_part() {
         imap_password: None,
         request_mdn: false,
         request_dsn: false,
+        notify_self: false,
     };
     let raw = String::from_utf8(format_draft(&account, &req).unwrap()).unwrap();
     assert!(raw.contains("multipart/related"), "{raw}");

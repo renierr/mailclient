@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use lettre::address::{Address, Envelope};
+use lettre::message::{Mailbox, Message};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::transport::smtp::client::{Tls, TlsParameters};
 use lettre::transport::smtp::extension::ClientId;
@@ -15,7 +16,7 @@ use lettre::{SmtpTransport, Transport};
 
 use crate::db::Db;
 use crate::error::{Result, StoreError};
-use crate::models::{Account, FolderRole};
+use crate::models::{Account, FolderRole, QueuedSend};
 use crate::store::{account_settings, accounts, contacts, folders, queue, settings};
 use crate::sync::imap::ImapSync;
 use crate::sync::traits::MailSender;
@@ -289,6 +290,7 @@ impl SmtpSender {
                     envelope_from: from_addr,
                     envelope_to: &rcpts,
                     request_dsn: req.request_dsn,
+                    notify_self: req.notify_self,
                     send_at: at,
                 },
             )?,
@@ -461,6 +463,24 @@ impl SmtpSender {
                             log::warn!("smtp: outbox sent copy failed: {e}");
                         }
                     }
+                    if row.notify_self {
+                        // The user asked for a receipt to the own address.
+                        // The mail itself is already out, so a failed
+                        // receipt only logs itself and never fails the flush.
+                        if let Err(e) = self
+                            .send_self_receipt(
+                                db,
+                                account_id,
+                                &row,
+                                password,
+                                imap_password,
+                                &mut transport,
+                            )
+                            .await
+                        {
+                            log::warn!("smtp: outbox entry {} self receipt failed: {e}", row.id);
+                        }
+                    }
                 }
                 Err(e) => {
                     log::warn!("smtp: outbox entry {} failed: {e}", row.id);
@@ -472,6 +492,31 @@ impl SmtpSender {
             Some(e) if sent == 0 => Err(e),
             _ => Ok(sent),
         }
+    }
+
+    /// Mail a delivery receipt for a scheduled send to the account's own
+    /// address: what went out, to whom, and when. The receipt is an ordinary
+    /// immediate row (no `notify_self` of its own, so it cannot chain) sent
+    /// over the caller's transport, with a Sent copy like any other send.
+    async fn send_self_receipt(
+        &self,
+        db: &Db,
+        account_id: i64,
+        orig: &QueuedSend,
+        password: &str,
+        imap_password: Option<&str>,
+        transport: &mut Option<SmtpTransport>,
+    ) -> Result<()> {
+        let raw = self_receipt_mime(&self.from, orig)?;
+        let to = vec![self.from.clone()];
+        let id = queue::enqueue_mime(db, account_id, None, &raw, &self.from, &to, false)?;
+        let submitted = self.submit_claimed_via(db, id, password, transport)?;
+        if !submitted.raw.is_empty() {
+            self.save_sent_copy(db, account_id, imap_password, &submitted.raw)
+                .await?;
+        }
+        log::info!("smtp: scheduled-send receipt mailed to self");
+        Ok(())
     }
 
     /// Rewrite a stored MIME message's `Date:` header to now (RFC 5322), for a
@@ -705,6 +750,31 @@ impl SmtpSender {
     }
 }
 
+/// Build the receipt for one delivered scheduled send, addressed to
+/// `self_addr` (the account's own address).
+///
+/// Names the original subject, when it went out and how many recipients it
+/// had — never the recipients themselves: the receipt is written to the
+/// outbox and filed into Sent, and no recipient list belongs in either.
+fn self_receipt_mime(self_addr: &str, orig: &QueuedSend) -> Result<Vec<u8>> {
+    let raw = orig.raw_mime.as_deref().unwrap_or(&[]);
+    let subject =
+        crate::outbox::subject_from_mime(raw).unwrap_or_else(|| "(no subject)".to_string());
+    // The row's own `send_at` is kept through promotion, so this is when the
+    // mail was due; the flush running now is the actual delivery.
+    let body = format!(
+        "Scheduled send delivered.\n\nSubject: {subject}\nSent: {}\nRecipients: {}\n",
+        crate::store::now(),
+        orig.envelope_to.len(),
+    );
+    let email = Message::builder()
+        .from(self_addr.parse::<Mailbox>()?)
+        .to(self_addr.parse::<Mailbox>()?)
+        .subject(format!("Scheduled send delivered: {subject}"))
+        .body(body)?;
+    Ok(email.formatted().to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -719,6 +789,66 @@ mod tests {
         let ep = endpoint_for(&test_account());
         assert_eq!(ep.addr, "smtp.x:587");
         assert!(!ep.implicit_tls);
+    }
+
+    /// A minimal delivered row for the receipt tests.
+    fn held_send() -> QueuedSend {
+        QueuedSend {
+            id: 1,
+            account_id: 1,
+            message_id: None,
+            status: crate::models::QueueStatus::Queued,
+            last_error: None,
+            retries: 0,
+            raw_mime: None,
+            envelope_from: None,
+            envelope_to: Vec::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            request_dsn: false,
+            send_at: None,
+            notify_self: true,
+        }
+    }
+
+    #[test]
+    fn self_receipt_names_subject_time_and_count_but_no_recipients() {
+        let raw = b"From: me@example.com\r\nTo: someone@example.com\r\nCc: other@example.com\r\n\
+                    Subject: The subject\r\n\r\nbody";
+        let orig = QueuedSend {
+            raw_mime: Some(raw.to_vec()),
+            envelope_from: Some("me@example.com".to_string()),
+            envelope_to: vec![
+                "someone@example.com".to_string(),
+                "other@example.com".to_string(),
+            ],
+            ..held_send()
+        };
+        let out = String::from_utf8(self_receipt_mime("me@example.com", &orig).unwrap()).unwrap();
+        let (head, body) = out.split_once("\r\n\r\n").expect("header/body split");
+        assert!(head.contains("From: me@example.com"), "{head}");
+        assert!(head.contains("To: me@example.com"), "{head}");
+        assert!(
+            head.contains("Subject: Scheduled send delivered: The subject"),
+            "{head}"
+        );
+        assert!(body.contains("Subject: The subject"), "{body}");
+        assert!(body.contains("Recipients: 2"), "{body}");
+        assert!(body.contains("Sent: 20"), "{body}");
+        // Never the recipients: the receipt goes into Sent too.
+        assert!(!out.contains("someone@example.com"), "{out}");
+        assert!(!out.contains("other@example.com"), "{out}");
+    }
+
+    #[test]
+    fn self_receipt_of_a_row_without_bytes_still_reads_as_a_receipt() {
+        let out =
+            String::from_utf8(self_receipt_mime("me@example.com", &held_send()).unwrap()).unwrap();
+        assert!(
+            out.contains("Subject: Scheduled send delivered: (no subject)"),
+            "{out}"
+        );
+        assert!(out.contains("Recipients: 0"), "{out}");
     }
 
     #[test]
@@ -778,6 +908,7 @@ mod tests {
             imap_password: None,
             request_mdn: false,
             request_dsn: false,
+            notify_self: false,
         };
         // A bad address fails here — before any network and before a row.
         let bad_cc = vec!["bob@".to_string()];
@@ -841,6 +972,7 @@ mod tests {
             imap_password: None,
             request_mdn: false,
             request_dsn: false,
+            notify_self: false,
         };
         let at = (chrono::Utc::now() + chrono::Duration::hours(2))
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);

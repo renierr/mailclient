@@ -56,6 +56,9 @@ pub struct ScheduledMime<'a> {
     pub envelope_from: &'a str,
     pub envelope_to: &'a [String],
     pub request_dsn: bool,
+    /// Mail a delivery receipt to the account's own address once the row
+    /// goes out. Never set on the receipt itself, so it cannot chain.
+    pub notify_self: bool,
     pub send_at: &'a str,
 }
 
@@ -69,8 +72,8 @@ pub fn enqueue_scheduled_mime(db: &Db, account_id: i64, mime: &ScheduledMime<'_>
     let ts = now();
     db.conn().execute(
         "insert into send_queue (account_id, message_id, status, retries,
-            raw_mime, envelope_from, envelope_to, request_dsn, send_at, created_at, updated_at)
-         values (?1, ?2, 'scheduled', 0, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+            raw_mime, envelope_from, envelope_to, request_dsn, notify_self, send_at, created_at, updated_at)
+         values (?1, ?2, 'scheduled', 0, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
         params![
             account_id,
             mime.message_id,
@@ -78,6 +81,7 @@ pub fn enqueue_scheduled_mime(db: &Db, account_id: i64, mime: &ScheduledMime<'_>
             mime.envelope_from,
             serde_json::to_string(mime.envelope_to)?,
             mime.request_dsn,
+            mime.notify_self,
             send_at,
             ts,
         ],
@@ -137,11 +141,12 @@ fn row_to_queued(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueuedSend> {
         updated_at: row.get(10)?,
         request_dsn: row.get(11)?,
         send_at: row.get(12)?,
+        notify_self: row.get(13)?,
     })
 }
 
 const COLS: &str = "id, account_id, message_id, status, last_error, retries,
-    raw_mime, envelope_from, envelope_to, created_at, updated_at, request_dsn, send_at";
+    raw_mime, envelope_from, envelope_to, created_at, updated_at, request_dsn, send_at, notify_self";
 
 /// All pending (queued/sending/failed/scheduled) entries, oldest first.
 pub fn list_pending(db: &Db) -> Result<Vec<QueuedSend>> {
@@ -634,6 +639,7 @@ mod tests {
                 envelope_from: "a@x.y",
                 envelope_to: &to,
                 request_dsn: false,
+                notify_self: false,
                 send_at: &at,
             },
         )
@@ -752,5 +758,41 @@ mod tests {
             )
             .unwrap();
         assert_eq!(due_scheduled_account_ids(&db).unwrap(), vec![acc]);
+    }
+
+    #[test]
+    fn the_receipt_flag_survives_promotion() {
+        let (db, acc) = setup();
+        let to = vec!["b@x.y".to_string()];
+        let at = future_ts(60);
+        let id = enqueue_scheduled_mime(
+            &db,
+            acc,
+            &ScheduledMime {
+                message_id: None,
+                raw_mime: RAW,
+                envelope_from: "a@x.y",
+                envelope_to: &to,
+                request_dsn: false,
+                notify_self: true,
+                send_at: &at,
+            },
+        )
+        .unwrap();
+        assert!(get(&db, id).unwrap().notify_self);
+        // Backdate it past its time: it promotes into the next flush, and
+        // the flag rides along so the receipt still goes out.
+        let past = (chrono::Utc::now() - chrono::Duration::minutes(1))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        db.conn()
+            .execute(
+                "update send_queue set send_at = ?1 where id = ?2",
+                params![past, id],
+            )
+            .unwrap();
+        assert_eq!(promote_due(&db, acc).unwrap(), 1);
+        let row = get(&db, id).unwrap();
+        assert_eq!(row.status, QueueStatus::Queued);
+        assert!(row.notify_self);
     }
 }

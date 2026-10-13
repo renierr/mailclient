@@ -799,6 +799,7 @@ pub mod qobject {
         #[qproperty(bool, reply_below_quote)]
         #[qproperty(bool, request_mdn)]
         #[qproperty(bool, request_dsn)]
+        #[qproperty(bool, scheduled_receipt)]
         #[qproperty(f32, ui_scale)]
         #[namespace = "mailclient"]
         type SettingsBridge = super::SettingsBridgeRust;
@@ -1187,6 +1188,7 @@ pub struct SettingsBridgeRust {
     reply_below_quote: bool,
     request_mdn: bool,
     request_dsn: bool,
+    scheduled_receipt: bool,
     ui_scale: f32,
 }
 
@@ -1214,6 +1216,7 @@ impl Default for SettingsBridgeRust {
             reply_below_quote: false,
             request_mdn: false,
             request_dsn: false,
+            scheduled_receipt: false,
             ui_scale: 1.0,
         }
     }

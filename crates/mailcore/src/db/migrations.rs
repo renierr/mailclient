@@ -14,7 +14,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 24;
+pub const SCHEMA_VERSION: u32 = 25;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -421,6 +421,17 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
             conn.execute_batch(
                 "create index if not exists idx_send_queue_send_at
                     on send_queue (status, send_at);",
+            )?;
+            Ok(())
+        })?;
+    }
+    if current < 25 {
+        step(conn, 25, |conn| {
+            // v25: `send_queue.notify_self` — a scheduled send whose
+            // delivery mails a receipt to the account's own address.
+            add_columns(
+                conn,
+                &["alter table send_queue add column notify_self integer not null default 0;"],
             )?;
             Ok(())
         })?;
@@ -1383,5 +1394,24 @@ b<c",
             )
             .unwrap();
         assert_eq!(idx, 1);
+    }
+
+    #[test]
+    fn v25_migration_adds_notify_self_column() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_FULL).unwrap();
+        conn.execute(
+            "insert into schema_meta (key, value) values ('version', '24')",
+            [],
+        )
+        .unwrap();
+        // A v24 database has no receipt flag: drop it to fake one.
+        conn.execute_batch("alter table send_queue drop column notify_self;")
+            .unwrap();
+        ensure_schema(&conn).unwrap();
+
+        assert_eq!(version(&conn), SCHEMA_VERSION.to_string());
+        conn.execute("select notify_self from send_queue", [])
+            .unwrap();
     }
 }

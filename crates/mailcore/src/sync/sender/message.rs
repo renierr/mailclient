@@ -63,6 +63,10 @@ pub struct SendRequest<'a> {
     /// RFC 3461). Kept with the outbox row, since it is an SMTP parameter
     /// and not part of the MIME.
     pub request_dsn: bool,
+    /// A scheduled send whose delivery mails a receipt to the account's own
+    /// address. Only read when holding for a future instant; immediate sends
+    /// ignore it.
+    pub notify_self: bool,
 }
 /// Split composer input into `(plain, Option<html>)` for the send format.
 ///

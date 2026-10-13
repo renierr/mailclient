@@ -302,6 +302,10 @@ pub struct QueuedSend {
     /// Submit with DSN `NOTIFY=SUCCESS,FAILURE,DELAY`: a delivery
     /// confirmation was asked for.
     pub request_dsn: bool,
+    /// A `scheduled` row whose delivery mails a receipt to the account's own
+    /// address (what went out, to whom, when). Never set on the receipt
+    /// itself, so it cannot chain.
+    pub notify_self: bool,
 }
 
 #[cfg(test)]

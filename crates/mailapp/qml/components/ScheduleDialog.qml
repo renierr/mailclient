@@ -18,7 +18,17 @@ AppDialog {
     minHeight: 460
     padding: Theme.lg
 
-    signal scheduleAccepted(string sendAtUtc)
+    signal scheduleAccepted(string sendAtUtc, bool notifySelf)
+
+    // Mail a delivery note to the own address once this send goes out.
+    // Opens on the setting's default (the core's `SCHEDULED_RECEIPT`);
+    // the user's decision here overrides it for this one send.
+    property bool notifySelf: false
+
+    // Only the composer offers the choice: rescheduling a held row moves
+    // its time and nothing else, so the row's own receipt flag stands and
+    // the toggle would decide something it cannot carry out.
+    property bool showReceipt: true
 
     // Selection (local wall-clock parts).
     property int viewYear: 0
@@ -43,6 +53,7 @@ AppDialog {
     }
 
     function openFor(sendAtUtc) {
+        var prechecked = arguments.length > 1 && arguments[1] === true;
         // Opens on the held instant when rescheduling, else on right now
         // (still invalid until moved into the future — the button enforces
         // the lead time).
@@ -55,6 +66,8 @@ AppDialog {
         root.hasSelection = true;
         hourSpin.value = d.getHours();
         minuteSpin.value = d.getMinutes();
+        // Rescheduling a row that already asks for a receipt keeps it.
+        root.notifySelf = prechecked;
         open();
     }
 
@@ -100,7 +113,7 @@ AppDialog {
             intent: "primary"
             enabled: root.valid
             onClicked: {
-                root.scheduleAccepted(root.selectedUtc());
+                root.scheduleAccepted(root.selectedUtc(), root.notifySelf);
                 root.close();
             }
         }
@@ -268,6 +281,25 @@ AppDialog {
                 color: root.valid ? Theme.accent : Theme.danger
                 font.pixelSize: Theme.fontSmall
                 text: root.valid ? root.summary : qsTr("Pick a time at least a minute in the future")
+            }
+
+            CheckBox {
+                id: receiptCheck
+                Layout.fillWidth: true
+                visible: root.showReceipt
+                text: qsTr("Mail me a delivery receipt")
+                checked: root.notifySelf
+                onToggled: root.notifySelf = checked
+            }
+
+            Label {
+                Layout.fillWidth: true
+                visible: root.showReceipt
+                wrapMode: Text.Wrap
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+                text: qsTr(
+                          "When it goes out, this device mails itself a note naming the subject, the time and how many recipients it had.")
             }
         }
     }

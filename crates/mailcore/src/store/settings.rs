@@ -77,6 +77,11 @@ pub const REQUEST_MDN: &str = "request_mdn";
 /// (default: off), like [`REQUEST_MDN`]. Only servers that offer DSN pass
 /// the request on.
 pub const REQUEST_DSN: &str = "request_dsn";
+/// Pre-check the "mail me a receipt" toggle of the Send-later dialog
+/// (default: off). A scheduled send then mails a delivery note to the
+/// account's own address once it goes out. The dialog's own checkbox
+/// overrides this for that one send.
+pub const SCHEDULED_RECEIPT: &str = "scheduled_receipt";
 /// Interface scale factor (`1` = 100%, default). Snapped to the supported
 /// steps `1` | `1.1` | `1.25` | `1.5`; unknown values fall back to `1`.
 pub const UI_SCALE: &str = "ui_scale";
@@ -141,6 +146,7 @@ pub fn defaults(key: &str) -> Option<&'static str> {
         REPLY_BELOW_QUOTE => Some("0"),
         REQUEST_MDN => Some("0"),
         REQUEST_DSN => Some("0"),
+        SCHEDULED_RECEIPT => Some("0"),
         UI_SCALE => Some("1"),
         NOTIFICATIONS_ENABLED => Some("1"),
         NOTIFICATION_ACTION => Some("archive"),

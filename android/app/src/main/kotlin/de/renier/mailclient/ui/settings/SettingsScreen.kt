@@ -363,6 +363,14 @@ private fun ComposingSection(d: SettingsDraft) {
         help = "Shows a Delivery confirmation toggle in the composer. The receiving server reports once the mail " +
             "is in the mailbox, where every server supports it. Both toggles start off on each mail.",
     )
+    SettingSwitch(
+        "Mail me a receipt for scheduled sends",
+        d.flag("scheduled_receipt"),
+        { d.setFlag("scheduled_receipt", it) },
+        help = "Pre-checks the same toggle in the Send-later dialog, where it can still be changed for one mail. " +
+            "When the send goes out, this phone mails itself a note naming the subject, the time and how many " +
+            "recipients it had.",
+    )
 }
 
 @Composable

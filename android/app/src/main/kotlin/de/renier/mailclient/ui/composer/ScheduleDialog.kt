@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -21,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import java.text.DateFormat
@@ -35,12 +37,21 @@ import java.util.TimeZone
 // ("yyyy-MM-dd'T'HH:mm:ss'Z'"), stored in the outbox as `send_at` and
 // delivered by the next check past it. Device-local by design: the dialog
 // says the phone must stay on and online.
+//
+// The receipt toggle opens on the setting's default (`receipt` from the
+// core's `Receipts`), and what the user picks here travels back with the
+// chosen time, overriding that default for this one send.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ScheduleDialog(
     initialSendAtUtc: String,
-    onConfirm: (String) -> Unit,
+    initialNotifySelf: Boolean,
+    onConfirm: (String, Boolean) -> Unit,
     onDismiss: () -> Unit,
+    // Only the composer offers the choice: rescheduling a held row moves
+    // its time and nothing else, so the row's own receipt flag stands and
+    // the toggle would decide something it cannot carry out.
+    showReceipt: Boolean = true,
 ) {
     // Selection as local wall-clock parts; the UTC instant derives from it.
     var day by remember { mutableStateOf(midnightOf(initialDay(initialSendAtUtc))) }
@@ -48,6 +59,8 @@ fun ScheduleDialog(
     var minute by remember { mutableStateOf(initialMinute(initialSendAtUtc)) }
     var pickingDate by remember { mutableStateOf(false) }
     var pickingTime by remember { mutableStateOf(false) }
+    // Mail a delivery note to the own address once this send goes out.
+    var notifySelf by remember { mutableStateOf(initialNotifySelf) }
 
     fun selectedMillis(): Long {
         val c = Calendar.getInstance()
@@ -91,10 +104,24 @@ fun ScheduleDialog(
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (valid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                 )
+                if (showReceipt) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = notifySelf, onCheckedChange = { notifySelf = it })
+                        Text("Mail me a delivery receipt", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Text(
+                        "When it goes out, this phone mails itself a note naming the subject, the time and how many recipients it had.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(formatUtc(selectedMillis())) }, enabled = valid) {
+            TextButton(
+                onClick = { onConfirm(formatUtc(selectedMillis()), notifySelf) },
+                enabled = valid,
+            ) {
                 Text("Schedule send")
             }
         },

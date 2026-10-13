@@ -49,6 +49,7 @@ pub fn settings_json() -> anyhow::Result<String> {
     for key in [
         s::REQUEST_MDN,
         s::REQUEST_DSN,
+        s::SCHEDULED_RECEIPT,
         // Android-only (READ_CONTACTS), like NOTIFICATION_ACTION; the
         // other frontends have no phone book to offer.
         s::SUGGEST_PHONE_CONTACTS,

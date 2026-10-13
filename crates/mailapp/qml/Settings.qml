@@ -53,6 +53,7 @@ AppDialog {
     property bool localReplyBelow
     property bool localRequestMdn
     property bool localRequestDsn
+    property bool localScheduledReceipt
     property string localSortField
     property bool localSortDesc
 
@@ -460,6 +461,7 @@ AppDialog {
         root.localReplyBelow = settingsBridge.reply_below_quote;
         root.localRequestMdn = settingsBridge.request_mdn;
         root.localRequestDsn = settingsBridge.request_dsn;
+        root.localScheduledReceipt = settingsBridge.scheduled_receipt;
         root.localSortField = root.backend ? root.backend.sort_field : root.defaultOf("message_sort_field");
         root.localSortDesc = root.backend ? root.backend.sort_descending : root.defaultOf("message_sort_desc");
         root.loadCapsAccounts();
@@ -878,6 +880,17 @@ AppDialog {
                     HintLabel {
                         text: qsTr(
                                   "Shows a delivery confirmation toggle in the composer. The receiving server reports once the mail is in the mailbox, where every server on the way supports it.")
+                    }
+                    AppCheckBox {
+                        Layout.fillWidth: true
+                        Layout.topMargin: Theme.sm
+                        checked: root.localScheduledReceipt
+                        text: qsTr("Mail me a receipt for scheduled sends")
+                        onToggled: root.localScheduledReceipt = checked
+                    }
+                    HintLabel {
+                        text: qsTr(
+                                  "Pre-checks the same toggle in the Send-later dialog, where it can still be changed for one mail. When the send goes out, this device mails itself a note naming the subject, the time and how many recipients it had.")
                     }
                     HintLabel {
                         text: qsTr("Both toggles start off on every mail.")
@@ -1351,6 +1364,7 @@ AppDialog {
         settingsBridge.reply_below_quote = root.localReplyBelow;
         settingsBridge.request_mdn = root.localRequestMdn;
         settingsBridge.request_dsn = root.localRequestDsn;
+        settingsBridge.scheduled_receipt = root.localScheduledReceipt;
         var saveError = settingsBridge.save();
         var accountError = root.saveAccountDrafts();
         // Sort lives on Bridge (shared with the list header menu).

@@ -128,12 +128,13 @@ pub fn status_json(db: &Db, account_id: i64) -> Result<String> {
 /// One outbox row for the dialog: everything the UI shows, never the MIME
 /// bytes (like [`crate::feed`] keeps bodies out of list rows). `state` is
 /// the row's one-line state, phrased once here so both frontends show the
-/// same words (like [`crate::undo`]'s toast labels). Scheduled rows carry
-/// `send_at` (UTC RFC3339; `""` otherwise) for the picker's local display.
+/// same words (like [`undo`]'s toast labels). Scheduled rows carry
+/// `send_at` (UTC RFC3339; `""` otherwise) for the picker's local display,
+/// and `notify_self` when delivery mails a receipt to the own address.
 pub fn list_json(db: &Db, account_id: i64) -> Result<String> {
     let mut stmt = db.conn().prepare(
         "select id, status, last_error, retries, raw_mime,
-                envelope_from, envelope_to, created_at, updated_at, send_at
+                envelope_from, envelope_to, created_at, updated_at, send_at, notify_self
           from send_queue
           where account_id = ?1 and status in ('queued', 'sending', 'failed', 'scheduled')
           order by created_at",
@@ -151,11 +152,23 @@ pub fn list_json(db: &Db, account_id: i64) -> Result<String> {
             r.get::<_, String>(7)?,
             r.get::<_, String>(8)?,
             r.get::<_, Option<String>>(9)?,
+            r.get::<_, bool>(10)?,
         ))
     })?;
     for row in rows {
-        let (id, status_raw, last_error, retries, raw, from, to_raw, created, updated, send_at) =
-            row?;
+        let (
+            id,
+            status_raw,
+            last_error,
+            retries,
+            raw,
+            from,
+            to_raw,
+            created,
+            updated,
+            send_at,
+            notify_self,
+        ) = row?;
         let status = QueueStatus::parse_status(&status_raw);
         let has_bytes = raw.as_deref().is_some_and(|b| !b.is_empty());
         // `dismiss`'s rule: never a row being sent.
@@ -183,6 +196,7 @@ pub fn list_json(db: &Db, account_id: i64) -> Result<String> {
             "created_at": created,
             "updated_at": updated,
             "send_at": send_at.unwrap_or_default(),
+            "notify_self": notify_self,
         }));
     }
     Ok(serde_json::to_string(&arr)?)
@@ -268,8 +282,8 @@ pub fn state_line(status: QueueStatus, retryable: bool, has_bytes: bool) -> &'st
 
 /// The `Subject:` header of a built MIME message, unfolded. No RFC 2047
 /// decoding — an encoded word shows as-is, which is enough for recognising
-/// one's own queued mail.
-fn subject_from_mime(raw: &[u8]) -> Option<String> {
+/// one's own queued mail (and for naming a self receipt after it).
+pub(crate) fn subject_from_mime(raw: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(raw);
     let mut subject: Option<String> = None;
     for line in text.split_inclusive('\n') {
@@ -392,6 +406,7 @@ mod tests {
                 envelope_from: "me@example.com",
                 envelope_to: &to,
                 request_dsn: false,
+                notify_self: false,
                 send_at: &at,
             },
         )
@@ -482,6 +497,7 @@ mod tests {
                     envelope_from: "me@example.com",
                     envelope_to: &to,
                     request_dsn: false,
+                    notify_self: false,
                     send_at,
                 },
             )

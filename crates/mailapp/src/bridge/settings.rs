@@ -155,6 +155,13 @@ impl qobject::SettingsBridge {
                 mailcore::store::settings::get_bool(db, mailcore::store::settings::REQUEST_DSN)
                     .unwrap_or(false),
             );
+            self.as_mut().set_scheduled_receipt(
+                mailcore::store::settings::get_bool(
+                    db,
+                    mailcore::store::settings::SCHEDULED_RECEIPT,
+                )
+                .unwrap_or(false),
+            );
             self.as_mut()
                 .set_ui_scale(mailcore::store::settings::get_ui_scale(db));
         }
@@ -361,6 +368,14 @@ impl qobject::SettingsBridge {
                 db,
                 mailcore::store::settings::REQUEST_DSN,
                 request_dsn,
+            ),
+        );
+        note(
+            "scheduled send receipt",
+            mailcore::store::settings::set_bool(
+                db,
+                mailcore::store::settings::SCHEDULED_RECEIPT,
+                *self.scheduled_receipt(),
             ),
         );
         note(

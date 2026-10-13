@@ -148,6 +148,10 @@ fun ComposerScreen(
     // toggles show (compose::Receipts::offered).
     var requestMdn by remember { mutableStateOf(seed.requestMdn ?: false) }
     var requestDsn by remember { mutableStateOf(seed.requestDsn ?: false) }
+    // Mail a delivery note to the own address once a scheduled send goes
+    // out. Only the Send-later dialog asks; this is the setting's default
+    // that pre-checks its toggle.
+    var offerReceipt by remember { mutableStateOf(false) }
     var offerMdn by remember { mutableStateOf(false) }
     var offerDsn by remember { mutableStateOf(false) }
     var suggestContacts by remember { mutableStateOf(true) }
@@ -199,6 +203,7 @@ fun ComposerScreen(
         if (receipts != null) {
             offerMdn = receipts.optBoolean("read")
             offerDsn = receipts.optBoolean("delivery")
+            offerReceipt = receipts.optBoolean("receipt")
         }
     }
 
@@ -332,13 +337,15 @@ fun ComposerScreen(
         }
     }
 
-    fun confirmSchedule(sendAtUtc: String) {
+    fun confirmSchedule(sendAtUtc: String, notifySelf: Boolean) {
         val html = scheduleHtml ?: return
         showSchedule = false
         scheduling = true
         error = null
         scope.launch {
-            val f = form(html)
+            // The dialog's decision travels in the form: absent means the
+            // global setting, which is what pre-checked its toggle.
+            val f = JSONObject(form(html)).put("notify_self", notifySelf).toString()
             val failure = withContext(Dispatchers.IO) {
                 runCatching {
                     MailNative.scheduleMail(accountId, f, sendAtUtc)
@@ -738,6 +745,7 @@ fun ComposerScreen(
     if (showSchedule) {
         ScheduleDialog(
             initialSendAtUtc = "",
+            initialNotifySelf = offerReceipt,
             onConfirm = ::confirmSchedule,
             onDismiss = { showSchedule = false },
         )

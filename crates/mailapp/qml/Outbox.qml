@@ -188,6 +188,16 @@ AppDialog {
                             Layout.fillWidth: true
                             Layout.minimumWidth: 0
                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            color: Theme.accent
+                            font.pixelSize: Theme.fontSmall
+                            text: qsTr("Mails a delivery receipt to me when it sends")
+                            visible: modelData.notify_self === true
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                             color: Theme.textMuted
                             font.pixelSize: Theme.fontSmall
                             text: modelData.state
@@ -238,6 +248,9 @@ AppDialog {
 
     ScheduleDialog {
         id: rescheduleDialog
+        // Rescheduling keeps whatever the row already asks for (its own
+        // `notify_self` survives the move), so the toggle is not offered.
+        showReceipt: false
         onScheduleAccepted: sendAt => {
             var r = root.backend.reschedule_outbox(root.rescheduleId, sendAt);
             if (r !== "")

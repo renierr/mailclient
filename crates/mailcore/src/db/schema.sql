@@ -199,6 +199,9 @@ create table if not exists send_queue (
     send_at          text,
     -- Ask for a delivery confirmation (SMTP DSN) when submitting.
     request_dsn   integer not null default 0,
+    -- Scheduled send with a receipt: mail a delivery note to the account's
+    -- own address once the row goes out.
+    notify_self integer not null default 0,
     created_at    text not null,
     updated_at    text not null
 );

@@ -60,6 +60,8 @@ private data class OutboxEntry(
     val dismissable: Boolean,
     // UTC instant a `scheduled` row waits for ("" otherwise).
     val sendAt: String,
+    // Delivery goes out to the own address when this one sends.
+    val notifySelf: Boolean = false,
 )
 
 private fun parse(json: String): List<OutboxEntry> {
@@ -75,6 +77,7 @@ private fun parse(json: String): List<OutboxEntry> {
             error = o.optString("last_error"),
             dismissable = o.optBoolean("dismissable"),
             sendAt = o.optString("send_at"),
+            notifySelf = o.optBoolean("notify_self"),
         )
     }
 }
@@ -225,8 +228,12 @@ fun OutboxScreen(state: MailState) {
     reschedule?.let { e ->
         ScheduleDialog(
             initialSendAtUtc = e.sendAt,
-            onConfirm = { rescheduled(it) },
+            initialNotifySelf = false,
+            onConfirm = { sendAt, _ -> rescheduled(sendAt) },
             onDismiss = { reschedule = null },
+            // Rescheduling keeps whatever the row already asks for: its own
+            // `notify_self` survives the move, so the toggle is not offered.
+            showReceipt = false,
         )
     }
 }
@@ -262,6 +269,13 @@ private fun OutboxRow(
             if (e.sendAt.isNotEmpty()) {
                 Text(
                     "Sends ${formatSendAtLocal(e.sendAt)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            if (e.notifySelf) {
+                Text(
+                    "Mails a delivery receipt to me when it sends",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,
                 )

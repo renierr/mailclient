@@ -20,6 +20,10 @@ pub struct Receipts {
     /// Delivery confirmation: SMTP DSN `NOTIFY=SUCCESS` (RFC 3461). The
     /// receiving server reports once the mail is in the mailbox.
     pub delivery: bool,
+    /// Mail a delivery note to the account's own address once a scheduled
+    /// send goes out. Read receipt and DSN both ask the other side; this
+    /// one is ours, so it always answers.
+    pub receipt: bool,
 }
 
 impl Receipts {
@@ -29,10 +33,12 @@ impl Receipts {
         Self {
             read: settings::get_bool(db, settings::REQUEST_MDN).unwrap_or(false),
             delivery: settings::get_bool(db, settings::REQUEST_DSN).unwrap_or(false),
+            receipt: settings::get_bool(db, settings::SCHEDULED_RECEIPT).unwrap_or(false),
         }
     }
 
-    /// [`Self::offered`] as `{read, delivery}` JSON for the composers.
+    /// [`Self::offered`] as `{read, delivery, receipt}` JSON for the
+    /// composers.
     pub fn offered_json(db: &Db) -> String {
         serde_json::to_string(&Self::offered(db)).unwrap_or_else(|_| "{}".to_string())
     }
@@ -64,11 +70,16 @@ pub struct ComposeForm {
     pub request_mdn: Option<bool>,
     /// Ask for a delivery confirmation; `None` means the stored setting.
     pub request_dsn: Option<bool>,
+    /// Scheduled send only: mail a delivery receipt to the account's own
+    /// address once the row goes out. `None` means the stored setting
+    /// ([`settings::SCHEDULED_RECEIPT`]); immediate sends ignore it.
+    pub notify_self: Option<bool>,
 }
 
 impl ComposeForm {
     /// Parse `{to, cc?, bcc?, from?, from_name?, reply_to?, subject, body,
-    /// body_html?, attachments?, draft_uid?, request_mdn?, request_dsn?}`.
+    /// body_html?, attachments?, draft_uid?, request_mdn?, request_dsn?,
+    /// notify_self?}`.
     pub fn parse(json: &str) -> Result<Self, String> {
         let v: serde_json::Value =
             serde_json::from_str(json).map_err(|_| "invalid message form".to_string())?;
@@ -121,6 +132,7 @@ impl ComposeForm {
                 .clamp(-1, i32::MAX as i64) as i32,
             request_mdn: v.get("request_mdn").and_then(|x| x.as_bool()),
             request_dsn: v.get("request_dsn").and_then(|x| x.as_bool()),
+            notify_self: v.get("notify_self").and_then(|x| x.as_bool()),
         })
     }
 
@@ -156,14 +168,21 @@ impl ComposeForm {
             imap_password: None,
             request_mdn: receipts.read,
             request_dsn: receipts.delivery,
+            notify_self: receipts.receipt,
         }
     }
 
-    /// The receipts to request: only what the composer switched on.
-    pub fn receipts(&self) -> Receipts {
+    /// The receipts to request: only what the composer switched on, with
+    /// anything it left unset coming from the stored settings
+    /// ([`Receipts::offered`]). The receipt toggle only ever applies to a
+    /// scheduled send; an immediate one ignores it.
+    pub fn receipts(&self, db: &Db) -> Receipts {
         Receipts {
             read: self.request_mdn.unwrap_or(false),
             delivery: self.request_dsn.unwrap_or(false),
+            receipt: self.notify_self.unwrap_or_else(|| {
+                settings::get_bool(db, settings::SCHEDULED_RECEIPT).unwrap_or(false)
+            }),
         }
     }
 
@@ -245,18 +264,35 @@ mod tests {
         let db = crate::db::Db::open_in_memory().unwrap();
         crate::store::settings::set(&db, crate::store::settings::REQUEST_DSN, "1").unwrap();
         let f = ComposeForm::parse(r#"{"to":"a@example.com"}"#).unwrap();
-        assert_eq!(f.receipts(), Receipts::default());
+        assert_eq!(f.receipts(&db), Receipts::default());
         let f = ComposeForm::parse(r#"{"request_mdn":true,"request_dsn":false}"#).unwrap();
         assert_eq!(
-            f.receipts(),
+            f.receipts(&db),
             Receipts {
                 read: true,
-                delivery: false
+                delivery: false,
+                receipt: false
             }
         );
         assert_eq!(
             Receipts::offered_json(&db),
-            r#"{"read":false,"delivery":true}"#
+            r#"{"read":false,"delivery":true,"receipt":false}"#
         );
+    }
+
+    #[test]
+    fn the_receipt_toggle_follows_the_form_over_the_global_setting() {
+        let db = crate::db::Db::open_in_memory().unwrap();
+        // Off by default, like the setting itself.
+        let f = ComposeForm::parse(r#"{"to":"a@example.com"}"#).unwrap();
+        assert!(!f.receipts(&db).receipt);
+        // The global setting pre-checks the dialog's toggle.
+        crate::store::settings::set(&db, crate::store::settings::SCHEDULED_RECEIPT, "1").unwrap();
+        assert!(f.receipts(&db).receipt);
+        // And the composer's own decision wins over it, both ways.
+        let on = ComposeForm::parse(r#"{"to":"a@example.com","notify_self":false}"#).unwrap();
+        assert!(!on.receipts(&db).receipt);
+        let off = ComposeForm::parse(r#"{"to":"a@example.com","notify_self":true}"#).unwrap();
+        assert!(off.receipts(&db).receipt);
     }
 }

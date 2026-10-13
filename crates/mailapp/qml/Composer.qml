@@ -129,6 +129,10 @@ Dialog {
     // starts from the settings, the toggles beside Send change just this one.
     property bool requestMdn: false
     property bool requestDsn: false
+    // Mail a delivery note to the own address once a scheduled send goes
+    // out. Only the Send-later dialog asks; the composer just carries the
+    // setting's default into it.
+    property bool offerReceipt: false
     // Which receipt toggles to show (settings); every mail starts with none.
     property bool offerMdn: false
     property bool offerDsn: false
@@ -266,6 +270,8 @@ Dialog {
         var receipts = root.backend ? FeedJson.parse(root.backend.receipt_toggles_json(), ({})) : ({});
         root.offerMdn = receipts.read === true;
         root.offerDsn = receipts.delivery === true;
+        // The Send-later dialog pre-checks its receipt toggle from this.
+        root.offerReceipt = receipts.receipt === true;
         root.requestMdn = false;
         root.requestDsn = false;
     }
@@ -502,11 +508,11 @@ Dialog {
         }
         if (root.sourceMode) {
             root.pendingSchedulePayload = root.payloadFor(sourceArea.text);
-            scheduleDialog.openFor("");
+            scheduleDialog.openFor("", root.offerReceipt);
         } else {
             bodyEditor.fetchHtml(function (html) {
                 root.pendingSchedulePayload = root.payloadFor(html);
-                scheduleDialog.openFor("");
+                scheduleDialog.openFor("", root.offerReceipt);
             });
         }
     }
@@ -948,7 +954,13 @@ Dialog {
 
     ScheduleDialog {
         id: scheduleDialog
-        onScheduleAccepted: sendAt => root.scheduleRequested(root.pendingSchedulePayload, sendAt)
+        // The dialog's decision travels in the form: absent means the
+        // global setting, which is what pre-checked its toggle.
+        onScheduleAccepted: (sendAt, notifySelf) => {
+            var payload = JSON.parse(root.pendingSchedulePayload);
+            payload.notify_self = notifySelf;
+            root.scheduleRequested(JSON.stringify(payload), sendAt);
+        }
     }
 
     // --- file picker ------------------------------------------------------
