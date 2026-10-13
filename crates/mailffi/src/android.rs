@@ -3304,6 +3304,22 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_nextSendDue<'caller>
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `MailNative.sendDue()`: flush every due `scheduled` row, whatever
+/// account holds it (no poll gating). Blocks for the network run, so only
+/// a worker thread calls it. Returns `{sent, skipped, errors, run}` as
+/// JSON; outbox-only, so no inbox sync and no new-mail notification.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_sendDue<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            Ok(env.new_string(crate::api::outbox::send_due()?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `MailNative.storageStatsJson(dbPath, tempDir)`: database, message and
 /// temp sizes for the maintenance section.
 #[unsafe(no_mangle)]

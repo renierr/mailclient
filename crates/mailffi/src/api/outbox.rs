@@ -56,3 +56,15 @@ pub fn next_send_due() -> anyhow::Result<String> {
         None => "{}".to_string(),
     })
 }
+
+/// Flush every due `scheduled` row, whatever account holds it (no poll
+/// gating: intervals, quiet hours and push/poll mode never hold back mail
+/// the user asked to send). Blocks for the network run, so only a worker
+/// thread calls it. Returns `{sent, skipped, errors, run}` as JSON.
+pub fn send_due() -> anyhow::Result<String> {
+    let report = mailcore::sync::background::send_due_scheduled_blocking(
+        shared_db()?,
+        &crate::db::db_path(),
+    );
+    Ok(serde_json::to_string(&report)?)
+}

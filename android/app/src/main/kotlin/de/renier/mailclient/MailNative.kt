@@ -331,6 +331,12 @@ object MailNative {
     @JvmStatic external fun sendNowOutbox(accountId: Long, id: Long)
     @JvmStatic external fun nextScheduled(accountId: Long): String
     @JvmStatic external fun nextSendDue(): String
+    // Flush every due `scheduled` row, whatever account holds it (no poll
+    // gating: intervals, quiet hours and push/poll mode never hold back
+    // mail the user asked to send). Blocks for the network run; workers
+    // only. `{sent, skipped, errors, run}` as JSON; outbox-only, so no
+    // inbox sync and no new-mail notification.
+    @JvmStatic external fun sendDue(): String
     @JvmStatic external fun storageStatsJson(dbPath: String, tempDir: String): String
     @JvmStatic external fun cleanupTempFilesJson(tempDir: String): String
     @JvmStatic external fun pickStageDir(base: String): String

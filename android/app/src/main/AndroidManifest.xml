@@ -153,10 +153,12 @@
         <!-- On-time background mail check (MailAlarm.kt): exact alarm shots,
              re-armed after a reboot or an app update. Only armed when
              Settings picks the alarm scheduler; otherwise it stays idle.
-             Also restarts push mail after a reboot or update. -->
+             Also restarts push mail after a reboot or update. Exported: the
+             boot/update broadcasts come from the system, which cannot reach
+             a non-exported receiver. -->
         <receiver
             android:name=".MailAlarmReceiver"
-            android:exported="false">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED"/>
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
@@ -176,10 +178,11 @@
             android:name=".MailPushReceiver"
             android:exported="false" />
         <!-- Quiet hours: plan again when a window starts or ends, or the
-             clock moves under it (MailSchedule.kt). -->
+             clock moves under it (MailSchedule.kt). Exported: the time-zone
+             and time broadcasts come from the system. -->
         <receiver
             android:name=".MailScheduleReceiver"
-            android:exported="false">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.TIMEZONE_CHANGED"/>
                 <action android:name="android.intent.action.TIME_SET"/>

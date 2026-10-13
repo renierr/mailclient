@@ -64,6 +64,7 @@ import de.renier.mailclient.ui.common.DeleteConfirmDialog
 import de.renier.mailclient.ui.common.FormDialog
 import de.renier.mailclient.ui.common.UnsavedChangesDialog
 import de.renier.mailclient.ui.common.isShortScreen
+import de.renier.mailclient.ui.settings.BackgroundPower
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.state.PendingSend
 import kotlinx.coroutines.Dispatchers
@@ -346,6 +347,12 @@ fun ComposerScreen(
             }
             if (failure == null) {
                 state.info("Scheduled — sends automatically")
+                // On-time delivery needs the exact grant: without it the
+                // alarm still fires in standby, just not at the exact
+                // minute. Ask once, where the need just arose.
+                if (!BackgroundPower.exactAlarms(context)) {
+                    BackgroundPower.requestExactAlarms(context)
+                }
                 onClose()
             } else {
                 scheduling = false

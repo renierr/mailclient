@@ -20,14 +20,15 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::auth;
 use crate::db::Db;
 use crate::models::Account;
-use crate::store::settings;
+use crate::store::{accounts, queue, settings};
 use crate::sync::headless::{
     self, acquire_sync_lock, sync_account, sync_accounts, SyncLock, SyncScope,
 };
 use crate::sync::imap::ImapSync;
-
+use crate::sync::sender::SmtpSender;
 /// One mail the background check has never reported before. Carries the ids
 /// the UI needs to open it (`account_id`/`folder_id`/`uid`), plus the
 /// metadata a notification shows. Bodies never cross here, only the cached
@@ -423,6 +424,124 @@ pub fn background_check_now_blocking(db: &Db, db_path: &Path, trigger: &str) -> 
         .build()
         .expect("tokio runtime for background check");
     rt.block_on(background_check_now(db, db_path, trigger))
+}
+
+/// Outcome of [`send_due_scheduled`]: how many held `scheduled` rows went
+/// out. Crosses to the Android host as JSON. Unlike [`BackgroundReport`]
+/// this carries no inbox state: the run flushes the outbox only, so a send
+/// at 3am never syncs the inbox or notifies for new mail — quiet hours gate
+/// unattended checks, but a send the user scheduled is their own intent.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SendDueReport {
+    /// Another sync held the lock, so this run did nothing. Not an error —
+    /// the lock holder's own flush promotes the same due rows.
+    pub skipped: bool,
+    pub sent: u64,
+    pub errors: Vec<String>,
+    /// `started_at` of this run's [`LastRun`], for [`record_outcome`].
+    pub run: String,
+}
+
+/// Flush every due `scheduled` outbox row, whatever account holds it. No
+/// poll gating: check intervals, quiet hours and push/poll mode decide when
+/// the phone looks for *new* mail, never whether mail the user asked to send
+/// goes out. Each account flushes through its own submit (SMTP, then the
+/// Sent copy), so one bad account never stops the rest. Every run leaves a
+/// [`LastRun`] tagged `scheduled-send` for the Settings status block.
+pub async fn send_due_scheduled(db: &Db, db_path: &Path) -> SendDueReport {
+    let run = LastRun::started(Utc::now(), "scheduled-send");
+    save_run(db, &run);
+    let mut report = flush_due_scheduled(db, db_path).await;
+    report.run = run.started_at.clone();
+    save_run(
+        db,
+        &LastRun {
+            started_at: run.started_at.clone(),
+            finished_at: Some(Utc::now().to_rfc3339()),
+            trigger: "scheduled-send".to_string(),
+            skipped: report.skipped,
+            new: 0,
+            errors: report
+                .errors
+                .iter()
+                .take(LAST_RUN_ERRORS)
+                .cloned()
+                .collect(),
+            outcome: None,
+        },
+    );
+    report
+}
+
+async fn flush_due_scheduled(db: &Db, db_path: &Path) -> SendDueReport {
+    let _lock = match acquire_sync_lock(db_path) {
+        Ok(Some(guard)) => guard,
+        Ok(None) => {
+            return SendDueReport {
+                skipped: true,
+                ..Default::default()
+            };
+        }
+        Err(e) => {
+            return SendDueReport {
+                skipped: true,
+                errors: vec![format!("sync lock: {e}")],
+                ..Default::default()
+            };
+        }
+    };
+    let ids = queue::due_scheduled_account_ids(db).unwrap_or_default();
+    let mut report = SendDueReport::default();
+    for id in ids {
+        let account = match accounts::get(db, id) {
+            Ok(a) => a,
+            Err(e) => {
+                report.errors.push(format!("account {id}: {e}"));
+                continue;
+            }
+        };
+        let secrets = match auth::load_account_secrets_retry(&account.auth_vault_key).await {
+            Ok(s) => s,
+            Err(e) => {
+                report
+                    .errors
+                    .push(format!("{}: {e}", account.email_address));
+                continue;
+            }
+        };
+        match SmtpSender::new(&account)
+            .flush_outbox(
+                db,
+                id,
+                &secrets.smtp_password,
+                Some(secrets.imap_password.as_str()),
+            )
+            .await
+        {
+            Ok(n) => {
+                if n > 0 {
+                    log::info!("smtp: scheduled send flushed {n} send(s)");
+                }
+                report.sent += n;
+            }
+            Err(e) => report
+                .errors
+                .push(format!("{}: {e}", account.email_address)),
+        }
+    }
+    report
+}
+
+/// Synchronous wrapper around [`send_due_scheduled`] for FFI callers, which
+/// cannot await. Same current-thread runtime shape as
+/// [`background_check_blocking`].
+pub fn send_due_scheduled_blocking(db: &Db, db_path: &Path) -> SendDueReport {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime for scheduled send");
+    rt.block_on(send_due_scheduled(db, db_path))
 }
 
 /// Unread inbox mail first seen since the marks were last committed.
@@ -840,5 +959,31 @@ mod tests {
         let run = last_run(&db).unwrap();
         assert_eq!(run.started_at, "2020-01-01T00:00:00Z");
         assert_eq!(run.trigger, "");
+    }
+
+    #[test]
+    fn send_due_with_nothing_due_sends_nothing_and_stays_offline() {
+        // No accounts at all: no network, still a finished history entry.
+        let db = Db::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let report = send_due_scheduled_blocking(&db, &dir.path().join("db.sqlite"));
+        assert!(!report.skipped);
+        assert_eq!(report.sent, 0);
+        assert!(report.errors.is_empty());
+        let run = last_run(&db).unwrap();
+        assert_eq!(run.trigger, "scheduled-send");
+        assert!(run.finished_at.is_some());
+        assert_eq!(report.run, run.started_at);
+    }
+
+    #[test]
+    fn a_locked_send_due_run_is_recorded_as_skipped() {
+        let db = Db::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db.sqlite");
+        let _held = acquire_sync_lock(&path).unwrap().unwrap();
+        let report = send_due_scheduled_blocking(&db, &path);
+        assert!(report.skipped);
+        assert!(last_run(&db).unwrap().skipped);
     }
 }

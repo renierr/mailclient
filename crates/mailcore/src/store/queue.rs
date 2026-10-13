@@ -337,6 +337,24 @@ pub fn next_due_for(db: &Db, account_id: i64) -> Result<Option<String>> {
         .map_err(Into::into)
 }
 
+/// Accounts holding `scheduled` rows whose time has come (bytes present).
+/// A scheduled send is user intent, not a poll: the sender flushes these
+/// regardless of check intervals, quiet hours or push/poll mode, so this
+/// deliberately ignores everything [`crate::sync::background::schedule`]
+/// gates on.
+pub fn due_scheduled_account_ids(db: &Db) -> Result<Vec<i64>> {
+    let mut stmt = db.conn().prepare(
+        "select distinct account_id from send_queue
+          where status = 'scheduled'
+            and raw_mime is not null and length(raw_mime) > 0
+            and send_at is not null and send_at <= ?1
+          order by account_id",
+    )?;
+    let rows = stmt.query_map(params![now()], |row| row.get(0))?;
+    rows.collect::<rusqlite::Result<Vec<i64>>>()
+        .map_err(Into::into)
+}
+
 /// Replace a row's MIME bytes (a scheduled send's `Date:` refresh before
 /// submit). The row stays in its status; only the bytes change.
 pub fn update_raw_mime(db: &Db, id: i64, raw: &[u8]) -> Result<()> {
@@ -714,5 +732,25 @@ mod tests {
             next_due_for(&db, acc).unwrap().as_deref(),
             Some(at.as_str())
         );
+    }
+
+    #[test]
+    fn due_scheduled_lists_only_accounts_past_their_time() {
+        let (db, acc) = setup();
+        assert!(due_scheduled_account_ids(&db).unwrap().is_empty());
+        schedule(&db, acc, 120);
+        // Still in the future: nobody is due.
+        assert!(due_scheduled_account_ids(&db).unwrap().is_empty());
+        // Backdate one row past its time: its account is due.
+        let past = (chrono::Utc::now() - chrono::Duration::minutes(1))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let id = schedule(&db, acc, 60);
+        db.conn()
+            .execute(
+                "update send_queue set send_at = ?1 where id = ?2",
+                params![past, id],
+            )
+            .unwrap();
+        assert_eq!(due_scheduled_account_ids(&db).unwrap(), vec![acc]);
     }
 }

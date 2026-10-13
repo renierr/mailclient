@@ -39,6 +39,7 @@ import de.renier.mailclient.ui.common.DeleteConfirmDialog
 import de.renier.mailclient.ui.common.strings
 import de.renier.mailclient.ui.composer.ScheduleDialog
 import de.renier.mailclient.ui.composer.formatSendAtLocal
+import de.renier.mailclient.ui.settings.BackgroundPower
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.state.refreshOutbox
 import de.renier.mailclient.ui.state.syncNow
@@ -157,6 +158,20 @@ fun OutboxScreen(state: MailState) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 4.dp)) }
+            if (entries?.any { it.status == "scheduled" } == true && !BackgroundPower.exactAlarms(context)) {
+                Text(
+                    "Exact alarms are off: scheduled mail still sends, but may go out late while the phone sleeps.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+                OutlinedButton(
+                    onClick = { BackgroundPower.requestExactAlarms(context) },
+                    modifier = Modifier.padding(top = 4.dp),
+                ) {
+                    Text("Allow exact alarms")
+                }
+            }
             OutlinedButton(
                 onClick = {
                     error = null

@@ -14,8 +14,10 @@ import java.util.TimeZone
 
 // The scheduled-send alarm: one exact shot for the earliest held `scheduled`
 // outbox row across all accounts (the core's `nextSendDue`). Firing only
-// enqueues a MailCheckWorker check — whose sync flushes due rows — and then
-// re-arms from the next held row, so deliveries converge without polling.
+// enqueues an outbox-only flush — never the inbox check, so quiet hours,
+// check intervals and push/poll mode cannot hold back mail the user asked
+// to send — and then re-arms from the next held row, so deliveries converge
+// without polling.
 //
 // Why its own alarm: the interval poller ticks every N minutes (15 at
 // least), which would send minutes late; this fires on the minute. Like
@@ -59,11 +61,12 @@ object MailSendAlarm {
     }
 
     private fun armAt(context: Context, atMillis: Long) {
-        // Past-due (the phone was off at the time): check now — the worker
-        // delivers when online and waits for a network when not — and keep
-        // the backstop until the row is gone.
+        // Past-due (the phone was off at the time): flush now — the worker
+        // waits for a network when offline — and keep the backstop until
+        // the row is gone. The backstop re-arms itself: while the row is
+        // still held at the next shot, this arms another one.
         if (atMillis <= System.currentTimeMillis()) {
-            MailAlarm.enqueueCheck(context, "scheduled-send")
+            MailCheckWorker.enqueueSendDue(context)
         }
         val at = if (atMillis <= System.currentTimeMillis()) {
             System.currentTimeMillis() + RETRY_MILLIS
@@ -80,6 +83,9 @@ object MailSendAlarm {
     }
 
     private fun parseUtc(raw: String): Long? {
+        // The core stores UTC RFC3339 (`2026-10-13T12:00:00Z`), with offsets
+        // possible after a reschedule; Instant parses every shape.
+        runCatching { java.time.Instant.parse(raw).toEpochMilli() }.getOrNull()?.let { return it }
         for (p in arrayOf("yyyy-MM-dd'T'HH:mm:ssX", "yyyy-MM-dd'T'HH:mm:ss.SSSX")) {
             runCatching {
                 val f = SimpleDateFormat(p, Locale.US)
@@ -102,12 +108,12 @@ object MailSendAlarm {
         context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
 }
 
-// A held row's time has come (or the backstop elapsed): run the same check
-// the schedulers run — its sync flushes every due row — then plan again.
+// A held row's time has come (or the backstop elapsed): flush the outbox —
+// never the inbox check — then plan again.
 class MailSendReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != MailSendAlarm.ACTION_SEND) return
-        MailAlarm.enqueueCheck(context, "scheduled-send")
+        MailCheckWorker.enqueueSendDue(context)
         MailSendAlarm.refresh(context)
     }
 }
