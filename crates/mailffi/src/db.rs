@@ -17,6 +17,10 @@
 use std::cell::OnceCell;
 
 thread_local! {
+    // The initializer is already `const` (bare `const` without braces does
+    // not parse in `thread_local!`); the lint is a false positive that only
+    // fires for the Android target.
+    #[allow(clippy::missing_const_for_thread_local)]
     static DB: OnceCell<&'static mailcore::Db> = const { OnceCell::new() };
 }
 

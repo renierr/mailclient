@@ -3153,9 +3153,9 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_canToggleColors<'cal
     unowned
         .with_env(|_env| -> Result<bool> {
             Ok(mailcore::html::reader::can_toggle_colors(
-                is_html != 0,
-                html_colored != 0,
-                dark != 0,
+                is_html,
+                html_colored,
+                dark,
                 u32::try_from(fit_below.max(0)).unwrap_or(0),
             ))
         })
