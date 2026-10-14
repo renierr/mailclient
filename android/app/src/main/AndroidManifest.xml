@@ -15,12 +15,17 @@
          the phone sleeps. Play restricts this permission; the APK is
          sideloaded. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
-    <!-- Exact-alarm scheduler (Settings option, WorkManager stays default):
-         the alarm fires on time in Doze via setExactAndAllowWhileIdle.
-         Since Android 14 this is denied by default; Settings sends the user
-         to the "Alarms & reminders" screen to allow it. Without the grant
-         the alarm still fires via AllowWhileIdle, just not exact. -->
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <!-- Exact alarms (scheduled send, push keep-alive, the alarm poller):
+         they fire on time in Doze via setExactAndAllowWhileIdle.
+         USE_EXACT_ALARM (Android 13+) is granted at install, so scheduled
+         mail goes out on the minute without a setup step. Play allows it
+         only for alarm and calendar apps; the APK is sideloaded, so a Play
+         build has to drop it. Android 12 has only SCHEDULE_EXACT_ALARM,
+         granted on the "Alarms & reminders" screen Settings links to;
+         without the grant the alarm still fires via AllowWhileIdle, just
+         not exact. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32"/>
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
     <!-- Runtime-prompted when the user switches on "Suggest recipients from
          the phone's contacts" (Settings): the composer's recipient field
          then merges the phone book into the mail-collected suggestions. The
