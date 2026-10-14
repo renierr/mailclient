@@ -910,15 +910,19 @@ ApplicationWindow {
         }
 
         function onJob_finished(kind, status, outcome) {
-            if (jobConnections.readOnlyKinds.indexOf(kind) < 0) {
+            // A due-timer flush that sent nothing changed no feed either.
+            var quietFlush = kind === "Scheduled send" && outcome !== "sent";
+            if (jobConnections.readOnlyKinds.indexOf(kind) < 0 && !quietFlush) {
                 reloadAccounts();
                 reloadFolders();
                 reloadMessages();
             }
             reloadOutboxStatus();
             // A due send may have gone out (or just been scheduled): the
-            // next held row needs its timer.
-            root.armDueTimer();
+            // next held row needs its timer. After a flush that sent nothing
+            // (another process held the sync lock), wait a minute rather
+            // than retry on the second.
+            root.armDueTimer(quietFlush ? 60000 : 1000);
             // A sync can change what the index holds: re-run an active
             // search so results never go stale behind a fresh feed (local
             // re-query only — never re-arms the server debounce).
@@ -951,6 +955,11 @@ ApplicationWindow {
                         composer.open();
                     }
                 }
+                if (status !== "")
+                    root.statusText = status;
+                return;
+            }
+            if (kind === "Scheduled send") {
                 if (status !== "")
                     root.statusText = status;
                 return;
@@ -1034,27 +1043,40 @@ ApplicationWindow {
         onTriggered: root.consumePendingOpen()
     }
 
-    // Scheduled sends: one shot for the earliest held row across all
+    // Scheduled sends: one shot for the earliest waiting row across all
     // accounts. Fires `flush_due_sends` (every account, not just the open
-    // one); the finish handler re-arms from the next held row.
+    // one); the finish handler re-arms from the next waiting row. A Timer
+    // does not count time the machine sleeps, so a long wait is cut into
+    // steps of at most `dueStepMs` that re-plan from the clock, and waking
+    // up re-plans at once.
+    readonly property int dueStepMs: 5 * 60 * 1000
     Timer {
         id: dueTimer
         repeat: false
         onTriggered: {
+            if (backend.scheduled_due_ms() !== 0) {
+                root.armDueTimer(1000);
+                return;
+            }
             var r = backend.flush_due_sends();
             if (r !== "")
                 root.statusText = r;
         }
     }
 
-    function armDueTimer() {
+    function armDueTimer(minMs) {
         var ms = backend.scheduled_due_ms();
         if (ms < 0) {
             dueTimer.stop();
             return;
         }
-        dueTimer.interval = Math.min(Math.max(ms, 1000), 2147483647);
+        dueTimer.interval = Math.min(Math.max(ms, minMs || 1000), root.dueStepMs);
         dueTimer.restart();
+    }
+
+    onActiveChanged: {
+        if (root.active)
+            root.armDueTimer();
     }
 
     // The open account's check interval: its own, or the app-wide default.
@@ -1672,7 +1694,7 @@ ApplicationWindow {
                 composer.saving = true;
         }
         onScheduleRequested: (payload, sendAt) => {
-            var r = backend.schedule_mail(payload, sendAt);
+            var r = backend.schedule_mail(backend.current_account_id, payload, sendAt);
             if (r !== "") {
                 root.statusText = r;
             } else {
@@ -1681,10 +1703,7 @@ ApplicationWindow {
                 composer.close();
                 reloadOutboxStatus();
                 root.armDueTimer();
-                var when = new Date(sendAt);
-                root.statusText = isNaN(when.getTime()) ? qsTr("Scheduled — sends automatically") : qsTr(
-                                                              "Scheduled for %1").arg(Qt.formatDateTime(when,
-                                                                                                        "dddd, d MMMM HH:mm"));
+                root.statusText = SendAt.label(sendAt) || qsTr("Scheduled — sends automatically");
             }
         }
     }

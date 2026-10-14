@@ -90,6 +90,10 @@ pub struct ScheduledSend {
     pub account_id: i64,
     /// Normalized UTC instant the row waits for (what the outbox shows).
     pub send_at: String,
+    /// The server draft the mail was composed from, now carried by the
+    /// outbox row: the adapter removes it with [`super::delete_draft`] on
+    /// its net thread, as [`deliver`] does for an immediate send.
+    pub draft_uid: Option<u32>,
 }
 
 /// Validate the form, build the MIME with the user's send settings and hold
@@ -105,6 +109,7 @@ pub fn prepare_scheduled(
     send_at: &str,
 ) -> Result<ScheduledSend, String> {
     form.require_recipient()?;
+    let send_at = queue::normalize_future_send_at(send_at).map_err(|e| e.to_string())?;
     let acc = resolve_account(db, account_id)?;
     let format = SendFormat::parse(&settings::get_send_format(db));
     let include_plain = settings::get_bool(db, settings::COMPOSE_INCLUDE_PLAIN).unwrap_or(true);
@@ -115,17 +120,14 @@ pub fn prepare_scheduled(
             db,
             acc.id,
             &form.as_request(&acc, format, include_plain, receipts, &policy),
-            Some(send_at),
+            Some(&send_at),
         )
         .map_err(|e| e.to_string())?;
-    let stored = queue::get(db, queue_id)
-        .map_err(|e| e.to_string())?
-        .send_at
-        .unwrap_or_default();
     Ok(ScheduledSend {
         queue_id,
         account_id: acc.id,
-        send_at: stored,
+        send_at,
+        draft_uid: u32::try_from(form.draft_uid).ok(),
     })
 }
 
@@ -383,6 +385,7 @@ mod tests {
         let held = prepare_scheduled(&db, id, form(), &at).unwrap();
         assert_eq!(held.account_id, id);
         assert_eq!(held.send_at, at);
+        assert_eq!(held.draft_uid, None);
         let row = queue::get(&db, held.queue_id).unwrap();
         assert_eq!(row.status, crate::models::QueueStatus::Scheduled);
         assert!(row.raw_mime.as_deref().is_some_and(|b| !b.is_empty()));

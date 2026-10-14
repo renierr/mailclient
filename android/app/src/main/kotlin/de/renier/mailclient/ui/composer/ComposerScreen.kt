@@ -1,5 +1,6 @@
 package de.renier.mailclient.ui.composer
 
+import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -347,17 +348,23 @@ fun ComposerScreen(
             // global setting, which is what pre-checked its toggle.
             val f = JSONObject(form(html)).put("notify_self", notifySelf).toString()
             val failure = withContext(Dispatchers.IO) {
-                runCatching {
-                    MailNative.scheduleMail(accountId, f, sendAtUtc)
-                    MailSendAlarm.refresh(context)
-                }.exceptionOrNull()
+                runCatching { MailNative.scheduleMail(accountId, f, sendAtUtc) }.exceptionOrNull()
             }
             if (failure == null) {
+                // The row is stored: arming the alarm can only fail on its
+                // own, and must never read as "not scheduled" (a retry
+                // would hold the mail twice). Start-up and every check
+                // re-arm from the outbox anyway.
+                withContext(Dispatchers.IO) {
+                    runCatching { MailSendAlarm.refresh(context) }
+                        .onFailure { Log.w("mailclient", "schedule: alarm not armed", it) }
+                }
                 state.info("Scheduled — sends automatically")
                 // On-time delivery needs the exact grant: without it the
                 // alarm still fires in standby, just not at the exact
-                // minute. Ask once, where the need just arose.
-                if (!BackgroundPower.exactAlarms(context)) {
+                // minute. Ask once, where the need first arose; the Outbox
+                // keeps offering it after that.
+                if (!BackgroundPower.exactAlarms(context) && BackgroundPower.firstExactAlarmAsk(context)) {
                     BackgroundPower.requestExactAlarms(context)
                 }
                 onClose()

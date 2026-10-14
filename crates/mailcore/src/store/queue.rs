@@ -260,104 +260,151 @@ pub fn promote_due(db: &Db, account_id: i64) -> Result<u64> {
     Ok(n as u64)
 }
 
-/// Move a held row to a new future instant: validates `send_at` like
-/// [`normalize_future_send_at`], requires bytes still present, and refuses
-/// rows that are `sending` (a submit owns them) or `sent`. A previous failure
-/// is cleared: the retry is a new intent, not the old error.
-pub fn reschedule(db: &Db, id: i64, send_at: &str) -> Result<String> {
+/// How long a scheduled send that failed after its time waits before the
+/// planners ([`next_due`], [`due_scheduled_account_ids`]) ask for another
+/// flush. Without a pause a row that keeps failing (server down, password
+/// gone) would be due again the moment it failed, and a due timer or alarm
+/// would spin on it.
+pub const SCHEDULED_RETRY_SECS: i64 = 300;
+
+/// Statuses a scheduled send can be in while it still waits to go out:
+/// held (`scheduled`), promoted by a flush (`queued`), or failed after its
+/// time with retries left (`failed`). Reschedule and Send now act on these.
+const HELD_STATUSES: &str = "('scheduled', 'queued', 'failed')";
+
+/// Why a conditional update on outbox row `id` of `account_id` touched
+/// nothing: the row is gone (or another account's), a submit owns it, or its
+/// bytes were dropped.
+fn unchanged_reason(db: &Db, account_id: i64, id: i64) -> StoreError {
+    match get(db, id) {
+        Ok(row) if row.account_id != account_id => StoreError::NotFound("outbox entry".to_string()),
+        Ok(row)
+            if matches!(
+                row.status,
+                QueueStatus::Scheduled | QueueStatus::Queued | QueueStatus::Failed
+            ) =>
+        {
+            StoreError::InvalidInput(
+                "this entry has no message data left; send it again by hand".to_string(),
+            )
+        }
+        Ok(_) => StoreError::InvalidInput("this entry is already being sent".to_string()),
+        Err(e) => e,
+    }
+}
+
+/// Move a waiting row of `account_id` to a new future instant: validates
+/// `send_at` like [`normalize_future_send_at`], requires bytes still present,
+/// and refuses rows that are `sending` (a submit owns them) or `sent`. The
+/// check is part of the update itself, so a flush claiming the row at the
+/// same moment either wins (and this fails) or loses (and the row waits).
+/// A previous failure and its retry count are cleared: the new time is a new
+/// intent, not the old error.
+pub fn reschedule(db: &Db, account_id: i64, id: i64, send_at: &str) -> Result<String> {
     let send_at = normalize_future_send_at(send_at)?;
-    let row = get(db, id)?;
-    if !matches!(
-        row.status,
-        QueueStatus::Scheduled | QueueStatus::Queued | QueueStatus::Failed
-    ) {
-        return Err(StoreError::InvalidInput(
-            "this entry is already being sent".to_string(),
-        ));
-    }
-    if row.raw_mime.as_deref().is_none_or(|b| b.is_empty()) {
-        return Err(StoreError::InvalidInput(
-            "this entry has no message data left; send it again by hand".to_string(),
-        ));
-    }
-    db.conn().execute(
-        "update send_queue set status = 'scheduled', send_at = ?1,
-            last_error = null, updated_at = ?2 where id = ?3",
-        params![send_at, now(), id],
+    let n = db.conn().execute(
+        &format!(
+            "update send_queue set status = 'scheduled', send_at = ?1, retries = 0,
+                last_error = null, updated_at = ?2
+              where id = ?3 and account_id = ?4 and status in {HELD_STATUSES}
+                and raw_mime is not null and length(raw_mime) > 0"
+        ),
+        params![send_at, now(), id, account_id],
     )?;
+    if n == 0 {
+        return Err(unchanged_reason(db, account_id, id));
+    }
     Ok(send_at)
 }
 
-/// Send a `scheduled` row with the next sync instead of at its time: back to
-/// `queued` with no `send_at`. Refuses rows that are `sending` or `sent`.
-pub fn send_now(db: &Db, id: i64) -> Result<()> {
-    let row = get(db, id)?;
-    if !matches!(
-        row.status,
-        QueueStatus::Scheduled | QueueStatus::Queued | QueueStatus::Failed
-    ) {
-        return Err(StoreError::InvalidInput(
-            "this entry is already being sent".to_string(),
-        ));
-    }
-    db.conn().execute(
-        "update send_queue set status = 'queued', send_at = null, updated_at = ?1
-          where id = ?2",
-        params![now(), id],
+/// Send a waiting row of `account_id` now instead of at its time: `queued`
+/// with `send_at` set to now, so delivery still refreshes the `Date:` the
+/// message was built with and the planners see it as due at once (an alarm
+/// or due timer flushes it without waiting for a sync). Same guards and
+/// reset as [`reschedule`].
+pub fn send_now(db: &Db, account_id: i64, id: i64) -> Result<()> {
+    let ts = now();
+    let n = db.conn().execute(
+        &format!(
+            "update send_queue set status = 'queued', send_at = ?1, retries = 0,
+                last_error = null, updated_at = ?1
+              where id = ?2 and account_id = ?3 and status in {HELD_STATUSES}
+                and raw_mime is not null and length(raw_mime) > 0"
+        ),
+        params![ts, id, account_id],
     )?;
+    if n == 0 {
+        return Err(unchanged_reason(db, account_id, id));
+    }
     Ok(())
 }
 
-/// Earliest held `scheduled` instant (UTC RFC3339) with bytes still present,
-/// past-due included so a caller arms an immediate check for it. `None` when
-/// nothing is scheduled. For exact-alarm planning on the composing device.
-pub fn next_due(db: &Db) -> Result<Option<(i64, String)>> {
-    db.conn()
-        .query_row(
-            "select account_id, send_at from send_queue
-              where status = 'scheduled'
-                and raw_mime is not null and length(raw_mime) > 0
-                and send_at is not null
-              order by send_at limit 1",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()
-        .map_err(Into::into)
+/// Every scheduled send still waiting to go out, as `(account_id, next
+/// attempt)`. A held row's attempt is its `send_at`; a promoted one's is
+/// `send_at` too (due now); one that failed after its time retries
+/// [`SCHEDULED_RETRY_SECS`] after the failure. Rows without bytes or out of
+/// retries are dead and left to the outbox list.
+fn waiting_scheduled(db: &Db) -> Result<Vec<(i64, chrono::DateTime<chrono::Utc>)>> {
+    let mut stmt = db.conn().prepare(&format!(
+        "select account_id, status, send_at, updated_at from send_queue
+          where send_at is not null and status in {HELD_STATUSES}
+            and raw_mime is not null and length(raw_mime) > 0
+            and retries < ?1"
+    ))?;
+    let rows = stmt.query_map(params![MAX_SEND_RETRIES as i64], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+    let parse = |raw: &str| {
+        chrono::DateTime::parse_from_rfc3339(raw)
+            .ok()
+            .map(|t| t.to_utc())
+    };
+    let mut out = Vec::new();
+    for row in rows {
+        let (account_id, status, send_at, updated_at) = row?;
+        let Some(at) = parse(&send_at) else {
+            log::warn!("outbox: unreadable send_at on a scheduled row of account {account_id}");
+            continue;
+        };
+        let next = match QueueStatus::parse_status(&status) {
+            QueueStatus::Failed => parse(&updated_at)
+                .map(|t| (t + chrono::Duration::seconds(SCHEDULED_RETRY_SECS)).max(at))
+                .unwrap_or(at),
+            _ => at,
+        };
+        out.push((account_id, next));
+    }
+    Ok(out)
 }
 
-/// [`next_due`] scoped to one account, for per-account outbox views.
-pub fn next_due_for(db: &Db, account_id: i64) -> Result<Option<String>> {
-    db.conn()
-        .query_row(
-            "select send_at from send_queue
-              where status = 'scheduled' and account_id = ?1
-                and raw_mime is not null and length(raw_mime) > 0
-                and send_at is not null
-              order by send_at limit 1",
-            [account_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(Into::into)
+/// When the earliest waiting scheduled send wants a flush (see
+/// [`waiting_scheduled`]), past instants included so a caller flushes at
+/// once. `None` when nothing waits. Due timers and exact alarms plan from
+/// this.
+pub fn next_due(db: &Db) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+    Ok(waiting_scheduled(db)?.into_iter().map(|(_, at)| at).min())
 }
 
-/// Accounts holding `scheduled` rows whose time has come (bytes present).
-/// A scheduled send is user intent, not a poll: the sender flushes these
+/// Accounts with a waiting scheduled send whose attempt is due now. A
+/// scheduled send is user intent, not a poll: the sender flushes these
 /// regardless of check intervals, quiet hours or push/poll mode, so this
 /// deliberately ignores everything [`crate::sync::background::schedule`]
 /// gates on.
 pub fn due_scheduled_account_ids(db: &Db) -> Result<Vec<i64>> {
-    let mut stmt = db.conn().prepare(
-        "select distinct account_id from send_queue
-          where status = 'scheduled'
-            and raw_mime is not null and length(raw_mime) > 0
-            and send_at is not null and send_at <= ?1
-          order by account_id",
-    )?;
-    let rows = stmt.query_map(params![now()], |row| row.get(0))?;
-    rows.collect::<rusqlite::Result<Vec<i64>>>()
-        .map_err(Into::into)
+    let now = chrono::Utc::now();
+    let mut ids: Vec<i64> = waiting_scheduled(db)?
+        .into_iter()
+        .filter(|(_, at)| *at <= now)
+        .map(|(id, _)| id)
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    Ok(ids)
 }
 
 /// Replace a row's MIME bytes (a scheduled send's `Date:` refresh before
@@ -442,357 +489,4 @@ pub fn prune_sent(db: &Db) -> Result<u64> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::models::NewAccount;
-    use crate::store::accounts;
-
-    const RAW: &[u8] = b"From: a@x.y\r\nTo: b@x.y\r\nSubject: hi\r\n\r\nbody";
-
-    fn account(db: &Db, name: &str, vault_key: &str) -> i64 {
-        accounts::create(
-            db,
-            &NewAccount {
-                name: name.to_string(),
-                email_address: format!("{name}@x.y"),
-                from_name: String::new(),
-                imap_host: "h".to_string(),
-                imap_port: 993,
-                imap_security: "tls".to_string(),
-                imap_username: "u".to_string(),
-                smtp_host: "h".to_string(),
-                smtp_port: 465,
-                smtp_security: "tls".to_string(),
-                smtp_username: "u".to_string(),
-                auth_vault_key: vault_key.to_string(),
-                check_interval_secs: 60,
-            },
-        )
-        .unwrap()
-    }
-
-    fn setup() -> (Db, i64) {
-        let db = Db::open_in_memory().unwrap();
-        let acc = account(&db, "a", "k");
-        (db, acc)
-    }
-
-    fn enqueue(db: &Db, acc: i64) -> i64 {
-        enqueue_mime(db, acc, None, RAW, "a@x.y", &["b@x.y".to_string()], false).unwrap()
-    }
-
-    /// Backdate a row so it looks orphaned by a crash long ago.
-    fn age(db: &Db, id: i64, minutes: i64) {
-        let ts = (chrono::Utc::now() - chrono::Duration::minutes(minutes))
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        db.conn()
-            .execute(
-                "update send_queue set updated_at = ?1 where id = ?2",
-                params![ts, id],
-            )
-            .unwrap();
-    }
-
-    #[test]
-    fn enqueue_and_fail_then_sent() {
-        let (db, acc) = setup();
-        let id = enqueue(&db, acc);
-        assert_eq!(list_pending(&db).unwrap().len(), 1);
-        mark_failed(&db, id, "connection refused").unwrap();
-        let pending = list_pending(&db).unwrap();
-        assert_eq!(pending[0].retries, 1);
-        assert_eq!(pending[0].status, QueueStatus::Failed);
-        mark_sent(&db, id).unwrap();
-        assert!(list_pending(&db).unwrap().is_empty());
-    }
-
-    #[test]
-    fn mime_bytes_roundtrip_and_born_claimed() {
-        let (db, acc) = setup();
-        let id = enqueue(&db, acc);
-        let row = get(&db, id).unwrap();
-        assert_eq!(row.status, QueueStatus::Sending);
-        assert_eq!(row.raw_mime.as_deref(), Some(RAW));
-        assert_eq!(row.envelope_from.as_deref(), Some("a@x.y"));
-        assert_eq!(row.envelope_to, vec!["b@x.y".to_string()]);
-        assert!(!row.request_dsn);
-        let dsn = enqueue_mime(&db, acc, None, RAW, "a@x.y", &["b@x.y".to_string()], true).unwrap();
-        assert!(get(&db, dsn).unwrap().request_dsn);
-        // Owned by the enqueuer: a concurrent flush must not see it.
-        assert!(list_submittable(&db, acc).unwrap().is_empty());
-        assert!(!claim(&db, id).unwrap());
-    }
-
-    #[test]
-    fn only_one_submitter_wins_the_claim() {
-        let (db, acc) = setup();
-        let id = enqueue(&db, acc);
-        mark_failed(&db, id, "timeout").unwrap();
-        assert_eq!(list_submittable(&db, acc).unwrap().len(), 1);
-        assert!(claim(&db, id).unwrap());
-        assert!(!claim(&db, id).unwrap());
-        assert!(list_submittable(&db, acc).unwrap().is_empty());
-    }
-
-    #[test]
-    fn a_live_send_is_not_requeued_but_an_orphan_is() {
-        let (db, acc) = setup();
-        let live = enqueue(&db, acc);
-        let orphan = enqueue(&db, acc);
-        age(&db, orphan, STALE_SENDING_MINUTES + 1);
-        assert_eq!(requeue_interrupted(&db, acc).unwrap(), 1);
-        assert_eq!(get(&db, live).unwrap().status, QueueStatus::Sending);
-        assert_eq!(get(&db, orphan).unwrap().status, QueueStatus::Queued);
-    }
-
-    #[test]
-    fn an_orphan_without_bytes_becomes_failed_not_queued() {
-        let (db, acc) = setup();
-        let orphan = enqueue(&db, acc);
-        discard_mime(&db, orphan).unwrap();
-        age(&db, orphan, STALE_SENDING_MINUTES + 1);
-        assert_eq!(requeue_interrupted(&db, acc).unwrap(), 0);
-        let row = get(&db, orphan).unwrap();
-        assert_eq!(row.status, QueueStatus::Failed);
-    }
-
-    #[test]
-    fn marking_sent_releases_the_mime() {
-        let (db, acc) = setup();
-        let id = enqueue(&db, acc);
-        mark_sent(&db, id).unwrap();
-        let row = get(&db, id).unwrap();
-        assert_eq!(row.status, QueueStatus::Sent);
-        assert_eq!(row.raw_mime, None);
-    }
-
-    #[test]
-    fn discarded_mime_is_never_resubmitted() {
-        let (db, acc) = setup();
-        let id = enqueue(&db, acc);
-        mark_failed(&db, id, "550 rejected").unwrap();
-        discard_mime(&db, id).unwrap();
-        assert!(list_submittable(&db, acc).unwrap().is_empty());
-        // Still visible as a pending outbox problem, just not auto-retried.
-        assert_eq!(list_pending(&db).unwrap().len(), 1);
-    }
-
-    #[test]
-    fn retry_cap_stops_resubmission() {
-        let (db, acc) = setup();
-        let id = enqueue(&db, acc);
-        for _ in 0..MAX_SEND_RETRIES {
-            mark_failed(&db, id, "timeout").unwrap();
-            if get(&db, id).unwrap().retries < MAX_SEND_RETRIES {
-                assert_eq!(list_submittable(&db, acc).unwrap().len(), 1);
-                assert!(claim(&db, id).unwrap());
-            }
-        }
-        assert!(list_submittable(&db, acc).unwrap().is_empty());
-    }
-
-    #[test]
-    fn requeue_interrupted_is_scoped_to_the_account() {
-        let (db, acc) = setup();
-        let other = account(&db, "b", "k2");
-        let mine = enqueue(&db, acc);
-        let theirs = enqueue(&db, other);
-        age(&db, mine, STALE_SENDING_MINUTES + 1);
-        age(&db, theirs, STALE_SENDING_MINUTES + 1);
-        assert_eq!(requeue_interrupted(&db, acc).unwrap(), 1);
-        assert_eq!(get(&db, mine).unwrap().status, QueueStatus::Queued);
-        assert_eq!(get(&db, theirs).unwrap().status, QueueStatus::Sending);
-    }
-
-    #[test]
-    fn prune_keeps_recent_sent_rows() {
-        let (db, acc) = setup();
-        let recent = enqueue(&db, acc);
-        let old = enqueue(&db, acc);
-        mark_sent(&db, recent).unwrap();
-        mark_sent(&db, old).unwrap();
-        db.conn()
-            .execute(
-                "update send_queue set updated_at = ?1 where id = ?2",
-                params![days_ago(SENT_RETENTION_DAYS + 1), old],
-            )
-            .unwrap();
-        assert_eq!(prune_sent(&db).unwrap(), 1);
-        assert!(get(&db, recent).is_ok());
-        assert!(get(&db, old).is_err());
-    }
-
-    fn future_ts(minutes: i64) -> String {
-        (chrono::Utc::now() + chrono::Duration::minutes(minutes))
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-    }
-
-    fn schedule(db: &Db, acc: i64, minutes: i64) -> i64 {
-        let at = future_ts(minutes);
-        let to = vec!["b@x.y".to_string()];
-        enqueue_scheduled_mime(
-            db,
-            acc,
-            &ScheduledMime {
-                message_id: None,
-                raw_mime: RAW,
-                envelope_from: "a@x.y",
-                envelope_to: &to,
-                request_dsn: false,
-                notify_self: false,
-                send_at: &at,
-            },
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn scheduled_rows_wait_unclaimed_until_due() {
-        let (db, acc) = setup();
-        let id = schedule(&db, acc, 60);
-        let row = get(&db, id).unwrap();
-        assert_eq!(row.status, QueueStatus::Scheduled);
-        assert!(row.send_at.is_some());
-        // Held back: not submittable, not claimable, but listed as pending.
-        assert!(list_submittable(&db, acc).unwrap().is_empty());
-        assert!(!claim(&db, id).unwrap());
-        assert_eq!(list_pending(&db).unwrap().len(), 1);
-        // Future validation: past and near times are refused; other offsets
-        // normalize to the same stored instant.
-        assert!(normalize_future_send_at("not a time").is_err());
-        assert!(normalize_future_send_at(&future_ts(-5)).is_err());
-        assert!(normalize_future_send_at(&future_ts(0)).is_err());
-        let utc = chrono::Utc::now() + chrono::Duration::minutes(90);
-        let east = chrono::FixedOffset::east_opt(7200).unwrap();
-        let shifted = utc
-            .with_timezone(&east)
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
-        assert!(shifted.ends_with("+02:00"));
-        assert_eq!(
-            normalize_future_send_at(&shifted).unwrap(),
-            utc.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-        );
-    }
-
-    #[test]
-    fn promote_due_moves_only_past_rows_and_keeps_send_at() {
-        let (db, acc) = setup();
-        let due = schedule(&db, acc, 60);
-        let later = schedule(&db, acc, 120);
-        // Backdate one past its time: only it promotes.
-        let past = (chrono::Utc::now() - chrono::Duration::minutes(1))
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        db.conn()
-            .execute(
-                "update send_queue set send_at = ?1 where id = ?2",
-                params![past, due],
-            )
-            .unwrap();
-        assert_eq!(promote_due(&db, acc).unwrap(), 1);
-        let row = get(&db, due).unwrap();
-        assert_eq!(row.status, QueueStatus::Queued);
-        assert_eq!(row.send_at.as_deref(), Some(past.as_str()));
-        assert_eq!(get(&db, later).unwrap().status, QueueStatus::Scheduled);
-        // The due row submits now; the future one still waits.
-        assert_eq!(
-            list_submittable(&db, acc)
-                .unwrap()
-                .iter()
-                .map(|r| r.id)
-                .collect::<Vec<_>>(),
-            vec![due]
-        );
-    }
-
-    #[test]
-    fn reschedule_rejects_the_past_and_send_now_clears_the_time() {
-        let (db, acc) = setup();
-        let id = schedule(&db, acc, 60);
-        assert!(reschedule(&db, id, &future_ts(-10)).is_err());
-        let moved = reschedule(&db, id, &future_ts(180)).unwrap();
-        let row = get(&db, id).unwrap();
-        assert_eq!(row.status, QueueStatus::Scheduled);
-        assert_eq!(row.send_at.as_deref(), Some(moved.as_str()));
-        send_now(&db, id).unwrap();
-        let row = get(&db, id).unwrap();
-        assert_eq!(row.status, QueueStatus::Queued);
-        assert_eq!(row.send_at, None);
-        assert_eq!(list_submittable(&db, acc).unwrap().len(), 1);
-        // A live send cannot be rescheduled or rushed.
-        let live = enqueue(&db, acc);
-        assert!(reschedule(&db, live, &future_ts(180)).is_err());
-        assert!(send_now(&db, live).is_err());
-    }
-
-    #[test]
-    fn next_due_reports_the_earliest_held_instant() {
-        let (db, acc) = setup();
-        assert_eq!(next_due(&db).unwrap(), None);
-        assert_eq!(next_due_for(&db, acc).unwrap(), None);
-        schedule(&db, acc, 120);
-        let first = schedule(&db, acc, 60);
-        let (aid, at) = next_due(&db).unwrap().unwrap();
-        assert_eq!(aid, acc);
-        assert_eq!(at, get(&db, first).unwrap().send_at.unwrap());
-        assert_eq!(
-            next_due_for(&db, acc).unwrap().as_deref(),
-            Some(at.as_str())
-        );
-    }
-
-    #[test]
-    fn due_scheduled_lists_only_accounts_past_their_time() {
-        let (db, acc) = setup();
-        assert!(due_scheduled_account_ids(&db).unwrap().is_empty());
-        schedule(&db, acc, 120);
-        // Still in the future: nobody is due.
-        assert!(due_scheduled_account_ids(&db).unwrap().is_empty());
-        // Backdate one row past its time: its account is due.
-        let past = (chrono::Utc::now() - chrono::Duration::minutes(1))
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let id = schedule(&db, acc, 60);
-        db.conn()
-            .execute(
-                "update send_queue set send_at = ?1 where id = ?2",
-                params![past, id],
-            )
-            .unwrap();
-        assert_eq!(due_scheduled_account_ids(&db).unwrap(), vec![acc]);
-    }
-
-    #[test]
-    fn the_receipt_flag_survives_promotion() {
-        let (db, acc) = setup();
-        let to = vec!["b@x.y".to_string()];
-        let at = future_ts(60);
-        let id = enqueue_scheduled_mime(
-            &db,
-            acc,
-            &ScheduledMime {
-                message_id: None,
-                raw_mime: RAW,
-                envelope_from: "a@x.y",
-                envelope_to: &to,
-                request_dsn: false,
-                notify_self: true,
-                send_at: &at,
-            },
-        )
-        .unwrap();
-        assert!(get(&db, id).unwrap().notify_self);
-        // Backdate it past its time: it promotes into the next flush, and
-        // the flag rides along so the receipt still goes out.
-        let past = (chrono::Utc::now() - chrono::Duration::minutes(1))
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        db.conn()
-            .execute(
-                "update send_queue set send_at = ?1 where id = ?2",
-                params![past, id],
-            )
-            .unwrap();
-        assert_eq!(promote_due(&db, acc).unwrap(), 1);
-        let row = get(&db, id).unwrap();
-        assert_eq!(row.status, QueueStatus::Queued);
-        assert!(row.notify_self);
-    }
-}
+mod tests;

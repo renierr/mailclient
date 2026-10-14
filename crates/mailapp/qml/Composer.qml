@@ -954,6 +954,7 @@ Dialog {
 
     ScheduleDialog {
         id: scheduleDialog
+        backend: root.backend
         // The dialog's decision travels in the form: absent means the
         // global setting, which is what pre-checked its toggle.
         onScheduleAccepted: (sendAt, notifySelf) => {

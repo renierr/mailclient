@@ -30,7 +30,7 @@ Future<void> dismissOutbox({
   id: id,
 );
 
-/// Move a held outbox row to a new future instant (`send_at` any RFC3339
+/// Move a waiting outbox row to a new future instant (`send_at` any RFC3339
 /// instant, at least a minute out). Returns the normalized UTC instant the
 /// row now waits for, so the app can re-arm its exact alarm. Local-only.
 Future<String> rescheduleOutbox({
@@ -43,8 +43,8 @@ Future<String> rescheduleOutbox({
   sendAt: sendAt,
 );
 
-/// Send a `scheduled` row with the next sync instead of at its time.
-/// Local-only.
+/// Send a waiting scheduled row now instead of at its time (due at once for
+/// the alarm). Local-only.
 Future<void> sendNowOutbox({
   required PlatformInt64 accountId,
   required PlatformInt64 id,
@@ -53,13 +53,8 @@ Future<void> sendNowOutbox({
   id: id,
 );
 
-/// Earliest held `scheduled` instant of this account (UTC RFC3339), `""`
-/// when nothing waits. Local read.
-Future<String> nextScheduled({required PlatformInt64 accountId}) =>
-    MailCoreApi.instance.api.crateApiOutboxNextScheduled(accountId: accountId);
-
-/// Earliest held `scheduled` send across all accounts as
-/// `{"account_id","send_at"}` (`{}` when nothing waits): what the exact
-/// alarm arms from. Local read.
-Future<String> nextSendDue() =>
-    MailCoreApi.instance.api.crateApiOutboxNextSendDue();
+/// Flush every due scheduled send, whatever account holds it (no poll
+/// gating: intervals, quiet hours and push/poll mode never hold back mail
+/// the user asked to send). Blocks for the network run, so only a worker
+/// thread calls it. Returns `{sent, skipped, errors, run}` as JSON.
+Future<String> sendDue() => MailCoreApi.instance.api.crateApiOutboxSendDue();

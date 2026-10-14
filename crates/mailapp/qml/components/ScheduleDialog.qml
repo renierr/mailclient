@@ -7,8 +7,9 @@ import Mailclient
 // Pick the date and time a mail goes out: a month grid and hour/minute
 // fields, opening on the current date and time. The result is a UTC instant
 // (`scheduleAccepted` carries `date.toISOString()`), stored in the outbox as
-// `send_at` and delivered by the next sync past it. Device-local by design:
-// the dialog says the composing device must stay on and online.
+// `send_at` and delivered by the due timer past it. Device-local by design:
+// the dialog says the composing device must stay on and online. Whether the
+// picked time is valid, and why not, comes from the core (`send_at_error`).
 AppDialog {
     id: root
     title: qsTr("Send later")
@@ -19,6 +20,8 @@ AppDialog {
     padding: Theme.lg
 
     signal scheduleAccepted(string sendAtUtc, bool notifySelf)
+
+    property var backend: null
 
     // Mail a delivery note to the own address once this send goes out.
     // Opens on the setting's default (the core's `SCHEDULED_RECEIPT`);
@@ -36,8 +39,15 @@ AppDialog {
     property int selDay: 0
     property bool hasSelection: false
 
-    // At least a minute out, like the core's `SCHEDULE_LEAD_SECS`.
-    readonly property int leadSecs: 60
+    // Ticks while the dialog is open so a picked time that slips into the
+    // past re-checks without the user touching anything.
+    property int nowTick: 0
+    Timer {
+        interval: 15000
+        repeat: true
+        running: root.visible
+        onTriggered: root.nowTick += 1
+    }
 
     function midnight(d) {
         return new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -52,10 +62,11 @@ AppDialog {
         return (new Date(y, m, 1).getDay() + 6) % 7;
     }
 
-    function openFor(sendAtUtc) {
-        var prechecked = arguments.length > 1 && arguments[1] === true;
+    // `prechecked`: the receipt toggle's start (the composer passes the
+    // setting; rescheduling hides the toggle and passes nothing).
+    function openFor(sendAtUtc, prechecked) {
         // Opens on the held instant when rescheduling, else on right now
-        // (still invalid until moved into the future — the button enforces
+        // (still invalid until moved into the future — the core enforces
         // the lead time).
         var d = sendAtUtc ? new Date(sendAtUtc) : new Date();
         if (sendAtUtc && isNaN(d.getTime()))
@@ -66,8 +77,7 @@ AppDialog {
         root.hasSelection = true;
         hourSpin.value = d.getHours();
         minuteSpin.value = d.getMinutes();
-        // Rescheduling a row that already asks for a receipt keeps it.
-        root.notifySelf = prechecked;
+        root.notifySelf = prechecked === true;
         open();
     }
 
@@ -81,19 +91,15 @@ AppDialog {
         return root.selectedDate().toISOString();
     }
 
-    readonly property bool valid: {
+    readonly property string timeError: {
+        root.nowTick;
         var d = root.selectedDate();
         if (!d)
-            return false;
-        return d.getTime() - Date.now() > root.leadSecs * 1000;
+            return qsTr("Pick a date");
+        return root.backend ? root.backend.send_at_error(d.toISOString()) : "";
     }
 
-    readonly property string summary: {
-        var d = root.selectedDate();
-        if (!d)
-            return "";
-        return qsTr("Sends %1 at %2").arg(Qt.formatDate(d, "dddd, d MMMM")).arg(Qt.formatTime(d, "HH:mm"));
-    }
+    readonly property bool valid: root.timeError === ""
 
     footer: RowLayout {
         spacing: Theme.sm
@@ -242,16 +248,19 @@ AppDialog {
             }
 
             // --- time ---------------------------------------------------------
+            Label {
+                text: qsTr("Time")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+            }
+            // The spin boxes share the row and shrink with the dialog.
             RowLayout {
                 Layout.fillWidth: true
                 spacing: Theme.sm
-                Label {
-                    text: qsTr("Time")
-                    color: Theme.textMuted
-                    font.pixelSize: Theme.fontSmall
-                }
                 SpinBox {
                     id: hourSpin
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
                     from: 0
                     to: 23
                     editable: true
@@ -264,14 +273,13 @@ AppDialog {
                 }
                 SpinBox {
                     id: minuteSpin
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
                     from: 0
                     to: 59
                     stepSize: 5
                     editable: true
                     font.pixelSize: Theme.fontBase
-                }
-                Item {
-                    Layout.fillWidth: true
                 }
             }
 
@@ -280,10 +288,10 @@ AppDialog {
                 wrapMode: Text.Wrap
                 color: root.valid ? Theme.accent : Theme.danger
                 font.pixelSize: Theme.fontSmall
-                text: root.valid ? root.summary : qsTr("Pick a time at least a minute in the future")
+                text: root.valid ? SendAt.label(root.selectedUtc()) : root.timeError
             }
 
-            CheckBox {
+            AppCheckBox {
                 id: receiptCheck
                 Layout.fillWidth: true
                 visible: root.showReceipt

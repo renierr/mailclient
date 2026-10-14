@@ -82,6 +82,7 @@ still to promote") points here instead of keeping its own list.
 | WYSIWYG editor document (was #3): page, CSP, `window.mc` script, caret slot | `mailcore::compose::editor::document` (+ `mc.set`); Qt `Bridge.editor_document` (theme colours, `font_px`, placeholder, `extra_css` for its scrollbars) and `EditorFrame.qml` drives only the `mc.*` API; native unchanged (`MailNative.editorDocument`) |
 | Small UI twins (was #8): cleanup reason wording, colours-toggle rule, undo result text, capabilities error shape | `contacts::cleanup_reason_text` as `reason_text` on every `CleanupCandidate`; `html::reader::can_toggle_colors` (Qt `Bridge.can_toggle_colors`, `MailNative.canToggleColors`); `undo::undone_text` in both adapters; `sync::capabilities::{payload, failed_payload, error_payload}` with the lookup failure in the payload on both sides |
 | Forward and reopened-draft file prefetch (was #9): download plus seed in one job | Qt `forward_fetch`/`resend_fetch`/`draft_form` jobs plus native `MailNative.forwardFetch`/`resendFetch`/`draftFetch` jobs (same core `forward_files`/`resend_files`/draft ensure+stage); the native shell only opens the `{draft, files}` / `{form, staged}` seed from the finish event |
+| Scheduled sends: is a picked time valid (lead time) and the error words, when the next flush is due (incl. the retry pause after a failure), the due flush across accounts and its status line, Send now / Reschedule guards | `mailcore::outbox::{send_at_error, due_in_ms, reschedule, send_now}`, `queue::{next_due, due_scheduled_account_ids}`, `sync::background::{send_due_scheduled, SendDueReport::status_line}`; Qt `send_at_error` / `scheduled_due_ms` / `flush_due_sends`, native `MailNative.sendAtError` / `sendDueInMs` / `sendDue`; both pickers dropped their lead-time copy and the Qt due flush its own account loop |
 
 ## Open
 
@@ -120,3 +121,16 @@ on purpose.
   so a bridge call per character buys nothing; the core still refuses a
   message without a real recipient when Send runs
   (`ComposeForm::require_recipient`).
+- **A scheduled send's time in local words** (QML `SendAt.label`, Kotlin
+  `sendsAtLabel`). Locale date/time formatting is toolkit work: each side
+  formats the core's UTC `send_at` with its own locale and 12/24-hour
+  setting. The core decides validity (`outbox::send_at_error`) and drops
+  `send_at` from rows that left `scheduled`, so the label never decides
+  what to show.
+- **When to wake for a scheduled send** (Qt `armDueTimer`, Kotlin
+  `MailSendAlarm`). The core says how long until the next flush
+  (`outbox::due_in_ms`); a QML Timer and an Android exact alarm are
+  toolkit mechanisms. Each keeps its own backstop: Qt caps a wait at five
+  minutes (Timers do not count suspend), Android re-arms after 15 minutes
+  while a row stays due and after a minute when a run was skipped for the
+  sync lock.

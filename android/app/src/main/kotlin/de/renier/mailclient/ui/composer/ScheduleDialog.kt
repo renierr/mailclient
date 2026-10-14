@@ -4,7 +4,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DatePicker
@@ -12,31 +13,41 @@ import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TimeInput
 import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import java.text.DateFormat
-import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
+import de.renier.mailclient.MailNative
+import de.renier.mailclient.ui.common.isShortScreen
+import kotlinx.coroutines.delay
+import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalTime
+import java.time.ZoneId
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 
 // Pick the date and time a mail goes out: a calendar and a clock, opening
-// on the current date and time. The result is a UTC instant
-// ("yyyy-MM-dd'T'HH:mm:ss'Z'"), stored in the outbox as `send_at` and
-// delivered by the next check past it. Device-local by design: the dialog
-// says the phone must stay on and online.
+// on the current date and time. The result is a UTC instant (ISO-8601,
+// "…Z"), stored in the outbox as `send_at` and delivered by the alarm past
+// it. Device-local by design: the dialog says the phone must stay on and
+// online. Whether the picked time is valid, and why not, comes from the
+// core (`MailNative.sendAtError`), the same check the Qt dialog uses.
 //
 // The receipt toggle opens on the setting's default (`receipt` from the
 // core's `Receipts`), and what the user picks here travels back with the
@@ -53,54 +64,61 @@ fun ScheduleDialog(
     // the toggle would decide something it cannot carry out.
     showReceipt: Boolean = true,
 ) {
+    val context = LocalContext.current
+    val zone = ZoneId.systemDefault()
+    // The held instant when rescheduling, else right now (still invalid
+    // until moved into the future — the core enforces the lead time).
+    val start = remember { (parseInstant(initialSendAtUtc) ?: Instant.now()).atZone(zone) }
     // Selection as local wall-clock parts; the UTC instant derives from it.
-    var day by remember { mutableStateOf(midnightOf(initialDay(initialSendAtUtc))) }
-    var hour by remember { mutableStateOf(initialHour(initialSendAtUtc)) }
-    var minute by remember { mutableStateOf(initialMinute(initialSendAtUtc)) }
+    var date by remember { mutableStateOf(start.toLocalDate()) }
+    var hour by remember { mutableIntStateOf(start.hour) }
+    var minute by remember { mutableIntStateOf(start.minute) }
     var pickingDate by remember { mutableStateOf(false) }
     var pickingTime by remember { mutableStateOf(false) }
     // Mail a delivery note to the own address once this send goes out.
     var notifySelf by remember { mutableStateOf(initialNotifySelf) }
-
-    fun selectedMillis(): Long {
-        val c = Calendar.getInstance()
-        c.timeInMillis = day
-        c.set(Calendar.HOUR_OF_DAY, hour)
-        c.set(Calendar.MINUTE, minute)
-        c.set(Calendar.SECOND, 0)
-        c.set(Calendar.MILLISECOND, 0)
-        return c.timeInMillis
+    // Re-checks a picked time that slips into the past while the dialog
+    // stays open, without the user touching anything.
+    var nowTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(15_000)
+            nowTick++
+        }
     }
 
-    val valid = selectedMillis() - System.currentTimeMillis() > LEAD_MILLIS
-    val summary = if (valid) {
-        val d = Date(selectedMillis())
-        "Sends ${DateFormat.getDateInstance(DateFormat.FULL).format(d)} at " +
-            "${DateFormat.getTimeInstance(DateFormat.SHORT).format(d)}"
-    } else {
-        "Pick a time at least a minute in the future"
+    val selected = date.atTime(LocalTime.of(hour, minute)).atZone(zone).toInstant()
+    val sendAtUtc = selected.toString()
+    val timeError = remember(sendAtUtc, nowTick) {
+        runCatching { MailNative.sendAtError(sendAtUtc) }.getOrDefault("")
     }
+    val valid = timeError.isEmpty()
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Send later") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Scrolls on short screens and large text, so the toggle and
+            // its note stay reachable.
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+            ) {
                 Text(
-                    "The mail waits in this phone's outbox and goes out with the first check past its time — the phone must be on and online then.",
+                    "The mail waits in this phone's outbox and goes out at its time — the phone must be on and online then.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { pickingDate = true }, modifier = Modifier.weight(1f)) {
-                        Text(DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(day)))
+                        Text(date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)))
                     }
                     OutlinedButton(onClick = { pickingTime = true }, modifier = Modifier.weight(1f)) {
-                        Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(selectedMillis())))
+                        Text(LocalTime.of(hour, minute).format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)))
                     }
                 }
                 Text(
-                    summary,
+                    if (valid) sendsAtText(selected) else timeError,
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (valid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                 )
@@ -118,10 +136,7 @@ fun ScheduleDialog(
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = { onConfirm(formatUtc(selectedMillis()), notifySelf) },
-                enabled = valid,
-            ) {
+            TextButton(onClick = { onConfirm(sendAtUtc, notifySelf) }, enabled = valid) {
                 Text("Schedule send")
             }
         },
@@ -131,13 +146,25 @@ fun ScheduleDialog(
     )
 
     if (pickingDate) {
-        val state = rememberDatePickerState(initialSelectedDateMillis = day)
+        // Material3's DatePicker counts in UTC days: hand it the picked
+        // local date at UTC midnight and read its answer back the same way,
+        // or zones east and west of UTC land a day off.
+        val today = LocalDate.now(zone)
+        val state = rememberDatePickerState(
+            initialSelectedDateMillis = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(),
+            selectableDates = object : SelectableDates {
+                override fun isSelectableDate(utcTimeMillis: Long): Boolean =
+                    !utcDay(utcTimeMillis).isBefore(today)
+
+                override fun isSelectableYear(year: Int): Boolean = year >= today.year
+            },
+        )
         DatePickerDialog(
             onDismissRequest = { pickingDate = false },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        state.selectedDateMillis?.let { day = midnightOf(it) }
+                        state.selectedDateMillis?.let { date = utcDay(it) }
                         pickingDate = false
                     },
                 ) { Text("OK") }
@@ -150,11 +177,22 @@ fun ScheduleDialog(
         }
     }
     if (pickingTime) {
-        val state = rememberTimePickerState(initialHour = hour, initialMinute = minute, is24Hour = true)
+        val state = rememberTimePickerState(
+            initialHour = hour,
+            initialMinute = minute,
+            is24Hour = android.text.format.DateFormat.is24HourFormat(context),
+        )
         AlertDialog(
             onDismissRequest = { pickingTime = false },
             title = { Text("Time") },
-            text = { TimePicker(state, modifier = Modifier.fillMaxWidth()) },
+            text = {
+                // The clock dial needs more height than a short screen has.
+                if (isShortScreen()) {
+                    TimeInput(state)
+                } else {
+                    TimePicker(state, modifier = Modifier.fillMaxWidth())
+                }
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -171,71 +209,17 @@ fun ScheduleDialog(
     }
 }
 
-// The core only ever stores normalized UTC seconds ("...Z"), but parse
-// leniently: offsets and millis read too.
-private fun parseUtc(raw: String): Long? {
-    if (raw.isEmpty()) return null
-    val patterns = arrayOf("yyyy-MM-dd'T'HH:mm:ssX", "yyyy-MM-dd'T'HH:mm:ss.SSSX")
-    for (p in patterns) {
-        runCatching {
-            val f = SimpleDateFormat(p, Locale.US)
-            f.timeZone = TimeZone.getTimeZone("UTC")
-            f.isLenient = false
-            f.parse(raw)?.time
-        }.getOrNull()?.let { return it }
-    }
-    return null
+private fun parseInstant(raw: String): Instant? =
+    if (raw.isEmpty()) null else runCatching { Instant.parse(raw) }.getOrNull()
+
+private fun utcDay(utcMillis: Long): LocalDate =
+    Instant.ofEpochMilli(utcMillis).atZone(ZoneOffset.UTC).toLocalDate()
+
+private fun sendsAtText(at: Instant): String {
+    val local = at.atZone(ZoneId.systemDefault())
+    return "Sends ${local.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL))} at " +
+        local.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT))
 }
 
-private fun midnightOf(millis: Long): Long {
-    val c = Calendar.getInstance()
-    c.timeInMillis = millis
-    c.set(Calendar.HOUR_OF_DAY, 0)
-    c.set(Calendar.MINUTE, 0)
-    c.set(Calendar.SECOND, 0)
-    c.set(Calendar.MILLISECOND, 0)
-    return c.timeInMillis
-}
-
-// The held instant when rescheduling, else right now (still invalid until
-// moved into the future — the confirm button enforces the lead time).
-private fun initialDay(sendAtUtc: String): Long {
-    parseUtc(sendAtUtc)?.let { return midnightOf(it) }
-    return midnightOf(System.currentTimeMillis())
-}
-
-private fun initialHour(sendAtUtc: String): Int {
-    parseUtc(sendAtUtc)?.let {
-        val c = Calendar.getInstance()
-        c.timeInMillis = it
-        return c.get(Calendar.HOUR_OF_DAY)
-    }
-    return Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-}
-
-private fun initialMinute(sendAtUtc: String): Int {
-    parseUtc(sendAtUtc)?.let {
-        val c = Calendar.getInstance()
-        c.timeInMillis = it
-        return c.get(Calendar.MINUTE)
-    }
-    return Calendar.getInstance().get(Calendar.MINUTE)
-}
-
-/** UTC "yyyy-MM-dd'T'HH:mm:ss'Z'" for the core's `send_at`. */
-fun formatUtc(millis: Long): String {
-    val f = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
-    f.timeZone = TimeZone.getTimeZone("UTC")
-    return f.format(Date(millis))
-}
-
-/** Local "Tuesday, 14 October, 08:00" words for an outbox row's `send_at`. */
-fun formatSendAtLocal(sendAtUtc: String): String {
-    val millis = parseUtc(sendAtUtc) ?: return ""
-    val d = Date(millis)
-    return "${DateFormat.getDateInstance(DateFormat.FULL).format(d)}, " +
-        DateFormat.getTimeInstance(DateFormat.SHORT).format(d)
-}
-
-// Like the core's SCHEDULE_LEAD_SECS: anything sooner is an immediate send.
-private const val LEAD_MILLIS = 60_000L
+/** "Sends Tuesday, 14 October 2026 at 08:00" for an outbox row's UTC `send_at`; "" when unreadable. */
+fun sendsAtLabel(sendAtUtc: String): String = parseInstant(sendAtUtc)?.let { sendsAtText(it) }.orEmpty()

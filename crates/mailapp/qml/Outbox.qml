@@ -42,23 +42,14 @@ AppDialog {
     }
 
     function sendNowRow(id) {
-        var r = root.backend.send_now_outbox(id);
+        var r = root.backend.send_now_outbox(root.backend.current_account_id, id);
         if (r !== "") {
             root.statusMessage(r);
             return;
         }
         root.reload();
         root.scheduleChanged();
-        root.statusMessage(qsTr("Will go out with the next sync"));
-    }
-
-    function localSendAt(sendAt) {
-        if (!sendAt)
-            return "";
-        var d = new Date(sendAt);
-        if (isNaN(d.getTime()))
-            return "";
-        return qsTr("Sends %1 at %2").arg(Qt.formatDate(d, "dddd, d MMMM")).arg(Qt.formatTime(d, "HH:mm"));
+        root.statusMessage(qsTr("Sending now"));
     }
 
     // A row's one-line state comes phrased from the core (`state`), so
@@ -68,7 +59,7 @@ AppDialog {
     Connections {
         target: root.backend
         function onJob_finished(kind) {
-            if ((kind === "Send" || kind === "Sync") && root.visible)
+            if ((kind === "Send" || kind === "Scheduled send" || kind === "Sync") && root.visible)
                 root.reload();
         }
     }
@@ -180,7 +171,7 @@ AppDialog {
                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                             color: Theme.accent
                             font.pixelSize: Theme.fontSmall
-                            text: root.localSendAt(modelData.send_at)
+                            text: SendAt.label(modelData.send_at)
                             visible: (modelData.send_at || "") !== ""
                         }
 
@@ -248,11 +239,12 @@ AppDialog {
 
     ScheduleDialog {
         id: rescheduleDialog
+        backend: root.backend
         // Rescheduling keeps whatever the row already asks for (its own
         // `notify_self` survives the move), so the toggle is not offered.
         showReceipt: false
         onScheduleAccepted: sendAt => {
-            var r = root.backend.reschedule_outbox(root.rescheduleId, sendAt);
+            var r = root.backend.reschedule_outbox(root.backend.current_account_id, root.rescheduleId, sendAt);
             if (r !== "")
                 root.statusMessage(r);
             else

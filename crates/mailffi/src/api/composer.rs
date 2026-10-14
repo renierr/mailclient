@@ -56,10 +56,9 @@ pub fn send_mail(account_id: i64, folder_id: i64, form: String) -> anyhow::Resul
 pub fn schedule_mail(account_id: i64, form: String, send_at: String) -> anyhow::Result<String> {
     let form = ComposeForm::parse(&form).map_err(anyhow::Error::msg)?;
     let db = shared_db()?;
-    let draft_uid = form.draft_uid;
     let held =
         compose::prepare_scheduled(db, account_id, form, &send_at).map_err(anyhow::Error::msg)?;
-    if draft_uid >= 0 {
+    if let Some(draft_uid) = held.draft_uid {
         // The outbox row carries the mail now; the server draft it came from
         // goes away on the net thread. A failure only notes itself in the
         // job event — the scheduled send stands either way.
@@ -67,7 +66,7 @@ pub fn schedule_mail(account_id: i64, form: String, send_at: String) -> anyhow::
             "Delete draft",
             format!("draft-del:{account_id}:{draft_uid}"),
             move |db, _progress| async move {
-                let drafts_id = compose::delete_draft(db, account_id, draft_uid as u32).await?;
+                let drafts_id = compose::delete_draft(db, account_id, draft_uid).await?;
                 Ok((
                     String::new(),
                     Some(JobRefresh::folder(account_id, drafts_id)),

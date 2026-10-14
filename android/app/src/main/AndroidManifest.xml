@@ -138,27 +138,29 @@
                 android:resource="@xml/reader_paths" />
         </provider>
         <!-- The mail reader's WebView must not phone home: Safe Browsing
-              sends URL lookups and list updates to Google, and metrics upload
-              usage. Mail content is already kept offline by the reader's CSP. -->
+             sends URL lookups and list updates to Google, and metrics upload
+             usage. Mail content is already kept offline by the reader's CSP. -->
         <meta-data
             android:name="android.webkit.WebView.EnableSafeBrowsing"
             android:value="false" />
         <!-- Scheduled sends (MailSendAlarm.kt): one exact shot for the
-              earliest held `scheduled` outbox row, re-armed from the outbox
-              after every check. Boot and updates re-arm through
-              MailAlarmReceiver. -->
+             earliest waiting scheduled send, re-armed from the outbox after
+             every check. Boot and updates re-arm through MailAlarmReceiver. -->
         <receiver
             android:name=".MailSendReceiver"
             android:exported="false" />
         <!-- On-time background mail check (MailAlarm.kt): exact alarm shots,
              re-armed after a reboot or an app update. Only armed when
              Settings picks the alarm scheduler; otherwise it stays idle.
-             Also restarts push mail after a reboot or update. Exported: the
-             boot/update broadcasts come from the system, which cannot reach
-             a non-exported receiver. -->
+             Also restarts push mail after a reboot or update. Not exported:
+             the system sends BOOT_COMPLETED / MY_PACKAGE_REPLACED as the
+             system uid, which reaches non-exported receivers (WorkManager's
+             own reschedule receiver works the same way); only an
+             `adb shell am broadcast` test cannot, so verify with a real
+             reboot. Exporting would let any app trigger checks. -->
         <receiver
             android:name=".MailAlarmReceiver"
-            android:exported="true">
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED"/>
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
@@ -178,11 +180,11 @@
             android:name=".MailPushReceiver"
             android:exported="false" />
         <!-- Quiet hours: plan again when a window starts or ends, or the
-             clock moves under it (MailSchedule.kt). Exported: the time-zone
-             and time broadcasts come from the system. -->
+             clock moves under it (MailSchedule.kt). Not exported, like
+             MailAlarmReceiver: the system's time broadcasts still arrive. -->
         <receiver
             android:name=".MailScheduleReceiver"
-            android:exported="true">
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.TIMEZONE_CHANGED"/>
                 <action android:name="android.intent.action.TIME_SET"/>

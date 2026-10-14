@@ -8,7 +8,6 @@
 use std::time::Duration;
 
 use lettre::address::{Address, Envelope};
-use lettre::message::{Mailbox, Message};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::transport::smtp::client::{Tls, TlsParameters};
 use lettre::transport::smtp::extension::ClientId;
@@ -29,6 +28,7 @@ use super::{
     dsn::{send_with_dsn, Connect},
     message::{assemble_message, resolve_bodies, split_inline_images, SendRequest},
     policy::effective_format,
+    scheduled::{refresh_date_header, self_receipt_mime},
 };
 
 /// SMTP submission endpoint derived from an account.
@@ -356,10 +356,10 @@ impl SmtpSender {
         password: &str,
         transport: &mut Option<SmtpTransport>,
     ) -> Result<Submitted> {
-        let row = queue::get(db, queue_id)?;
+        let mut row = queue::get(db, queue_id)?;
         let mut raw = row
             .raw_mime
-            .clone()
+            .take()
             .filter(|b| !b.is_empty())
             .ok_or_else(|| {
                 StoreError::InvalidInput(format!("queue entry {queue_id} has no MIME bytes"))
@@ -368,7 +368,7 @@ impl SmtpSender {
         // refresh `Date:` to the actual send time so the recipient's list
         // sorts it under today, not under composition day.
         if row.send_at.is_some() {
-            raw = Self::refresh_date_header(&raw);
+            raw = refresh_date_header(&raw);
             if let Err(e) = queue::update_raw_mime(db, queue_id, &raw) {
                 log::warn!("smtp: outbox entry {queue_id} date not refreshed: {e}");
             }
@@ -495,9 +495,15 @@ impl SmtpSender {
     }
 
     /// Mail a delivery receipt for a scheduled send to the account's own
-    /// address: what went out, to whom, and when. The receipt is an ordinary
-    /// immediate row (no `notify_self` of its own, so it cannot chain) sent
-    /// over the caller's transport, with a Sent copy like any other send.
+    /// address: what went out, when, and to how many. The receipt is an
+    /// ordinary immediate row (no `notify_self` of its own, so it cannot
+    /// chain) sent over the caller's transport, with a Sent copy like any
+    /// other send. No [`super::SendPolicy`] check: it only ever goes to the
+    /// account itself, which the user asked for when scheduling.
+    ///
+    /// A failed receipt is dropped, not retried: the mail it reports on is
+    /// already out, and a leftover row would show as an unexplained failed
+    /// send and go out late on some later sync.
     async fn send_self_receipt(
         &self,
         db: &Db,
@@ -510,7 +516,15 @@ impl SmtpSender {
         let raw = self_receipt_mime(&self.from, orig)?;
         let to = vec![self.from.clone()];
         let id = queue::enqueue_mime(db, account_id, None, &raw, &self.from, &to, false)?;
-        let submitted = self.submit_claimed_via(db, id, password, transport)?;
+        let submitted = match self.submit_claimed_via(db, id, password, transport) {
+            Ok(s) => s,
+            Err(e) => {
+                if let Err(del) = queue::delete(db, id) {
+                    log::warn!("smtp: failed receipt row {id} not removed: {del}");
+                }
+                return Err(e);
+            }
+        };
         if !submitted.raw.is_empty() {
             self.save_sent_copy(db, account_id, imap_password, &submitted.raw)
                 .await?;
@@ -519,87 +533,8 @@ impl SmtpSender {
         Ok(())
     }
 
-    /// Rewrite a stored MIME message's `Date:` header to now (RFC 5322), for a
-    /// scheduled send whose bytes were built at composition time: without this
-    /// the recipient's list would sort it under composition day. Byte surgery on
-    /// the header block only (before the blank line) — bodies, which may hold
-    /// non-UTF-8 attachment bytes, are never decoded. A folded `Date:` loses its
-    /// continuations; a missing one is prepended. Never fails the send:
-    /// anything unexpected goes out with its original bytes.
-    fn refresh_date_header(raw: &[u8]) -> Vec<u8> {
-        let now = chrono::Utc::now()
-            .format("%a, %d %b %Y %H:%M:%S %z")
-            .to_string();
-        let crlf = raw.windows(2).any(|w| w == b"\r\n");
-        let nl: &[u8] = if crlf { b"\r\n" } else { b"\n" };
-        let head_end = Self::find_slice(raw, b"\r\n\r\n")
-            .map(|i| i + 4)
-            .or_else(|| Self::find_slice(raw, b"\n\n").map(|i| i + 2))
-            .unwrap_or(raw.len());
-        let (head, body) = (raw[..head_end].to_vec(), &raw[head_end..]);
-        let is_date_line = |line: &[u8]| {
-            line.len() > 5 && line[4] == b':' && line[..4].eq_ignore_ascii_case(b"date")
-        };
-        let mut out: Vec<u8> = Vec::with_capacity(raw.len() + 64);
-        let mut replaced = false;
-        let mut skipping_fold = false;
-        // Split keeping endings: iterate on `\n`, re-emit the `\r` when present.
-        let mut start = 0;
-        for (i, b) in head.iter().enumerate() {
-            if *b != b'\n' {
-                continue;
-            }
-            let mut line = &head[start..i];
-            let had_cr = line.ends_with(b"\r");
-            if had_cr {
-                line = &line[..line.len() - 1];
-            }
-            let ending: &[u8] = if had_cr { b"\r\n" } else { b"\n" };
-            if skipping_fold {
-                if line.starts_with(b" ") || line.starts_with(b"\t") {
-                    start = i + 1;
-                    continue;
-                }
-                skipping_fold = false;
-            }
-            if !replaced && is_date_line(line) {
-                out.extend_from_slice(format!("Date: {now}").as_bytes());
-                out.extend_from_slice(ending);
-                replaced = true;
-                skipping_fold = true;
-            } else {
-                out.extend_from_slice(line);
-                out.extend_from_slice(ending);
-            }
-            start = i + 1;
-        }
-        // A header block without trailing newline (or no blank line at all):
-        // handle the tail the same way.
-        if start < head.len() {
-            let line = &head[start..];
-            if skipping_fold && (line.starts_with(b" ") || line.starts_with(b"\t")) {
-                // Folded tail of the replaced Date: dropped.
-            } else if !replaced && is_date_line(line) {
-                out.extend_from_slice(format!("Date: {now}").as_bytes());
-                replaced = true;
-            } else {
-                out.extend_from_slice(line);
-            }
-        }
-        if !replaced {
-            let mut with_date = format!("Date: {now}").into_bytes();
-            with_date.extend_from_slice(nl);
-            with_date.extend_from_slice(&out);
-            out = with_date;
-        }
-        out.extend_from_slice(body);
-        out
-    }
-
-    /// First index of `needle` in `haystack`, if present.
-    fn find_slice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-        haystack.windows(needle.len()).position(|w| w == needle)
-    }
+    /// SMTP round-trip only; the caller fills [`Submitted::raw`] with the
+    /// bytes it already owns instead of a copy made here.
     fn submit_raw(
         &self,
         from: &str,
@@ -626,7 +561,7 @@ impl SmtpSender {
             );
             return Ok(Submitted {
                 dsn_unsupported: !dsn,
-                raw: raw.to_vec(),
+                raw: Vec::new(),
             });
         }
         let transport = match transport {
@@ -642,7 +577,7 @@ impl SmtpSender {
         );
         Ok(Submitted {
             dsn_unsupported: false,
-            raw: raw.to_vec(),
+            raw: Vec::new(),
         })
     }
 
@@ -750,31 +685,6 @@ impl SmtpSender {
     }
 }
 
-/// Build the receipt for one delivered scheduled send, addressed to
-/// `self_addr` (the account's own address).
-///
-/// Names the original subject, when it went out and how many recipients it
-/// had — never the recipients themselves: the receipt is written to the
-/// outbox and filed into Sent, and no recipient list belongs in either.
-fn self_receipt_mime(self_addr: &str, orig: &QueuedSend) -> Result<Vec<u8>> {
-    let raw = orig.raw_mime.as_deref().unwrap_or(&[]);
-    let subject =
-        crate::outbox::subject_from_mime(raw).unwrap_or_else(|| "(no subject)".to_string());
-    // The row's own `send_at` is kept through promotion, so this is when the
-    // mail was due; the flush running now is the actual delivery.
-    let body = format!(
-        "Scheduled send delivered.\n\nSubject: {subject}\nSent: {}\nRecipients: {}\n",
-        crate::store::now(),
-        orig.envelope_to.len(),
-    );
-    let email = Message::builder()
-        .from(self_addr.parse::<Mailbox>()?)
-        .to(self_addr.parse::<Mailbox>()?)
-        .subject(format!("Scheduled send delivered: {subject}"))
-        .body(body)?;
-    Ok(email.formatted().to_vec())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -789,66 +699,6 @@ mod tests {
         let ep = endpoint_for(&test_account());
         assert_eq!(ep.addr, "smtp.x:587");
         assert!(!ep.implicit_tls);
-    }
-
-    /// A minimal delivered row for the receipt tests.
-    fn held_send() -> QueuedSend {
-        QueuedSend {
-            id: 1,
-            account_id: 1,
-            message_id: None,
-            status: crate::models::QueueStatus::Queued,
-            last_error: None,
-            retries: 0,
-            raw_mime: None,
-            envelope_from: None,
-            envelope_to: Vec::new(),
-            created_at: String::new(),
-            updated_at: String::new(),
-            request_dsn: false,
-            send_at: None,
-            notify_self: true,
-        }
-    }
-
-    #[test]
-    fn self_receipt_names_subject_time_and_count_but_no_recipients() {
-        let raw = b"From: me@example.com\r\nTo: someone@example.com\r\nCc: other@example.com\r\n\
-                    Subject: The subject\r\n\r\nbody";
-        let orig = QueuedSend {
-            raw_mime: Some(raw.to_vec()),
-            envelope_from: Some("me@example.com".to_string()),
-            envelope_to: vec![
-                "someone@example.com".to_string(),
-                "other@example.com".to_string(),
-            ],
-            ..held_send()
-        };
-        let out = String::from_utf8(self_receipt_mime("me@example.com", &orig).unwrap()).unwrap();
-        let (head, body) = out.split_once("\r\n\r\n").expect("header/body split");
-        assert!(head.contains("From: me@example.com"), "{head}");
-        assert!(head.contains("To: me@example.com"), "{head}");
-        assert!(
-            head.contains("Subject: Scheduled send delivered: The subject"),
-            "{head}"
-        );
-        assert!(body.contains("Subject: The subject"), "{body}");
-        assert!(body.contains("Recipients: 2"), "{body}");
-        assert!(body.contains("Sent: 20"), "{body}");
-        // Never the recipients: the receipt goes into Sent too.
-        assert!(!out.contains("someone@example.com"), "{out}");
-        assert!(!out.contains("other@example.com"), "{out}");
-    }
-
-    #[test]
-    fn self_receipt_of_a_row_without_bytes_still_reads_as_a_receipt() {
-        let out =
-            String::from_utf8(self_receipt_mime("me@example.com", &held_send()).unwrap()).unwrap();
-        assert!(
-            out.contains("Subject: Scheduled send delivered: (no subject)"),
-            "{out}"
-        );
-        assert!(out.contains("Recipients: 0"), "{out}");
     }
 
     #[test]
@@ -984,46 +834,5 @@ mod tests {
             "scheduled rows wait, they never submit early"
         );
         assert!(queue::list_submittable(&db, acc).unwrap().is_empty());
-    }
-
-    #[test]
-    fn date_refresh_rewrites_only_the_header() {
-        // Binary bodies (attachments) survive byte-identical; only Date moves.
-        let mut raw =
-            b"From: a@x.y\r\nDate: Mon, 01 Jan 2000 00:00:00 +0000\r\nSubject: hi\r\n\r\n".to_vec();
-        raw.extend_from_slice(&[0xFF, 0xFE, 0x00, 0x62, 0x6F, 0x64, 0x79]);
-        let out = SmtpSender::refresh_date_header(&raw);
-        assert!(
-            !out.windows(9).any(|w| w == b"01 Jan 200"),
-            "the stale date is gone"
-        );
-        assert!(out.starts_with(b"From: a@x.y\r\nDate: "));
-        assert!(
-            out.ends_with(&[0xFF, 0xFE, 0x00, 0x62, 0x6F, 0x64, 0x79]),
-            "body bytes are untouched"
-        );
-        // Exactly one Date header, still CRLF shaped.
-        assert_eq!(
-            out.windows(5)
-                .filter(|w| w.eq_ignore_ascii_case(b"date:"))
-                .count(),
-            1
-        );
-        // Missing Date: prepended, blank line kept.
-        let nodate = b"Subject: hi\r\n\r\nbody".to_vec();
-        let out = SmtpSender::refresh_date_header(&nodate);
-        assert!(out.starts_with(b"Date: "));
-        assert!(out.windows(4).any(|w| w == b"\r\n\r\n"));
-        // A folded Date loses its continuations, nothing else moves.
-        let folded = b"Date: Mon, 01 Jan\r\n 2000 +0000\r\nSubject: hi\r\n\r\nx".to_vec();
-        let out = SmtpSender::refresh_date_header(&folded);
-        let text = String::from_utf8(out).unwrap();
-        assert!(!text.contains("2000 +0000"), "folded tail dropped");
-        assert!(text.contains("Subject: hi"));
-        assert_eq!(
-            text.matches("Date:").count(),
-            1,
-            "still exactly one Date header"
-        );
     }
 }

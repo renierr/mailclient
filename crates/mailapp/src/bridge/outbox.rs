@@ -43,8 +43,7 @@ impl qobject::Bridge {
         qstring(&result.err().unwrap_or_default())
     }
 
-    pub fn reschedule_outbox(&self, id: i64, send_at: &QString) -> QString {
-        let account_id = *self.current_account_id();
+    pub fn reschedule_outbox(&self, account_id: i64, id: i64, send_at: &QString) -> QString {
         let send_at = send_at.to_string();
         let result = shared_db().map_err(|e| e.to_string()).and_then(|db| {
             mailcore::outbox::reschedule(db, account_id, id, &send_at).map_err(|e| e.to_string())
@@ -52,8 +51,7 @@ impl qobject::Bridge {
         qstring(&result.err().unwrap_or_default())
     }
 
-    pub fn send_now_outbox(&self, id: i64) -> QString {
-        let account_id = *self.current_account_id();
+    pub fn send_now_outbox(&self, account_id: i64, id: i64) -> QString {
         let result = shared_db().map_err(|e| e.to_string()).and_then(|db| {
             mailcore::outbox::send_now(db, account_id, id).map_err(|e| e.to_string())
         });

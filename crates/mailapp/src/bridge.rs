@@ -655,26 +655,38 @@ pub mod qobject {
         #[qinvokable]
         fn send_mail(self: Pin<&mut Self>, form: &QString) -> QString;
 
-        /// Hold a message for `send_at` (any RFC3339 instant, at least a
-        /// minute out) instead of sending now: same form as `send_mail`, kept
-        /// as a `scheduled` outbox row until its time. Returns `""` or an
-        /// error; the composer closes on success like a send. The composing
-        /// device owns the delivery (each device keeps its own outbox), so
-        /// the dialog says it must stay on and online.
+        /// Hold a message of `account_id` for `send_at` (any RFC3339
+        /// instant, at least a minute out) instead of sending now: same form
+        /// as `send_mail`, kept as a `scheduled` outbox row until its time.
+        /// Returns `""` or an error; the composer closes on success like a
+        /// send. The composing device owns the delivery (each device keeps
+        /// its own outbox), so the dialog says it must stay on and online.
         #[qinvokable]
-        fn schedule_mail(self: Pin<&mut Self>, form: &QString, send_at: &QString) -> QString;
+        fn schedule_mail(
+            self: Pin<&mut Self>,
+            account_id: i64,
+            form: &QString,
+            send_at: &QString,
+        ) -> QString;
 
-        /// Submit due `scheduled` rows of every account (a due timer's job).
-        /// Returns `""` when queued, else why not; completion arrives via
-        /// `job_finished` with kind `"Send"`.
+        /// Flush every due scheduled send of every account (the due timer's
+        /// job). Returns `""` when queued, else why not; completion arrives
+        /// via `job_finished` with kind `"Scheduled send"` and outcome
+        /// `"sent"` when something went out.
         #[qinvokable]
         fn flush_due_sends(self: Pin<&mut Self>) -> QString;
 
-        /// Milliseconds until the earliest held `scheduled` send across all
-        /// accounts (`-1` = none scheduled, `0` = already due). The due
+        /// Milliseconds until the earliest waiting scheduled send across all
+        /// accounts wants a flush (`-1` = none, `0` = due now). The due
         /// timer arms from this.
         #[qinvokable]
         fn scheduled_due_ms(&self) -> i64;
+
+        /// Why `send_at` (any RFC3339 instant) cannot be a scheduled send's
+        /// time, `""` when it can: the Send-later dialog's check, from the
+        /// core.
+        #[qinvokable]
+        fn send_at_error(&self, send_at: &QString) -> QString;
 
         /// Append or replace an IMAP `\Draft` message from a Composer form.
         #[qinvokable]
@@ -730,9 +742,11 @@ pub mod qobject {
         /// Unsent mail for the current account as JSON
         /// (`mailcore::outbox::list_json`: `[{id, status, state, last_error,
         /// retries, retryable, dismissable, has_bytes, envelope_from, envelope_to,
-        /// subject, created_at, updated_at, send_at}]`; `send_at` is the UTC
-        /// instant a `scheduled` row waits for, `""` otherwise). Local SQLite
-        /// read, no network. Returns `"[]"` when nothing is queued.
+        /// subject, created_at, updated_at, send_at, notify_self}]`; `send_at`
+        /// is the UTC instant a `scheduled` row waits for, `""` otherwise;
+        /// `notify_self` says delivery mails a receipt to the own address).
+        /// Local SQLite read, no network. Returns `"[]"` when nothing is
+        /// queued.
         #[qinvokable]
         fn outbox_json(&self) -> QString;
 
@@ -748,15 +762,17 @@ pub mod qobject {
         #[qinvokable]
         fn dismiss_outbox(&self, id: i64) -> QString;
 
-        /// Move a held outbox row to a new future instant (`send_at` any
-        /// RFC3339 instant, at least a minute out). Returns `""` or an error.
+        /// Move a waiting outbox row of `account_id` to a new future instant
+        /// (`send_at` any RFC3339 instant, at least a minute out). Returns
+        /// `""` or an error.
         #[qinvokable]
-        fn reschedule_outbox(&self, id: i64, send_at: &QString) -> QString;
+        fn reschedule_outbox(&self, account_id: i64, id: i64, send_at: &QString) -> QString;
 
-        /// Send a `scheduled` row with the next sync instead of at its time.
-        /// Returns `""` or an error.
+        /// Send a waiting scheduled row of `account_id` now instead of at
+        /// its time (the due timer flushes it at once). Returns `""` or an
+        /// error.
         #[qinvokable]
-        fn send_now_outbox(&self, id: i64) -> QString;
+        fn send_now_outbox(&self, account_id: i64, id: i64) -> QString;
 
         /// Drop all pooled IMAP sessions (app quit). No LOGOUT round-trip,
         /// so quit never blocks on a dead connection — closing the sockets

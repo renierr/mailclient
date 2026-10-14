@@ -3,6 +3,8 @@ package de.renier.mailclient.ui.outbox
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -38,7 +40,7 @@ import de.renier.mailclient.R
 import de.renier.mailclient.ui.common.DeleteConfirmDialog
 import de.renier.mailclient.ui.common.strings
 import de.renier.mailclient.ui.composer.ScheduleDialog
-import de.renier.mailclient.ui.composer.formatSendAtLocal
+import de.renier.mailclient.ui.composer.sendsAtLabel
 import de.renier.mailclient.ui.settings.BackgroundPower
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.state.refreshOutbox
@@ -130,7 +132,7 @@ fun OutboxScreen(state: MailState) {
     fun sendNow(e: OutboxEntry) {
         scope.launch {
             withContext(Dispatchers.IO) { runCatching { MailNative.sendNowOutbox(accountId, e.id) } }
-                .onSuccess { state.info("Will go out with the next sync") }
+                .onSuccess { state.info("Sending now") }
                 .onFailure { error = it.message ?: "Could not queue for sending" }
             state.refreshOutbox()
             refreshAlarm()
@@ -238,6 +240,7 @@ fun OutboxScreen(state: MailState) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun OutboxRow(
     e: OutboxEntry,
@@ -268,7 +271,7 @@ private fun OutboxRow(
             }
             if (e.sendAt.isNotEmpty()) {
                 Text(
-                    "Sends ${formatSendAtLocal(e.sendAt)}",
+                    sendsAtLabel(e.sendAt),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,
                 )
@@ -287,7 +290,11 @@ private fun OutboxRow(
                 Text(e.error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
             if (e.status == "scheduled") {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Wraps under each other at 360dp and large text.
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
                     OutlinedButton(onClick = onSendNow) { Text("Send now") }
                     OutlinedButton(onClick = onReschedule) { Text("Reschedule") }
                 }

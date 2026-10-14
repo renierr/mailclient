@@ -323,14 +323,15 @@ object MailNative {
     @JvmStatic external fun readerDocumentFull(body: String, paint: String, paper: Int, ink: Int, link: Int, quote: Int, rule: Int, allowRemote: Boolean, topSpace: Int, scale: Float, fit: Boolean): String
     @JvmStatic external fun outboxJson(accountId: Long): String
     @JvmStatic external fun dismissOutbox(accountId: Long, id: Long)
-    // A held row to a new future instant (returns the normalized UTC time);
-    // send a scheduled row with the next sync; this account's earliest held
-    // instant (""); the earliest across all accounts ({"account_id","send_at"}
-    // or {}) for the exact alarm.
+    // A waiting row to a new future instant (returns the normalized UTC
+    // time); send a waiting row now (due at once for the alarm); ms until
+    // the earliest waiting send across all accounts wants a flush (-1 none,
+    // 0 due) for the exact alarm; why a picked time cannot be a send time
+    // ("" when it can), the Send-later dialog's check.
     @JvmStatic external fun rescheduleOutbox(accountId: Long, id: Long, sendAt: String): String
     @JvmStatic external fun sendNowOutbox(accountId: Long, id: Long)
-    @JvmStatic external fun nextScheduled(accountId: Long): String
-    @JvmStatic external fun nextSendDue(): String
+    @JvmStatic external fun sendDueInMs(): Long
+    @JvmStatic external fun sendAtError(sendAt: String): String
     // Flush every due `scheduled` row, whatever account holds it (no poll
     // gating: intervals, quiet hours and push/poll mode never hold back
     // mail the user asked to send). Blocks for the network run; workers

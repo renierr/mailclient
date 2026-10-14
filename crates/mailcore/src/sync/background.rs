@@ -426,7 +426,7 @@ pub fn background_check_now_blocking(db: &Db, db_path: &Path, trigger: &str) -> 
     rt.block_on(background_check_now(db, db_path, trigger))
 }
 
-/// Outcome of [`send_due_scheduled`]: how many held `scheduled` rows went
+/// Outcome of [`send_due_scheduled`]: how many due scheduled sends went
 /// out. Crosses to the Android host as JSON. Unlike [`BackgroundReport`]
 /// this carries no inbox state: the run flushes the outbox only, so a send
 /// at 3am never syncs the inbox or notifies for new mail — quiet hours gate
@@ -434,8 +434,9 @@ pub fn background_check_now_blocking(db: &Db, db_path: &Path, trigger: &str) -> 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SendDueReport {
-    /// Another sync held the lock, so this run did nothing. Not an error —
-    /// the lock holder's own flush promotes the same due rows.
+    /// Another sync held the lock, so this run did nothing. The due rows
+    /// stay due: the caller tries again shortly (a lock holder only flushes
+    /// the accounts it syncs, so it may not take them).
     pub skipped: bool,
     pub sent: u64,
     pub errors: Vec<String>,
@@ -443,8 +444,28 @@ pub struct SendDueReport {
     pub run: String,
 }
 
-/// Flush every due `scheduled` outbox row, whatever account holds it. No
-/// poll gating: check intervals, quiet hours and push/poll mode decide when
+impl SendDueReport {
+    /// The run in one status line, phrased once for every frontend: empty
+    /// when nothing was due and nothing failed.
+    #[must_use]
+    pub fn status_line(&self) -> String {
+        let mut line = match self.sent {
+            0 if self.errors.is_empty() => return String::new(),
+            0 => "Scheduled send failed".to_string(),
+            1 => "Sent 1 scheduled message".to_string(),
+            n => format!("Sent {n} scheduled messages"),
+        };
+        if !self.errors.is_empty() {
+            line.push_str("; ");
+            line.push_str(&self.errors.join("; "));
+        }
+        line
+    }
+}
+
+/// Flush every due scheduled send (held rows past their time, and ones that
+/// failed after it once their retry pause is over), whatever account holds
+/// it. No poll gating: check intervals, quiet hours and push/poll mode decide when
 /// the phone looks for *new* mail, never whether mail the user asked to send
 /// goes out. Each account flushes through its own submit (SMTP, then the
 /// Sent copy), so one bad account never stops the rest. Every run leaves a
@@ -491,8 +512,14 @@ async fn flush_due_scheduled(db: &Db, db_path: &Path) -> SendDueReport {
             };
         }
     };
-    let ids = queue::due_scheduled_account_ids(db).unwrap_or_default();
     let mut report = SendDueReport::default();
+    let ids = match queue::due_scheduled_account_ids(db) {
+        Ok(ids) => ids,
+        Err(e) => {
+            report.errors.push(format!("outbox: {e}"));
+            return report;
+        }
+    };
     for id in ids {
         let account = match accounts::get(db, id) {
             Ok(a) => a,
@@ -974,6 +1001,34 @@ mod tests {
         assert_eq!(run.trigger, "scheduled-send");
         assert!(run.finished_at.is_some());
         assert_eq!(report.run, run.started_at);
+    }
+
+    #[test]
+    fn send_due_status_line_names_sends_and_failures() {
+        let quiet = SendDueReport::default();
+        assert_eq!(quiet.status_line(), "");
+        let one = SendDueReport {
+            sent: 1,
+            ..Default::default()
+        };
+        assert_eq!(one.status_line(), "Sent 1 scheduled message");
+        let mixed = SendDueReport {
+            sent: 2,
+            errors: vec!["a@example.com: refused".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(
+            mixed.status_line(),
+            "Sent 2 scheduled messages; a@example.com: refused"
+        );
+        let failed = SendDueReport {
+            errors: vec!["b@example.com: no password".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(
+            failed.status_line(),
+            "Scheduled send failed; b@example.com: no password"
+        );
     }
 
     #[test]

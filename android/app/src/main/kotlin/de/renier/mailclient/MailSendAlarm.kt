@@ -7,17 +7,14 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
-import org.json.JSONObject
-import java.text.SimpleDateFormat
-import java.util.Locale
-import java.util.TimeZone
 
-// The scheduled-send alarm: one exact shot for the earliest held `scheduled`
-// outbox row across all accounts (the core's `nextSendDue`). Firing only
+// The scheduled-send alarm: one exact shot for the earliest waiting
+// scheduled send across all accounts (the core's `sendDueInMs`, which also
+// spaces out retries of a send that failed after its time). Firing only
 // enqueues an outbox-only flush — never the inbox check, so quiet hours,
 // check intervals and push/poll mode cannot hold back mail the user asked
-// to send — and then re-arms from the next held row, so deliveries converge
-// without polling.
+// to send — and then re-arms from the next waiting row, so deliveries
+// converge without polling.
 //
 // Why its own alarm: the interval poller ticks every N minutes (15 at
 // least), which would send minutes late; this fires on the minute. Like
@@ -27,51 +24,40 @@ object MailSendAlarm {
     const val ACTION_SEND = "de.renier.mailclient.SCHEDULED_SEND"
     private const val REQUEST_CODE = 1003
 
-    // Backstop while a due row cannot go out (offline): the worker waits for
-    // a network, and the next shot retries.
-    private const val RETRY_MILLIS = 15 * 60_000L
+    // Backstop while a due row cannot go out (offline, no password): the
+    // worker waits for a network, and the next shot retries.
+    const val RETRY_MILLIS = 15 * 60_000L
 
-    // Plan the next shot from the held rows now. Database read only.
+    // Plan the next shot from the waiting rows now. Database read only.
     // Called after every schedule change, on start, on boot/update, and by
-    // the worker after each check (a delivery changed what is held).
-    fun refresh(context: Context) {
-        val due = try {
+    // the workers after each run (a delivery changed what waits).
+    //
+    // `flushIfDue`: a due row enqueues the flush right away. The send worker
+    // itself passes false — it just ran that flush, and enqueueing again
+    // would start the next worker the moment this one ends, over and over
+    // while the row stays due — and gets the backstop after `retryMillis`.
+    fun refresh(context: Context, flushIfDue: Boolean = true, retryMillis: Long = RETRY_MILLIS) {
+        val inMs = try {
             MailNative.ensureInit(context)
-            JSONObject(MailNative.nextSendDue())
+            MailNative.sendDueInMs()
         } catch (e: RuntimeException) {
             Log.w("mailclient", "send alarm: next due unavailable", e)
             return
         }
-        val at = due.optString("send_at")
-        if (at.isEmpty()) {
+        if (inMs < 0) {
             cancel(context)
             return
         }
-        val millis = parseUtc(at)
-        if (millis == null) {
-            Log.w("mailclient", "send alarm: unreadable send_at")
-            cancel(context)
-            return
-        }
-        armAt(context, millis)
-    }
-
-    fun cancel(context: Context) {
-        alarms(context).cancel(pendingIntent(context))
-    }
-
-    private fun armAt(context: Context, atMillis: Long) {
-        // Past-due (the phone was off at the time): flush now — the worker
-        // waits for a network when offline — and keep the backstop until
-        // the row is gone. The backstop re-arms itself: while the row is
-        // still held at the next shot, this arms another one.
-        if (atMillis <= System.currentTimeMillis()) {
-            MailCheckWorker.enqueueSendDue(context)
-        }
-        val at = if (atMillis <= System.currentTimeMillis()) {
-            System.currentTimeMillis() + RETRY_MILLIS
+        val now = System.currentTimeMillis()
+        val at = if (inMs == 0L) {
+            // Due (the phone was off at the time, or a flush could not
+            // finish): flush now unless the caller just did — the worker
+            // waits for a network when offline — and keep a backstop until
+            // the row is gone.
+            if (flushIfDue) MailCheckWorker.enqueueSendDue(context)
+            now + retryMillis
         } else {
-            atMillis
+            now + inMs
         }
         val alarms = alarms(context)
         val exact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarms.canScheduleExactAlarms()
@@ -82,19 +68,8 @@ object MailSendAlarm {
         }
     }
 
-    private fun parseUtc(raw: String): Long? {
-        // The core stores UTC RFC3339 (`2026-10-13T12:00:00Z`), with offsets
-        // possible after a reschedule; Instant parses every shape.
-        runCatching { java.time.Instant.parse(raw).toEpochMilli() }.getOrNull()?.let { return it }
-        for (p in arrayOf("yyyy-MM-dd'T'HH:mm:ssX", "yyyy-MM-dd'T'HH:mm:ss.SSSX")) {
-            runCatching {
-                val f = SimpleDateFormat(p, Locale.US)
-                f.timeZone = TimeZone.getTimeZone("UTC")
-                f.isLenient = false
-                f.parse(raw)?.time
-            }.getOrNull()?.let { return it }
-        }
-        return null
+    fun cancel(context: Context) {
+        alarms(context).cancel(pendingIntent(context))
     }
 
     private fun pendingIntent(context: Context): PendingIntent = PendingIntent.getBroadcast(
@@ -108,12 +83,11 @@ object MailSendAlarm {
         context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
 }
 
-// A held row's time has come (or the backstop elapsed): flush the outbox —
-// never the inbox check — then plan again.
+// A waiting row's time has come (or the backstop elapsed): plan again,
+// which enqueues the outbox flush — never the inbox check — when it is due.
 class MailSendReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != MailSendAlarm.ACTION_SEND) return
-        MailCheckWorker.enqueueSendDue(context)
         MailSendAlarm.refresh(context)
     }
 }

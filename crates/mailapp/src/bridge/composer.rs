@@ -60,44 +60,48 @@ impl qobject::Bridge {
         queued
     }
 
-    pub fn schedule_mail(self: Pin<&mut Self>, form: &QString, send_at: &QString) -> QString {
+    pub fn schedule_mail(
+        self: Pin<&mut Self>,
+        account_id: i64,
+        form: &QString,
+        send_at: &QString,
+    ) -> QString {
         let form = match ComposeForm::parse(&form.to_string()) {
             Ok(f) => f,
             Err(e) => return qstring(&e),
         };
-        let send_at = send_at.to_string();
-        let wanted = *self.current_account_id();
         let db = match crate::bridge::shared_db() {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        let draft_uid = form.draft_uid;
         // Validate + build + hold synchronously, so mistakes report instantly
         // with the composer still open. No delivery job: the row waits as
-        // `scheduled` until a sync past its time submits it.
-        let held = match compose::prepare_scheduled(db, wanted, form, &send_at) {
+        // `scheduled` until the due timer (or a sync) past its time submits it.
+        let held = match compose::prepare_scheduled(db, account_id, form, &send_at.to_string()) {
             Ok(h) => h,
             Err(e) => return qstring(&e),
         };
-        if draft_uid >= 0 {
+        if let Some(draft_uid) = held.draft_uid {
             // The outbox row carries the mail now; the server draft it came
-            // from goes away in the background. A failure only notes itself
-            // on the status line — the scheduled send stands either way.
+            // from goes away in the background, under its own kind so a
+            // second cleanup still running cannot refuse it. The scheduled
+            // send stands either way, so this never fails the call.
             let account_id = held.account_id;
             let current = *self.current_folder_id();
-            let queued = spawn_job(self, "Delete draft", move |db, _progress| async move {
-                let _drafts = compose::delete_draft(db, account_id, draft_uid as u32).await?;
+            let kind = format!("Delete draft {draft_uid}");
+            let queued = spawn_job(self, &kind, move |db, _progress| async move {
+                compose::delete_draft(db, account_id, draft_uid).await?;
                 Ok((String::new(), Some(JobRefresh::feeds(account_id, current))))
             });
             if !queued.is_empty() {
-                log::warn!("schedule: draft cleanup not queued: {queued}");
+                log::warn!("schedule: source draft stays, cleanup not queued: {queued}");
             }
         }
         qstring("")
     }
 
-    /// Milliseconds until the earliest held `scheduled` send (`-1` = none,
-    /// `0` = already due). The QML due timer arms from this.
+    /// Milliseconds until the earliest waiting scheduled send wants a flush
+    /// (`-1` = none, `0` = due now). The QML due timer arms from this.
     pub fn scheduled_due_ms(&self) -> i64 {
         match crate::bridge::shared_db() {
             Ok(db) => mailcore::outbox::due_in_ms(db),
@@ -105,65 +109,31 @@ impl qobject::Bridge {
         }
     }
 
-    /// Submit due `scheduled` rows of every account (the due timer's job, or
-    /// "Sync now" from the outbox). Ordinary queued retries flush along —
-    /// that is what any sync would do. Kind `"Send"` serializes with
-    /// interactive sends; the QML finish handler only touches the composer
-    /// while a send is still pending, so a timer flush just updates the
-    /// status line and the outbox pill.
+    /// Why `send_at` cannot be a scheduled send's time (`""` = it can):
+    /// the Send-later dialog's validity and its message, from the core.
+    pub fn send_at_error(&self, send_at: &QString) -> QString {
+        qstring(&mailcore::outbox::send_at_error(&send_at.to_string()).unwrap_or_default())
+    }
+
+    /// Flush every due scheduled send of every account: the due timer's
+    /// job, as one core call (`send_due_scheduled`, the same run Android's
+    /// alarm makes). Its own kind, so a timer firing behind a long sync never
+    /// latches `"Send"` and refuses the user's Send click meanwhile; the
+    /// outbox claim keeps the overlap with an interactive send safe.
     pub fn flush_due_sends(self: Pin<&mut Self>) -> QString {
         let current_account = *self.current_account_id();
         let current_folder = *self.current_folder_id();
-        spawn_job(self, "Send", move |db, _progress| async move {
-            let mut sent = 0u64;
-            let mut errors = Vec::new();
-            for acc in mailcore::store::accounts::list(db).map_err(|e| e.to_string())? {
-                // Promotion runs inside the flush too; this only skips
-                // accounts with nothing held or due without touching secrets.
-                let due =
-                    mailcore::store::queue::promote_due(db, acc.id).map_err(|e| e.to_string())?;
-                let waiting = mailcore::store::queue::list_submittable(db, acc.id)
-                    .map_err(|e| e.to_string())?;
-                if due == 0 && waiting.is_empty() {
-                    continue;
-                }
-                let secrets = mailcore::auth::load_account_secrets(&acc.auth_vault_key)
-                    .map_err(|e| format!("{}: {e}", acc.email_address))?;
-                match mailcore::sync::sender::SmtpSender::new(&acc)
-                    .flush_outbox(
-                        db,
-                        acc.id,
-                        &secrets.smtp_password,
-                        Some(secrets.imap_password.as_str()),
-                    )
-                    .await
-                {
-                    Ok(n) => sent += n,
-                    Err(e) => errors.push(format!("{}: {e}", acc.email_address)),
-                }
-            }
-            let refresh = JobRefresh::feeds(current_account, current_folder);
-            if sent == 0 && errors.is_empty() {
-                return Ok(JobDone {
-                    status: String::new(),
-                    refresh: Some(refresh),
-                    outcome: String::new(),
-                });
-            }
-            let mut status = if sent == 1 {
-                "Sent 1 scheduled message".to_string()
-            } else if sent > 1 {
-                format!("Sent {sent} scheduled messages")
-            } else {
-                "Scheduled send failed".to_string()
-            };
-            if !errors.is_empty() {
-                status.push_str(&format!("; {}", errors.join("; ")));
-            }
+        spawn_job(self, "Scheduled send", move |db, _progress| async move {
+            let report =
+                mailcore::sync::background::send_due_scheduled(db, &mailcore::default_db_path())
+                    .await;
+            // Nothing went out and nothing failed (an early fire, or a sync
+            // took the row first): leave the feeds alone.
+            let changed = report.sent > 0 || !report.errors.is_empty();
             Ok(JobDone {
-                status,
-                refresh: Some(refresh),
-                outcome: if sent > 0 {
+                status: report.status_line(),
+                refresh: changed.then(|| JobRefresh::feeds(current_account, current_folder)),
+                outcome: if report.sent > 0 {
                     "sent".to_string()
                 } else {
                     String::new()

@@ -11,7 +11,8 @@
 //! Layout: `policy` (send policy + format), `message` (request + MIME
 //! assembly, pure), `addresses` (recipient parsing), `attachments`
 //! (outgoing files), `client` ([`SmtpSender`] submission + queue), `dsn`
-//! (delivery confirmations over lettre's low-level connection).
+//! (delivery confirmations over lettre's low-level connection),
+//! `scheduled` (a scheduled send's `Date:` refresh and self receipt).
 
 mod addresses;
 mod attachments;
@@ -20,6 +21,7 @@ mod dsn;
 mod inline;
 mod message;
 mod policy;
+mod scheduled;
 
 #[cfg(test)]
 pub(crate) mod support;

@@ -3257,8 +3257,8 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_rescheduleOutbox<'ca
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-/// `MailNative.sendNowOutbox(accountId, id)`: send a `scheduled` row with the
-/// next sync instead of at its time. Local-only.
+/// `MailNative.sendNowOutbox(accountId, id)`: send a waiting scheduled row
+/// now instead of at its time (due at once for the alarm). Local-only.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_de_renier_mailclient_MailNative_sendNowOutbox<'caller>(
     mut unowned: EnvUnowned<'caller>,
@@ -3274,37 +3274,40 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_sendNowOutbox<'calle
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-/// `MailNative.nextScheduled(accountId)`: this account's earliest held
-/// `scheduled` instant (UTC RFC3339), `""` when nothing waits. Local read.
+/// `MailNative.sendDueInMs()`: milliseconds until the earliest waiting
+/// scheduled send across all accounts wants a flush (`-1` = none, `0` = due
+/// now; `mailcore::outbox::due_in_ms`). What the exact alarm arms from.
+/// Local read.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_de_renier_mailclient_MailNative_nextScheduled<'caller>(
+pub extern "system" fn Java_de_renier_mailclient_MailNative_sendDueInMs<'caller>(
     mut unowned: EnvUnowned<'caller>,
     _class: JClass<'caller>,
-    account_id: i64,
-) -> JString<'caller> {
+) -> i64 {
     unowned
-        .with_env(|env| -> Result<JString<'caller>> {
-            Ok(env.new_string(crate::api::outbox::next_scheduled(account_id)?)?)
+        .with_env(|_env| -> Result<i64> {
+            Ok(mailcore::outbox::due_in_ms(crate::db::shared_db()?))
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-/// `MailNative.nextSendDue()`: earliest held `scheduled` send across all
-/// accounts as `{"account_id","send_at"}` (`{}` when nothing waits): what
-/// the exact alarm arms from. Local read.
+/// `MailNative.sendAtError(sendAt)`: why `sendAt` (any RFC3339 instant)
+/// cannot be a scheduled send's time, `""` when it can
+/// (`mailcore::outbox::send_at_error`). The Send-later dialog's check.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_de_renier_mailclient_MailNative_nextSendDue<'caller>(
+pub extern "system" fn Java_de_renier_mailclient_MailNative_sendAtError<'caller>(
     mut unowned: EnvUnowned<'caller>,
     _class: JClass<'caller>,
+    send_at: JString<'caller>,
 ) -> JString<'caller> {
     unowned
         .with_env(|env| -> Result<JString<'caller>> {
-            Ok(env.new_string(crate::api::outbox::next_send_due()?)?)
+            let error = mailcore::outbox::send_at_error(&string(env, &send_at)?);
+            Ok(env.new_string(error.unwrap_or_default())?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-/// `MailNative.sendDue()`: flush every due `scheduled` row, whatever
+/// `MailNative.sendDue()`: flush every due scheduled send, whatever
 /// account holds it (no poll gating). Blocks for the network run, so only
 /// a worker thread calls it. Returns `{sent, skipped, errors, run}` as
 /// JSON; outbox-only, so no inbox sync and no new-mail notification.

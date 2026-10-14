@@ -72,6 +72,9 @@ fn main() {
             // Pure per-account settings form helpers, shared by Settings and
             // its headless tests (see qml/AccountOverrides.qml).
             .qml_file(QmlFile::from("qml/AccountOverrides.qml").singleton(true))
+            // A scheduled send's time in local words, shared by the composer
+            // status, the outbox rows and the Send-later dialog.
+            .qml_file(QmlFile::from("qml/SendAt.qml").singleton(true))
             .qml_file("qml/Main.qml")
             .qml_file("qml/Sidebar.qml")
             .qml_file("qml/MessageList.qml")

@@ -128,9 +128,11 @@ pub fn status_json(db: &Db, account_id: i64) -> Result<String> {
 /// One outbox row for the dialog: everything the UI shows, never the MIME
 /// bytes (like [`crate::feed`] keeps bodies out of list rows). `state` is
 /// the row's one-line state, phrased once here so both frontends show the
-/// same words (like [`undo`]'s toast labels). Scheduled rows carry
-/// `send_at` (UTC RFC3339; `""` otherwise) for the picker's local display,
-/// and `notify_self` when delivery mails a receipt to the own address.
+/// same words (like [`undo`]'s toast labels). Rows still `scheduled` carry
+/// `send_at` (UTC RFC3339; `""` otherwise, also once a flush took the row)
+/// for the picker's local display, and `notify_self` when delivery mails a
+/// receipt to the own address. `retryable` is what a sync could deliver now,
+/// as in [`status`]: never a row that waits for its time.
 pub fn list_json(db: &Db, account_id: i64) -> Result<String> {
     let mut stmt = db.conn().prepare(
         "select id, status, last_error, retries, raw_mime,
@@ -176,7 +178,13 @@ pub fn list_json(db: &Db, account_id: i64) -> Result<String> {
             status,
             QueueStatus::Queued | QueueStatus::Failed | QueueStatus::Scheduled
         );
-        let retryable = dismissable && has_bytes && (retries as u64) < queue::MAX_SEND_RETRIES;
+        let retryable = matches!(status, QueueStatus::Queued | QueueStatus::Failed)
+            && has_bytes
+            && (retries as u64) < queue::MAX_SEND_RETRIES;
+        let send_at = match status {
+            QueueStatus::Scheduled => send_at.unwrap_or_default(),
+            _ => String::new(),
+        };
         let to: Vec<String> = serde_json::from_str(&to_raw).unwrap_or_default();
         arr.push(json!({
             "id": id,
@@ -195,7 +203,7 @@ pub fn list_json(db: &Db, account_id: i64) -> Result<String> {
                 .unwrap_or_else(|| "(no subject)".to_string()),
             "created_at": created,
             "updated_at": updated,
-            "send_at": send_at.unwrap_or_default(),
+            "send_at": send_at,
             "notify_self": notify_self,
         }));
     }
@@ -221,45 +229,43 @@ pub fn dismiss(db: &Db, account_id: i64, id: i64) -> Result<()> {
     Ok(())
 }
 
-/// Move a held row to a new future instant (outbox dialog's reschedule).
+/// Move a waiting row to a new future instant (outbox dialog's reschedule).
 /// Returns the normalized UTC instant the row now waits for.
 pub fn reschedule(db: &Db, account_id: i64, id: i64, send_at: &str) -> Result<String> {
-    let row = queue::get(db, id)?;
-    if row.account_id != account_id {
-        return Err(StoreError::NotFound("outbox entry".into()));
-    }
-    queue::reschedule(db, id, send_at)
+    queue::reschedule(db, account_id, id, send_at)
 }
 
-/// Send a `scheduled` row with the next sync instead of at its time.
+/// Send a waiting scheduled row now instead of at its time.
 pub fn send_now(db: &Db, account_id: i64, id: i64) -> Result<()> {
-    let row = queue::get(db, id)?;
-    if row.account_id != account_id {
-        return Err(StoreError::NotFound("outbox entry".into()));
-    }
-    queue::send_now(db, id)
+    queue::send_now(db, account_id, id)
 }
 
-/// Earliest held `scheduled` instant (UTC RFC3339) of this account, `None`
-/// when nothing waits. The due timer / exact alarm plans from this.
-pub fn next_scheduled(db: &Db, account_id: i64) -> Result<Option<String>> {
-    queue::next_due_for(db, account_id)
+/// Whether `raw` (any RFC3339 instant) can be a scheduled send's time:
+/// `None` when it can, else the reason in the words the pickers show. Both
+/// frontends ask this instead of repeating the lead-time rule; storing the
+/// row checks again, so a dialog left open past its time is still refused.
+#[must_use]
+pub fn send_at_error(raw: &str) -> Option<String> {
+    queue::normalize_future_send_at(raw).err().map(|e| match e {
+        StoreError::InvalidInput(msg) => msg,
+        other => other.to_string(),
+    })
 }
 
-/// Milliseconds until the earliest held `scheduled` send across all accounts
-/// (`-1` = none scheduled, `0` = already due). Due timers and exact alarms
-/// arm from this.
+/// Milliseconds until the earliest waiting scheduled send wants a flush
+/// across all accounts (`-1` = none waits, `0` = due now). Due timers and
+/// exact alarms arm from this; a send that failed after its time comes back
+/// after [`queue::SCHEDULED_RETRY_SECS`], not at once.
 #[must_use]
 pub fn due_in_ms(db: &Db) -> i64 {
-    let Ok(Some((_, at))) = queue::next_due(db) else {
-        return -1;
-    };
-    let Ok(when) = chrono::DateTime::parse_from_rfc3339(&at) else {
-        return -1;
-    };
-    (when.to_utc() - chrono::Utc::now())
-        .num_milliseconds()
-        .max(0)
+    match queue::next_due(db) {
+        Ok(Some(when)) => (when - chrono::Utc::now()).num_milliseconds().max(0),
+        Ok(None) => -1,
+        Err(e) => {
+            log::warn!("outbox: cannot plan scheduled sends: {e}");
+            -1
+        }
+    }
 }
 
 /// A row's one-line state from its status, whether a sync could still
@@ -280,365 +286,17 @@ pub fn state_line(status: QueueStatus, retryable: bool, has_bytes: bool) -> &'st
     }
 }
 
-/// The `Subject:` header of a built MIME message, unfolded. No RFC 2047
-/// decoding — an encoded word shows as-is, which is enough for recognising
-/// one's own queued mail (and for naming a self receipt after it).
+/// The decoded `Subject:` of a built MIME message (RFC 2047 encoded words
+/// included, so an umlaut subject reads as written), `None` when absent or
+/// empty. Headers only: the body is never parsed.
 pub(crate) fn subject_from_mime(raw: &[u8]) -> Option<String> {
-    let text = String::from_utf8_lossy(raw);
-    let mut subject: Option<String> = None;
-    for line in text.split_inclusive('\n') {
-        let line = line.strip_suffix('\n').unwrap_or(line);
-        let line = line.strip_suffix('\r').unwrap_or(line);
-        if line.is_empty() {
-            break; // end of headers
-        }
-        if line.starts_with([' ', '\t']) {
-            if let Some(s) = subject.as_mut() {
-                s.push(' ');
-                s.push_str(line.trim());
-            }
-            continue;
-        }
-        if is_subject_header(line) {
-            let value = line.split_once(':').map(|(_, v)| v.trim()).unwrap_or("");
-            subject = Some(value.to_string());
-        }
-    }
-    subject.filter(|s| !s.is_empty())
-}
-
-fn is_subject_header(line: &str) -> bool {
-    line.len() > 8 && line.as_bytes()[7] == b':' && line[..7].eq_ignore_ascii_case("subject")
+    mail_parser::MessageParser::default()
+        .parse_headers(raw)?
+        .subject()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::models::NewAccount;
-    use crate::store::accounts;
-
-    fn account(db: &Db) -> i64 {
-        accounts::create(
-            db,
-            &NewAccount {
-                name: "a".to_string(),
-                email_address: "me@example.com".to_string(),
-                from_name: String::new(),
-                imap_host: "h".to_string(),
-                imap_port: 993,
-                imap_security: "tls".to_string(),
-                imap_username: "u".to_string(),
-                smtp_host: "h".to_string(),
-                smtp_port: 465,
-                smtp_security: "tls".to_string(),
-                smtp_username: "u".to_string(),
-                auth_vault_key: "k".to_string(),
-                check_interval_secs: 60,
-            },
-        )
-        .unwrap()
-    }
-
-    fn enqueue(db: &Db, acc: i64, subject: &str) -> i64 {
-        let raw = format!(
-            "From: me@example.com\r\nTo: you@example.com\r\nSubject: {subject}\r\n\r\nbody"
-        );
-        queue::enqueue_mime(
-            db,
-            acc,
-            None,
-            raw.as_bytes(),
-            "me@example.com",
-            &["you@example.com".to_string()],
-            false,
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn empty_outbox_has_no_status() {
-        let db = Db::open_in_memory().unwrap();
-        let acc = account(&db);
-        let s = status(&db, acc).unwrap();
-        assert_eq!(
-            s,
-            OutboxStatus {
-                queued: 0,
-                sending: 0,
-                failed: 0,
-                scheduled: 0,
-                retryable: 0,
-                pending: 0,
-            }
-        );
-        assert!(!s.any());
-        assert_eq!(list_json(&db, acc).unwrap(), "[]");
-    }
-
-    #[test]
-    fn counts_follow_row_states() {
-        let db = Db::open_in_memory().unwrap();
-        let acc = account(&db);
-        // Born claimed (`sending`).
-        let a = enqueue(&db, acc, "first");
-        let s = status(&db, acc).unwrap();
-        assert_eq!((s.sending, s.retryable, s.pending), (1, 0, 1));
-        assert!(s.any());
-        // A failed flush keeps its bytes: retryable.
-        queue::mark_failed(&db, a, "timeout").unwrap();
-        let s = status(&db, acc).unwrap();
-        assert_eq!((s.failed, s.retryable), (1, 1));
-        // A user-reported failure drops its bytes: visible but not retryable.
-        queue::discard_mime(&db, a).unwrap();
-        let s = status(&db, acc).unwrap();
-        assert_eq!((s.failed, s.retryable), (1, 0));
-        // A scheduled send counts apart from the retryable queue.
-        let at = (chrono::Utc::now() + chrono::Duration::hours(2))
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let to = ["you@example.com".to_string()];
-        queue::enqueue_scheduled_mime(
-            &db,
-            acc,
-            &queue::ScheduledMime {
-                message_id: None,
-                raw_mime:
-                    b"From: me@example.com\r\nTo: you@example.com\r\nSubject: later\r\n\r\nbody",
-                envelope_from: "me@example.com",
-                envelope_to: &to,
-                request_dsn: false,
-                notify_self: false,
-                send_at: &at,
-            },
-        )
-        .unwrap();
-        let s = status(&db, acc).unwrap();
-        assert_eq!((s.scheduled, s.retryable, s.pending), (1, 0, 2));
-        assert_eq!(s.label(), "2 unsent (1 failed, 1 scheduled)");
-        // Sent rows leave the counts.
-        queue::mark_sent(&db, a).unwrap();
-        assert!(status(&db, acc).unwrap().any());
-    }
-
-    #[test]
-    fn list_rows_carry_subject_recipients_and_error() {
-        let db = Db::open_in_memory().unwrap();
-        let acc = account(&db);
-        let id = enqueue(&db, acc, "hello there");
-        queue::mark_failed(&db, id, "connection refused").unwrap();
-        let list: serde_json::Value = serde_json::from_str(&list_json(&db, acc).unwrap()).unwrap();
-        let row = &list[0];
-        assert_eq!(row["id"], id);
-        assert_eq!(row["status"], "failed");
-        assert_eq!(row["state"], "Failed — will retry on the next sync");
-        assert_eq!(row["last_error"], "connection refused");
-        assert_eq!(row["retryable"], true);
-        assert_eq!(row["has_bytes"], true);
-        assert_eq!(row["subject"], "hello there");
-        assert_eq!(row["envelope_to"][0], "you@example.com");
-    }
-
-    #[test]
-    fn dismiss_is_scoped_to_the_account() {
-        let db = Db::open_in_memory().unwrap();
-        let acc = account(&db);
-        let other = accounts::create(
-            &db,
-            &NewAccount {
-                name: "b".to_string(),
-                email_address: "b@example.com".to_string(),
-                from_name: String::new(),
-                imap_host: "h".to_string(),
-                imap_port: 993,
-                imap_security: "tls".to_string(),
-                imap_username: "u".to_string(),
-                smtp_host: "h".to_string(),
-                smtp_port: 465,
-                smtp_security: "tls".to_string(),
-                smtp_username: "u".to_string(),
-                auth_vault_key: "k2".to_string(),
-                check_interval_secs: 60,
-            },
-        )
-        .unwrap();
-        let id = enqueue(&db, other, "theirs");
-        queue::mark_failed(&db, id, "connection refused").unwrap();
-        assert!(dismiss(&db, acc, id).is_err());
-        dismiss(&db, other, id).unwrap();
-        assert!(dismiss(&db, other, id).is_err());
-        assert!(dismiss(&db, acc, 9999).is_err());
-    }
-
-    #[test]
-    fn a_row_being_sent_cannot_be_dismissed() {
-        let db = Db::open_in_memory().unwrap();
-        let acc = account(&db);
-        // Born claimed: a sync is submitting it right now.
-        let id = enqueue(&db, acc, "in flight");
-        assert!(dismiss(&db, acc, id).is_err());
-        assert!(queue::get(&db, id).is_ok());
-        let rows: serde_json::Value = serde_json::from_str(&list_json(&db, acc).unwrap()).unwrap();
-        assert_eq!(rows[0]["dismissable"], false);
-    }
-
-    #[test]
-    fn scheduled_rows_carry_send_at_and_reschedule() {
-        let db = Db::open_in_memory().unwrap();
-        let acc = account(&db);
-        let at = (chrono::Utc::now() + chrono::Duration::hours(2))
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let to = ["you@example.com".to_string()];
-        let scheduled = |subject: &[u8], send_at: &str| {
-            queue::enqueue_scheduled_mime(
-                &db,
-                acc,
-                &queue::ScheduledMime {
-                    message_id: None,
-                    raw_mime: subject,
-                    envelope_from: "me@example.com",
-                    envelope_to: &to,
-                    request_dsn: false,
-                    notify_self: false,
-                    send_at,
-                },
-            )
-            .unwrap()
-        };
-        let id = scheduled(
-            b"From: me@example.com\r\nTo: you@example.com\r\nSubject: later\r\n\r\nbody",
-            &at,
-        );
-        let list: serde_json::Value = serde_json::from_str(&list_json(&db, acc).unwrap()).unwrap();
-        assert_eq!(list[0]["status"], "scheduled");
-        assert_eq!(list[0]["state"], "Scheduled — sends automatically");
-        assert_eq!(list[0]["send_at"], at);
-        assert_eq!(list[0]["dismissable"], true);
-        assert_eq!(list[0]["retryable"], true);
-        assert_eq!(
-            next_scheduled(&db, acc).unwrap().as_deref(),
-            Some(at.as_str())
-        );
-        // Someone else's account cannot touch it.
-        assert!(reschedule(&db, acc + 99, id, &at).is_err());
-        assert!(send_now(&db, acc + 99, id).is_err());
-        // A new time moves it; Send now queues it for the next sync.
-        let later = (chrono::Utc::now() + chrono::Duration::hours(5))
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        assert_eq!(reschedule(&db, acc, id, &later).unwrap(), later);
-        assert!(reschedule(&db, acc, id, "yesterday").is_err());
-        send_now(&db, acc, id).unwrap();
-        let list: serde_json::Value = serde_json::from_str(&list_json(&db, acc).unwrap()).unwrap();
-        assert_eq!(list[0]["status"], "queued");
-        assert_eq!(list[0]["send_at"], "");
-        assert_eq!(next_scheduled(&db, acc).unwrap(), None);
-        // And a scheduled row dismisses like any other held row.
-        let id2 = scheduled(
-            b"From: me@example.com\r\nTo: you@example.com\r\nSubject: never\r\n\r\nbody",
-            &later,
-        );
-        dismiss(&db, acc, id2).unwrap();
-        assert!(queue::get(&db, id2).is_err());
-    }
-
-    #[test]
-    fn queued_without_bytes_counts_as_failed() {
-        let db = Db::open_in_memory().unwrap();
-        let acc = account(&db);
-        let id = enqueue(&db, acc, "empty queued");
-        queue::discard_mime(&db, id).unwrap();
-        db.conn()
-            .execute(
-                "update send_queue set status = 'queued' where id = ?1",
-                [id],
-            )
-            .unwrap();
-        let s = status(&db, acc).unwrap();
-        assert_eq!(s.queued, 0);
-        assert_eq!(s.failed, 1);
-        assert_eq!(s.retryable, 0);
-        assert_eq!(s.pending, 1);
-        let list: serde_json::Value = serde_json::from_str(&list_json(&db, acc).unwrap()).unwrap();
-        assert_eq!(
-            list[0]["state"],
-            "Incomplete — message data was discarded; dismiss this entry"
-        );
-    }
-
-    #[test]
-    fn state_line_names_retryable_and_dead_rows() {
-        use QueueStatus::*;
-        assert_eq!(state_line(Sending, false, true), "Sending…");
-        assert_eq!(
-            state_line(Scheduled, false, true),
-            "Scheduled — sends automatically"
-        );
-        assert_eq!(
-            state_line(Queued, true, true),
-            "Queued — goes out with the next sync"
-        );
-        assert_eq!(
-            state_line(Queued, false, false),
-            "Incomplete — message data was discarded; dismiss this entry"
-        );
-        assert_eq!(
-            state_line(Failed, true, true),
-            "Failed — will retry on the next sync"
-        );
-        assert_eq!(
-            state_line(Failed, false, true),
-            "Failed — retry limit reached, dismiss or resend by hand"
-        );
-        assert_eq!(
-            state_line(Failed, false, false),
-            "Failed — send it again by hand, then dismiss this entry"
-        );
-    }
-
-    #[test]
-    fn subject_parsing_handles_folding_case_and_absence() {
-        assert_eq!(
-            subject_from_mime(b"Subject: Hi\r\n\r\nx").as_deref(),
-            Some("Hi")
-        );
-        assert_eq!(
-            subject_from_mime(b"subject: folded\r\n continues here\r\nTo: a@b.c\r\n\r\nx")
-                .as_deref(),
-            Some("folded continues here")
-        );
-        assert_eq!(
-            subject_from_mime(b"From: a@b.c\r\n\r\nno subject here"),
-            None
-        );
-        // Headers end at the blank line: no false subject from the body.
-        assert_eq!(
-            subject_from_mime(b"From: a@b.c\r\n\r\nSubject: not a header"),
-            None
-        );
-    }
-
-    #[test]
-    fn status_json_carries_the_pill_label() {
-        let db = Db::open_in_memory().unwrap();
-        let acc = account(&db);
-        let a = enqueue(&db, acc, "one");
-        enqueue(&db, acc, "two");
-        queue::mark_failed(&db, a, "refused").unwrap();
-        let v: serde_json::Value = serde_json::from_str(&status_json(&db, acc).unwrap()).unwrap();
-        assert_eq!(v["label"], "2 unsent (1 failed)");
-        assert_eq!(v["has_failures"], true);
-        let one = OutboxStatus {
-            queued: 1,
-            sending: 0,
-            failed: 0,
-            scheduled: 0,
-            retryable: 1,
-            pending: 1,
-        };
-        assert_eq!(one.label(), "1 unsent");
-        let sched = OutboxStatus {
-            scheduled: 2,
-            pending: 2,
-            ..one
-        };
-        assert_eq!(sched.label(), "2 unsent (2 scheduled)");
-    }
-}
+mod tests;

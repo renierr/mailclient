@@ -881,6 +881,9 @@ AppDialog {
                         text: qsTr(
                                   "Shows a delivery confirmation toggle in the composer. The receiving server reports once the mail is in the mailbox, where every server on the way supports it.")
                     }
+                    HintLabel {
+                        text: qsTr("Both toggles start off on every mail.")
+                    }
                     AppCheckBox {
                         Layout.fillWidth: true
                         Layout.topMargin: Theme.sm
@@ -891,9 +894,6 @@ AppDialog {
                     HintLabel {
                         text: qsTr(
                                   "Pre-checks the same toggle in the Send-later dialog, where it can still be changed for one mail. When the send goes out, this device mails itself a note naming the subject, the time and how many recipients it had.")
-                    }
-                    HintLabel {
-                        text: qsTr("Both toggles start off on every mail.")
                     }
                 }
             }

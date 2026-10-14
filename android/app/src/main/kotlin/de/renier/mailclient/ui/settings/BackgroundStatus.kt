@@ -75,6 +75,21 @@ object BackgroundPower {
         }
     }
 
+    /**
+     * True only the first time it is asked: the composer sends the user to
+     * the exact-alarm screen once, where scheduling first needed it, and
+     * leaves the reminder to the Outbox after that.
+     */
+    fun firstExactAlarmAsk(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_EXACT_ASKED, false)) return false
+        prefs.edit().putBoolean(KEY_EXACT_ASKED, true).apply()
+        return true
+    }
+
+    private const val PREFS = "mailclient_background"
+    private const val KEY_EXACT_ASKED = "exact_alarm_asked_for_send"
+
     /** The plan needs exact alarms: push's keep-alive or the alarm poller. */
     fun needsExact(plan: JSONObject): Boolean =
         plan.optBoolean("push") || (plan.optInt("poll_minutes") > 0 && plan.optString("poll_scheduler") == "alarm")

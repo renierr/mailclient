@@ -14,6 +14,7 @@ import androidx.work.PeriodicWorkRequest
 import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
+import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 // One background mail check, run by WorkManager for the battery-saving
@@ -30,8 +31,16 @@ class MailCheckWorker(context: Context, params: WorkerParameters) : Worker(conte
                 // Outbox-only: no inbox sync, no notification. Quiet hours
                 // gate new-mail checks; they never hold back a send the
                 // user scheduled.
-                MailNative.sendDue()
-                MailSendAlarm.refresh(applicationContext)
+                val report = JSONObject(MailNative.sendDue())
+                // Never enqueue a follow-up from here: a row that stays due
+                // (another sync held the lock, the password is missing)
+                // would chain worker after worker. The alarm comes back
+                // instead — soon when the lock was only busy.
+                MailSendAlarm.refresh(
+                    applicationContext,
+                    flushIfDue = false,
+                    retryMillis = if (report.optBoolean("skipped")) LOCKED_RETRY_MILLIS else MailSendAlarm.RETRY_MILLIS,
+                )
                 return Result.success()
             }
             // The check the schedulers ask for: what they owe now, so manual
@@ -52,8 +61,9 @@ class MailCheckWorker(context: Context, params: WorkerParameters) : Worker(conte
             if ((inputData.getString(KEY_TRIGGER) ?: "worker") == "tile") {
                 CheckFeedback.showFailure(applicationContext)
             }
-            // The shot is spent either way: re-arm from what is still held.
-            runCatching { MailSendAlarm.refresh(applicationContext) }
+            // The shot is spent either way: re-arm from what is still held,
+            // without enqueueing the next worker from inside this one.
+            runCatching { MailSendAlarm.refresh(applicationContext, flushIfDue = false) }
             return Result.failure()
         }
     }
@@ -71,6 +81,10 @@ class MailCheckWorker(context: Context, params: WorkerParameters) : Worker(conte
         // check while a send waits).
         private const val SEND_TASK = "mail-scheduled-send"
 
+        // A send run skipped because another sync held the lock: that one
+        // only flushes the accounts it syncs, so try again shortly.
+        private const val LOCKED_RETRY_MILLIS = 60_000L
+
         // Android's floor for periodic work.
         private const val MIN_MINUTES = 15L
 
@@ -80,9 +94,11 @@ class MailCheckWorker(context: Context, params: WorkerParameters) : Worker(conte
         fun input(trigger: String): Data = Data.Builder().putString(KEY_TRIGGER, trigger).build()
 
         // A due scheduled send: outbox-only flush, kept off the poller's
-        // task so neither drops the other. APPEND chains shots (each flush
-        // is quick once the first sent); KEEP would drop a second send
-        // while the first still waits for the network.
+        // task so neither drops the other. APPEND_OR_REPLACE chains shots
+        // (each flush is quick once the first sent) — KEEP would drop a
+        // second send while the first still waits for the network — and,
+        // unlike plain APPEND, starts a fresh chain when the last worker
+        // failed instead of failing every later shot along with it.
         fun enqueueSendDue(context: Context) {
             val request = OneTimeWorkRequest.Builder(MailCheckWorker::class.java)
                 .setInputData(input("scheduled-send"))
@@ -96,7 +112,7 @@ class MailCheckWorker(context: Context, params: WorkerParameters) : Worker(conte
                 }
                 .build()
             WorkManager.getInstance(context)
-                .enqueueUniqueWork(SEND_TASK, ExistingWorkPolicy.APPEND, request)
+                .enqueueUniqueWork(SEND_TASK, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
         }
 
         // The battery-saving schedule: deferrable, only with a network.

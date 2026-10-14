@@ -542,6 +542,7 @@ mod tests {
         let inbox = folders::upsert(&db, acc, "INBOX", "/", FolderRole::Inbox).unwrap();
         let archive = folders::upsert(&db, acc, "Archive", "/", FolderRole::Archive).unwrap();
 
+        #[allow(clippy::too_many_arguments)]
         fn put(
             db: &Db,
             acc: i64,
