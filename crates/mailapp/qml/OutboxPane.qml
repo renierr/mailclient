@@ -37,8 +37,8 @@ Rectangle {
             root.outboxStatus = ({});
             return;
         }
-        root.rows = FeedJson.parse(root.backend.outbox_json(), []);
-        root.outboxStatus = FeedJson.parse(root.backend.outbox_status_json(), ({}));
+        root.rows = FeedJson.parse(root.backend.outbox_json(root.accountId), []);
+        root.outboxStatus = FeedJson.parse(root.backend.outbox_status_json(root.accountId), ({}));
     }
 
     function changed(message) {
@@ -54,7 +54,7 @@ Rectangle {
     }
 
     function deleteRow(id) {
-        root.changed(root.backend.dismiss_outbox(id));
+        root.changed(root.backend.dismiss_outbox(root.accountId, id));
     }
 
     onVisibleChanged: {

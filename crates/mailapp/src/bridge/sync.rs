@@ -23,12 +23,12 @@ fn format_job_duration(started: std::time::Instant) -> String {
 }
 
 impl qobject::Bridge {
-    pub fn sync_now(self: Pin<&mut Self>) -> QString {
-        let wanted = *self.current_account_id();
-        let current = *self.current_folder_id();
+    pub fn sync_now(self: Pin<&mut Self>, account_id: i64) -> QString {
+        // The shown folder stays shown after the sync when it still exists.
+        let (_, current) = self.shown();
         spawn_job(self, "Sync", move |db, progress| async move {
             let started = std::time::Instant::now();
-            let acc = job_account(db, wanted)?;
+            let acc = job_account(db, account_id)?;
             // Shared orchestration (outbox flush, flag push, folder sweep);
             // the GUI lends its pooled session, the CLI brings a fresh one.
             progress.report("Connecting…");
@@ -90,12 +90,11 @@ impl qobject::Bridge {
         })
     }
 
-    pub fn sync_folder_now(self: Pin<&mut Self>, path: &QString) -> QString {
-        let wanted = *self.current_account_id();
+    pub fn sync_folder_now(self: Pin<&mut Self>, account_id: i64, path: &QString) -> QString {
         let path = path.to_string();
         spawn_job(self, "Sync", move |db, progress| async move {
             let started = std::time::Instant::now();
-            let acc = job_account(db, wanted)?;
+            let acc = job_account(db, account_id)?;
             let folder = folders::get_by_path(db, acc.id, &path).map_err(|e| e.to_string())?;
             let mut imap = checkout_session(&acc).await?;
             imap.push_dirty_flags(db, acc.id).await;
@@ -119,19 +118,14 @@ impl qobject::Bridge {
         })
     }
 
-    pub fn load_older_messages(self: Pin<&mut Self>) -> QString {
-        let wanted = *self.current_account_id();
-        let folder_id = *self.current_folder_id();
+    pub fn load_older_messages(self: Pin<&mut Self>, folder_id: i64) -> QString {
         if folder_id < 0 {
             return qstring("no folder selected");
         }
         spawn_job(self, "Sync", move |db, _progress| async move {
             let started = std::time::Instant::now();
-            let acc = job_account(db, wanted)?;
             let folder = folders::get(db, folder_id).map_err(|e| e.to_string())?;
-            if folder.account_id != acc.id {
-                return Err("folder does not belong to this account".to_string());
-            }
+            let acc = job_account(db, folder.account_id)?;
             let mut imap = checkout_session(&acc).await?;
             let r = imap
                 .sync_older(db, folder_id, OLDER_BATCH)
@@ -165,11 +159,10 @@ impl qobject::Bridge {
         })
     }
 
-    pub fn refresh_folders(self: Pin<&mut Self>) -> QString {
-        let wanted = *self.current_account_id();
-        let current = *self.current_folder_id();
+    pub fn refresh_folders(self: Pin<&mut Self>, account_id: i64) -> QString {
+        let (_, current) = self.shown();
         spawn_job(self, "Sync", move |db, _progress| async move {
-            let acc = job_account(db, wanted)?;
+            let acc = job_account(db, account_id)?;
             let mut imap = checkout_session(&acc).await?;
             let list = imap
                 .sync_folders(db, acc.id)
@@ -194,13 +187,17 @@ impl qobject::Bridge {
         })
     }
 
-    pub fn search_server(self: Pin<&mut Self>, query: &QString, folder: &QString) -> QString {
-        let wanted = *self.current_account_id();
-        let current = *self.current_folder_id();
+    pub fn search_server(
+        self: Pin<&mut Self>,
+        account_id: i64,
+        query: &QString,
+        folder: &QString,
+    ) -> QString {
+        let (_, current) = self.shown();
         let query = query.to_string();
         let folder = folder.to_string();
         spawn_job(self, "Search", move |db, _progress| async move {
-            let acc = job_account(db, wanted)?;
+            let acc = job_account(db, account_id)?;
             if !mailcore::search::is_searchable(&query) {
                 return Ok(("Search: nothing searchable in that query".to_string(), None));
             }
@@ -229,6 +226,7 @@ impl qobject::Bridge {
 
     pub fn set_folder_subscribed(
         mut self: Pin<&mut Self>,
+        account_id: i64,
         path: &QString,
         subscribed: bool,
     ) -> QString {
@@ -236,8 +234,7 @@ impl qobject::Bridge {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        let wanted = *self.current_account_id();
-        let acc = match resolve_account(db, wanted) {
+        let acc = match resolve_account(db, account_id) {
             Ok(a) => a,
             Err(e) => return qstring(&e),
         };
@@ -248,18 +245,17 @@ impl qobject::Bridge {
         if let Err(e) = folders::set_subscribed(db, folder.id, subscribed) {
             return qstring(&e.to_string());
         }
-        let current = *self.current_folder_id();
-        push_feeds(&mut self, db, acc.id, current);
+        let (shown_account, shown_folder) = self.shown();
+        push_feeds(&mut self, db, shown_account, shown_folder);
         qstring("")
     }
 
-    pub fn select_folder(mut self: Pin<&mut Self>, path: &QString) -> QString {
+    pub fn select_folder(mut self: Pin<&mut Self>, account_id: i64, path: &QString) -> QString {
         let db = match shared_db() {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        let wanted = *self.current_account_id();
-        let acc = match resolve_account(db, wanted) {
+        let acc = match resolve_account(db, account_id) {
             Ok(a) => a,
             Err(e) => return qstring(&e),
         };
@@ -274,12 +270,11 @@ impl qobject::Bridge {
         }
     }
 
-    pub fn create_folder(self: Pin<&mut Self>, path: &QString) -> QString {
-        let wanted = *self.current_account_id();
-        let current = *self.current_folder_id();
+    pub fn create_folder(self: Pin<&mut Self>, account_id: i64, path: &QString) -> QString {
+        let (_, current) = self.shown();
         let path = path.to_string();
         spawn_job(self, "Sync", move |db, _progress| async move {
-            let acc = job_account(db, wanted)?;
+            let acc = job_account(db, account_id)?;
             let delimiter = folders::list_by_account(db, acc.id)
                 .unwrap_or_default()
                 .first()

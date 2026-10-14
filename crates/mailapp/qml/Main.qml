@@ -201,7 +201,8 @@ ApplicationWindow {
         if (root.messageByUid(root.currentUid) === undefined)
             root.currentUid = -1;
         if (root.currentUid >= 0)
-            root.currentMessage = FeedJson.parse(backend.message_json(root.currentUid), undefined);
+            root.currentMessage = FeedJson.parse(backend.message_json(backend.current_folder_id, root.currentUid),
+                                                 undefined);
         else
             root.currentMessage = undefined;
     }
@@ -222,7 +223,7 @@ ApplicationWindow {
     // Cheap local read for the footer pill; never touches the list feeds,
     // so read-only jobs can refresh it without losing scroll position.
     function reloadOutboxStatus() {
-        root.outboxStatus = FeedJson.parse(backend.outbox_status_json(), ({}));
+        root.outboxStatus = FeedJson.parse(backend.outbox_status_json(backend.current_account_id), ({}));
     }
 
     function openOutbox() {
@@ -321,8 +322,8 @@ ApplicationWindow {
 
     function findSimilar(folderPath, uid) {
         var folder = folderPath !== "" ? folderPath : root.currentFolder;
-        var subj = backend.find_similar_subject(folder, uid);
-        var hits = FeedJson.parse(backend.find_similar_json(folder, uid), []);
+        var subj = backend.find_similar_subject(backend.current_account_id, folder, uid);
+        var hits = FeedJson.parse(backend.find_similar_json(backend.current_account_id, folder, uid), []);
         root.similarSubject = subj;
         root.similarTarget = ({
                                   folder: folder,
@@ -367,7 +368,8 @@ ApplicationWindow {
             if (fromTyping) {
                 root.clearSimilar();
             } else {
-                root.searchRows = FeedJson.parse(backend.find_similar_json(root.similarTarget.folder || "",
+                root.searchRows = FeedJson.parse(backend.find_similar_json(backend.current_account_id,
+                                                                           root.similarTarget.folder || "",
                                                                            root.similarTarget.uid), []);
                 return;
             }
@@ -382,7 +384,8 @@ ApplicationWindow {
                 root.narrowPane = "list";
             }
             root.searching = true;
-            root.searchRows = FeedJson.parse(backend.search_json(root.searchPlan.query, root.searchScope()), []);
+            root.searchRows = FeedJson.parse(backend.search_json(backend.current_account_id, root.searchPlan.query,
+                                                                 root.searchScope()), []);
             // Thin local hits get topped up from the server once typing
             // settles (debounced below); the job refresh re-runs this.
             if (fromTyping)
@@ -415,7 +418,7 @@ ApplicationWindow {
                 >= root.searchPlan.hit_limit)
 
             return;
-        var r = backend.search_server(q, root.searchScope());
+        var r = backend.search_server(backend.current_account_id, q, root.searchScope());
         if (r === "") {
             root.lastServerQuery = q;
             root.serverSearching = true;
@@ -433,7 +436,7 @@ ApplicationWindow {
             root.openMessage(uid);
     }
 
-    // Bridge actions act on the selected folder: a search hit's row action
+    // Bridge actions name the selected folder: a search hit's row action
     // selects the hit's folder first (the results stay on screen). That
     // switch starts no folder sync: its job would leave the bridge busy, and
     // the action that follows (a permanent delete is a job too) would be
@@ -450,12 +453,12 @@ ApplicationWindow {
     function forwardMessage(uid) {
         if (uid < 0 || !composer.readyForNew())
             return;
-        if (backend.forward_missing(uid) === 0) {
-            composer.openAnswerDraft(FeedJson.parse(backend.forward_draft_json(uid), ({})));
+        if (backend.forward_missing(backend.current_folder_id, uid) === 0) {
+            composer.openAnswerDraft(FeedJson.parse(backend.forward_draft_json(backend.current_folder_id, uid), ({})));
             return;
         }
         root.statusText = qsTr("Downloading attachments…");
-        var r = backend.forward_fetch(uid);
+        var r = backend.forward_fetch(backend.current_folder_id, uid);
         if (r !== "")
             root.statusText = r;
     }
@@ -466,12 +469,12 @@ ApplicationWindow {
     function resendMessage(uid) {
         if (uid < 0 || !composer.readyForNew())
             return;
-        if (backend.resend_missing(uid) === 0) {
-            composer.openAnswerDraft(FeedJson.parse(backend.resend_draft_json(uid), ({})));
+        if (backend.resend_missing(backend.current_folder_id, uid) === 0) {
+            composer.openAnswerDraft(FeedJson.parse(backend.resend_draft_json(backend.current_folder_id, uid), ({})));
             return;
         }
         root.statusText = qsTr("Downloading attachments…");
-        var r = backend.resend_fetch(uid);
+        var r = backend.resend_fetch(backend.current_folder_id, uid);
         if (r !== "")
             root.statusText = r;
     }
@@ -483,14 +486,14 @@ ApplicationWindow {
         for (var i = 0; i < folderModel.count; i++) {
             if (folderModel.get(i).name === root.currentFolder && folderModel.get(i).role === "drafts") {
                 root.statusText = qsTr("Opening draft…");
-                var r = backend.draft_form(uid);
+                var r = backend.draft_form(backend.current_folder_id, uid);
                 if (r !== "")
                     root.statusText = r;
                 return;
             }
         }
         root.currentUid = uid;
-        root.currentMessage = FeedJson.parse(backend.message_json(uid), undefined);
+        root.currentMessage = FeedJson.parse(backend.message_json(backend.current_folder_id, uid), undefined);
         // Narrow layouts navigate to the reader; wide ones show it already.
         // Drafts open in the composer instead (above), and a message that
         // failed to load stays on the list rather than in an empty reader.
@@ -519,7 +522,7 @@ ApplicationWindow {
     function markAsRead(uid) {
         if (uid < 0)
             return;
-        var r = backend.open_message(uid);
+        var r = backend.open_message(backend.current_folder_id, uid);
         if (r !== "")
             root.statusText = r;
         // messageRows are plain JS objects: mutating row.unread in place
@@ -536,7 +539,7 @@ ApplicationWindow {
         if (root.busy)
             return;
         root.statusText = qsTr("Syncing…");
-        var r = backend.sync_now();
+        var r = backend.sync_now(backend.current_account_id);
         if (r !== "")
             root.statusText = r;
     }
@@ -545,7 +548,7 @@ ApplicationWindow {
         if (root.busy)
             return;
         root.statusText = qsTr("Loading older messages…");
-        var r = backend.load_older_messages();
+        var r = backend.load_older_messages(backend.current_folder_id);
         if (r !== "")
             root.statusText = r;
     }
@@ -560,7 +563,7 @@ ApplicationWindow {
     function toggleStar(uid) {
         if (uid < 0)
             return;
-        showResult("", backend.toggle_star(uid));
+        showResult("", backend.toggle_star(backend.current_folder_id, uid));
         root.patchRows([uid]);
         if (root.searching)
             root.updateSearch(false);
@@ -620,7 +623,7 @@ ApplicationWindow {
             root.currentMessage = undefined;
         }
         root.statusText = qsTr("Deleting…");
-        var r = backend.delete_message(uid);
+        var r = backend.delete_message(backend.current_folder_id, uid);
         if (r !== "")
             root.statusText = r;
     }
@@ -631,7 +634,7 @@ ApplicationWindow {
         if (root.currentUid === uid)
             root.currentUid = -1;
         root.statusText = qsTr("Archiving…");
-        var r = backend.archive_message(uid);
+        var r = backend.archive_message(backend.current_folder_id, uid);
         if (r !== "")
             root.statusText = r;
     }
@@ -663,7 +666,7 @@ ApplicationWindow {
         if (root.currentUid === uid)
             root.currentUid = -1;
         root.statusText = qsTr("Deleting…");
-        var r = backend.purge_message(uid);
+        var r = backend.purge_message(backend.current_folder_id, uid);
         if (r !== "")
             root.statusText = r;
     }
@@ -726,16 +729,16 @@ ApplicationWindow {
     }
 
     function bulkMarkRead(targets, read) {
-        var r = root.runBulk(targets, json => backend.mark_read_many(json, read), json => backend.mark_read_hits(json,
-                                                                                                                 read));
+        var r = root.runBulk(targets, json => backend.mark_read_many(backend.current_folder_id, json, read),
+                             json => backend.mark_read_hits(backend.current_account_id, json, read));
         reloadFolders();
         root.afterBulkFlags(targets);
         root.statusText = r;
     }
 
     function bulkStar(targets, starred) {
-        var r = root.runBulk(targets, json => backend.set_star_many(json, starred), json => backend.set_star_hits(json,
-                                                                                                                  starred));
+        var r = root.runBulk(targets, json => backend.set_star_many(backend.current_folder_id, json, starred),
+                             json => backend.set_star_hits(backend.current_account_id, json, starred));
         root.afterBulkFlags(targets);
         root.statusText = r;
     }
@@ -743,7 +746,8 @@ ApplicationWindow {
     function bulkArchive(targets) {
         root.dropPreviewIfGone(targets);
         root.statusText = qsTr("Archiving…");
-        var r = root.runBulk(targets, json => backend.archive_many(json), json => backend.archive_hits(json));
+        var r = root.runBulk(targets, json => backend.archive_many(backend.current_folder_id, json),
+                             json => backend.archive_hits(backend.current_account_id, json));
         if (r !== "")
             root.statusText = r;
     }
@@ -751,7 +755,8 @@ ApplicationWindow {
     function bulkMoveTo(targets, path) {
         root.dropPreviewIfGone(targets);
         root.statusText = qsTr("Moving…");
-        var r = root.runBulk(targets, json => backend.move_many(json, path), json => backend.move_hits(json, path));
+        var r = root.runBulk(targets, json => backend.move_many(backend.current_folder_id, json, path),
+                             json => backend.move_hits(backend.current_account_id, json, path));
         if (r !== "")
             root.statusText = r;
     }
@@ -774,7 +779,8 @@ ApplicationWindow {
     function doBulkDelete(targets) {
         root.dropPreviewIfGone(targets);
         root.statusText = qsTr("Deleting…");
-        var r = root.runBulk(targets, json => backend.delete_many(json), json => backend.delete_hits(json));
+        var r = root.runBulk(targets, json => backend.delete_many(backend.current_folder_id, json),
+                             json => backend.delete_hits(backend.current_account_id, json));
         if (r !== "")
             root.statusText = r;
     }
@@ -782,7 +788,8 @@ ApplicationWindow {
     function bulkPurge(targets) {
         root.dropPreviewIfGone(targets);
         root.statusText = qsTr("Deleting…");
-        var r = root.runBulk(targets, json => backend.purge_many(json), json => backend.purge_hits(json));
+        var r = root.runBulk(targets, json => backend.purge_many(backend.current_folder_id, json),
+                             json => backend.purge_hits(backend.current_account_id, json));
         if (r !== "")
             root.statusText = r;
     }
@@ -803,7 +810,7 @@ ApplicationWindow {
     // useSearchFolder) — the results, their checkboxes and the search stay
     // as they are, and no server sync starts.
     function selectFolder(path, underSearch) {
-        var r = backend.select_folder(path);
+        var r = backend.select_folder(backend.current_account_id, path);
         if (r === "") {
             markReadTimer.stop();
             if (underSearch !== true)
@@ -828,7 +835,7 @@ ApplicationWindow {
             // and the toolbar Sync button refresh the server separately.
             root.statusText = qsTr("Folder: %1").arg(path);
             if (!root.busy)
-                backend.sync_folder_now(path);
+                backend.sync_folder_now(backend.current_account_id, path);
         } else {
             root.statusText = r;
         }
@@ -876,8 +883,8 @@ ApplicationWindow {
             root.updateSearch(true);
             root.statusText = qsTr("Account: %1").arg(backend.current_account_email);
             // Render the selected account's cache before the synchronous
-            // account-scoped refresh begins. `sync_now` only ever uses
-            // `current_account_id`, so inactive accounts are never loaded.
+            // account-scoped refresh begins. Only the account just selected
+            // is synced, so inactive accounts are never loaded.
             Qt.callLater(function () {
                 if (!root.busy && backend.current_account_id === id)
                     root.syncNow();
@@ -1216,7 +1223,7 @@ ApplicationWindow {
     Shortcut {
         sequences: ["R"]
         onActivated: if (root.currentUid >= 0)
-                         composer.openForAnswer(root.currentUid, "reply")
+                         composer.openForAnswer(backend.current_folder_id, root.currentUid, "reply")
     }
     Shortcut {
         sequences: ["F"]
@@ -1483,6 +1490,7 @@ ApplicationWindow {
 
         MessageList {
             id: messageList
+            accountId: backend.current_account_id
             visible: !root.outboxOpen && !root.readerFullscreen && (root.wideLayout ? true : root.mediumLayout ? root.currentUid
                                                                                                                   < 0 :
                                                                                                                   root.narrowPane
@@ -1520,7 +1528,7 @@ ApplicationWindow {
             onArchiveRequested: uid => root.archiveMessage(uid)
             onMoveRequested: uid => root.openMove(uid)
             onMarkReadRequested: (uid, read) => {
-                var r = backend.mark_read(uid, read);
+                var r = backend.mark_read(backend.current_folder_id, uid, read);
                 reloadFolders();
                 root.patchRows([uid]);
                 if (root.searching)
@@ -1574,9 +1582,12 @@ ApplicationWindow {
             readerFont: appSettings.reader_font_size
             linkClickAction: appSettings.link_click_action
             backend: backend
+            accountId: backend.current_account_id
+            folderId: backend.current_folder_id
+            folderPath: root.currentFolder
             message: root.currentMessage
-            onReplyRequested: composer.openForAnswer(root.currentUid, "reply")
-            onReplyAllRequested: composer.openForAnswer(root.currentUid, "reply_all")
+            onReplyRequested: composer.openForAnswer(backend.current_folder_id, root.currentUid, "reply")
+            onReplyAllRequested: composer.openForAnswer(backend.current_folder_id, root.currentUid, "reply_all")
             onForwardRequested: root.forwardMessage(root.currentUid)
             onResendRequested: root.resendMessage(root.currentUid)
             // Same landing as a search hit: switch folder without a sync job,
@@ -1722,6 +1733,7 @@ ApplicationWindow {
 
     Composer {
         id: composer
+        accountId: backend.current_account_id
         accountEmail: backend.current_account_email
         accountFromName: backend.current_account_from_name
         sendFormat: appSettings.compose_send_format
@@ -1731,7 +1743,7 @@ ApplicationWindow {
         onStatusMessage: text => root.statusText = text
         onSendRequested: payload => {
             root.statusText = qsTr("Sending…");
-            var r = backend.send_mail(payload);
+            var r = backend.send_mail(composer.accountId, payload);
             if (r !== "") {
                 root.statusText = r;
             } else {
@@ -1747,14 +1759,14 @@ ApplicationWindow {
             root.statusText = qsTr("Saving draft…");
             // Stays open until the job reports back: closing on the queue
             // acknowledgement would discard the text if the save then failed.
-            var r = backend.save_draft(payload);
+            var r = backend.save_draft(composer.accountId, payload);
             if (r !== "")
                 root.statusText = r;
             else
                 composer.saving = true;
         }
         onScheduleRequested: (payload, sendAt) => {
-            var r = backend.schedule_mail(backend.current_account_id, payload, sendAt);
+            var r = backend.schedule_mail(composer.accountId, payload, sendAt);
             if (r !== "") {
                 root.statusText = r;
             } else {
@@ -1816,18 +1828,18 @@ ApplicationWindow {
             if (root.busy)
                 return;
             root.statusText = qsTr("Refreshing folders…");
-            var r = backend.refresh_folders();
+            var r = backend.refresh_folders(backend.current_account_id);
             if (r !== "")
                 root.statusText = r;
         }
         onVisibilityToggled: (path, subscribed) => {
-            showResult("", backend.set_folder_subscribed(path, subscribed));
+            showResult("", backend.set_folder_subscribed(backend.current_account_id, path, subscribed));
             reloadFolders();
         }
         onCreateRequested: path => {
             foldersDialog.clearNewFolder();
             root.statusText = qsTr("Creating folder…");
-            var r = backend.create_folder(path);
+            var r = backend.create_folder(backend.current_account_id, path);
             if (r !== "")
                 root.statusText = r;
         }
@@ -1856,7 +1868,7 @@ ApplicationWindow {
                     var target = targets[0];
                     if (root.currentUid === target)
                         root.currentUid = -1;
-                    r = backend.move_message(target, path);
+                    r = backend.move_message(backend.current_folder_id, target, path);
                 }
                 if (r !== "")
                     root.statusText = r;

@@ -19,7 +19,7 @@ impl qobject::Bridge {
             Err(e) => return qstring(&e.to_string()),
         };
         self.as_mut().set_account_count(list.len() as i32);
-        let wanted = settings::get_last_active_account_id(db).unwrap_or(*self.current_account_id());
+        let wanted = settings::get_last_active_account_id(db).unwrap_or(self.shown().0);
         let Some(acc) = list
             .into_iter()
             .find(|a| a.id == wanted)

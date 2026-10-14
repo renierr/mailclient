@@ -39,10 +39,11 @@ and reported back on a single event stream — the same shape `mailapp` uses,
 with a Dart `Stream<JobEvent>` in place of the Qt signal.
 
 **Dart owns the selection.** This is the one real divergence from the Qt
-bridge. `mailapp` keeps the current account and folder inside the `Bridge`
-QObject and pushes rebuilt JSON feeds into QML properties, which forces it to
-reconcile a job that finishes after the user has moved on. Here every read
-takes ids explicitly and a finished job only reports *what* changed, so
+bridge. Both take ids explicitly for every read and action, but `mailapp`
+also keeps the shown account and folder inside the `Bridge` QObject and
+pushes rebuilt JSON feeds into QML properties, which forces it to reconcile
+a job that finishes after the user has moved on. Here a finished job only
+reports *what* changed, so
 `MailState` re-reads whatever it is actually showing and stale jobs refresh
 nothing. That also means `mailffi` has no `busy` latch: jobs are deduped per
 kind, so a running sync does not refuse an attachment download.

@@ -1,8 +1,9 @@
 //! The multi-select actions behind the bulk action bar.
 //!
-//! Each one takes the selection as a JSON UID array from QML (see
-//! `parse_uids_json`) and applies one statement or one IMAP command to the
-//! whole set, rather than looping the single-message path -- a hundred
+//! Each one takes the selection from QML as a JSON UID array of one folder
+//! (`folder_id`, see `parse_uids_json`) or as search hits of one account
+//! (`account_id`, see `parse_hits_json`) and applies one statement or one
+//! IMAP command to the whole set, rather than looping the single-message path -- a hundred
 //! selected mails must not be a hundred round trips.
 
 use std::pin::Pin;
@@ -14,13 +15,18 @@ use mailcore::undo::{self, MoveTarget, Queued};
 
 use crate::bridge::qobject;
 use crate::bridge::worker::{spawn_flag_push, spawn_job, spawn_push_after_grace, JobRefresh};
-use crate::bridge::{push_feeds, push_flag_change, qstring, shared_db};
+use crate::bridge::{folder_account, push_feeds, push_flag_change, qstring, shared_db};
 use mailcore::sync::pool::job_account;
 
 use super::{parse_hits_json, parse_uids_json};
 
 impl qobject::Bridge {
-    pub fn mark_read_many(mut self: Pin<&mut Self>, uids_json: &QString, read: bool) -> QString {
+    pub fn mark_read_many(
+        mut self: Pin<&mut Self>,
+        folder_id: i64,
+        uids_json: &QString,
+        read: bool,
+    ) -> QString {
         let uids = match parse_uids_json(&uids_json.to_string()) {
             Ok(u) => u,
             Err(e) => return qstring(&e),
@@ -29,14 +35,14 @@ impl qobject::Bridge {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
-        if folder_id < 0 {
-            return qstring("no folder selected");
-        }
+        let acc_id = match folder_account(db, folder_id) {
+            Ok(a) => a,
+            Err(e) => return qstring(&e),
+        };
         match messages::set_read_many_by_uids(db, folder_id, &uids, read) {
             Ok(n) => {
                 // QML patches the selected rows (`message_rows_json`).
-                push_flag_change(&mut self, db, acc_id);
+                push_flag_change(&mut self, db);
                 if n > 0 {
                     spawn_flag_push(acc_id);
                 }
@@ -46,7 +52,12 @@ impl qobject::Bridge {
         }
     }
 
-    pub fn set_star_many(mut self: Pin<&mut Self>, uids_json: &QString, starred: bool) -> QString {
+    pub fn set_star_many(
+        mut self: Pin<&mut Self>,
+        folder_id: i64,
+        uids_json: &QString,
+        starred: bool,
+    ) -> QString {
         let uids = match parse_uids_json(&uids_json.to_string()) {
             Ok(u) => u,
             Err(e) => return qstring(&e),
@@ -55,14 +66,14 @@ impl qobject::Bridge {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
-        if folder_id < 0 {
-            return qstring("no folder selected");
-        }
+        let acc_id = match folder_account(db, folder_id) {
+            Ok(a) => a,
+            Err(e) => return qstring(&e),
+        };
         match messages::set_star_many_by_uids(db, folder_id, &uids, starred) {
             Ok(n) => {
                 // QML patches the selected rows (`message_rows_json`).
-                push_flag_change(&mut self, db, acc_id);
+                push_flag_change(&mut self, db);
                 if n > 0 {
                     spawn_flag_push(acc_id);
                 }
@@ -72,30 +83,35 @@ impl qobject::Bridge {
         }
     }
 
-    pub fn delete_many(self: Pin<&mut Self>, uids_json: &QString) -> QString {
+    pub fn delete_many(self: Pin<&mut Self>, folder_id: i64, uids_json: &QString) -> QString {
         match parse_uids_json(&uids_json.to_string()) {
-            Ok(uids) => self.queue_undoable(uids, MoveTarget::Trash),
+            Ok(uids) => self.queue_undoable(folder_id, uids, MoveTarget::Trash),
             Err(e) => qstring(&e),
         }
     }
 
-    pub fn archive_many(self: Pin<&mut Self>, uids_json: &QString) -> QString {
+    pub fn archive_many(self: Pin<&mut Self>, folder_id: i64, uids_json: &QString) -> QString {
         match parse_uids_json(&uids_json.to_string()) {
-            Ok(uids) => self.queue_undoable(uids, MoveTarget::Archive),
+            Ok(uids) => self.queue_undoable(folder_id, uids, MoveTarget::Archive),
             Err(e) => qstring(&e),
         }
     }
 
-    pub fn move_many(self: Pin<&mut Self>, uids_json: &QString, path: &QString) -> QString {
+    pub fn move_many(
+        self: Pin<&mut Self>,
+        folder_id: i64,
+        uids_json: &QString,
+        path: &QString,
+    ) -> QString {
         match parse_uids_json(&uids_json.to_string()) {
-            Ok(uids) => self.queue_undoable(uids, MoveTarget::Folder(path.to_string())),
+            Ok(uids) => self.queue_undoable(folder_id, uids, MoveTarget::Folder(path.to_string())),
             Err(e) => qstring(&e),
         }
     }
 
-    pub fn purge_many(self: Pin<&mut Self>, uids_json: &QString) -> QString {
+    pub fn purge_many(self: Pin<&mut Self>, folder_id: i64, uids_json: &QString) -> QString {
         match parse_uids_json(&uids_json.to_string()) {
-            Ok(uids) => self.purge_uids(uids),
+            Ok(uids) => self.purge_uids(folder_id, uids),
             Err(e) => qstring(&e),
         }
     }
@@ -104,57 +120,69 @@ impl qobject::Bridge {
     /// session, no folder switch. Per-folder `purge_many` calls would each
     /// be a job, and every one after the first is refused while the bridge
     /// is busy.
-    pub fn purge_hits(self: Pin<&mut Self>, hits_json: &QString) -> QString {
-        match self.hit_groups(hits_json) {
-            Ok(groups) => self.purge_groups(groups),
+    pub fn purge_hits(self: Pin<&mut Self>, account_id: i64, hits_json: &QString) -> QString {
+        match hit_groups(account_id, hits_json) {
+            Ok(groups) => self.purge_groups(account_id, groups),
             Err(e) => qstring(&e),
         }
     }
 
-    pub fn mark_read_hits(mut self: Pin<&mut Self>, hits_json: &QString, read: bool) -> QString {
-        let groups = match self.hit_groups(hits_json) {
+    pub fn mark_read_hits(
+        mut self: Pin<&mut Self>,
+        account_id: i64,
+        hits_json: &QString,
+        read: bool,
+    ) -> QString {
+        let groups = match hit_groups(account_id, hits_json) {
             Ok(g) => g,
             Err(e) => return qstring(&e),
         };
         self.as_mut().flag_hits(
+            account_id,
             |db| bulk::set_read(db, &groups, read),
             |n| read_label(n, read),
         )
     }
 
-    pub fn set_star_hits(mut self: Pin<&mut Self>, hits_json: &QString, starred: bool) -> QString {
-        let groups = match self.hit_groups(hits_json) {
+    pub fn set_star_hits(
+        mut self: Pin<&mut Self>,
+        account_id: i64,
+        hits_json: &QString,
+        starred: bool,
+    ) -> QString {
+        let groups = match hit_groups(account_id, hits_json) {
             Ok(g) => g,
             Err(e) => return qstring(&e),
         };
         self.as_mut().flag_hits(
+            account_id,
             |db| bulk::set_starred(db, &groups, starred),
             |n| star_label(n, starred),
         )
     }
 
-    pub fn delete_hits(self: Pin<&mut Self>, hits_json: &QString) -> QString {
-        self.queue_hits(hits_json, MoveTarget::Trash)
+    pub fn delete_hits(self: Pin<&mut Self>, account_id: i64, hits_json: &QString) -> QString {
+        self.queue_hits(account_id, hits_json, MoveTarget::Trash)
     }
 
-    pub fn archive_hits(self: Pin<&mut Self>, hits_json: &QString) -> QString {
-        self.queue_hits(hits_json, MoveTarget::Archive)
+    pub fn archive_hits(self: Pin<&mut Self>, account_id: i64, hits_json: &QString) -> QString {
+        self.queue_hits(account_id, hits_json, MoveTarget::Archive)
     }
 
-    pub fn move_hits(self: Pin<&mut Self>, hits_json: &QString, path: &QString) -> QString {
-        self.queue_hits(hits_json, MoveTarget::Folder(path.to_string()))
+    pub fn move_hits(
+        self: Pin<&mut Self>,
+        account_id: i64,
+        hits_json: &QString,
+        path: &QString,
+    ) -> QString {
+        self.queue_hits(account_id, hits_json, MoveTarget::Folder(path.to_string()))
     }
 
-    /// Search hits of the current account, grouped by folder by the core.
-    fn hit_groups(&self, hits_json: &QString) -> Result<bulk::Groups, String> {
-        let hits = parse_hits_json(&hits_json.to_string())?;
-        let db = shared_db()?;
-        bulk::resolve_hits(db, *self.current_account_id(), &hits)
-    }
-
-    /// A local flag write over hits, then the feeds and the flag push.
+    /// A local flag write over hits of `account_id`, then the feeds and the
+    /// flag push.
     fn flag_hits(
         mut self: Pin<&mut Self>,
+        account_id: i64,
         write: impl FnOnce(&mailcore::Db) -> mailcore::Result<u64>,
         label: impl FnOnce(u64) -> String,
     ) -> QString {
@@ -162,12 +190,12 @@ impl qobject::Bridge {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
         match write(db) {
             Ok(n) => {
-                push_feeds(&mut self, db, acc_id, folder_id);
+                let (shown_account, shown_folder) = self.shown();
+                push_feeds(&mut self, db, shown_account, shown_folder);
                 if n > 0 {
-                    spawn_flag_push(acc_id);
+                    spawn_flag_push(account_id);
                 }
                 qstring(&label(n))
             }
@@ -177,8 +205,13 @@ impl qobject::Bridge {
 
     /// Delete / archive / move over hits: one Undo for what goes through the
     /// undo queue, one purge job for the shares that destroy.
-    fn queue_hits(mut self: Pin<&mut Self>, hits_json: &QString, target: MoveTarget) -> QString {
-        let groups = match self.hit_groups(hits_json) {
+    fn queue_hits(
+        mut self: Pin<&mut Self>,
+        account_id: i64,
+        hits_json: &QString,
+        target: MoveTarget,
+    ) -> QString {
+        let groups = match hit_groups(account_id, hits_json) {
             Ok(g) => g,
             Err(e) => return qstring(&e),
         };
@@ -186,21 +219,21 @@ impl qobject::Bridge {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
-        let moved = match bulk::queue_move(db, acc_id, &groups, target) {
+        let moved = match bulk::queue_move(db, account_id, &groups, target) {
             Ok(m) => m,
             Err(e) => return qstring(&e),
         };
-        push_feeds(&mut self, db, acc_id, folder_id);
+        let (shown_account, shown_folder) = self.shown();
+        push_feeds(&mut self, db, shown_account, shown_folder);
         if let Some(batch) = &moved.batch {
             self.as_mut()
                 .undo_available(&qstring(batch), &qstring(&moved.label));
-            spawn_push_after_grace(acc_id);
+            spawn_push_after_grace(account_id);
         }
         if moved.permanent.is_empty() {
             return qstring(&moved.label);
         }
-        let purging = self.purge_groups(moved.permanent);
+        let purging = self.purge_groups(account_id, moved.permanent);
         if moved.batch.is_some() && purging.is_empty() {
             qstring(&moved.label)
         } else {
@@ -208,20 +241,25 @@ impl qobject::Bridge {
         }
     }
 
-    /// Destroy `uids` of the current folder server-side (a job; no undo).
-    pub(crate) fn purge_uids(self: Pin<&mut Self>, uids: Vec<u32>) -> QString {
-        let folder_id = *self.current_folder_id();
-        self.purge_groups(vec![(folder_id, uids)])
+    /// Destroy `uids` of `folder_id` server-side (a job; no undo).
+    pub(crate) fn purge_uids(self: Pin<&mut Self>, folder_id: i64, uids: Vec<u32>) -> QString {
+        let account_id = match shared_db().and_then(|db| folder_account(db, folder_id)) {
+            Ok(a) => a,
+            Err(e) => return qstring(&e),
+        };
+        self.purge_groups(account_id, vec![(folder_id, uids)])
     }
 
-    /// Destroy per-folder UID lists of the current account in one job.
-    fn purge_groups(self: Pin<&mut Self>, groups: bulk::Groups) -> QString {
-        let acc_id = *self.current_account_id();
-        let folder_id = *self.current_folder_id();
+    /// Destroy per-folder UID lists of `account_id` in one job.
+    fn purge_groups(self: Pin<&mut Self>, account_id: i64, groups: bulk::Groups) -> QString {
+        let (shown_account, shown_folder) = self.shown();
         spawn_job(self, "Delete", move |db, _progress| async move {
-            let acc = job_account(db, acc_id)?;
+            let acc = job_account(db, account_id)?;
             let purged = bulk::purge(db, &acc, &groups).await?;
-            Ok((purged.status(), Some(JobRefresh::feeds(acc.id, folder_id))))
+            Ok((
+                purged.status(),
+                Some(JobRefresh::feeds(shown_account, shown_folder)),
+            ))
         })
     }
 
@@ -231,6 +269,7 @@ impl qobject::Bridge {
     /// already confirmed it as permanent.
     pub(crate) fn queue_undoable(
         mut self: Pin<&mut Self>,
+        folder_id: i64,
         uids: Vec<u32>,
         target: MoveTarget,
     ) -> QString {
@@ -238,19 +277,20 @@ impl qobject::Bridge {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
-        if folder_id < 0 {
-            return qstring("no folder selected");
-        }
+        let acc_id = match folder_account(db, folder_id) {
+            Ok(a) => a,
+            Err(e) => return qstring(&e),
+        };
         match undo::queue_move(db, acc_id, folder_id, &uids, target) {
             Ok(Queued::Pending { batch, label, .. }) => {
-                push_feeds(&mut self, db, acc_id, folder_id);
+                let (shown_account, shown_folder) = self.shown();
+                push_feeds(&mut self, db, shown_account, shown_folder);
                 self.as_mut()
                     .undo_available(&qstring(&batch), &qstring(&label));
                 spawn_push_after_grace(acc_id);
                 qstring(&label)
             }
-            Ok(Queued::Permanent) => self.purge_uids(uids),
+            Ok(Queued::Permanent) => self.purge_uids(folder_id, uids),
             Ok(Queued::AlreadyThere) => qstring("Already here"),
             Err(e) => qstring(&e),
         }
@@ -264,8 +304,7 @@ impl qobject::Bridge {
         match undo::undo(db, &batch.to_string()) {
             Ok(n) => {
                 if n > 0 {
-                    let (acc_id, folder_id) =
-                        (*self.current_account_id(), *self.current_folder_id());
+                    let (acc_id, folder_id) = self.shown();
                     push_feeds(&mut self, db, acc_id, folder_id);
                 }
                 qstring(&undo::undone_text(n))
@@ -277,6 +316,13 @@ impl qobject::Bridge {
     pub fn undo_grace_secs(&self) -> i32 {
         undo::UNDO_GRACE_SECS as i32
     }
+}
+
+/// Search hits of `account_id`, grouped by folder by the core.
+fn hit_groups(account_id: i64, hits_json: &QString) -> Result<bulk::Groups, String> {
+    let hits = parse_hits_json(&hits_json.to_string())?;
+    let db = shared_db()?;
+    bulk::resolve_hits(db, account_id, &hits)
 }
 
 /// The status line after a read/unread change of `n` messages.

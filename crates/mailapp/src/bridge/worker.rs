@@ -266,9 +266,10 @@ where
         .busy_kinds
         .insert(kind.to_string());
     bridge.as_mut().set_busy(true);
+    let (account_id, folder_id) = bridge.shown();
     let started = Selection {
-        account_id: *bridge.current_account_id(),
-        folder_id: *bridge.current_folder_id(),
+        account_id,
+        folder_id,
     };
     let qt = bridge.qt_thread();
     let kind_owned = kind.to_string();
@@ -301,9 +302,10 @@ where
                 if let Some(limit) = refresh.message_limit {
                     bridge.as_mut().set_message_limit(limit);
                 }
+                let (account_id, folder_id) = bridge.shown();
                 let live = Selection {
-                    account_id: *bridge.current_account_id(),
-                    folder_id: *bridge.current_folder_id(),
+                    account_id,
+                    folder_id,
                 };
                 let target = refresh.resolve(started, live);
                 match prebuilt {

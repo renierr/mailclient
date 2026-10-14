@@ -88,6 +88,9 @@ Dialog {
     signal scheduleRequested(string payload, string sendAt)
     signal saveDraftRequested(string payload)
 
+    // The account the composer writes for (Main binds the selected one):
+    // sending, saving and discarding a draft act for it.
+    property int accountId: -1
     property string accountEmail: ""
     property string accountFromName: ""
     property string sendFormat: "auto"
@@ -316,13 +319,12 @@ Dialog {
         open();
     }
 
-    // `mode` is "reply", "reply_all" or "forward"; `uid` is in the current
-    // folder.
-    function openForAnswer(uid, mode) {
+    // `mode` is "reply", "reply_all" or "forward"; `uid` is in `folderId`.
+    function openForAnswer(folderId, uid, mode) {
         if (!root.readyForNew())
             return;
-        root.openAnswerDraft(root.backend && uid >= 0 ? FeedJson.parse(root.backend.answer_draft_json(uid, mode), ({})) :
-                                                        ({}));
+        var json = root.backend && uid >= 0 ? root.backend.answer_draft_json(folderId, uid, mode) : "";
+        root.openAnswerDraft(FeedJson.parse(json, ({})));
     }
 
     // A prepared answer draft; a forward's also carries the original's files
@@ -1130,7 +1132,7 @@ Dialog {
                         root.markClean();
                         deleteDraftConfirm.close();
                         root.close();
-                        var r = root.backend.delete_draft(uid);
+                        var r = root.backend.delete_draft(root.accountId, uid);
                         if (r !== "")
                             root.statusMessage(r);
                     } else {

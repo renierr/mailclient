@@ -35,6 +35,9 @@ Rectangle {
     property string filterText: ""
     // The app bridge, for the core's list filter (`search::filter_matches`).
     property var backend
+    // The account the list belongs to (Main binds the selected one); search
+    // hits name their folder by path within it.
+    property int accountId: -1
     // Quick filters for the current list: each checked entry narrows the
     // visible rows (AND-combined). They apply in folder and search modes.
     property bool filterUnread: false
@@ -1591,6 +1594,7 @@ Rectangle {
     EmlExportDialog {
         id: exportEmlDialog
         backend: root.backend
+        accountId: root.accountId
         onStatusMessage: text => root.statusMessage(text)
     }
 }

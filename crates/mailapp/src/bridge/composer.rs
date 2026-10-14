@@ -14,7 +14,7 @@ use mailcore::sync::attachments::ensure_cached;
 // phrase the result. The send/draft rules themselves live in the core.
 
 impl qobject::Bridge {
-    pub fn send_mail(self: Pin<&mut Self>, form: &QString) -> QString {
+    pub fn send_mail(self: Pin<&mut Self>, account_id: i64, form: &QString) -> QString {
         let form = match ComposeForm::parse(&form.to_string()) {
             Ok(f) => f,
             Err(e) => return qstring(&e),
@@ -27,15 +27,16 @@ impl qobject::Bridge {
         if self.rust().busy_kinds.contains("Send") {
             return qstring(BUSY_MESSAGE);
         }
-        let wanted = *self.current_account_id();
-        let folder_id = *self.current_folder_id();
+        // The shown folder: delivery refreshes it besides Sent (mail to
+        // self lands there), and the finished job rebuilds the feeds for it.
+        let (_, folder_id) = self.shown();
         // Validate + build + enqueue synchronously, so mistakes report
         // instantly with the composer still open.
         let db = match crate::bridge::shared_db() {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        let prepared = match compose::prepare_send(db, wanted, form) {
+        let prepared = match compose::prepare_send(db, account_id, form) {
             Ok(p) => p,
             Err(e) => return qstring(&e),
         };
@@ -87,7 +88,7 @@ impl qobject::Bridge {
             // second cleanup still running cannot refuse it. The scheduled
             // send stands either way, so this never fails the call.
             let account_id = held.account_id;
-            let current = *self.current_folder_id();
+            let (_, current) = self.shown();
             let kind = format!("Delete draft {draft_uid}");
             let queued = spawn_job(self, &kind, move |db, _progress| async move {
                 compose::delete_draft(db, account_id, draft_uid).await?;
@@ -121,8 +122,7 @@ impl qobject::Bridge {
     /// latches `"Send"` and refuses the user's Send click meanwhile; the
     /// outbox claim keeps the overlap with an interactive send safe.
     pub fn flush_due_sends(self: Pin<&mut Self>) -> QString {
-        let current_account = *self.current_account_id();
-        let current_folder = *self.current_folder_id();
+        let (current_account, current_folder) = self.shown();
         spawn_job(self, "Scheduled send", move |db, _progress| async move {
             let report =
                 mailcore::sync::background::send_due_scheduled(db, &mailcore::default_db_path())
@@ -142,15 +142,14 @@ impl qobject::Bridge {
         })
     }
 
-    pub fn save_draft(self: Pin<&mut Self>, form: &QString) -> QString {
+    pub fn save_draft(self: Pin<&mut Self>, account_id: i64, form: &QString) -> QString {
         let form = match ComposeForm::parse(&form.to_string()) {
             Ok(f) => f,
             Err(_) => return qstring("invalid draft form"),
         };
-        let wanted = *self.current_account_id();
-        let current_folder_id = *self.current_folder_id();
+        let (_, current_folder_id) = self.shown();
         spawn_job(self, "Save draft", move |db, _progress| async move {
-            let saved = compose::save_draft(db, wanted, &form).await?;
+            let saved = compose::save_draft(db, account_id, &form).await?;
             if let Some(e) = saved.previous_not_removed {
                 return Err(format!(
                     "draft saved, but could not remove source draft: {e}"
@@ -231,46 +230,43 @@ impl qobject::Bridge {
         qstring(&doc)
     }
 
-    pub fn forward_missing(&self, uid: i32) -> i32 {
+    pub fn forward_missing(&self, folder_id: i64, uid: i32) -> i32 {
         let Ok(db) = shared_db() else {
             return 0;
         };
-        compose::forward_missing(db, *self.current_folder_id(), uid.max(0) as u32)
+        compose::forward_missing(db, folder_id, uid.max(0) as u32)
             .map_or(0, |n| i32::try_from(n).unwrap_or(i32::MAX))
     }
 
-    pub fn forward_draft_json(&self, uid: i32) -> QString {
+    pub fn forward_draft_json(&self, folder_id: i64, uid: i32) -> QString {
         let Ok(db) = shared_db() else {
             return qstring("{}");
         };
-        let folder_id = *self.current_folder_id();
         let uid = uid.max(0) as u32;
         compose::stage_forward_files(db, folder_id, uid, &std::env::temp_dir())
             .and_then(|files| answer_payload(db, folder_id, uid, "forward", files))
             .map_or_else(|_| qstring("{}"), |j| qstring(&j))
     }
 
-    pub fn resend_missing(&self, uid: i32) -> i32 {
+    pub fn resend_missing(&self, folder_id: i64, uid: i32) -> i32 {
         let Ok(db) = shared_db() else {
             return 0;
         };
-        compose::resend_missing(db, *self.current_folder_id(), uid.max(0) as u32)
+        compose::resend_missing(db, folder_id, uid.max(0) as u32)
             .map_or(0, |n| i32::try_from(n).unwrap_or(i32::MAX))
     }
 
-    pub fn resend_draft_json(&self, uid: i32) -> QString {
+    pub fn resend_draft_json(&self, folder_id: i64, uid: i32) -> QString {
         let Ok(db) = shared_db() else {
             return qstring("{}");
         };
-        let folder_id = *self.current_folder_id();
         let uid = uid.max(0) as u32;
         compose::stage_resend_files(db, folder_id, uid, &std::env::temp_dir())
             .and_then(|files| answer_payload(db, folder_id, uid, "resend", files))
             .map_or_else(|_| qstring("{}"), |j| qstring(&j))
     }
 
-    pub fn resend_fetch(self: Pin<&mut Self>, uid: i32) -> QString {
-        let folder_id = *self.current_folder_id();
+    pub fn resend_fetch(self: Pin<&mut Self>, folder_id: i64, uid: i32) -> QString {
         let uid = uid.max(0) as u32;
         spawn_job(self, "Resend", move |db, _progress| async move {
             let files = compose::resend_files(db, folder_id, uid, &std::env::temp_dir()).await?;
@@ -279,8 +275,7 @@ impl qobject::Bridge {
         })
     }
 
-    pub fn forward_fetch(self: Pin<&mut Self>, uid: i32) -> QString {
-        let folder_id = *self.current_folder_id();
+    pub fn forward_fetch(self: Pin<&mut Self>, folder_id: i64, uid: i32) -> QString {
         let uid = uid.max(0) as u32;
         spawn_job(self, "Forward", move |db, _progress| async move {
             let files = compose::forward_files(db, folder_id, uid, &std::env::temp_dir()).await?;
@@ -289,8 +284,7 @@ impl qobject::Bridge {
         })
     }
 
-    pub fn draft_form(self: Pin<&mut Self>, uid: i32) -> QString {
-        let folder_id = *self.current_folder_id();
+    pub fn draft_form(self: Pin<&mut Self>, folder_id: i64, uid: i32) -> QString {
         spawn_job(self, "Open draft", move |db, _progress| async move {
             let message = compose::open_draft(db, folder_id, uid as u32)?;
             ensure_cached(db, message.id, true).await?;
@@ -329,17 +323,16 @@ impl qobject::Bridge {
         })
     }
 
-    pub fn delete_draft(self: Pin<&mut Self>, uid: i32) -> QString {
+    pub fn delete_draft(self: Pin<&mut Self>, account_id: i64, uid: i32) -> QString {
         if uid < 0 {
             return qstring("draft is no longer available");
         }
-        let wanted = *self.current_account_id();
-        let current = *self.current_folder_id();
+        let (shown_account, shown_folder) = self.shown();
         spawn_job(self, "Delete", move |db, _progress| async move {
-            compose::delete_draft(db, wanted, uid as u32).await?;
+            compose::delete_draft(db, account_id, uid as u32).await?;
             Ok((
                 "Draft deleted".to_string(),
-                Some(JobRefresh::feeds(wanted, current)),
+                Some(JobRefresh::feeds(shown_account, shown_folder)),
             ))
         })
     }

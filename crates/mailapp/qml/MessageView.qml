@@ -40,6 +40,11 @@ Rectangle {
     property string linkClickAction: "examine"
     // Rust Bridge, for the on-demand "Show once" re-sanitize. Set by Main.
     property var backend
+    // Where `message` lives (Main binds the shown folder): every bridge call
+    // about it names this folder.
+    property int accountId: -1
+    property int folderId: -1
+    property string folderPath: ""
     property string remoteHtml: ""
     signal replyRequested
     signal replyAllRequested
@@ -135,7 +140,7 @@ Rectangle {
         // stored raw body with remotes kept for this view only.
         var html = "";
         if (root.backend && root.backend.message_html)
-            html = root.backend.message_html(root.message.uid, true);
+            html = root.backend.message_html(root.folderId, root.message.uid, true);
         if (html !== "")
             root.remoteHtml = html;
         root.allowRemoteOnce = true;
@@ -231,7 +236,7 @@ Rectangle {
         if (!root.backend || !root.message)
             return;
         root.statusMessage(note || qsTr("Downloading images…"));
-        var r = root.backend.download_inline_images(root.message.uid);
+        var r = root.backend.download_inline_images(root.folderId, root.message.uid);
         if (r !== "")
             root.statusMessage(r);
     }
@@ -253,7 +258,7 @@ Rectangle {
         root.headersInfo = ({});
         if (!root.backend || !root.backend.message_headers_json || root.messageUid < 0)
             return;
-        root.headersInfo = FeedJson.parse(root.backend.message_headers_json(root.messageUid), ({}));
+        root.headersInfo = FeedJson.parse(root.backend.message_headers_json(root.folderId, root.messageUid), ({}));
     }
 
     // Sender parts and the Reply-To decision come parsed from the reader
@@ -1060,7 +1065,7 @@ Rectangle {
         AppMenuItem {
             glyph: Icons.fileDownload
             label: qsTr("Save as .eml…")
-            onTriggered: exportEmlDialog.openFor("", root.messageUid)
+            onTriggered: exportEmlDialog.openFor(root.folderPath, root.messageUid)
         }
         MenuSeparator {}
         AppMenuItem {
@@ -1266,7 +1271,7 @@ Rectangle {
         onAccepted: {
             if (root.backend && root.backend.save_all_attachments) {
                 root.statusMessage(qsTr("Saving…"));
-                var r = root.backend.save_all_attachments(root.messageUid, selectedFolder.toString());
+                var r = root.backend.save_all_attachments(root.folderId, root.messageUid, selectedFolder.toString());
                 if (r !== "")
                     root.statusMessage(r);
             }
@@ -1276,6 +1281,7 @@ Rectangle {
     EmlExportDialog {
         id: exportEmlDialog
         backend: root.backend
+        accountId: root.accountId
         onStatusMessage: text => root.statusMessage(text)
     }
 

@@ -170,43 +170,47 @@ pub mod qobject {
         #[qinvokable]
         fn delete_contacts(&self, addresses: &QString) -> QString;
 
-        /// Run a full IMAP sync for the current account (blocking).
+        /// Run a full IMAP sync for `account_id` (blocking).
         /// Selective + windowed: the folder LIST is always cheap, INBOX syncs
         /// the newest 200 mails fully, every other folder only refreshes flags
         /// + the newest 50 (sidebar pills stay fresh without downloading
         /// everything). Open a folder to fetch its newest 200 on demand via
         /// `sync_folder_now`. Returns a summary or an error message.
         #[qinvokable]
-        fn sync_now(self: Pin<&mut Self>) -> QString;
+        fn sync_now(self: Pin<&mut Self>, account_id: i64) -> QString;
 
-        /// Sync one folder (by path) fully (newest 200) on demand.
+        /// Sync one folder of `account_id` (by path) fully (newest 200) on demand.
         /// Not called from the folder-click path: SELECT + UID SEARCH + body
         /// fetches are synchronous today, so that path is cache-only.
         /// Returns a summary or an error message.
         #[qinvokable]
-        fn sync_folder_now(self: Pin<&mut Self>, path: &QString) -> QString;
+        fn sync_folder_now(self: Pin<&mut Self>, account_id: i64, path: &QString) -> QString;
 
-        /// Fetch the next older batch for the current folder (one page).
+        /// Fetch the next older batch for `folder_id` (one page).
         /// Grows `message_limit` by what was fetched and refreshes the feed,
         /// so the list visibly extends backwards. Returns e.g.
         /// `"Loaded 200 older messages"` or `"Caught up — no older messages"`.
         #[qinvokable]
-        fn load_older_messages(self: Pin<&mut Self>) -> QString;
+        fn load_older_messages(self: Pin<&mut Self>, folder_id: i64) -> QString;
 
-        /// Refresh only the folder LIST from the server (no message bodies).
+        /// Refresh only `account_id`'s folder LIST from the server (no message bodies).
         /// This is how new/renamed IMAP folders appear: cheap, then pick what
         /// to view in the Folders manager.
         /// Returns a summary or an error message.
         #[qinvokable]
-        fn refresh_folders(self: Pin<&mut Self>) -> QString;
+        fn refresh_folders(self: Pin<&mut Self>, account_id: i64) -> QString;
 
         /// Show/hide a folder in the sidebar (`subscribed` flag, display-only).
         /// Hidden folders keep their cache, still quick-sync for pills unless
         /// skipped, and an explicit open still syncs them.
         /// Returns `""` or an error message.
         #[qinvokable]
-        fn set_folder_subscribed(self: Pin<&mut Self>, path: &QString, subscribed: bool)
-            -> QString;
+        fn set_folder_subscribed(
+            self: Pin<&mut Self>,
+            account_id: i64,
+            path: &QString,
+            subscribed: bool,
+        ) -> QString;
 
         /// Painted sidebar rows (`[{id, collapsible, expanded, unread,
         /// total}]`) for `expanded_json` (a JSON array of expanded folder
@@ -215,18 +219,18 @@ pub mod qobject {
         #[qinvokable]
         fn sidebar_rows_json(&self, account_id: i64, expanded_json: &QString) -> QString;
 
-        /// Sanitized HTML for one message in the current folder.
+        /// Sanitized HTML for one message of `folder_id`.
         /// `allow_remote=true` re-sanitizes the stored raw body with remote
         /// images kept — the "Show once" path (the list feed strips them when
         /// the setting is off, so it cannot reuse `body_html`).
         /// Returns the HTML string, or `""` if unknown.
         #[qinvokable]
-        fn message_html(&self, uid: i32, allow_remote: bool) -> QString;
+        fn message_html(&self, folder_id: i64, uid: i32, allow_remote: bool) -> QString;
 
-        /// Full reader payload for one selected message. Mailbox navigation
+        /// Full reader payload for one message of `folder_id`. Mailbox navigation
         /// uses compact rows so it never processes 200 message bodies at once.
         #[qinvokable]
-        fn message_json(&self, uid: i32) -> QString;
+        fn message_json(&self, folder_id: i64, uid: i32) -> QString;
 
         /// The reader's paint for one HTML mail (`mailcore::html::reader::
         /// paint_for`): `theme`, `original` or `darkened`.
@@ -295,55 +299,48 @@ pub mod qobject {
             permanent_json: &QString,
         ) -> QString;
 
-        /// Attachment metadata for one message in the current folder as JSON
-        /// (`[{id, filename, mime_type, size, content_id, is_inline}]`, no
-        /// bytes). Mirrors the `attachments` array already in the feed; use
-        /// this when the feed row is stale. Returns `"[]"` if unknown.
-        #[qinvokable]
-        fn attachments_json(&self, uid: i32) -> QString;
-
-        /// Header details for one message in the current folder as JSON
+        /// Header details for one message of `folder_id` as JSON
         /// (`{from, to, cc, date, subject, message_id, reply_to}`) for the
         /// reader's Headers dialog. Returns `"{}"` if unknown.
         #[qinvokable]
-        fn message_headers_json(&self, uid: i32) -> QString;
+        fn message_headers_json(&self, folder_id: i64, uid: i32) -> QString;
 
-        /// Reply/forward draft for one message in the current folder as JSON
+        /// Reply/forward draft for one message of `folder_id` as JSON
         /// (`mailcore::compose::AnswerDraft`); `mode` is `reply`,
         /// `reply_all`, `forward` or `resend`. Returns `"{}"` if unknown.
         #[qinvokable]
-        fn answer_draft_json(&self, uid: i32, mode: &QString) -> QString;
+        fn answer_draft_json(&self, folder_id: i64, uid: i32, mode: &QString) -> QString;
 
         /// How many of a message's files a forward still has to download
-        /// (current folder). Zero: `forward_draft_json` has them all.
+        /// (`uid` in `folder_id`). Zero: `forward_draft_json` has them all.
         #[qinvokable]
-        fn forward_missing(&self, uid: i32) -> i32;
+        fn forward_missing(&self, folder_id: i64, uid: i32) -> i32;
 
         /// Forward draft as JSON: `answer_draft_json`'s shape plus the
         /// original's cached files as `attachments` (`[{path, name}]`) and
         /// `files_notice` naming any left out. Local, never downloads.
         #[qinvokable]
-        fn forward_draft_json(&self, uid: i32) -> QString;
+        fn forward_draft_json(&self, folder_id: i64, uid: i32) -> QString;
 
         /// Job "Forward": download the original's files, then report
         /// `forward_draft_json`'s payload as the job status.
         #[qinvokable]
-        fn forward_fetch(self: Pin<&mut Self>, uid: i32) -> QString;
+        fn forward_fetch(self: Pin<&mut Self>, folder_id: i64, uid: i32) -> QString;
 
         /// `forward_missing` for "Edit & resend" of the bounce `uid`
-        /// (current folder): counts the sent original's missing files.
+        /// (in `folder_id`): counts the sent original's missing files.
         #[qinvokable]
-        fn resend_missing(&self, uid: i32) -> i32;
+        fn resend_missing(&self, folder_id: i64, uid: i32) -> i32;
 
         /// Resend draft for the bounce `uid` (`compose::resend_draft`) with
         /// the original's cached files, shaped like `forward_draft_json`.
         #[qinvokable]
-        fn resend_draft_json(&self, uid: i32) -> QString;
+        fn resend_draft_json(&self, folder_id: i64, uid: i32) -> QString;
 
         /// Job "Resend": download the original's files, then report
         /// `resend_draft_json`'s payload as the job status.
         #[qinvokable]
-        fn resend_fetch(self: Pin<&mut Self>, uid: i32) -> QString;
+        fn resend_fetch(self: Pin<&mut Self>, folder_id: i64, uid: i32) -> QString;
 
         /// New-mail draft (just the signature) as JSON, same shape as
         /// `answer_draft_json`.
@@ -357,19 +354,21 @@ pub mod qobject {
 
         /// FTS search over subject/from/body (`[{uid, folder_id, folder,
         /// subject, from, date, snippet, unread, starred, has_attachments}]`,
-        /// FTS rank order). `folder` scopes to one folder path (empty = whole
-        /// account). Local SQLite read, no network. Returns `"[]"` when the
+        /// FTS rank order) in `account_id`. `folder` scopes to one folder path
+        /// (empty = whole account). Local SQLite read, no network. Returns `"[]"` when the
         /// query is blank or has no usable terms.
         #[qinvokable]
-        fn search_json(&self, query: &QString, folder: &QString) -> QString;
+        fn search_json(&self, account_id: i64, query: &QString, folder: &QString) -> QString;
 
-        /// Similar messages across the account as JSON (same shape as search_json).
+        /// Messages similar to `uid` in `folder_path` across `account_id` as
+        /// JSON (same shape as search_json).
         #[qinvokable]
-        fn find_similar_json(&self, folder_path: &QString, uid: i32) -> QString;
+        fn find_similar_json(&self, account_id: i64, folder_path: &QString, uid: i32) -> QString;
 
         /// Target message's subject for the "Similar to: ..." chip.
         #[qinvokable]
-        fn find_similar_subject(&self, folder_path: &QString, uid: i32) -> QString;
+        fn find_similar_subject(&self, account_id: i64, folder_path: &QString, uid: i32)
+            -> QString;
 
         /// The search syntax for the search field's tooltip
         /// (`mailcore::search::SYNTAX_HELP`).
@@ -440,7 +439,7 @@ pub mod qobject {
         ) -> QString;
 
         /// Server-side search backfill for thin local results: runs IMAP
-        /// `TEXT` search per token across the account's folders — or just one
+        /// `TEXT` search per token across `account_id`'s folders — or just one
         /// folder when `folder` is set — and fetches missing hits into the
         /// cache (bounded, metadata only). Network runs on the mailclient-net
         /// thread: returns `""` when queued (completion arrives via
@@ -448,7 +447,12 @@ pub mod qobject {
         /// the local search re-query picks the hits up), or a busy message
         /// when not queued.
         #[qinvokable]
-        fn search_server(self: Pin<&mut Self>, query: &QString, folder: &QString) -> QString;
+        fn search_server(
+            self: Pin<&mut Self>,
+            account_id: i64,
+            query: &QString,
+            folder: &QString,
+        ) -> QString;
 
         /// Copy one attachment to a temp file and return its `file://` URL
         /// so QML can open it with the system viewer (`Qt.openUrlExternally`).
@@ -464,24 +468,30 @@ pub mod qobject {
         #[qinvokable]
         fn save_attachment(self: Pin<&mut Self>, attachment_id: i32, path: &QString) -> QString;
 
-        /// Write every non-inline attachment of a message into `dir`.
+        /// Write every non-inline attachment of a message of `folder_id` into `dir`.
         /// Returns e.g. `"Saved 3 attachments"` or an error message.
         #[qinvokable]
-        fn save_all_attachments(self: Pin<&mut Self>, uid: i32, dir: &QString) -> QString;
+        fn save_all_attachments(
+            self: Pin<&mut Self>,
+            folder_id: i64,
+            uid: i32,
+            dir: &QString,
+        ) -> QString;
 
-        /// Fetch the inline (`cid:`) images of a message in the current
-        /// folder that sync never kept (mail cached before inline bytes were
+        /// Fetch the inline (`cid:`) images of a message of `folder_id` that
+        /// sync never kept (mail cached before inline bytes were
         /// stored). The finished job reloads the feeds, and the reader's body
         /// then carries them as `data:` URIs. `""` when queued, else why not.
         #[qinvokable]
-        fn download_inline_images(self: Pin<&mut Self>, uid: i32) -> QString;
+        fn download_inline_images(self: Pin<&mut Self>, folder_id: i64, uid: i32) -> QString;
 
         /// Export one message as a standard RFC 5322 .eml file at `path`.
         /// Downloads attachments first when they are not cached yet.
+        /// `folder_path` names the message's folder in `account_id`.
         #[qinvokable]
-        /// `folder_path` names the message's folder (empty = the open one).
         fn export_message(
             self: Pin<&mut Self>,
+            account_id: i64,
             folder_path: &QString,
             uid: i32,
             path: &QString,
@@ -490,7 +500,7 @@ pub mod qobject {
         /// Suggested filename for exporting a message as .eml
         /// (`folder_path` as for `export_message`).
         #[qinvokable]
-        fn suggested_eml_name(&self, folder_path: &QString, uid: i32) -> QString;
+        fn suggested_eml_name(&self, account_id: i64, folder_path: &QString, uid: i32) -> QString;
 
         /// Local storage statistics for the Maintenance settings section, as
         /// JSON (`db_bytes`, `message_count`, cached/temp sizes, …). Local
@@ -524,20 +534,20 @@ pub mod qobject {
         #[qinvokable]
         fn evict_attachments(self: Pin<&mut Self>) -> QString;
 
-        /// Select a folder by path and refresh the message feed.
+        /// Show a folder of `account_id` (by path): rebuild the feeds for it.
         #[qinvokable]
-        fn select_folder(self: Pin<&mut Self>, path: &QString) -> QString;
+        fn select_folder(self: Pin<&mut Self>, account_id: i64, path: &QString) -> QString;
 
-        /// Mark a message read locally. Never touches the network: the flag
+        /// Mark a message of `folder_id` read locally. Never touches the network: the flag
         /// is queued (`flags_dirty`) and pushed by the next sync, so clicking
         /// a message cannot block on IMAP.
         #[qinvokable]
-        fn open_message(self: Pin<&mut Self>, uid: i32) -> QString;
+        fn open_message(self: Pin<&mut Self>, folder_id: i64, uid: i32) -> QString;
 
         /// Explicitly set the read flag locally (manual mark read/unread,
         /// e.g. from the list context menu). Queued like `open_message`.
         #[qinvokable]
-        fn mark_read(self: Pin<&mut Self>, uid: i32, read: bool) -> QString;
+        fn mark_read(self: Pin<&mut Self>, folder_id: i64, uid: i32, read: bool) -> QString;
 
         /// Whether and when opening an `unread` row marks it read
         /// (`store::settings::mark_read_plan` over the two settings):
@@ -547,38 +557,39 @@ pub mod qobject {
 
         /// Flip the starred flag locally; pushed by the next sync.
         #[qinvokable]
-        fn toggle_star(self: Pin<&mut Self>, uid: i32) -> QString;
+        fn toggle_star(self: Pin<&mut Self>, folder_id: i64, uid: i32) -> QString;
 
-        /// Move a message to Trash (what the delete action means), undoable:
+        /// Move a message of `folder_id` to Trash (what the delete action
+        /// means), undoable:
         /// the message leaves the list now and moves on the server after the
         /// grace period, announced via `undo_available`. Spam, mail already in
         /// Trash, and accounts without Trash are destroyed at once instead (a
         /// job; no undo). Returns the status line text or an error.
         #[qinvokable]
-        fn delete_message(self: Pin<&mut Self>, uid: i32) -> QString;
+        fn delete_message(self: Pin<&mut Self>, folder_id: i64, uid: i32) -> QString;
 
         /// Move a message to the Archive folder (one-click archive), undoable
         /// like `delete_message`. The Archive folder is created server-side
         /// on push when the account has none.
         #[qinvokable]
-        fn archive_message(self: Pin<&mut Self>, uid: i32) -> QString;
+        fn archive_message(self: Pin<&mut Self>, folder_id: i64, uid: i32) -> QString;
 
         /// Move a message to any folder of the same account (by path,
         /// subfolders included), undoable like `delete_message`.
         #[qinvokable]
-        fn move_message(self: Pin<&mut Self>, uid: i32, path: &QString) -> QString;
+        fn move_message(self: Pin<&mut Self>, folder_id: i64, uid: i32, path: &QString) -> QString;
 
-        /// Create an IMAP folder (`/` separates levels, e.g. `Work/Client`;
+        /// Create an IMAP folder in `account_id` (`/` separates levels, e.g. `Work/Client`;
         /// mapped onto the account's hierarchy delimiter). Missing parents
         /// are created too; an existing path is success. Returns `"Created
         /// <path>"`, `"Folder already exists"`, or an error message.
         #[qinvokable]
-        fn create_folder(self: Pin<&mut Self>, path: &QString) -> QString;
+        fn create_folder(self: Pin<&mut Self>, account_id: i64, path: &QString) -> QString;
 
         /// Destroy a message server-side (`\Deleted` + expunge). No undo;
         /// only for an explicit "delete permanently" action.
         #[qinvokable]
-        fn purge_message(self: Pin<&mut Self>, uid: i32) -> QString;
+        fn purge_message(self: Pin<&mut Self>, folder_id: i64, uid: i32) -> QString;
 
         /// Message-list ordering (`field` = `date`|`from`|`subject`, resilient;
         /// `descending` = newest/Z-A first). Persisted to the settings store
@@ -586,64 +597,94 @@ pub mod qobject {
         #[qinvokable]
         fn set_sort(self: Pin<&mut Self>, field: &QString, descending: bool) -> QString;
 
-        /// Bulk mark read/unread for `uids_json` (JSON array of UIDs in the
-        /// current folder). Local-only, queued like `mark_read`. Returns e.g.
+        /// Bulk mark read/unread for `uids_json` (JSON array of UIDs in
+        /// `folder_id`). Local-only, queued like `mark_read`. Returns e.g.
         /// `"Marked 5 as read"` or an error (`"no messages selected"` when empty).
         #[qinvokable]
-        fn mark_read_many(self: Pin<&mut Self>, uids_json: &QString, read: bool) -> QString;
+        fn mark_read_many(
+            self: Pin<&mut Self>,
+            folder_id: i64,
+            uids_json: &QString,
+            read: bool,
+        ) -> QString;
 
         /// Bulk star/unstar for `uids_json` (JSON array of UIDs). Local-only,
         /// queued. Returns e.g. `"Starred 5"` or an error.
         #[qinvokable]
-        fn set_star_many(self: Pin<&mut Self>, uids_json: &QString, starred: bool) -> QString;
+        fn set_star_many(
+            self: Pin<&mut Self>,
+            folder_id: i64,
+            uids_json: &QString,
+            starred: bool,
+        ) -> QString;
 
         /// Bulk delete, same rules and undo as `delete_message`, one IMAP
         /// command for the whole set.
         #[qinvokable]
-        fn delete_many(self: Pin<&mut Self>, uids_json: &QString) -> QString;
+        fn delete_many(self: Pin<&mut Self>, folder_id: i64, uids_json: &QString) -> QString;
 
         /// Bulk archive, undoable like `archive_message`.
         #[qinvokable]
-        fn archive_many(self: Pin<&mut Self>, uids_json: &QString) -> QString;
+        fn archive_many(self: Pin<&mut Self>, folder_id: i64, uids_json: &QString) -> QString;
 
         /// Bulk move to any same-account folder, undoable like `move_message`.
         #[qinvokable]
-        fn move_many(self: Pin<&mut Self>, uids_json: &QString, path: &QString) -> QString;
+        fn move_many(
+            self: Pin<&mut Self>,
+            folder_id: i64,
+            uids_json: &QString,
+            path: &QString,
+        ) -> QString;
 
         /// Bulk permanent destroy (`\Deleted` + expunge, one IMAP session).
         /// Returns e.g. `"Deleted 5 permanently"`.
         #[qinvokable]
-        fn purge_many(self: Pin<&mut Self>, uids_json: &QString) -> QString;
+        fn purge_many(self: Pin<&mut Self>, folder_id: i64, uids_json: &QString) -> QString;
 
-        /// Permanently destroy search hits across folders in one job
+        /// Permanently destroy search hits of `account_id` across folders in one job
         /// (`[{"folder": path, "uid": n}, ...]`), without switching folder.
         #[qinvokable]
-        fn purge_hits(self: Pin<&mut Self>, hits_json: &QString) -> QString;
+        fn purge_hits(self: Pin<&mut Self>, account_id: i64, hits_json: &QString) -> QString;
 
         /// Mark search hits read or unread across folders (`hits_json` as in
         /// `purge_hits`), via `mailcore::bulk`.
         #[qinvokable]
-        fn mark_read_hits(self: Pin<&mut Self>, hits_json: &QString, read: bool) -> QString;
+        fn mark_read_hits(
+            self: Pin<&mut Self>,
+            account_id: i64,
+            hits_json: &QString,
+            read: bool,
+        ) -> QString;
 
         /// Star or unstar search hits across folders.
         #[qinvokable]
-        fn set_star_hits(self: Pin<&mut Self>, hits_json: &QString, starred: bool) -> QString;
+        fn set_star_hits(
+            self: Pin<&mut Self>,
+            account_id: i64,
+            hits_json: &QString,
+            starred: bool,
+        ) -> QString;
 
         /// Delete search hits across folders: one Undo for every folder that
         /// goes to Trash, one purge job for those that destroy (already
         /// confirmed as permanent by QML).
         #[qinvokable]
-        fn delete_hits(self: Pin<&mut Self>, hits_json: &QString) -> QString;
+        fn delete_hits(self: Pin<&mut Self>, account_id: i64, hits_json: &QString) -> QString;
 
         /// Archive search hits across folders, one Undo.
         #[qinvokable]
-        fn archive_hits(self: Pin<&mut Self>, hits_json: &QString) -> QString;
+        fn archive_hits(self: Pin<&mut Self>, account_id: i64, hits_json: &QString) -> QString;
 
         /// Move search hits across folders to `path`, one Undo.
         #[qinvokable]
-        fn move_hits(self: Pin<&mut Self>, hits_json: &QString, path: &QString) -> QString;
+        fn move_hits(
+            self: Pin<&mut Self>,
+            account_id: i64,
+            hits_json: &QString,
+            path: &QString,
+        ) -> QString;
 
-        /// Send a message from a JSON form
+        /// Send a message of `account_id` from a JSON form
         /// (`{from,from_name?,to,cc?,bcc?,subject,body,body_html?,attachments?}`; `body`
         /// holds composer rich HTML source, `body_html` is an optional
         /// explicit override, `attachments` an optional list of local file
@@ -653,7 +694,7 @@ pub mod qobject {
         /// `auto`) plus `compose_include_plain`. Interactive user action =
         /// explicit send consent.
         #[qinvokable]
-        fn send_mail(self: Pin<&mut Self>, form: &QString) -> QString;
+        fn send_mail(self: Pin<&mut Self>, account_id: i64, form: &QString) -> QString;
 
         /// Hold a message of `account_id` for `send_at` (any RFC3339
         /// instant, at least a minute out) instead of sending now: same form
@@ -688,9 +729,10 @@ pub mod qobject {
         #[qinvokable]
         fn send_at_error(&self, send_at: &QString) -> QString;
 
-        /// Append or replace an IMAP `\Draft` message from a Composer form.
+        /// Append or replace an IMAP `\Draft` message of `account_id` from a
+        /// Composer form.
         #[qinvokable]
-        fn save_draft(self: Pin<&mut Self>, form: &QString) -> QString;
+        fn save_draft(self: Pin<&mut Self>, account_id: i64, form: &QString) -> QString;
 
         /// An image file as a `data:` URL for the composer to show inline
         /// (the sender turns it into a `cid:` part). Returns the URL, or an
@@ -728,18 +770,18 @@ pub mod qobject {
         #[qinvokable]
         fn editor_document(&self, options_json: &QString) -> QString;
 
-        /// Full Composer form for a draft in the current Drafts folder.
+        /// Full Composer form for a draft in the Drafts folder `folder_id`.
         /// Opening a draft explicitly downloads and materializes its files.
         #[qinvokable]
-        fn draft_form(self: Pin<&mut Self>, uid: i32) -> QString;
+        fn draft_form(self: Pin<&mut Self>, folder_id: i64, uid: i32) -> QString;
 
-        /// Destroy a server draft (`\Deleted` + expunge, never filed to
+        /// Destroy a server draft of `account_id` (`\Deleted` + expunge, never filed to
         /// Trash). What the composer's Discard means for a draft opened
         /// from the Drafts folder.
         #[qinvokable]
-        fn delete_draft(self: Pin<&mut Self>, uid: i32) -> QString;
+        fn delete_draft(self: Pin<&mut Self>, account_id: i64, uid: i32) -> QString;
 
-        /// Unsent mail for the current account as JSON
+        /// Unsent mail of `account_id` as JSON
         /// (`mailcore::outbox::list_json`: `[{id, status, state, last_error,
         /// retries, retryable, dismissable, has_bytes, envelope_from, envelope_to,
         /// subject, created_at, updated_at, send_at, notify_self}]`; `send_at`
@@ -748,19 +790,19 @@ pub mod qobject {
         /// Local SQLite read, no network. Returns `"[]"` when nothing is
         /// queued.
         #[qinvokable]
-        fn outbox_json(&self) -> QString;
+        fn outbox_json(&self, account_id: i64) -> QString;
 
-        /// The current account's outbox counts as JSON
+        /// `account_id`'s outbox counts as JSON
         /// (`mailcore::outbox::status`: `{queued, sending, failed,
         /// scheduled, retryable, pending, label, has_failures}`). Local read;
         /// `"{}"` without an account.
         #[qinvokable]
-        fn outbox_status_json(&self) -> QString;
+        fn outbox_status_json(&self, account_id: i64) -> QString;
 
-        /// Forget one queued send (a failed send the user owns the retry
-        /// for, or a stale entry). Local-only; returns `""` or an error.
+        /// Delete one unsent mail of `account_id` from the outbox. Local-only;
+        /// returns `""` or an error.
         #[qinvokable]
-        fn dismiss_outbox(&self, id: i64) -> QString;
+        fn dismiss_outbox(&self, account_id: i64, id: i64) -> QString;
 
         /// Move a waiting outbox row of `account_id` to a new future instant
         /// (`send_at` any RFC3339 instant, at least a minute out). Returns
@@ -1086,11 +1128,8 @@ pub(crate) fn push_feeds(
 /// (folders, accounts) but not the folder's whole message feed. QML swaps
 /// the changed rows in through `message_rows_json`; the stale feed is only
 /// rebuilt if QML asks for it again (`refresh_messages_if_stale`).
-pub(crate) fn push_flag_change(
-    bridge: &mut Pin<&mut qobject::Bridge>,
-    db: &mailcore::Db,
-    account_id: i64,
-) {
+pub(crate) fn push_flag_change(bridge: &mut Pin<&mut qobject::Bridge>, db: &mailcore::Db) {
+    let (account_id, _) = bridge.shown();
     let folders = feed::folders_json(db, account_id).unwrap_or_else(|_| "[]".to_string());
     let accounts = feed::accounts_json(db).unwrap_or_else(|_| "[]".to_string());
     bridge.as_mut().set_folders_json(qstring(&folders));
@@ -1099,7 +1138,25 @@ pub(crate) fn push_flag_change(
     FEED_EPOCH.fetch_add(1, Ordering::SeqCst);
 }
 
+/// The account a folder belongs to: actions take a `folder_id` from QML
+/// and act for its account, so the two can never disagree.
+pub(crate) fn folder_account(db: &mailcore::Db, folder_id: i64) -> Result<i64, String> {
+    if folder_id < 0 {
+        return Err("no folder selected".to_string());
+    }
+    mailcore::store::folders::get(db, folder_id)
+        .map(|f| f.account_id)
+        .map_err(|_| "the folder is no longer available".to_string())
+}
+
 impl qobject::Bridge {
+    /// The selection the feeds show (`push_feeds` sets it). The bridge's own
+    /// view state: read only to rebuild those feeds after a change, never as
+    /// the target of an action — that always comes from the caller.
+    pub(crate) fn shown(&self) -> (i64, i64) {
+        (*self.current_account_id(), *self.current_folder_id())
+    }
+
     pub fn contacts_json(&self, prefix: &QString) -> QString {
         let result = shared_db().and_then(|db| {
             mailcore::store::contacts::contacts_json(db, &prefix.to_string())

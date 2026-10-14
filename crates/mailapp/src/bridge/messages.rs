@@ -10,7 +10,9 @@ use mailcore::undo::MoveTarget;
 
 use crate::bridge::qobject;
 use crate::bridge::worker::{spawn_flag_push, spawn_job};
-use crate::bridge::{push_feeds, push_flag_change, qstring, shared_db, MAX_MESSAGE_LIMIT};
+use crate::bridge::{
+    folder_account, push_feeds, push_flag_change, qstring, shared_db, MAX_MESSAGE_LIMIT,
+};
 
 mod bulk;
 mod files;
@@ -100,11 +102,10 @@ fn save_flags(db: &mailcore::Db, message_id: i64, read: bool, starred: bool) -> 
 }
 
 impl qobject::Bridge {
-    pub fn message_html(&self, uid: i32, allow_remote: bool) -> QString {
+    pub fn message_html(&self, folder_id: i64, uid: i32, allow_remote: bool) -> QString {
         let Ok(db) = shared_db() else {
             return qstring("");
         };
-        let folder_id = *self.current_folder_id();
         if folder_id < 0 || uid < 0 {
             return qstring("");
         }
@@ -112,11 +113,10 @@ impl qobject::Bridge {
             .map_or_else(|_| qstring(""), |h| qstring(&h))
     }
 
-    pub fn message_json(&self, uid: i32) -> QString {
+    pub fn message_json(&self, folder_id: i64, uid: i32) -> QString {
         let Ok(db) = shared_db() else {
             return qstring("{}");
         };
-        let folder_id = *self.current_folder_id();
         if folder_id < 0 || uid < 0 {
             return qstring("{}");
         }
@@ -124,23 +124,10 @@ impl qobject::Bridge {
             .map_or_else(|_| qstring("{}"), |json| qstring(&json))
     }
 
-    pub fn attachments_json(&self, uid: i32) -> QString {
-        let Ok(db) = shared_db() else {
-            return qstring("[]");
-        };
-        let folder_id = *self.current_folder_id();
-        if folder_id < 0 || uid < 0 {
-            return qstring("[]");
-        }
-        feed::attachments_json(db, folder_id, uid as u32)
-            .map_or_else(|_| qstring("[]"), |j| qstring(&j))
-    }
-
-    pub fn message_headers_json(&self, uid: i32) -> QString {
+    pub fn message_headers_json(&self, folder_id: i64, uid: i32) -> QString {
         let Ok(db) = shared_db() else {
             return qstring("{}");
         };
-        let folder_id = *self.current_folder_id();
         if folder_id < 0 || uid < 0 {
             return qstring("{}");
         }
@@ -148,11 +135,10 @@ impl qobject::Bridge {
             .map_or_else(|_| qstring("{}"), |j| qstring(&j))
     }
 
-    pub fn answer_draft_json(&self, uid: i32, mode: &QString) -> QString {
+    pub fn answer_draft_json(&self, folder_id: i64, uid: i32, mode: &QString) -> QString {
         let Ok(db) = shared_db() else {
             return qstring("{}");
         };
-        let folder_id = *self.current_folder_id();
         if folder_id < 0 || uid < 0 {
             return qstring("{}");
         }
@@ -177,17 +163,16 @@ impl qobject::Bridge {
     /// FTS search for the toolbar (up to 50 hits, newest first). `folder`
     /// scopes to one folder path (empty = whole account). Local SQLite
     /// read, no network — safe to call per keystroke.
-    pub fn search_json(&self, query: &QString, folder: &QString) -> QString {
+    pub fn search_json(&self, account_id: i64, query: &QString, folder: &QString) -> QString {
         let Ok(db) = shared_db() else {
             return qstring("[]");
         };
-        let acc_id = *self.current_account_id();
-        if acc_id < 0 {
+        if account_id < 0 {
             return qstring("[]");
         }
         feed::search_json(
             db,
-            acc_id,
+            account_id,
             &query.to_string(),
             mailcore::search::HIT_LIMIT,
             &folder.to_string(),
@@ -195,32 +180,17 @@ impl qobject::Bridge {
         .map_or_else(|_| qstring("[]"), |j| qstring(&j))
     }
 
-    /// The folder a QML call names: its path, or the open folder when the
-    /// path is empty (the reader). `None` when the path does not resolve —
-    /// never a silent fallback to another folder, whose uid would name a
-    /// different message.
-    fn folder_for_path(&self, db: &mailcore::Db, folder_path: &QString) -> Option<i64> {
-        let acc_id = *self.current_account_id();
-        let folder_id = if folder_path.is_empty() {
-            *self.current_folder_id()
-        } else {
-            mailcore::store::folders::get_by_path(db, acc_id, &folder_path.to_string())
-                .ok()?
-                .id
-        };
-        (acc_id >= 0 && folder_id >= 0).then_some(folder_id)
-    }
-
-    pub fn find_similar_json(&self, folder_path: &QString, uid: i32) -> QString {
+    pub fn find_similar_json(&self, account_id: i64, folder_path: &QString, uid: i32) -> QString {
         let Ok(db) = shared_db() else {
             return qstring("[]");
         };
-        let Some(folder_id) = self.folder_for_path(db, folder_path).filter(|_| uid >= 0) else {
+        let Some(folder_id) = folder_for_path(db, account_id, folder_path).filter(|_| uid >= 0)
+        else {
             return qstring("[]");
         };
         mailcore::similar::similar_json(
             db,
-            *self.current_account_id(),
+            account_id,
             folder_id,
             uid as i64,
             mailcore::search::HIT_LIMIT,
@@ -228,14 +198,20 @@ impl qobject::Bridge {
         .map_or_else(|_| qstring("[]"), |j| qstring(&j))
     }
 
-    pub fn find_similar_subject(&self, folder_path: &QString, uid: i32) -> QString {
+    pub fn find_similar_subject(
+        &self,
+        account_id: i64,
+        folder_path: &QString,
+        uid: i32,
+    ) -> QString {
         let Ok(db) = shared_db() else {
             return qstring("");
         };
-        let Some(folder_id) = self.folder_for_path(db, folder_path).filter(|_| uid >= 0) else {
+        let Some(folder_id) = folder_for_path(db, account_id, folder_path).filter(|_| uid >= 0)
+        else {
             return qstring("");
         };
-        mailcore::similar::target_subject(db, *self.current_account_id(), folder_id, uid as i64)
+        mailcore::similar::target_subject(db, account_id, folder_id, uid as i64)
             .map_or_else(|_| qstring(""), |s| qstring(&s))
     }
 
@@ -381,7 +357,7 @@ impl qobject::Bridge {
             return;
         }
         if let Ok(db) = shared_db() {
-            let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+            let (acc_id, folder_id) = self.shown();
             push_feeds(&mut self, db, acc_id, folder_id);
         }
     }
@@ -472,8 +448,12 @@ impl qobject::Bridge {
         })
     }
 
-    pub fn save_all_attachments(self: Pin<&mut Self>, uid: i32, dir: &QString) -> QString {
-        let folder_id = *self.current_folder_id();
+    pub fn save_all_attachments(
+        self: Pin<&mut Self>,
+        folder_id: i64,
+        uid: i32,
+        dir: &QString,
+    ) -> QString {
         let dir = dir.to_string();
         spawn_job(self, "Save", move |db, _progress| async move {
             if folder_id < 0 || uid < 0 {
@@ -488,8 +468,7 @@ impl qobject::Bridge {
         })
     }
 
-    pub fn download_inline_images(self: Pin<&mut Self>, uid: i32) -> QString {
-        let folder_id = *self.current_folder_id();
+    pub fn download_inline_images(self: Pin<&mut Self>, folder_id: i64, uid: i32) -> QString {
         spawn_job(self, "Download images", move |db, _progress| async move {
             if folder_id < 0 || uid < 0 {
                 return Err("no message selected".to_string());
@@ -501,12 +480,12 @@ impl qobject::Bridge {
         })
     }
 
-    pub fn suggested_eml_name(&self, folder_path: &QString, uid: i32) -> QString {
+    pub fn suggested_eml_name(&self, account_id: i64, folder_path: &QString, uid: i32) -> QString {
         let fallback = || qstring(&format!("message-{uid}.eml"));
         let Ok(db) = shared_db() else {
             return fallback();
         };
-        match self.folder_for_path(db, folder_path).filter(|_| uid >= 0) {
+        match folder_for_path(db, account_id, folder_path).filter(|_| uid >= 0) {
             Some(folder_id) => qstring(&mailcore::export::suggested_eml_name(
                 db, folder_id, uid as u32,
             )),
@@ -516,13 +495,14 @@ impl qobject::Bridge {
 
     pub fn export_message(
         self: Pin<&mut Self>,
+        account_id: i64,
         folder_path: &QString,
         uid: i32,
         path: &QString,
     ) -> QString {
         let folder_id = shared_db()
             .ok()
-            .and_then(|db| self.folder_for_path(db, folder_path))
+            .and_then(|db| folder_for_path(db, account_id, folder_path))
             .filter(|_| uid >= 0);
         let path = path.to_string();
         spawn_job(self, "Export", move |db, _progress| async move {
@@ -552,12 +532,14 @@ impl qobject::Bridge {
         ))
     }
 
-    pub fn open_message(mut self: Pin<&mut Self>, uid: i32) -> QString {
+    pub fn open_message(mut self: Pin<&mut Self>, folder_id: i64, uid: i32) -> QString {
         let db = match shared_db() {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+        let Ok(acc_id) = folder_account(db, folder_id) else {
+            return qstring("");
+        };
         let Ok(msg) = messages::get_by_uid(db, folder_id, uid as u32) else {
             return qstring("");
         };
@@ -570,56 +552,66 @@ impl qobject::Bridge {
         }
         // The unread counts move; the row itself is patched by QML
         // (`message_rows_json`), so the folder feed is not rebuilt.
-        push_flag_change(&mut self, db, acc_id);
+        push_flag_change(&mut self, db);
         result
     }
 
-    pub fn mark_read(mut self: Pin<&mut Self>, uid: i32, read: bool) -> QString {
+    pub fn mark_read(mut self: Pin<&mut Self>, folder_id: i64, uid: i32, read: bool) -> QString {
         let db = match shared_db() {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+        let acc_id = match folder_account(db, folder_id) {
+            Ok(a) => a,
+            Err(e) => return qstring(&e),
+        };
         let Ok(msg) = messages::get_by_uid(db, folder_id, uid as u32) else {
             return qstring("message is no longer available");
         };
         // Queued locally, pushed promptly in the background (see open_message).
         let result = save_flags(db, msg.id, read, msg.is_starred);
         spawn_flag_push(acc_id);
-        push_flag_change(&mut self, db, acc_id);
+        push_flag_change(&mut self, db);
         result
     }
 
-    pub fn toggle_star(mut self: Pin<&mut Self>, uid: i32) -> QString {
+    pub fn toggle_star(mut self: Pin<&mut Self>, folder_id: i64, uid: i32) -> QString {
         let db = match shared_db() {
             Ok(d) => d,
             Err(e) => return qstring(&e),
         };
-        let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+        let acc_id = match folder_account(db, folder_id) {
+            Ok(a) => a,
+            Err(e) => return qstring(&e),
+        };
         let Ok(msg) = messages::get_by_uid(db, folder_id, uid as u32) else {
             return qstring("message is no longer available");
         };
         // Queued locally, pushed promptly in the background (see open_message).
         let result = save_flags(db, msg.id, msg.is_read, !msg.is_starred);
         spawn_flag_push(acc_id);
-        push_flag_change(&mut self, db, acc_id);
+        push_flag_change(&mut self, db);
         result
     }
 
-    pub fn delete_message(self: Pin<&mut Self>, uid: i32) -> QString {
-        self.queue_undoable(vec![uid as u32], MoveTarget::Trash)
+    pub fn delete_message(self: Pin<&mut Self>, folder_id: i64, uid: i32) -> QString {
+        self.queue_undoable(folder_id, vec![uid as u32], MoveTarget::Trash)
     }
 
-    pub fn archive_message(self: Pin<&mut Self>, uid: i32) -> QString {
-        self.queue_undoable(vec![uid as u32], MoveTarget::Archive)
+    pub fn archive_message(self: Pin<&mut Self>, folder_id: i64, uid: i32) -> QString {
+        self.queue_undoable(folder_id, vec![uid as u32], MoveTarget::Archive)
     }
 
-    pub fn move_message(self: Pin<&mut Self>, uid: i32, path: &QString) -> QString {
-        self.queue_undoable(vec![uid as u32], MoveTarget::Folder(path.to_string()))
+    pub fn move_message(self: Pin<&mut Self>, folder_id: i64, uid: i32, path: &QString) -> QString {
+        self.queue_undoable(
+            folder_id,
+            vec![uid as u32],
+            MoveTarget::Folder(path.to_string()),
+        )
     }
 
-    pub fn purge_message(self: Pin<&mut Self>, uid: i32) -> QString {
-        self.purge_uids(vec![uid as u32])
+    pub fn purge_message(self: Pin<&mut Self>, folder_id: i64, uid: i32) -> QString {
+        self.purge_uids(folder_id, vec![uid as u32])
     }
 
     pub fn set_sort(mut self: Pin<&mut Self>, field: &QString, descending: bool) -> QString {
@@ -631,11 +623,23 @@ impl qobject::Bridge {
         if let Err(e) = settings::set_sort(db, &normalized, descending) {
             return qstring(&e.to_string());
         }
-        let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+        let (acc_id, folder_id) = self.shown();
         // push_feeds re-reads the settings for the feed and syncs the props.
         push_feeds(&mut self, db, acc_id, folder_id);
         qstring("")
     }
+}
+
+/// The folder a QML call names by path within `account_id`. `None` when the
+/// path does not resolve — never a silent fallback to another folder, whose
+/// uid would name a different message.
+fn folder_for_path(db: &mailcore::Db, account_id: i64, folder_path: &QString) -> Option<i64> {
+    if account_id < 0 || folder_path.is_empty() {
+        return None;
+    }
+    mailcore::store::folders::get_by_path(db, account_id, &folder_path.to_string())
+        .ok()
+        .map(|f| f.id)
 }
 
 /// The theme colours QML sends (`{paper, ink, link, quote, rule}` as

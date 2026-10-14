@@ -51,7 +51,8 @@ impl qobject::Bridge {
     // in turn with sync on the one net thread.
 
     pub fn trim_cache(self: Pin<&mut Self>) -> QString {
-        let (acc_id, folder_id) = (*self.current_account_id(), *self.current_folder_id());
+        // Every account's cache shrinks; the shown feeds are rebuilt.
+        let (acc_id, folder_id) = self.shown();
         spawn_job(self, "Maintenance", move |db, _progress| async move {
             let keep = maintenance::TRIM_KEEP_PER_FOLDER;
             let removed = maintenance::trim_local_cache(db, keep).map_err(|e| e.to_string())?;
