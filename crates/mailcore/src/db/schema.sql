@@ -202,6 +202,11 @@ create table if not exists send_queue (
     -- Scheduled send with a receipt: mail a delivery note to the account's
     -- own address once the row goes out.
     notify_self integer not null default 0,
+    -- A scheduled send that failed waits until this UTC instant before the
+    -- next attempt (`NULL` = no pause); see queue::fail_scheduled_attempt.
+    next_attempt_at text,
+    -- The final failure of a scheduled send was already reported once.
+    failure_noticed integer not null default 0,
     created_at    text not null,
     updated_at    text not null
 );

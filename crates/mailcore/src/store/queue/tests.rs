@@ -396,36 +396,6 @@ fn due_scheduled_lists_only_accounts_past_their_time() {
 }
 
 #[test]
-fn a_scheduled_send_that_failed_stays_planned_with_a_pause() {
-    let (db, acc) = setup();
-    let id = schedule(&db, acc, 60);
-    backdate(&db, id, 1);
-    promote_due(&db, acc).unwrap();
-    // Promoted but not yet sent: still due.
-    assert_eq!(due_scheduled_account_ids(&db).unwrap(), vec![acc]);
-    assert!(claim(&db, id).unwrap());
-    mark_failed(&db, id, "421 try later").unwrap();
-    // Failed after its time: planned again after the pause, not dropped
-    // (an alarm cancelled here would leave it until the next sync) and
-    // not due at once (a due timer would spin on it).
-    let next = next_due(&db).unwrap().expect("still planned");
-    let wait = (next - chrono::Utc::now()).num_seconds();
-    assert!(
-        wait > SCHEDULED_RETRY_SECS - 30 && wait <= SCHEDULED_RETRY_SECS,
-        "{wait}"
-    );
-    assert!(due_scheduled_account_ids(&db).unwrap().is_empty());
-    // Once the pause is over the account is due again.
-    backdate(&db, id, SCHEDULED_RETRY_SECS / 60 + 1);
-    assert_eq!(due_scheduled_account_ids(&db).unwrap(), vec![acc]);
-    // Out of retries: dead, left to the outbox list.
-    for _ in 1..MAX_SEND_RETRIES {
-        mark_failed(&db, id, "421 try later").unwrap();
-    }
-    assert_eq!(next_due(&db).unwrap(), None);
-}
-
-#[test]
 fn the_receipt_flag_survives_promotion() {
     let (db, acc) = setup();
     let to = vec!["b@example.org".to_string()];
@@ -452,4 +422,124 @@ fn the_receipt_flag_survives_promotion() {
     let row = get(&db, id).unwrap();
     assert_eq!(row.status, QueueStatus::Queued);
     assert!(row.notify_self);
+}
+
+/// Promote `id` (past its time) and claim it, as a flush does before SMTP.
+fn attempt(db: &Db, acc: i64, id: i64) {
+    db.conn()
+        .execute(
+            "update send_queue set next_attempt_at = null where id = ?1",
+            [id],
+        )
+        .unwrap();
+    promote_due(db, acc).unwrap();
+    assert!(claim(db, id).unwrap(), "row {id} claimable");
+}
+
+fn wait_secs(at: &str) -> i64 {
+    let t = chrono::DateTime::parse_from_rfc3339(at).unwrap().to_utc();
+    (t - chrono::Utc::now()).num_seconds()
+}
+
+#[test]
+fn a_failing_scheduled_send_backs_off_then_gives_up() {
+    let (db, acc) = setup();
+    let id = schedule(&db, acc, 60);
+    backdate(&db, id, 1);
+    // Promoted but not yet sent: still due.
+    promote_due(&db, acc).unwrap();
+    assert_eq!(due_scheduled_account_ids(&db).unwrap(), vec![acc]);
+    for (n, pause) in SCHEDULED_BACKOFF_SECS.iter().enumerate() {
+        attempt(&db, acc, id);
+        let ScheduledFailure::RetryAt(at) =
+            fail_scheduled_attempt(&db, id, "connection refused", false).unwrap()
+        else {
+            panic!("attempt {} gave up early", n + 1);
+        };
+        let wait = wait_secs(&at);
+        assert!(wait > pause - 30 && wait <= *pause, "{wait} vs {pause}");
+        // Paused: no sync, timer or alarm picks it up early...
+        assert!(list_submittable(&db, acc).unwrap().is_empty());
+        assert!(due_scheduled_account_ids(&db).unwrap().is_empty());
+        // ...but it stays planned for its next try.
+        let next = next_due(&db).unwrap().expect("still planned");
+        assert_eq!(next.to_rfc3339_opts(chrono::SecondsFormat::Secs, true), at);
+    }
+    // The last attempt gives up: dead, unplanned, reported once.
+    attempt(&db, acc, id);
+    assert_eq!(
+        fail_scheduled_attempt(&db, id, "connection refused", false).unwrap(),
+        ScheduledFailure::GaveUp
+    );
+    assert_eq!(next_due(&db).unwrap(), None);
+    assert!(list_submittable(&db, acc).unwrap().is_empty());
+    let notices = take_failure_notices(&db).unwrap();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].subject, "hi");
+    assert_eq!(notices[0].error, "connection refused");
+    assert_eq!(
+        notices[0].line,
+        "Scheduled mail not sent: hi — connection refused"
+    );
+    assert!(take_failure_notices(&db).unwrap().is_empty());
+    // Send now is a new intent: attempts and the report start over.
+    send_now(&db, acc, id).unwrap();
+    let row = get(&db, id).unwrap();
+    assert_eq!((row.retries, row.next_attempt_at), (0, None));
+    assert_eq!(list_submittable(&db, acc).unwrap().len(), 1);
+}
+
+#[test]
+fn a_refusal_for_good_gives_up_at_once() {
+    let (db, acc) = setup();
+    let id = schedule(&db, acc, 60);
+    backdate(&db, id, 1);
+    attempt(&db, acc, id);
+    assert_eq!(
+        fail_scheduled_attempt(&db, id, "550 mailbox unavailable", true).unwrap(),
+        ScheduledFailure::GaveUp
+    );
+    assert_eq!(get(&db, id).unwrap().retries, MAX_SEND_RETRIES);
+}
+
+#[test]
+fn a_send_failing_past_its_deadline_gives_up() {
+    let (db, acc) = setup();
+    let id = schedule(&db, acc, 60);
+    // Due two days ago (the device was off): the first attempt still runs,
+    // but its failure is the last.
+    backdate(&db, id, 2 * 24 * 60);
+    attempt(&db, acc, id);
+    assert_eq!(
+        fail_scheduled_attempt(&db, id, "timeout", false).unwrap(),
+        ScheduledFailure::GaveUp
+    );
+}
+
+#[test]
+fn an_account_the_flush_cannot_try_charges_its_due_rows() {
+    let (db, acc) = setup();
+    let due = schedule(&db, acc, 60);
+    backdate(&db, due, 1);
+    let later = schedule(&db, acc, 120);
+    assert_eq!(fail_due_scheduled(&db, acc, "no password").unwrap(), 1);
+    let row = get(&db, due).unwrap();
+    assert_eq!(row.status, QueueStatus::Failed);
+    assert_eq!(row.retries, 1);
+    assert!(row.next_attempt_at.is_some());
+    // Not due yet: untouched. Paused: not charged twice in a row.
+    assert_eq!(get(&db, later).unwrap().status, QueueStatus::Scheduled);
+    assert_eq!(fail_due_scheduled(&db, acc, "no password").unwrap(), 0);
+}
+
+#[test]
+fn a_failure_line_names_subject_and_reason() {
+    assert_eq!(
+        FailedSend::line_for("Report", "timeout"),
+        "Scheduled mail not sent: Report — timeout"
+    );
+    assert_eq!(
+        FailedSend::line_for("Report", ""),
+        "Scheduled mail not sent: Report"
+    );
 }

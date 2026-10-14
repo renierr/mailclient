@@ -1,5 +1,6 @@
 package de.renier.mailclient.ui.outbox
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,7 +16,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -40,6 +40,7 @@ import de.renier.mailclient.R
 import de.renier.mailclient.ui.common.DeleteConfirmDialog
 import de.renier.mailclient.ui.common.strings
 import de.renier.mailclient.ui.composer.ScheduleDialog
+import de.renier.mailclient.ui.composer.nextTryLabel
 import de.renier.mailclient.ui.composer.sendsAtLabel
 import de.renier.mailclient.ui.settings.BackgroundPower
 import de.renier.mailclient.ui.state.MailState
@@ -49,50 +50,65 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import org.json.JSONObject
 
 /** One unsent mail, as `mailcore::outbox::list_json` describes it. */
 private data class OutboxEntry(
     val id: Long,
-    val status: String,
+    // The core's row model: sending / scheduled / queued / retrying / failed.
+    val kind: String,
     val subject: String,
     val to: String,
     // The core's one-line state ("Queued — goes out with the next sync").
     val state: String,
     val error: String,
-    val dismissable: Boolean,
-    // UTC instant a `scheduled` row waits for ("" otherwise).
+    // UTC instants: a scheduled row's time, a retrying row's next try.
     val sendAt: String,
+    val retryAt: String,
     // Delivery goes out to the own address when this one sends.
-    val notifySelf: Boolean = false,
+    val notifySelf: Boolean,
+    // What the core offers for this row (`outbox::RowActions`).
+    val canSendNow: Boolean,
+    val sendNowLabel: String,
+    val canReschedule: Boolean,
+    val canEdit: Boolean,
+    val canDelete: Boolean,
 )
 
 private fun parse(json: String): List<OutboxEntry> {
     val arr = JSONArray(json)
     return (0 until arr.length()).mapNotNull { i ->
         val o = arr.optJSONObject(i) ?: return@mapNotNull null
+        val actions = o.optJSONObject("actions") ?: JSONObject()
         OutboxEntry(
             id = o.optLong("id"),
-            status = o.optString("status"),
+            kind = o.optString("kind"),
             subject = o.optString("subject"),
             to = o.optJSONArray("envelope_to").strings().joinToString(", "),
             state = o.optString("state"),
             error = o.optString("last_error"),
-            dismissable = o.optBoolean("dismissable"),
             sendAt = o.optString("send_at"),
+            retryAt = o.optString("retry_at"),
             notifySelf = o.optBoolean("notify_self"),
+            canSendNow = actions.optBoolean("can_send_now"),
+            sendNowLabel = actions.optString("send_now_label", "Send now"),
+            canReschedule = actions.optBoolean("can_reschedule"),
+            canEdit = actions.optBoolean("can_edit"),
+            canDelete = actions.optBoolean("can_delete"),
         )
     }
 }
 
 /**
- * Unsent mail of the open account: queued, sending or failed sends. A sync
- * retries everything still deliverable (the core's `flush_outbox`); a dead
- * row — no bytes left, or out of retries — can only be forgotten here,
- * after a confirm, and the mail resent by hand. Re-reads whenever the
- * outbox counts move or a sync ends.
+ * Unsent mail of the open account: scheduled, queued, retrying or failed
+ * sends, as the core describes them (`kind`, `state`, `actions`). Failed
+ * sends retry by themselves for a while, then stop and wait here: Retry,
+ * Reschedule, Edit (back into the composer, through [onEdit]) or Delete
+ * after a confirm. A page on a phone, the list pane beside the folders on
+ * wider layouts. Re-reads whenever the outbox counts move or a sync ends.
  */
 @Composable
-fun OutboxScreen(state: MailState) {
+fun OutboxScreen(state: MailState, onEdit: (Long) -> Unit) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val accountId = state.activeAccountId
@@ -122,7 +138,7 @@ fun OutboxScreen(state: MailState) {
     fun dismiss(e: OutboxEntry) {
         scope.launch {
             withContext(Dispatchers.IO) { runCatching { MailNative.dismissOutbox(accountId, e.id) } }
-                .onFailure { error = it.message ?: "Could not forget the entry" }
+                .onFailure { error = it.message ?: "Could not delete the entry" }
             state.refreshOutbox()
             refreshAlarm()
             reload++
@@ -158,12 +174,12 @@ fun OutboxScreen(state: MailState) {
     Column(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
             Text(
-                "Mail waiting to send, or sends that failed. Syncing retries everything still deliverable.",
+                "Mail waiting to be sent from this phone. Failed sends try again by themselves for a while, then stop and wait for you.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 4.dp)) }
-            if (entries?.any { it.status == "scheduled" } == true && !BackgroundPower.exactAlarms(context)) {
+            if (entries?.any { it.kind == "scheduled" } == true && !BackgroundPower.exactAlarms(context)) {
                 Text(
                     "Exact alarms are off: scheduled mail still sends, but may go out late while the phone sleeps.",
                     style = MaterialTheme.typography.bodySmall,
@@ -204,9 +220,10 @@ fun OutboxScreen(state: MailState) {
                 items(list, key = { it.id }) { e ->
                     OutboxRow(
                         e,
-                        onForget = { forget = e },
+                        onDelete = { forget = e },
                         onSendNow = { sendNow(e) },
                         onReschedule = { reschedule = e },
+                        onEdit = { onEdit(e.id) },
                     )
                     HorizontalDivider()
                 }
@@ -216,9 +233,9 @@ fun OutboxScreen(state: MailState) {
 
     forget?.let { e ->
         DeleteConfirmDialog(
-            title = "Forget this entry?",
-            text = "“${e.subject}” is not sent and leaves the outbox. Send it again by hand if it is still needed.",
-            confirmLabel = "Forget",
+            title = "Delete unsent mail?",
+            text = "“${e.subject}” will not be sent and cannot be recovered.",
+            confirmLabel = "Delete",
             onConfirm = {
                 forget = null
                 dismiss(e)
@@ -244,21 +261,39 @@ fun OutboxScreen(state: MailState) {
 @Composable
 private fun OutboxRow(
     e: OutboxEntry,
-    onForget: () -> Unit,
+    onDelete: () -> Unit,
     onSendNow: () -> Unit,
     onReschedule: () -> Unit,
+    onEdit: () -> Unit,
 ) {
+    val scheme = MaterialTheme.colorScheme
+    val failed = e.kind == "failed"
     Row(
         verticalAlignment = Alignment.Top,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(if (failed) scheme.errorContainer.copy(alpha = 0.35f) else scheme.surface)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
+        Icon(
+            painterResource(
+                when (e.kind) {
+                    "scheduled" -> R.drawable.ic_schedule
+                    "failed" -> R.drawable.ic_error
+                    else -> R.drawable.ic_send
+                },
+            ),
+            contentDescription = null,
+            tint = if (failed) scheme.error else scheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 2.dp),
+        )
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 e.subject,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             if (e.to.isNotEmpty()) {
@@ -270,39 +305,44 @@ private fun OutboxRow(
                 )
             }
             if (e.sendAt.isNotEmpty()) {
-                Text(
-                    sendsAtLabel(e.sendAt),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
+                Text(sendsAtLabel(e.sendAt), style = MaterialTheme.typography.bodySmall, color = scheme.primary)
+            }
+            if (e.retryAt.isNotEmpty()) {
+                Text(nextTryLabel(e.retryAt), style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
             }
             if (e.notifySelf) {
                 Text(
                     "Mails a delivery receipt to me when it sends",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = scheme.primary,
                 )
             }
             if (e.state.isNotEmpty()) {
-                Text(e.state, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    e.state,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (failed) scheme.error else scheme.onSurfaceVariant,
+                )
             }
             if (e.error.isNotEmpty()) {
-                Text(e.error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                Text(e.error, style = MaterialTheme.typography.bodySmall, color = scheme.error)
             }
-            if (e.status == "scheduled") {
-                // Wraps under each other at 360dp and large text.
+            // Never a row being sent: the core offers nothing for it. Wraps
+            // under each other at 360dp and large text.
+            if (e.canSendNow || e.canReschedule || e.canEdit || e.canDelete) {
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.padding(top = 4.dp),
                 ) {
-                    OutlinedButton(onClick = onSendNow) { Text("Send now") }
-                    OutlinedButton(onClick = onReschedule) { Text("Reschedule") }
+                    if (e.canSendNow) OutlinedButton(onClick = onSendNow) { Text(e.sendNowLabel) }
+                    if (e.canReschedule) OutlinedButton(onClick = onReschedule) { Text("Reschedule") }
+                    if (e.canEdit) OutlinedButton(onClick = onEdit) { Text("Edit") }
+                    if (e.canDelete) {
+                        OutlinedButton(onClick = onDelete) { Text("Delete", color = scheme.error) }
+                    }
                 }
             }
-        }
-        // Never a row being sent: forgetting it would not stop the mail.
-        IconButton(onClick = onForget, enabled = e.dismissable) {
-            Icon(painterResource(R.drawable.ic_close), "Forget this entry")
         }
     }
 }

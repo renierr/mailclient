@@ -136,6 +136,7 @@ mod tests {
             request_dsn: false,
             send_at: None,
             notify_self: true,
+            next_attempt_at: None,
         }
     }
 

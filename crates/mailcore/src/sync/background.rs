@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth;
 use crate::db::Db;
 use crate::models::Account;
+use crate::store::queue::FailedSend;
 use crate::store::{accounts, queue, settings};
 use crate::sync::headless::{
     self, acquire_sync_lock, sync_account, sync_accounts, SyncLock, SyncScope,
@@ -440,7 +441,12 @@ pub struct SendDueReport {
     pub skipped: bool,
     pub sent: u64,
     pub errors: Vec<String>,
-    /// `started_at` of this run's [`LastRun`], for [`record_outcome`].
+    /// Scheduled sends that gave up (now or in an earlier flush, a sync's
+    /// included) and were not reported yet: the Android notification and
+    /// the Qt status line, each shown once.
+    pub failed: Vec<FailedSend>,
+    /// `started_at` of this run's [`LastRun`], for [`record_outcome`];
+    /// empty for a skipped run, which leaves no history entry.
     pub run: String,
 }
 
@@ -449,17 +455,22 @@ impl SendDueReport {
     /// when nothing was due and nothing failed.
     #[must_use]
     pub fn status_line(&self) -> String {
-        let mut line = match self.sent {
-            0 if self.errors.is_empty() => return String::new(),
-            0 => "Scheduled send failed".to_string(),
-            1 => "Sent 1 scheduled message".to_string(),
-            n => format!("Sent {n} scheduled messages"),
-        };
-        if !self.errors.is_empty() {
-            line.push_str("; ");
-            line.push_str(&self.errors.join("; "));
+        let mut parts = Vec::new();
+        match self.sent {
+            0 => {}
+            1 => parts.push("Sent 1 scheduled message".to_string()),
+            n => parts.push(format!("Sent {n} scheduled messages")),
         }
-        line
+        // A give-up is the news; the attempt errors behind it would only
+        // repeat it.
+        parts.extend(self.failed.iter().map(|f| f.line.clone()));
+        if self.failed.is_empty() && !self.errors.is_empty() {
+            if self.sent == 0 {
+                parts.push("Scheduled send failed, will retry".to_string());
+            }
+            parts.extend(self.errors.iter().cloned());
+        }
+        parts.join("; ")
     }
 }
 
@@ -471,9 +482,32 @@ impl SendDueReport {
 /// Sent copy), so one bad account never stops the rest. Every run leaves a
 /// [`LastRun`] tagged `scheduled-send` for the Settings status block.
 pub async fn send_due_scheduled(db: &Db, db_path: &Path) -> SendDueReport {
+    // A run that only found the lock taken leaves no history entry: the
+    // caller retries within a minute, and the ten kept runs are for checks
+    // that did something.
+    let _lock = match acquire_sync_lock(db_path) {
+        Ok(Some(guard)) => guard,
+        Ok(None) => {
+            return SendDueReport {
+                skipped: true,
+                ..Default::default()
+            };
+        }
+        Err(e) => {
+            return SendDueReport {
+                skipped: true,
+                errors: vec![format!("sync lock: {e}")],
+                ..Default::default()
+            };
+        }
+    };
     let run = LastRun::started(Utc::now(), "scheduled-send");
     save_run(db, &run);
-    let mut report = flush_due_scheduled(db, db_path).await;
+    let mut report = flush_due_scheduled(db).await;
+    report.failed = queue::take_failure_notices(db).unwrap_or_else(|e| {
+        report.errors.push(format!("outbox: {e}"));
+        Vec::new()
+    });
     report.run = run.started_at.clone();
     save_run(
         db,
@@ -495,23 +529,11 @@ pub async fn send_due_scheduled(db: &Db, db_path: &Path) -> SendDueReport {
     report
 }
 
-async fn flush_due_scheduled(db: &Db, db_path: &Path) -> SendDueReport {
-    let _lock = match acquire_sync_lock(db_path) {
-        Ok(Some(guard)) => guard,
-        Ok(None) => {
-            return SendDueReport {
-                skipped: true,
-                ..Default::default()
-            };
-        }
-        Err(e) => {
-            return SendDueReport {
-                skipped: true,
-                errors: vec![format!("sync lock: {e}")],
-                ..Default::default()
-            };
-        }
-    };
+/// The flush itself, under the caller's sync lock. An account that cannot
+/// be tried at all (unreadable settings, no password) charges its due rows
+/// one failed attempt each ([`queue::fail_due_scheduled`]), so they back
+/// off and give up like any other failure.
+async fn flush_due_scheduled(db: &Db) -> SendDueReport {
     let mut report = SendDueReport::default();
     let ids = match queue::due_scheduled_account_ids(db) {
         Ok(ids) => ids,
@@ -524,13 +546,16 @@ async fn flush_due_scheduled(db: &Db, db_path: &Path) -> SendDueReport {
         let account = match accounts::get(db, id) {
             Ok(a) => a,
             Err(e) => {
-                report.errors.push(format!("account {id}: {e}"));
+                let error = format!("account {id}: {e}");
+                charge_unreachable(db, id, &error);
+                report.errors.push(error);
                 continue;
             }
         };
         let secrets = match auth::load_account_secrets_retry(&account.auth_vault_key).await {
             Ok(s) => s,
             Err(e) => {
+                charge_unreachable(db, id, &format!("no password in keyring: {e}"));
                 report
                     .errors
                     .push(format!("{}: {e}", account.email_address));
@@ -558,6 +583,14 @@ async fn flush_due_scheduled(db: &Db, db_path: &Path) -> SendDueReport {
         }
     }
     report
+}
+
+/// One failed attempt for every due scheduled send of an account the flush
+/// could not try, logged when even that fails.
+fn charge_unreachable(db: &Db, account_id: i64, error: &str) {
+    if let Err(e) = queue::fail_due_scheduled(db, account_id, error) {
+        log::warn!("outbox: could not record a failed attempt for account {account_id}: {e}");
+    }
 }
 
 /// Synchronous wrapper around [`send_due_scheduled`] for FFI callers, which
@@ -1027,18 +1060,36 @@ mod tests {
         };
         assert_eq!(
             failed.status_line(),
-            "Scheduled send failed; b@example.com: no password"
+            "Scheduled send failed, will retry; b@example.com: no password"
+        );
+        // A give-up replaces the attempt errors behind it.
+        let gave_up = SendDueReport {
+            errors: vec!["b@example.com: no password".to_string()],
+            failed: vec![FailedSend {
+                queue_id: 1,
+                account_id: 1,
+                subject: "Report".to_string(),
+                error: "no password".to_string(),
+                line: FailedSend::line_for("Report", "no password"),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            gave_up.status_line(),
+            "Scheduled mail not sent: Report — no password"
         );
     }
 
     #[test]
-    fn a_locked_send_due_run_is_recorded_as_skipped() {
+    fn a_locked_send_due_run_is_skipped_without_history() {
         let db = Db::open_in_memory().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db.sqlite");
         let _held = acquire_sync_lock(&path).unwrap().unwrap();
         let report = send_due_scheduled_blocking(&db, &path);
         assert!(report.skipped);
-        assert!(last_run(&db).unwrap().skipped);
+        // No history entry for a run that did nothing.
+        assert!(last_run(&db).is_none());
+        assert!(report.run.is_empty());
     }
 }

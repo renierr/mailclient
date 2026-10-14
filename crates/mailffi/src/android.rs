@@ -3290,6 +3290,49 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_sendDueInMs<'caller>
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `MailNative.outboxEdit(accountId, id, dir)`: take an unsent mail out of
+/// the outbox into the composer (`mailcore::outbox::take_for_edit`), its
+/// files staged under `dir`. Returns the `OutboxEdit` as JSON; the row is
+/// gone once this returns. Local-only.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_outboxEdit<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    id: i64,
+    dir: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let dir = string(env, &dir)?;
+            let edit = mailcore::outbox::take_for_edit(
+                crate::db::shared_db()?,
+                account_id,
+                id,
+                std::path::Path::new(&dir),
+            )?;
+            Ok(env.new_string(serde_json::to_string(&edit)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `MailNative.takeSendFailures()`: scheduled sends that gave up and were
+/// not reported yet, as a JSON array of `FailedSend`
+/// (`mailcore::store::queue::take_failure_notices`); each is reported once.
+/// For the "not sent" notification after a background run. Local.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_takeSendFailures<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let failed = mailcore::store::queue::take_failure_notices(crate::db::shared_db()?)?;
+            Ok(env.new_string(serde_json::to_string(&failed)?)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `MailNative.sendAtError(sendAt)`: why `sendAt` (any RFC3339 instant)
 /// cannot be a scheduled send's time, `""` when it can
 /// (`mailcore::outbox::send_at_error`). The Send-later dialog's check.

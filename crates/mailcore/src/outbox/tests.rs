@@ -113,7 +113,10 @@ fn list_rows_carry_subject_recipients_and_error() {
     let row = &list[0];
     assert_eq!(row["id"], id);
     assert_eq!(row["status"], "failed");
-    assert_eq!(row["state"], "Failed — will retry on the next sync");
+    assert_eq!(
+        row["state"],
+        "Failed — tries again by itself (attempt 2 of 5)"
+    );
     assert_eq!(row["last_error"], "connection refused");
     assert_eq!(row["retryable"], true);
     assert_eq!(row["has_bytes"], true);
@@ -243,38 +246,197 @@ fn queued_without_bytes_counts_as_failed() {
     let list: serde_json::Value = serde_json::from_str(&list_json(&db, acc).unwrap()).unwrap();
     assert_eq!(
         list[0]["state"],
-        "Incomplete — message data was discarded; dismiss this entry"
+        "Incomplete — message data was discarded; delete this entry"
     );
 }
 
 #[test]
-fn state_line_names_retryable_and_dead_rows() {
-    use QueueStatus::*;
-    assert_eq!(state_line(Sending, false, true), "Sending…");
+fn row_state_names_waiting_retrying_and_dead_rows() {
+    use RowKind::*;
+    assert_eq!(row_state(Sending, true, 0), "Sending…");
     assert_eq!(
-        state_line(Scheduled, false, true),
+        row_state(Scheduled, true, 0),
         "Scheduled — sends automatically"
     );
     assert_eq!(
-        state_line(Queued, true, true),
+        row_state(Queued, true, 0),
         "Queued — goes out with the next sync"
     );
     assert_eq!(
-        state_line(Queued, false, false),
-        "Incomplete — message data was discarded; dismiss this entry"
+        row_state(Queued, false, 0),
+        "Incomplete — message data was discarded; delete this entry"
     );
     assert_eq!(
-        state_line(Failed, true, true),
-        "Failed — will retry on the next sync"
+        row_state(Retrying, true, 1),
+        "Failed — tries again by itself (attempt 2 of 5)"
     );
     assert_eq!(
-        state_line(Failed, false, true),
-        "Failed — retry limit reached, dismiss or resend by hand"
+        row_state(Failed, true, 5),
+        "Not sent — stopped retrying; retry, edit or delete it"
     );
     assert_eq!(
-        state_line(Failed, false, false),
-        "Failed — send it again by hand, then dismiss this entry"
+        row_state(Failed, false, 0),
+        "Failed — send it again by hand, then delete this entry"
     );
+}
+
+#[test]
+fn row_actions_follow_kind_and_bytes() {
+    let sending = RowActions::of(RowKind::Sending, true);
+    assert!(!sending.can_send_now && !sending.can_edit && !sending.can_delete);
+    let held = RowActions::of(RowKind::Scheduled, true);
+    assert!(held.can_send_now && held.can_reschedule && held.can_edit && held.can_delete);
+    assert_eq!(held.send_now_label, "Send now");
+    let queued = RowActions::of(RowKind::Queued, true);
+    assert!(!queued.can_send_now && queued.can_edit);
+    assert_eq!(
+        RowActions::of(RowKind::Retrying, true).send_now_label,
+        "Retry now"
+    );
+    let dead = RowActions::of(RowKind::Failed, true);
+    assert!(dead.can_send_now && dead.can_edit);
+    assert_eq!(dead.send_now_label, "Retry");
+    let empty = RowActions::of(RowKind::Failed, false);
+    assert!(!empty.can_send_now && !empty.can_edit && !empty.can_reschedule && empty.can_delete);
+}
+
+#[test]
+fn a_scheduled_send_that_gave_up_lists_as_failed_with_retry() {
+    let db = Db::open_in_memory().unwrap();
+    let acc = account(&db);
+    let id = scheduled_row(
+        &db,
+        acc,
+        b"From: me@example.com\r\nTo: you@example.com\r\nSubject: late\r\n\r\nbody",
+    );
+    queue::fail_scheduled_attempt(&db, id, "timeout", false).unwrap();
+    let list: serde_json::Value = serde_json::from_str(&list_json(&db, acc).unwrap()).unwrap();
+    assert_eq!(list[0]["kind"], "retrying");
+    assert_ne!(list[0]["retry_at"], "");
+    // In its pause: nothing a sync could deliver now.
+    assert_eq!(list[0]["retryable"], false);
+    queue::fail_scheduled_attempt(&db, id, "550 refused", true).unwrap();
+    let list: serde_json::Value = serde_json::from_str(&list_json(&db, acc).unwrap()).unwrap();
+    assert_eq!(list[0]["kind"], "failed");
+    assert_eq!(list[0]["retry_at"], "");
+    assert_eq!(list[0]["last_error"], "550 refused");
+    assert_eq!(list[0]["actions"]["send_now_label"], "Retry");
+    assert_eq!(list[0]["actions"]["can_edit"], true);
+}
+
+#[test]
+fn edit_takes_the_mail_back_with_bcc_files_and_inline_images() {
+    let db = Db::open_in_memory().unwrap();
+    let acc = account(&db);
+    let raw = concat!(
+        "From: Me <me@example.com>\r\n",
+        "To: you@example.com\r\n",
+        "Cc: cc@example.org\r\n",
+        "Reply-To: replies@example.com\r\n",
+        "Disposition-Notification-To: me@example.com\r\n",
+        "Subject: =?utf-8?q?Pr=C3=BCfung?=\r\n",
+        "MIME-Version: 1.0\r\n",
+        "Content-Type: multipart/mixed; boundary=\"outer\"\r\n",
+        "\r\n",
+        "--outer\r\n",
+        "Content-Type: multipart/related; boundary=\"rel\"\r\n",
+        "\r\n",
+        "--rel\r\n",
+        "Content-Type: text/html; charset=utf-8\r\n",
+        "\r\n",
+        "<p>Hello <img src=\"cid:logo@example.com\"></p>\r\n",
+        "--rel\r\n",
+        "Content-Type: image/png\r\n",
+        "Content-ID: <logo@example.com>\r\n",
+        "Content-Disposition: inline\r\n",
+        "Content-Transfer-Encoding: base64\r\n",
+        "\r\n",
+        "iVBORw0KGgo=\r\n",
+        "--rel--\r\n",
+        "--outer\r\n",
+        "Content-Type: text/plain; name=\"notes.txt\"\r\n",
+        "Content-Disposition: attachment; filename=\"notes.txt\"\r\n",
+        "\r\n",
+        "file body\r\n",
+        "--outer--\r\n",
+    );
+    let at = (chrono::Utc::now() + chrono::Duration::hours(2))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let to = [
+        "you@example.com".to_string(),
+        "cc@example.org".to_string(),
+        "hidden@example.org".to_string(),
+    ];
+    let id = queue::enqueue_scheduled_mime(
+        &db,
+        acc,
+        &queue::ScheduledMime {
+            message_id: None,
+            raw_mime: raw.as_bytes(),
+            envelope_from: "me@example.com",
+            envelope_to: &to,
+            request_dsn: true,
+            notify_self: false,
+            send_at: &at,
+        },
+    )
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    // Not someone else's.
+    assert!(take_for_edit(&db, acc + 99, id, dir.path()).is_err());
+    let e = take_for_edit(&db, acc, id, dir.path()).unwrap();
+    assert_eq!(e.from, "me@example.com");
+    assert_eq!(e.from_name, "Me");
+    assert_eq!(e.to, "you@example.com");
+    assert_eq!(e.cc, "cc@example.org");
+    assert_eq!(e.bcc, "hidden@example.org");
+    assert_eq!(e.reply_to, "replies@example.com");
+    assert_eq!(e.subject, "Pr\u{fc}fung");
+    assert!(e.request_mdn && e.request_dsn);
+    assert!(
+        e.editor_html.contains("data:image/png;base64,"),
+        "{}",
+        e.editor_html
+    );
+    assert_eq!(e.files.len(), 1);
+    assert_eq!(e.files[0].name, "notes.txt");
+    assert_eq!(
+        std::fs::read_to_string(&e.files[0].path).unwrap().trim(),
+        "file body"
+    );
+    // Out of the outbox now: the composer holds the only copy.
+    assert!(queue::get(&db, id).is_err());
+}
+
+#[test]
+fn edit_refuses_a_row_being_sent() {
+    let db = Db::open_in_memory().unwrap();
+    let acc = account(&db);
+    let id = enqueue(&db, acc, "in flight");
+    let dir = tempfile::tempdir().unwrap();
+    let err = take_for_edit(&db, acc, id, dir.path()).unwrap_err();
+    assert!(err.to_string().contains("being sent"), "{err}");
+    assert!(queue::get(&db, id).is_ok());
+}
+
+fn scheduled_row(db: &Db, acc: i64, raw: &[u8]) -> i64 {
+    let at = (chrono::Utc::now() + chrono::Duration::hours(2))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let to = ["you@example.com".to_string()];
+    queue::enqueue_scheduled_mime(
+        db,
+        acc,
+        &queue::ScheduledMime {
+            message_id: None,
+            raw_mime: raw,
+            envelope_from: "me@example.com",
+            envelope_to: &to,
+            request_dsn: false,
+            notify_self: false,
+            send_at: &at,
+        },
+    )
+    .unwrap()
 }
 
 #[test]

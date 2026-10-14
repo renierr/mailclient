@@ -100,6 +100,9 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
         internal set
     var outboxRetryable by mutableStateOf(0)
         internal set
+    // The Outbox pane stands in for the message list on wide layouts
+    // (sidebar entry, status chip); opening a folder or a message closes it.
+    var outboxOpen by mutableStateOf(false)
     var undoOffer: UndoOffer? by mutableStateOf(null)
         internal set
     var notice: String? by mutableStateOf(null)

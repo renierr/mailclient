@@ -14,7 +14,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::error::Result;
 
 /// Current schema version.
-pub const SCHEMA_VERSION: u32 = 25;
+pub const SCHEMA_VERSION: u32 = 26;
 
 /// Full DDL for fresh installs (== latest schema).
 const SCHEMA_FULL: &str = include_str!("schema.sql");
@@ -432,6 +432,22 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
             add_columns(
                 conn,
                 &["alter table send_queue add column notify_self integer not null default 0;"],
+            )?;
+            Ok(())
+        })?;
+    }
+    if current < 26 {
+        step(conn, 26, |conn| {
+            // v26: a scheduled send that failed waits for
+            // `send_queue.next_attempt_at` (growing pauses) instead of
+            // retrying on every flush, and `failure_noticed` remembers that
+            // its final failure was already reported to the user.
+            add_columns(
+                conn,
+                &[
+                    "alter table send_queue add column next_attempt_at text;",
+                    "alter table send_queue add column failure_noticed integer not null default 0;",
+                ],
             )?;
             Ok(())
         })?;
@@ -1413,5 +1429,30 @@ b<c",
         assert_eq!(version(&conn), SCHEMA_VERSION.to_string());
         conn.execute("select notify_self from send_queue", [])
             .unwrap();
+    }
+
+    #[test]
+    fn v26_migration_adds_retry_columns() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_FULL).unwrap();
+        conn.execute(
+            "insert into schema_meta (key, value) values ('version', '25')",
+            [],
+        )
+        .unwrap();
+        // A v25 database has neither column: drop them to fake one.
+        conn.execute_batch(
+            "alter table send_queue drop column next_attempt_at;
+             alter table send_queue drop column failure_noticed;",
+        )
+        .unwrap();
+        ensure_schema(&conn).unwrap();
+
+        assert_eq!(version(&conn), SCHEMA_VERSION.to_string());
+        conn.execute(
+            "select next_attempt_at, failure_noticed from send_queue",
+            [],
+        )
+        .unwrap();
     }
 }

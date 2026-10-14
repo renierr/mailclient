@@ -53,7 +53,7 @@ still to promote") points here instead of keeping its own list.
 | Mark-read on open | `mailcore::store::settings::mark_read_plan` (off / now / after-delay from the two settings plus the row state); both viewers follow it |
 | Job outcome | `SendOutcome::outcome` (`"sent"` / `"sent_partial"`) on the job event (`job_finished` outcome, `JobEvent.outcome`); Qt keys its close decision off it, and the Sent refresh stays `deliver`'s job on both |
 | Recipient autocomplete segment | `mailcore::compose::{recipient_segment, replace_recipient_segment}`, quote-aware; both recipient fields complete through them |
-| Outbox rows: counts, list, dismiss, one-line row state; a send that never started | `mailcore::outbox` (`status`, `list_json`, `dismiss` — never a row being sent, `state_line`); `compose::abandon_send` for an unstarted send job; retry is the next sync (`flush_outbox`), both dialogs only start one |
+| Outbox rows: counts, list, row kind and actions, one-line row state, delete, edit; a send that never started | `mailcore::outbox` (`status`, `list_json` with `kind` / `actions` / `retry_at`, `RowKind`, `RowActions`, `row_state`, `dismiss` — never a row being sent, `take_for_edit` rebuilds the composer fields and files from the stored MIME and removes the row); `compose::abandon_send` for an unstarted send job; both Outbox panes only lay the rows out |
 | Similar messages: 3-tier match, subject normalize, keywords | `mailcore::similar` (`similar_json`, `target_subject`, `normalize_subject`, `extract_keywords`); frontends are UI only |
 | Attachment open/save MIME | `mailcore::mime::open_mime`, carried as `open_mime` on every attachment in the reader feed; the frontends hand it to the OS opener / save picker as is |
 | Message EML export: attachment download, MIME assembly, headers, safe filename | `mailcore::export` (`prepare`, `assemble_eml`, `export_eml_to`, `suggested_eml_name`); the body tree is the composer's `sync::sender::mime_body` (lettre encodes every header); frontends only pick the destination |
@@ -82,7 +82,7 @@ still to promote") points here instead of keeping its own list.
 | WYSIWYG editor document (was #3): page, CSP, `window.mc` script, caret slot | `mailcore::compose::editor::document` (+ `mc.set`); Qt `Bridge.editor_document` (theme colours, `font_px`, placeholder, `extra_css` for its scrollbars) and `EditorFrame.qml` drives only the `mc.*` API; native unchanged (`MailNative.editorDocument`) |
 | Small UI twins (was #8): cleanup reason wording, colours-toggle rule, undo result text, capabilities error shape | `contacts::cleanup_reason_text` as `reason_text` on every `CleanupCandidate`; `html::reader::can_toggle_colors` (Qt `Bridge.can_toggle_colors`, `MailNative.canToggleColors`); `undo::undone_text` in both adapters; `sync::capabilities::{payload, failed_payload, error_payload}` with the lookup failure in the payload on both sides |
 | Forward and reopened-draft file prefetch (was #9): download plus seed in one job | Qt `forward_fetch`/`resend_fetch`/`draft_form` jobs plus native `MailNative.forwardFetch`/`resendFetch`/`draftFetch` jobs (same core `forward_files`/`resend_files`/draft ensure+stage); the native shell only opens the `{draft, files}` / `{form, staged}` seed from the finish event |
-| Scheduled sends: is a picked time valid (lead time) and the error words, when the next flush is due (incl. the retry pause after a failure), the due flush across accounts and its status line, Send now / Reschedule guards | `mailcore::outbox::{send_at_error, due_in_ms, reschedule, send_now}`, `queue::{next_due, due_scheduled_account_ids}`, `sync::background::{send_due_scheduled, SendDueReport::status_line}`; Qt `send_at_error` / `scheduled_due_ms` / `flush_due_sends`, native `MailNative.sendAtError` / `sendDueInMs` / `sendDue`; both pickers dropped their lead-time copy and the Qt due flush its own account loop |
+| Scheduled sends: is a picked time valid (lead time) and the error words, when the next flush is due, retry backoff and give-up (`SCHEDULED_BACKOFF_SECS`, `SCHEDULED_DEADLINE_SECS`, a 5xx gives up at once), the due flush across accounts and its status line, the once-only "not sent" notice and its words, Send now / Reschedule guards | `mailcore::outbox::{send_at_error, due_in_ms, reschedule, send_now}`, `queue::{next_due, due_scheduled_account_ids, fail_scheduled_attempt, fail_due_scheduled, take_failure_notices, FailedSend::line}`, `sync::background::{send_due_scheduled, SendDueReport::status_line}`; Qt `send_at_error` / `scheduled_due_ms` / `flush_due_sends`, native `MailNative.sendAtError` / `sendDueInMs` / `sendDue`; both pickers dropped their lead-time copy and the Qt due flush its own account loop |
 
 ## Open
 
@@ -121,8 +121,8 @@ on purpose.
   so a bridge call per character buys nothing; the core still refuses a
   message without a real recipient when Send runs
   (`ComposeForm::require_recipient`).
-- **A scheduled send's time in local words** (QML `SendAt.label`, Kotlin
-  `sendsAtLabel`). Locale date/time formatting is toolkit work: each side
+- **Outbox times in local words** (QML `SendAt.label` / `nextTry`, Kotlin
+  `sendsAtLabel` / `nextTryLabel`). Locale date/time formatting is toolkit work: each side
   formats the core's UTC `send_at` with its own locale and 12/24-hour
   setting. The core decides validity (`outbox::send_at_error`) and drops
   `send_at` from rows that left `scheduled`, so the label never decides
@@ -133,4 +133,6 @@ on purpose.
   toolkit mechanisms. Each keeps its own backstop: Qt caps a wait at five
   minutes (Timers do not count suspend), Android re-arms after 15 minutes
   while a row stays due and after a minute when a run was skipped for the
-  sync lock.
+  sync lock. How often a failing send is retried and when it gives up is
+  the core's (`queue::fail_scheduled_attempt`); the backstops only wake to
+  ask.

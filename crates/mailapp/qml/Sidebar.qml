@@ -23,9 +23,15 @@ Rectangle {
     property int currentAccountId: -1
     // The Rust bridge, for the folded rows. Main.qml passes it through.
     property var backend
+    // The account's outbox counts (`outbox_status_json`) and whether the
+    // Outbox pane is the one open. The entry shows while anything waits or
+    // the pane is open.
+    property var outboxStatus: ({})
+    property bool outboxCurrent: false
 
     signal folderSelected(string path)
     signal accountSelected(int id)
+    signal outboxSelected
 
     // Visible subset of `folders` (subscribed !== false). Kept as its own
     // model so hiding a folder never destroys the full feed the manager
@@ -233,7 +239,7 @@ Rectangle {
                 height: Theme.rowHeight
 
                 required property var model
-                readonly property bool current: folderRow.model.name === root.currentFolder
+                readonly property bool current: !root.outboxCurrent && folderRow.model.name === root.currentFolder
 
                 onClicked: root.emitLater(root.folderSelected, folderRow.model.name)
                 ToolTip.visible: folderRow.hovered
@@ -330,6 +336,68 @@ Rectangle {
                                                                          "Expand subfolders")
                         onClicked: root.toggleFolder(folderRow.model.id)
                     }
+                }
+            }
+        }
+
+        // The outbox as a virtual folder, pinned under the real ones: mail
+        // waiting on this device (scheduled, queued, retrying, failed).
+        ItemDelegate {
+            id: outboxRow
+            Layout.fillWidth: true
+            Layout.preferredHeight: Theme.rowHeight
+            visible: root.outboxCurrent || (root.outboxStatus.pending || 0) > 0
+            leftPadding: Theme.md + Theme.sm
+            rightPadding: Theme.md + Theme.sm
+            onClicked: root.emitLater(root.outboxSelected)
+            ToolTip.visible: outboxRow.hovered
+            ToolTip.text: root.outboxStatus.label || qsTr("Outbox")
+            Accessible.name: qsTr("Outbox: %1").arg(root.outboxStatus.label || qsTr("empty"))
+
+            readonly property bool failed: root.outboxStatus.has_failures === true
+
+            background: Rectangle {
+                anchors.fill: parent
+                anchors.leftMargin: Theme.sm
+                anchors.rightMargin: Theme.sm
+                radius: Theme.radius
+                color: root.outboxCurrent ? Theme.selected : outboxRow.hovered ? Theme.hover : "transparent"
+            }
+
+            contentItem: RowLayout {
+                spacing: Theme.sm
+                Label {
+                    text: Icons.outbox
+                    color: outboxRow.failed ? Theme.danger : Theme.text
+                    font.family: Icons.fontFamily
+                    font.pixelSize: Theme.fontBase
+                }
+                Label {
+                    Layout.fillWidth: true
+                    text: qsTr("Outbox")
+                    elide: Text.ElideRight
+                    color: outboxRow.failed ? Theme.danger : root.outboxCurrent ? Theme.accent : Theme.text
+                    font.pixelSize: Theme.fontBase
+                    font.bold: outboxRow.failed
+                }
+                Rectangle {
+                    visible: (root.outboxStatus.pending || 0) > 0
+                    implicitWidth: Math.max(Math.round(20 * Theme.uiScale), outboxCount.implicitWidth + Theme.sm)
+                    implicitHeight: Math.round(18 * Theme.uiScale)
+                    radius: Math.round(9 * Theme.uiScale)
+                    color: outboxRow.failed ? Theme.danger : Theme.border
+                    Label {
+                        id: outboxCount
+                        anchors.centerIn: parent
+                        text: root.outboxStatus.pending || 0
+                        color: outboxRow.failed ? Theme.accentText : Theme.textMuted
+                        font.pixelSize: Theme.fontTiny
+                        font.bold: true
+                    }
+                }
+                Item {
+                    Layout.preferredWidth: 24
+                    Layout.preferredHeight: 1
                 }
             }
         }

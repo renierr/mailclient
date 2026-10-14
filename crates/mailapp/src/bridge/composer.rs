@@ -129,7 +129,7 @@ impl qobject::Bridge {
                     .await;
             // Nothing went out and nothing failed (an early fire, or a sync
             // took the row first): leave the feeds alone.
-            let changed = report.sent > 0 || !report.errors.is_empty();
+            let changed = report.sent > 0 || !report.errors.is_empty() || !report.failed.is_empty();
             Ok(JobDone {
                 status: report.status_line(),
                 refresh: changed.then(|| JobRefresh::feeds(current_account, current_folder)),

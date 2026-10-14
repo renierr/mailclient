@@ -306,6 +306,9 @@ pub struct QueuedSend {
     /// address (what went out, to whom, when). Never set on the receipt
     /// itself, so it cannot chain.
     pub notify_self: bool,
+    /// A scheduled send that failed waits until this UTC instant before its
+    /// next attempt (`None` = no pause). See `queue::fail_scheduled_attempt`.
+    pub next_attempt_at: Option<String>,
 }
 
 #[cfg(test)]

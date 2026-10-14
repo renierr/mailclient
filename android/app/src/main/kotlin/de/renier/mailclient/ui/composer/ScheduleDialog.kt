@@ -221,5 +221,12 @@ private fun sendsAtText(at: Instant): String {
         local.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT))
 }
 
+/** "Next try Tuesday, 14 October 2026 at 08:15" for an outbox row's UTC `retry_at`; "" when unreadable. */
+fun nextTryLabel(retryAtUtc: String): String = parseInstant(retryAtUtc)?.let {
+    val local = it.atZone(ZoneId.systemDefault())
+    "Next try ${local.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL))} at " +
+        local.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT))
+}.orEmpty()
+
 /** "Sends Tuesday, 14 October 2026 at 08:00" for an outbox row's UTC `send_at`; "" when unreadable. */
 fun sendsAtLabel(sendAtUtc: String): String = parseInstant(sendAtUtc)?.let { sendsAtText(it) }.orEmpty()

@@ -332,6 +332,12 @@ object MailNative {
     @JvmStatic external fun sendNowOutbox(accountId: Long, id: Long)
     @JvmStatic external fun sendDueInMs(): Long
     @JvmStatic external fun sendAtError(sendAt: String): String
+    // Take an unsent mail out of the outbox into the composer: the fields,
+    // editor HTML and files staged under `dir` as JSON; the row is gone
+    // afterwards. Scheduled sends that gave up and were not reported yet
+    // (JSON array, each reported once) for the "not sent" notification.
+    @JvmStatic external fun outboxEdit(accountId: Long, id: Long, dir: String): String
+    @JvmStatic external fun takeSendFailures(): String
     // Flush every due `scheduled` row, whatever account holds it (no poll
     // gating: intervals, quiet hours and push/poll mode never hold back
     // mail the user asked to send). Blocks for the network run; workers

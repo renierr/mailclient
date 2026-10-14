@@ -14,6 +14,7 @@ import androidx.work.PeriodicWorkRequest
 import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -32,6 +33,8 @@ class MailCheckWorker(context: Context, params: WorkerParameters) : Worker(conte
                 // gate new-mail checks; they never hold back a send the
                 // user scheduled.
                 val report = JSONObject(MailNative.sendDue())
+                // A send that gave up says so once; retries stay quiet.
+                MailNotifier.showSendFailures(applicationContext, report.optJSONArray("failed"))
                 // Never enqueue a follow-up from here: a row that stays due
                 // (another sync held the lock, the password is missing)
                 // would chain worker after worker. The alarm comes back
@@ -48,6 +51,10 @@ class MailCheckWorker(context: Context, params: WorkerParameters) : Worker(conte
             // runs its own check, marked explicit, in the shade instead).
             val report = MailNative.check(trigger, now = false)
             MailNotifier.deliver(applicationContext, report)
+            // The check flushes outboxes too: a scheduled send may have
+            // given up there.
+            runCatching { JSONArray(MailNative.takeSendFailures()) }
+                .onSuccess { MailNotifier.showSendFailures(applicationContext, it) }
             // A due scheduled send may just have gone out (or failed): the next
             // held row needs its alarm.
             MailSendAlarm.refresh(applicationContext)

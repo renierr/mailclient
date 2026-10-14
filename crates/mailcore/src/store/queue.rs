@@ -142,11 +142,13 @@ fn row_to_queued(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueuedSend> {
         request_dsn: row.get(11)?,
         send_at: row.get(12)?,
         notify_self: row.get(13)?,
+        next_attempt_at: row.get(14)?,
     })
 }
 
 const COLS: &str = "id, account_id, message_id, status, last_error, retries,
-    raw_mime, envelope_from, envelope_to, created_at, updated_at, request_dsn, send_at, notify_self";
+    raw_mime, envelope_from, envelope_to, created_at, updated_at, request_dsn, send_at, notify_self,
+    next_attempt_at";
 
 /// All pending (queued/sending/failed/scheduled) entries, oldest first.
 pub fn list_pending(db: &Db) -> Result<Vec<QueuedSend>> {
@@ -164,10 +166,12 @@ pub fn list_pending(db: &Db) -> Result<Vec<QueuedSend>> {
 /// Unclaimed rows that still hold MIME bytes, have retries left and are due,
 /// oldest first. A row whose bytes were dropped (the failure was already
 /// reported to the user, who owns the retry) or that hit [`MAX_SEND_RETRIES`]
-/// is skipped, and so is a `sending` row (someone owns it) and a `scheduled`
+/// is skipped, and so is a `sending` row (someone owns it), a `scheduled`
 /// row whose time has not come ([`promote_due`] moves it to `queued` when it
-/// has). Candidates only -- a submitter must still win [`claim`] before
-/// touching SMTP.
+/// has) and a failed scheduled send still in its pause
+/// ([`fail_scheduled_attempt`]): no sync, timer or alarm retries it early.
+/// Candidates only -- a submitter must still win [`claim`] before touching
+/// SMTP.
 pub fn list_submittable(db: &Db, account_id: i64) -> Result<Vec<QueuedSend>> {
     let due = now();
     let mut stmt = db.conn().prepare(&format!(
@@ -178,6 +182,7 @@ pub fn list_submittable(db: &Db, account_id: i64) -> Result<Vec<QueuedSend>> {
             and length(raw_mime) > 0
             and retries < ?2
             and (send_at is null or send_at <= ?3)
+            and (next_attempt_at is null or next_attempt_at <= ?3)
           order by created_at"
     ))?;
     let rows = stmt
@@ -260,12 +265,165 @@ pub fn promote_due(db: &Db, account_id: i64) -> Result<u64> {
     Ok(n as u64)
 }
 
-/// How long a scheduled send that failed after its time waits before the
-/// planners ([`next_due`], [`due_scheduled_account_ids`]) ask for another
-/// flush. Without a pause a row that keeps failing (server down, password
-/// gone) would be due again the moment it failed, and a due timer or alarm
-/// would spin on it.
-pub const SCHEDULED_RETRY_SECS: i64 = 300;
+/// Pauses before the second, third, … attempt of a scheduled send that
+/// failed, whatever the cause (offline, server down, password missing). They
+/// grow so a send that cannot go out costs a handful of wakeups, not one
+/// every few minutes; after the last pause the next failure gives up
+/// ([`MAX_SEND_RETRIES`] attempts in all).
+pub const SCHEDULED_BACKOFF_SECS: [i64; 4] = [5 * 60, 15 * 60, 60 * 60, 3 * 60 * 60];
+
+/// A scheduled send still failing this long after its time gives up at the
+/// next failure, however many attempts it had: a mail meant for Tuesday
+/// morning must not trickle out on Thursday. The first attempt always runs,
+/// even when the device was off past the deadline.
+pub const SCHEDULED_DEADLINE_SECS: i64 = 24 * 60 * 60;
+
+/// What [`fail_scheduled_attempt`] decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScheduledFailure {
+    /// Tries again at this UTC instant.
+    RetryAt(String),
+    /// Out of attempts, past the deadline, or refused for good: the row
+    /// stays `failed` and dead until the user acts on it.
+    GaveUp,
+}
+
+/// Record one failed attempt of a scheduled send (a row with `send_at`):
+/// `failed` with the error, then either a pause from
+/// [`SCHEDULED_BACKOFF_SECS`] or, when `permanent` (the server refused the
+/// mail for good), out of attempts or past [`SCHEDULED_DEADLINE_SECS`], a
+/// give-up — retries set to [`MAX_SEND_RETRIES`] so nothing retries it, and
+/// `failure_noticed` cleared so [`take_failure_notices`] reports it once.
+pub fn fail_scheduled_attempt(
+    db: &Db,
+    id: i64,
+    error: &str,
+    permanent: bool,
+) -> Result<ScheduledFailure> {
+    let row = get(db, id)?;
+    let attempts = row.retries + 1;
+    let now_t = chrono::Utc::now();
+    let past_deadline = row
+        .send_at
+        .as_deref()
+        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+        .is_some_and(|at| now_t > at.to_utc() + chrono::Duration::seconds(SCHEDULED_DEADLINE_SECS));
+    let pause = SCHEDULED_BACKOFF_SECS.get((attempts - 1) as usize).copied();
+    let decision = match pause {
+        Some(secs) if !permanent && !past_deadline && attempts < MAX_SEND_RETRIES => {
+            ScheduledFailure::RetryAt(
+                (now_t + chrono::Duration::seconds(secs))
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            )
+        }
+        _ => ScheduledFailure::GaveUp,
+    };
+    let (retries, next_at) = match &decision {
+        ScheduledFailure::RetryAt(at) => (attempts, Some(at.as_str())),
+        ScheduledFailure::GaveUp => (MAX_SEND_RETRIES, None),
+    };
+    db.conn().execute(
+        "update send_queue set status = 'failed', last_error = ?1, retries = ?2,
+            next_attempt_at = ?3, failure_noticed = 0, updated_at = ?4
+          where id = ?5",
+        params![error, retries as i64, next_at, now(), id],
+    )?;
+    if decision == ScheduledFailure::GaveUp {
+        log::info!("outbox: scheduled send {id} gave up after {attempts} attempt(s)");
+    }
+    Ok(decision)
+}
+
+/// A flush could not even try this account (its password or settings are
+/// unreadable): every scheduled send of it that is due now counts one
+/// failed attempt with `error`, so it backs off and finally gives up like a
+/// send the server refused instead of being retried on every run.
+pub fn fail_due_scheduled(db: &Db, account_id: i64, error: &str) -> Result<u64> {
+    let now_s = now();
+    let ids: Vec<i64> = {
+        let mut stmt = db.conn().prepare(&format!(
+            "select id from send_queue
+              where account_id = ?1 and send_at is not null and status in {HELD_STATUSES}
+                and raw_mime is not null and length(raw_mime) > 0
+                and retries < ?2 and send_at <= ?3
+                and (next_attempt_at is null or next_attempt_at <= ?3)"
+        ))?;
+        let rows = stmt.query_map(params![account_id, MAX_SEND_RETRIES as i64, now_s], |r| {
+            r.get(0)
+        })?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    for id in &ids {
+        fail_scheduled_attempt(db, *id, error, false)?;
+    }
+    Ok(ids.len() as u64)
+}
+
+/// A scheduled send that gave up, reported once (Android notification, Qt
+/// status line). Subject only — never recipients or the body (AGENTS §6
+/// keeps those out of logs; a notification is visible on the lock screen).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FailedSend {
+    pub queue_id: i64,
+    pub account_id: i64,
+    pub subject: String,
+    pub error: String,
+    /// The give-up in one line, phrased once for the Qt status line and the
+    /// Android notification ([`FailedSend::line_for`]).
+    pub line: String,
+}
+
+impl FailedSend {
+    /// "Scheduled mail not sent: <subject> — <reason>".
+    #[must_use]
+    pub fn line_for(subject: &str, error: &str) -> String {
+        if error.is_empty() {
+            format!("Scheduled mail not sent: {subject}")
+        } else {
+            format!("Scheduled mail not sent: {subject} — {error}")
+        }
+    }
+}
+
+/// Scheduled sends that gave up and were not reported yet; each is marked
+/// reported here, so a second call returns nothing new. Rescheduling or
+/// Send now clears the mark again (a new attempt can fail anew).
+pub fn take_failure_notices(db: &Db) -> Result<Vec<FailedSend>> {
+    // id, account, MIME bytes (for the subject), last error.
+    type NoticeRow = (i64, i64, Option<Vec<u8>>, Option<String>);
+    let rows: Vec<NoticeRow> = {
+        let mut stmt = db.conn().prepare(
+            "select id, account_id, raw_mime, last_error from send_queue
+              where status = 'failed' and send_at is not null
+                and retries >= ?1 and failure_noticed = 0
+              order by updated_at",
+        )?;
+        let mapped = stmt.query_map(params![MAX_SEND_RETRIES as i64], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?;
+        mapped.collect::<rusqlite::Result<_>>()?
+    };
+    let mut out = Vec::with_capacity(rows.len());
+    for (id, account_id, raw, error) in rows {
+        db.conn().execute(
+            "update send_queue set failure_noticed = 1 where id = ?1",
+            [id],
+        )?;
+        let subject = raw
+            .as_deref()
+            .and_then(crate::outbox::subject_from_mime)
+            .unwrap_or_else(|| "(no subject)".to_string());
+        let error = error.unwrap_or_default();
+        out.push(FailedSend {
+            queue_id: id,
+            account_id,
+            line: FailedSend::line_for(&subject, &error),
+            subject,
+            error,
+        });
+    }
+    Ok(out)
+}
 
 /// Statuses a scheduled send can be in while it still waits to go out:
 /// held (`scheduled`), promoted by a flush (`queued`), or failed after its
@@ -305,7 +463,7 @@ pub fn reschedule(db: &Db, account_id: i64, id: i64, send_at: &str) -> Result<St
     let n = db.conn().execute(
         &format!(
             "update send_queue set status = 'scheduled', send_at = ?1, retries = 0,
-                last_error = null, updated_at = ?2
+                last_error = null, next_attempt_at = null, failure_noticed = 0, updated_at = ?2
               where id = ?3 and account_id = ?4 and status in {HELD_STATUSES}
                 and raw_mime is not null and length(raw_mime) > 0"
         ),
@@ -327,7 +485,7 @@ pub fn send_now(db: &Db, account_id: i64, id: i64) -> Result<()> {
     let n = db.conn().execute(
         &format!(
             "update send_queue set status = 'queued', send_at = ?1, retries = 0,
-                last_error = null, updated_at = ?1
+                last_error = null, next_attempt_at = null, failure_noticed = 0, updated_at = ?1
               where id = ?2 and account_id = ?3 and status in {HELD_STATUSES}
                 and raw_mime is not null and length(raw_mime) > 0"
         ),
@@ -341,12 +499,12 @@ pub fn send_now(db: &Db, account_id: i64, id: i64) -> Result<()> {
 
 /// Every scheduled send still waiting to go out, as `(account_id, next
 /// attempt)`. A held row's attempt is its `send_at`; a promoted one's is
-/// `send_at` too (due now); one that failed after its time retries
-/// [`SCHEDULED_RETRY_SECS`] after the failure. Rows without bytes or out of
-/// retries are dead and left to the outbox list.
+/// `send_at` too (due now); one that failed waits for its
+/// `next_attempt_at` ([`fail_scheduled_attempt`]). Rows without bytes or out
+/// of retries are dead and left to the outbox list.
 fn waiting_scheduled(db: &Db) -> Result<Vec<(i64, chrono::DateTime<chrono::Utc>)>> {
     let mut stmt = db.conn().prepare(&format!(
-        "select account_id, status, send_at, updated_at from send_queue
+        "select account_id, send_at, next_attempt_at from send_queue
           where send_at is not null and status in {HELD_STATUSES}
             and raw_mime is not null and length(raw_mime) > 0
             and retries < ?1"
@@ -355,8 +513,7 @@ fn waiting_scheduled(db: &Db) -> Result<Vec<(i64, chrono::DateTime<chrono::Utc>)
         Ok((
             row.get::<_, i64>(0)?,
             row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, String>(3)?,
+            row.get::<_, Option<String>>(2)?,
         ))
     })?;
     let parse = |raw: &str| {
@@ -366,17 +523,15 @@ fn waiting_scheduled(db: &Db) -> Result<Vec<(i64, chrono::DateTime<chrono::Utc>)
     };
     let mut out = Vec::new();
     for row in rows {
-        let (account_id, status, send_at, updated_at) = row?;
+        let (account_id, send_at, next_attempt) = row?;
         let Some(at) = parse(&send_at) else {
             log::warn!("outbox: unreadable send_at on a scheduled row of account {account_id}");
             continue;
         };
-        let next = match QueueStatus::parse_status(&status) {
-            QueueStatus::Failed => parse(&updated_at)
-                .map(|t| (t + chrono::Duration::seconds(SCHEDULED_RETRY_SECS)).max(at))
-                .unwrap_or(at),
-            _ => at,
-        };
+        let next = next_attempt
+            .as_deref()
+            .and_then(parse)
+            .map_or(at, |t| t.max(at));
         out.push((account_id, next));
     }
     Ok(out)

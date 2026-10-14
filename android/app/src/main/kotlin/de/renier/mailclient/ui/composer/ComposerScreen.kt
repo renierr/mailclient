@@ -132,7 +132,7 @@ fun ComposerScreen(
     var showReplyTo by remember { mutableStateOf(seed.replyTo.isNotEmpty()) }
     val picked = remember { mutableStateListOf<PickedFile>().apply { addAll(seed.attachments) } }
     // A send that failed after closing is unsent work again: Discard asks.
-    var dirty by remember { mutableStateOf(seed.failure.isNotEmpty()) }
+    var dirty by remember { mutableStateOf(seed.failure.isNotEmpty() || seed.unsaved) }
     var sending by remember { mutableStateOf(false) }
     var scheduling by remember { mutableStateOf(false) }
     var showSchedule by remember { mutableStateOf(false) }

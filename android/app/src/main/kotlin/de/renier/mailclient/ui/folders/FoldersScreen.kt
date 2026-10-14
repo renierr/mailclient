@@ -36,6 +36,8 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.R
 import de.renier.mailclient.ui.common.Avatar
@@ -57,6 +59,7 @@ fun FoldersScreen(
     state: MailState,
     onOpenFolder: () -> Unit,
     onAddAccount: () -> Unit,
+    onOpenOutbox: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         if (state.accounts.isEmpty()) {
@@ -104,7 +107,7 @@ fun FoldersScreen(
                 items(rows, key = { it.folder.id }) { row ->
                     FolderRow(
                         folder = row.folder,
-                        selected = row.folder.id == state.folderId,
+                        selected = !state.outboxOpen && row.folder.id == state.folderId,
                         unread = row.unread,
                         total = row.total,
                         collapsible = row.collapsible,
@@ -115,6 +118,19 @@ fun FoldersScreen(
                             onOpenFolder()
                         },
                     )
+                }
+                // The outbox as a virtual folder under the real ones: mail
+                // waiting on this phone (scheduled, queued, retrying, failed).
+                if (state.outboxPending > 0 || state.outboxOpen) {
+                    item(key = "outbox") {
+                        OutboxRow(
+                            pending = state.outboxPending,
+                            failed = state.outboxFailed,
+                            label = state.outboxLabel,
+                            selected = state.outboxOpen,
+                            onClick = onOpenOutbox,
+                        )
+                    }
                 }
             }
         }
@@ -248,6 +264,39 @@ private fun FolderRow(
         } else {
             Spacer(modifier = Modifier.size(28.dp))
         }
+    }
+}
+
+@Composable
+private fun OutboxRow(pending: Int, failed: Boolean, label: String, selected: Boolean, onClick: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    val tint = if (failed) scheme.error else scheme.onSurface
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(if (selected) scheme.secondaryContainer else scheme.surface)
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = "Outbox: $label" }
+            .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(painterResource(R.drawable.ic_send), contentDescription = null, tint = tint)
+        Text(
+            "Outbox",
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = if (failed) FontWeight.SemiBold else null,
+            color = tint,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (pending > 0) {
+            Badge(containerColor = if (failed) scheme.error else scheme.secondaryContainer) {
+                Text(pending.toString())
+            }
+        }
+        Spacer(modifier = Modifier.size(28.dp))
     }
 }
 

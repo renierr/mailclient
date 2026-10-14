@@ -86,6 +86,7 @@ fn main() {
             .qml_file("qml/Folders.qml")
             .qml_file("qml/MoveTo.qml")
             .qml_file("qml/Settings.qml")
+            .qml_file("qml/OutboxPane.qml")
             .qml_file("qml/components/Avatar.qml")
             .qml_file("qml/components/IconButton.qml")
             .qml_file("qml/components/FormField.qml")

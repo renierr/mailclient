@@ -402,7 +402,15 @@ impl SmtpSender {
                 Ok(submitted)
             }
             Err(e) => {
-                let _ = queue::mark_failed(db, queue_id, &e.to_string());
+                if row.send_at.is_some() {
+                    // A scheduled send backs off and finally gives up instead
+                    // of being retried by every flush; a refusal for good
+                    // (5xx) gives up at once.
+                    let permanent = matches!(&e, StoreError::Smtp(s) if s.is_permanent());
+                    let _ = queue::fail_scheduled_attempt(db, queue_id, &e.to_string(), permanent);
+                } else {
+                    let _ = queue::mark_failed(db, queue_id, &e.to_string());
+                }
                 Err(e)
             }
         }

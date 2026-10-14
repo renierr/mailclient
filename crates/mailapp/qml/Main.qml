@@ -71,6 +71,9 @@ ApplicationWindow {
     readonly property bool wideLayout: root.width >= 1100
     readonly property bool mediumLayout: root.width >= 720 && root.width < 1100
     property bool sidebarOpen: true
+    // The Outbox pane stands in for the message list and reader (sidebar
+    // entry or status-bar pill); picking a folder closes it.
+    property bool outboxOpen: false
     // Narrow navigation: folders | list | reader. A cold start opens where
     // the `start_view` setting says (Component.onCompleted).
     property string narrowPane: "list"
@@ -220,6 +223,36 @@ ApplicationWindow {
     // so read-only jobs can refresh it without losing scroll position.
     function reloadOutboxStatus() {
         root.outboxStatus = FeedJson.parse(backend.outbox_status_json(), ({}));
+    }
+
+    function openOutbox() {
+        markReadTimer.stop();
+        root.currentUid = -1;
+        root.outboxOpen = true;
+        root.narrowPane = "list";
+        reloadOutboxStatus();
+        outboxPane.reload();
+    }
+
+    // Edit from the outbox: the core takes the mail out of the outbox
+    // (`outbox_edit`), so check the composer can take it first. It opens as
+    // unsaved work — the composer now holds the only copy.
+    function editFromOutbox(id) {
+        if (!composer.readyForNew())
+            return;
+        var seed = FeedJson.parse(backend.outbox_edit(backend.current_account_id, id), ({}));
+        outboxPane.reload();
+        reloadOutboxStatus();
+        root.armDueTimer();
+        if (seed.error !== undefined) {
+            root.statusText = seed.error;
+            return;
+        }
+        composer.openForDraft(seed);
+        composer.requestMdn = seed.request_mdn === true;
+        composer.requestDsn = seed.request_dsn === true;
+        composer.dirty = true;
+        root.statusText = qsTr("Taken out of the outbox — send, schedule or save it again");
     }
 
     // A read/star change touched only these rows of the open folder: swap
@@ -777,6 +810,7 @@ ApplicationWindow {
                 messageList.setSelectionMode(false);
             root.currentFolder = path;
             root.currentUid = -1;
+            root.outboxOpen = false;
             // Narrow layouts return to the list; wide ones show it already.
             root.narrowPane = "list";
             reloadMessages();
@@ -1440,14 +1474,19 @@ ApplicationWindow {
             currentFolder: root.currentFolder
             currentEmail: backend.current_account_email
             currentAccountId: backend.current_account_id
+            outboxStatus: root.outboxStatus
+            outboxCurrent: root.outboxOpen
             onFolderSelected: path => root.selectFolder(path)
             onAccountSelected: id => root.selectAccount(id)
+            onOutboxSelected: root.openOutbox()
         }
 
         MessageList {
             id: messageList
-            visible: !root.readerFullscreen && (root.wideLayout ? true : root.mediumLayout ? root.currentUid < 0 : root.narrowPane
-                                                                                             === "list")
+            visible: !root.outboxOpen && !root.readerFullscreen && (root.wideLayout ? true : root.mediumLayout ? root.currentUid
+                                                                                                                  < 0 :
+                                                                                                                  root.narrowPane
+                                                                                                                  === "list")
             enabled: visible
             SplitView.preferredWidth: 360
             SplitView.minimumWidth: 240
@@ -1501,11 +1540,32 @@ ApplicationWindow {
             onStatusMessage: text => root.statusText = text
         }
 
+        OutboxPane {
+            id: outboxPane
+            visible: root.outboxOpen && !root.readerFullscreen && (root.wideLayout || root.mediumLayout
+                                                                   || root.narrowPane === "list")
+            enabled: visible
+            SplitView.fillWidth: root.outboxOpen
+            SplitView.minimumWidth: 260
+            backend: backend
+            accountId: backend.current_account_id
+            showBack: !root.wideLayout && !root.mediumLayout
+            onStatusMessage: text => root.statusText = text
+            onSyncRequested: root.syncNow()
+            onScheduleChanged: {
+                root.reloadOutboxStatus();
+                root.armDueTimer();
+            }
+            onBackRequested: root.narrowPane = "folders"
+            onEditRequested: id => root.editFromOutbox(id)
+        }
+
         MessageView {
             id: messageView
-            SplitView.fillWidth: true
+            SplitView.fillWidth: !root.outboxOpen
             SplitView.minimumWidth: 260
-            visible: root.wideLayout ? true : root.mediumLayout ? root.currentUid >= 0 : root.narrowPane === "reader"
+            visible: !root.outboxOpen && (root.wideLayout ? true : root.mediumLayout ? root.currentUid >= 0 :
+                                                                                       root.narrowPane === "reader")
             enabled: visible
             isFullscreen: root.readerFullscreen
             showBack: root.mediumLayout ? root.currentUid >= 0 : !root.wideLayout && root.narrowPane === "reader"
@@ -1630,7 +1690,7 @@ ApplicationWindow {
                 onClicked: statusDetailsDialog.open()
             }
             // Unsent mail: queued, still sending, or failed. Opens the
-            // outbox dialog; red while anything failed.
+            // Outbox pane; red while anything failed.
             IconButton {
                 id: outboxButton
                 visible: (root.outboxStatus.pending || 0) > 0
@@ -1641,7 +1701,7 @@ ApplicationWindow {
                 iconFont: true
                 tooltip: qsTr("Outbox: %1 — open outbox").arg(root.outboxStatus.label || "")
                 Accessible.name: tooltip
-                onClicked: outboxDialog.open()
+                onClicked: root.openOutbox()
             }
             Label {
                 visible: outboxButton.visible
@@ -1744,18 +1804,6 @@ ApplicationWindow {
         id: contactsDialog
         backend: backend
         onStatusMessage: text => root.statusText = text
-    }
-
-    Outbox {
-        id: outboxDialog
-        backend: backend
-        onStatusMessage: text => root.statusText = text
-        onSyncRequested: root.syncNow()
-        onScheduleChanged: root.armDueTimer()
-        onClosed: {
-            root.reloadOutboxStatus();
-            root.armDueTimer();
-        }
     }
 
     Folders {

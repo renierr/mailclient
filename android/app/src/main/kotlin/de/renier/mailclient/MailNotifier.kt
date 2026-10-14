@@ -10,6 +10,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.util.Log
+import org.json.JSONArray
 import org.json.JSONObject
 
 // The new-mail notifications, for every scheduler (worker, alarm, push) and
@@ -35,6 +36,10 @@ object MailNotifier {
     private val TAG_PREFIXES = listOf("mail:", "account:")
     private const val TEST_TAG = "test"
     private const val REPLY_FAILED_PREFIX = "reply-failed:"
+    private const val SEND_FAILED_PREFIX = "send-failed:"
+
+    // Open payload of a "not sent" notification: that account's outbox.
+    const val OUTBOX_PREFIX = "outbox:"
 
     private const val TAG = "mailclient"
 
@@ -113,6 +118,36 @@ object MailNotifier {
             .setContentIntent(openIntent(context, tag, payload))
             .build()
         manager.notify(tag, NOTIFICATION_ID, notification)
+    }
+
+    // A scheduled send that gave up (`mailcore::store::queue::FailedSend`):
+    // one notification per mail, worded by the core; tapping it opens that
+    // account's outbox, where the mail waits to be retried, edited or
+    // deleted. Outside the plan's tags, so opening the app leaves it.
+    fun showSendFailed(context: Context, failure: JSONObject) {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        ensureChannel(manager)
+        val tag = SEND_FAILED_PREFIX + failure.optLong("queue_id")
+        val line = failure.optString("line")
+        val notification = builder(context)
+            .setSmallIcon(R.drawable.ic_launcher_monochrome)
+            .setContentTitle("Scheduled mail not sent")
+            .setContentText(line)
+            .setStyle(Notification.BigTextStyle().bigText(line))
+            .setAutoCancel(true)
+            .setCategory(Notification.CATEGORY_ERROR)
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .setContentIntent(openIntent(context, tag, OUTBOX_PREFIX + failure.optLong("account_id")))
+            .build()
+        manager.notify(tag, NOTIFICATION_ID, notification)
+    }
+
+    // Every give-up the core has not reported yet, each notified once.
+    fun showSendFailures(context: Context, failures: JSONArray?) {
+        if (failures == null) return
+        for (i in 0 until failures.length()) {
+            failures.optJSONObject(i)?.let { showSendFailed(context, it) }
+        }
     }
 
     // Remove every mail notification (the app was opened).

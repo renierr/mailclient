@@ -57,6 +57,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.MailNotifier
+import de.renier.mailclient.MailSendAlarm
 import de.renier.mailclient.ComposeEntryActivity
 import de.renier.mailclient.MailShortcuts
 import de.renier.mailclient.R
@@ -78,6 +79,7 @@ import de.renier.mailclient.ui.state.clearSearch
 import de.renier.mailclient.ui.state.isAlreadyRunning
 import de.renier.mailclient.ui.state.openFolder
 import de.renier.mailclient.ui.state.refreshFolders
+import de.renier.mailclient.ui.state.refreshOutbox
 import de.renier.mailclient.ui.state.selectAccount
 import de.renier.mailclient.ui.state.setSearch
 import de.renier.mailclient.ui.state.syncNow
@@ -158,13 +160,62 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
         (if (wide) listOf(Route.Folders) else listOf(Route.Folders, Route.List)) + listOfNotNull(reader)
 
     fun openFolderPane() {
+        state.outboxOpen = false
         // Wide: the list is beside the folders already; picking a folder
         // (the current one included) closes the reader, like Flutter.
         stack = if (wide) mailStack() else stack + Route.List
     }
 
     fun openReader(r: Route.Reader) {
+        state.outboxOpen = false
         stack = stack.dropLastWhile { it is Route.Reader } + r
+    }
+
+    // The outbox: in the list pane beside the folders on wide layouts (the
+    // sidebar's Outbox entry is the open "folder"), a page of its own on a
+    // phone.
+    fun openOutbox() {
+        if (wide) {
+            state.outboxOpen = true
+            stack = mailStack()
+        } else if (stack.last() != Route.Outbox) {
+            go(Route.Outbox)
+        }
+    }
+
+    // Edit from the outbox: the core takes the mail out (`outboxEdit`), so
+    // check the composer is free first. The composer then holds the only
+    // copy and opens as unsaved work.
+    fun editOutbox(id: Long) {
+        val accountId = state.activeAccountId
+        val folderId = state.folderId
+        if (accountId < 0) return
+        if (state.pendingSend != null) {
+            state.info("Still sending the last message…")
+            return
+        }
+        if (state.pendingDraft != null) {
+            state.info("Still saving the last draft…")
+            return
+        }
+        scope.launch {
+            val seed = withContext(Dispatchers.IO) {
+                val taken = runCatching {
+                    MailNative.ensureInit(context)
+                    ComposerSeed.fromOutbox(
+                        JSONObject(MailNative.outboxEdit(accountId, id, context.cacheDir.absolutePath)),
+                    )
+                }
+                // The row may be gone: the alarm plans from what is left.
+                runCatching { MailSendAlarm.refresh(context) }
+                taken
+            }
+            state.refreshOutbox()
+            seed.onSuccess {
+                state.info("Taken out of the outbox — send, schedule or save it again")
+                go(Route.Composer(it, accountId, folderId))
+            }.onFailure { state.info(it.message ?: "Could not take the mail out of the outbox") }
+        }
     }
 
     // Seeds read the local database only, but a long thread with inline
@@ -383,6 +434,13 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                 state.selectAccount(account)
                 stack = mailStack()
             }
+        } else if (payload.startsWith(MailNotifier.OUTBOX_PREFIX)) {
+            // A "scheduled mail not sent" notification: that account's outbox.
+            val account = payload.removePrefix(MailNotifier.OUTBOX_PREFIX).toLongOrNull()
+            if (account != null && state.accounts.any { it.id == account }) {
+                if (account != state.activeAccountId) state.selectAccount(account)
+                openOutbox()
+            }
         } else if (parts.size == 4 && parts[0] == "mail") {
             val account = parts[1].toLongOrNull()
             val folder = parts[2].toLongOrNull()
@@ -586,7 +644,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                     outboxPending = state.outboxPending,
                     outboxFailed = state.outboxFailed,
                     outboxLabel = state.outboxLabel,
-                    onOutbox = { if (route != Route.Outbox) go(Route.Outbox) },
+                    onOutbox = ::openOutbox,
                     onCopied = state::info,
                 )
             },
@@ -607,14 +665,19 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                         state = state,
                         onOpenFolder = ::openFolderPane,
                         onAddAccount = { go(Route.Setup(-1)) },
+                        onOpenOutbox = ::openOutbox,
                     )
                 }
                 val list: @Composable () -> Unit = {
-                    ListScreen(
-                        state = state,
-                        onOpenReader = ::openRow,
-                        openMessage = (route as? Route.Reader)?.let { it.folderId to it.uid },
-                    )
+                    if (state.outboxOpen) {
+                        OutboxScreen(state = state, onEdit = ::editOutbox)
+                    } else {
+                        ListScreen(
+                            state = state,
+                            onOpenReader = ::openRow,
+                            openMessage = (route as? Route.Reader)?.let { it.folderId to it.uid },
+                        )
+                    }
                 }
                 val reader: @Composable (Route.Reader) -> Unit = { r ->
                     // Keyed: opening another message beside the list must not
@@ -649,7 +712,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                         widths = widths,
                         folders = folders,
                         list = list,
-                        reader = (route as? Route.Reader)?.let { r -> { reader(r) } },
+                        reader = (route as? Route.Reader)?.takeUnless { state.outboxOpen }?.let { r -> { reader(r) } },
                         fullscreen = fullscreen,
                     )
                     return@Column
@@ -679,7 +742,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                         )
                     is Route.Reader -> reader(route)
                     Route.Settings -> SettingsScreen(state = state, onClose = ::back)
-                    Route.Outbox -> OutboxScreen(state = state)
+                    Route.Outbox -> OutboxScreen(state = state, onEdit = ::editOutbox)
                     Route.Contacts -> ContactsScreen()
                     is Route.Composer ->
                         ComposerScreen(

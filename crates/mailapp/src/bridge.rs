@@ -774,6 +774,13 @@ pub mod qobject {
         #[qinvokable]
         fn send_now_outbox(&self, account_id: i64, id: i64) -> QString;
 
+        /// Take an unsent mail of `account_id` out of the outbox into the
+        /// composer (`mailcore::outbox::take_for_edit`): the composer's draft
+        /// shape with its files staged as `file://` URLs, or `{error}`. The
+        /// row is gone once this succeeds.
+        #[qinvokable]
+        fn outbox_edit(&self, account_id: i64, id: i64) -> QString;
+
         /// Drop all pooled IMAP sessions (app quit). No LOGOUT round-trip,
         /// so quit never blocks on a dead connection — closing the sockets
         /// reaps the server-side sessions, like any network drop.

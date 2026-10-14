@@ -15,6 +15,7 @@ enum class ComposeMode(val title: String) {
     Forward("Forward"),
     Resend("Edit & resend"),
     Draft("Edit draft"),
+    Outbox("Edit unsent mail"),
 }
 
 /**
@@ -50,9 +51,31 @@ data class ComposerSeed(
     // Receipts the failed send asked for; null starts from the settings.
     val requestMdn: Boolean? = null,
     val requestDsn: Boolean? = null,
+    // The composer holds the only copy (taken out of the outbox): it opens
+    // as unsaved work, so closing it asks before discarding.
+    val unsaved: Boolean = false,
 ) {
     companion object {
         // Blocking JNI reads (local SQLite only): call off the main thread.
+
+        /** An unsent mail taken out of the outbox (`MailNative.outboxEdit`). */
+        fun fromOutbox(e: JSONObject): ComposerSeed = ComposerSeed(
+            mode = ComposeMode.Outbox,
+            fromAddr = e.optString("from"),
+            to = e.optString("to"),
+            cc = e.optString("cc"),
+            bcc = e.optString("bcc"),
+            replyTo = e.optString("reply_to"),
+            subject = e.optString("subject"),
+            bodyHtml = e.optString("editor_html"),
+            fromName = e.optString("from_name").ifEmpty { null },
+            attachments = e.optJSONArray("files").objects().map {
+                PickedFile(it.optString("path"), it.optString("name"))
+            },
+            requestMdn = e.optBoolean("request_mdn"),
+            requestDsn = e.optBoolean("request_dsn"),
+            unsaved = true,
+        )
 
         /** New mail, with the signature below room to type. */
         fun blank(): ComposerSeed =
