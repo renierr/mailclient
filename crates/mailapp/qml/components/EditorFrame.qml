@@ -28,8 +28,8 @@ Item {
     // like the reader, through the core's factor.
     property string readerFont: "normal"
 
-    // Live formatting state, polled from the document so the toolbar can
-    // show what the caret is actually inside of.
+    // Live formatting state, pushed by the document (its title, see
+    // `onTitleChanged`) so the toolbar shows what the caret is inside of.
     property bool boldActive: false
     property bool italicActive: false
     property bool underlineActive: false
@@ -96,7 +96,7 @@ Item {
         // value would otherwise close the JS string literal.
         var arg = value === undefined ? "" : "," + JSON.stringify(value);
         view.runJavaScript("mc.exec(" + JSON.stringify(command) + arg + ");", function () {
-            root.pollState();
+            root.refreshState();
             root.contentChanged();
         });
     }
@@ -105,7 +105,7 @@ Item {
         if (!root.ready)
             return;
         view.runJavaScript("mc.quote();", function () {
-            root.pollState();
+            root.refreshState();
             root.contentChanged();
         });
     }
@@ -115,7 +115,7 @@ Item {
         if (!root.ready)
             return;
         view.runJavaScript("mc.link(" + JSON.stringify(url) + ");", function () {
-            root.pollState();
+            root.refreshState();
             root.contentChanged();
         });
     }
@@ -167,19 +167,22 @@ Item {
             view.runJavaScript("mc.focus();");
     }
 
-    function pollState() {
-        if (!root.ready)
+    function applyState(json) {
+        if (!json)
             return;
-        view.runJavaScript("mc.state()", function (json) {
-            if (!json)
-                return;
-            var s = FeedJson.parse(json, ({}));
-            root.boldActive = s.b === true;
-            root.italicActive = s.i === true;
-            root.underlineActive = s.u === true;
-            root.listActive = s.l === true;
-            root.quoteActive = s.q === true;
-        });
+        var s = FeedJson.parse(json, ({}));
+        root.boldActive = s.b === true;
+        root.italicActive = s.i === true;
+        root.underlineActive = s.u === true;
+        root.listActive = s.l === true;
+        root.quoteActive = s.q === true;
+    }
+
+    // Asked once where the page may not have pushed yet (a fresh load, right
+    // after a toolbar command); every caret move and edit pushes by itself.
+    function refreshState() {
+        if (root.ready)
+            view.runJavaScript("mc.state()", root.applyState);
     }
 
     onBackendChanged: root.ensureLoaded()
@@ -197,6 +200,15 @@ Item {
         settings.javascriptCanOpenWindows: false
         settings.javascriptCanAccessClipboard: true
 
+        // The page pushes its formatting state as the title (`mc:<json>`,
+        // see `mailcore::compose::editor`): caret and selection changes have
+        // no QML signal, and WebEngine offers no call into QML without a
+        // web channel.
+        onTitleChanged: {
+            if (view.title.indexOf("mc:") === 0)
+                root.applyState(view.title.slice(3));
+        }
+
         onLoadingChanged: loadRequest => {
             if (loadRequest.status === WebEngineView.LoadSucceededStatus) {
                 root.ready = true;
@@ -204,7 +216,7 @@ Item {
                     root.setHtml(root.pendingHtml);
                     root.pendingHtml = "";
                 }
-                root.pollState();
+                root.refreshState();
             }
         }
 
@@ -220,14 +232,5 @@ Item {
         }
 
         Component.onCompleted: root.ensureLoaded()
-    }
-
-    // Caret and selection changes have no QML signal, so the toolbar state is
-    // sampled. 200 ms is below noticing and costs nothing while idle.
-    Timer {
-        interval: 200
-        running: root.ready && root.visible
-        repeat: true
-        onTriggered: root.pollState()
     }
 }

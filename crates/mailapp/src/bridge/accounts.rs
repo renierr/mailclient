@@ -1,5 +1,6 @@
 use std::pin::Pin;
 
+use cxx_qt::Threading;
 use cxx_qt_lib::QString;
 use mailcore::store::account_form::{self, KeyringStore};
 use mailcore::store::{accounts, folders, settings};
@@ -89,7 +90,7 @@ impl qobject::Bridge {
     /// Take a queued `mailapp --open` jump request (widget/notification
     /// click): returns `"<account_id>\n<folder>"` (folder may be empty =
     /// inbox), or `""` when nothing is queued. Take-once by design — each
-    /// click jumps exactly once, polled by the GUI startup and timer.
+    /// click jumps exactly once; read at startup and on `open_requested`.
     pub fn consume_pending_open(self: Pin<&mut Self>) -> QString {
         let db = match shared_db() {
             Ok(d) => d,
@@ -102,6 +103,25 @@ impl qobject::Bridge {
                 qstring(&serde_json::json!({ "account_id": id, "folder": folder }).to_string())
             }
             None => qstring(""),
+        }
+    }
+
+    pub fn listen_for_open(self: Pin<&mut Self>) -> QString {
+        static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return qstring("");
+        }
+        let qt = self.qt_thread();
+        let listening = crate::relay::listen(&mailcore::default_db_path(), move || {
+            let _ = qt.queue(|bridge| bridge.open_requested());
+        });
+        match listening {
+            Ok(()) => qstring(""),
+            Err(e) => {
+                log::warn!("open relay: cannot listen: {e}");
+                STARTED.store(false, std::sync::atomic::Ordering::SeqCst);
+                qstring(&format!("cannot listen for open requests: {e}"))
+            }
         }
     }
 

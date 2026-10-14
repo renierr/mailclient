@@ -23,7 +23,9 @@
 //! reply is typed above the quote, not into its attribution line. A host that can receive calls
 //! from the page exposes `window.MCHost` with `changed()` (the user edited)
 //! and `state(json)` (formatting at the caret changed: `b`, `i`, `u`, `l`
-//! list, `q` quote); one that cannot polls `mc.state()` instead.
+//! list, `q` quote). A host that cannot (Qt WebEngine without a web
+//! channel) gets the same state pushed as the page title, `mc:<json>`, and
+//! listens for title changes; `mc.state()` still answers on demand.
 
 use crate::html::{escape_attr, needs_html_formatting, sanitize_for_send};
 
@@ -107,7 +109,7 @@ function inside(r){return !!r&&e.contains(r.commonAncestorContainer);}
 function restore(){if(!saved)return;var s=getSelection();s.removeAllRanges();s.addRange(saved);saved=null;}
 function quoted(){return /blockquote/i.test(document.queryCommandValue('formatBlock'));}
 function state(){return JSON.stringify({b:document.queryCommandState('bold'),i:document.queryCommandState('italic'),u:document.queryCommandState('underline'),l:document.queryCommandState('insertUnorderedList'),q:quoted()});}
-function report(){if(!host)return;var s=state();if(s!==last){last=s;host.state(s);}}
+function report(){var s=state();if(s===last)return;last=s;if(host)host.state(s);else document.title='mc:'+s;}
 function edited(){if(host)host.changed();report();}
 var TAGS={bold:['B','STRONG'],italic:['I','EM'],underline:['U']};
 function holder(n,names){for(;n&&n!==e;n=n.parentNode){if(n.nodeType===1&&names.indexOf(n.nodeName)>=0)return n;}return null;}
@@ -181,6 +183,13 @@ mod tests {
         let a = document(&style(), "", "");
         let b = document(&style(), "", "");
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn a_host_without_a_bridge_gets_the_state_as_the_title() {
+        let doc = document(&style(), "", "");
+        assert!(doc.contains("if(host)host.state(s);else document.title='mc:'+s;"));
+        assert!(doc.contains("document.addEventListener('selectionchange',report);"));
     }
 
     #[test]

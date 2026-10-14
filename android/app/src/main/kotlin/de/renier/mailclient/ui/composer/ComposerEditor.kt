@@ -174,10 +174,10 @@ fun ComposerEditor(
     val minPx = with(density) { minHeight.roundToPx() }
     val heightDp = with(density) { controller.contentPx.coerceAtLeast(minPx).coerceAtMost(MAX_BODY_PX).toDp() }
 
-    // `selectionchange` does not reliably reach the bridge from a WebView
-    // (Qt polls `mc.state()` for the same reason), so the toggle state is
-    // refreshed on a slow tick while the page is up. The push bridge stays
-    // for instant updates on tap; both write the same values. The tick also
+    // `selectionchange` does not reliably reach the bridge from a WebView,
+    // so the toggle state is refreshed on a slow tick while the page is up.
+    // The push bridge stays for instant updates on tap; both write the same
+    // values. The tick also
     // re-measures the height, covering growth no input event reports (an
     // image finishing loading, an undo).
     LaunchedEffect(controller) {

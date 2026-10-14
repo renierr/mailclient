@@ -62,6 +62,11 @@ pub mod qobject {
         #[qsignal]
         fn undo_available(self: Pin<&mut Self>, batch: &QString, label: &QString);
 
+        /// A `mailapp --open` click queued a jump: take it with
+        /// `consume_pending_open`. Fired from the relay (`listen_for_open`).
+        #[qsignal]
+        fn open_requested(self: Pin<&mut Self>);
+
         /// Take back a queued action before it reaches the server. Returns
         /// the status line text (also when it was too late).
         #[qinvokable]
@@ -103,6 +108,13 @@ pub mod qobject {
         /// Take-once — each click jumps once.
         #[qinvokable]
         fn consume_pending_open(self: Pin<&mut Self>) -> QString;
+
+        /// Start answering `mailapp --open` clicks (`relay`): each one fires
+        /// `open_requested`. Once per process; later calls do nothing.
+        /// Returns `""` or why the window cannot be reached (clicks then
+        /// boot a second window, the way they did without a relay).
+        #[qinvokable]
+        fn listen_for_open(self: Pin<&mut Self>) -> QString;
 
         /// Delete an account with its folders/messages and keyring secrets.
         /// Returns `""` or an error message.

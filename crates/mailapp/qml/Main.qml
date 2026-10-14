@@ -942,6 +942,12 @@ ApplicationWindow {
 
         // A delete/archive/move was queued: the rows are already gone from
         // the bridge's feeds, and the toast offers Undo until the push.
+        // A `mailapp --open` click while the window is up (the relay nudged
+        // it): switch account, land on the folder, raise the window.
+        function onOpen_requested() {
+            root.consumePendingOpen();
+        }
+
         function onUndo_available(batch, label) {
             reloadFolders();
             reloadMessages();
@@ -1073,16 +1079,6 @@ ApplicationWindow {
         onTriggered: root.kickServerSearch()
     }
 
-    // Picks up `mailapp --open` clicks while the window is already up:
-    // one cheap settings read every 2s, a queued jump switches account,
-    // lands on the inbox and raises the window.
-    Timer {
-        id: pendingOpenTimer
-        interval: 2000
-        running: true
-        repeat: true
-        onTriggered: root.consumePendingOpen()
-    }
 
     // Scheduled sends: one shot for the earliest waiting row across all
     // accounts. Fires `flush_due_sends` (every account, not just the open
@@ -1149,6 +1145,11 @@ ApplicationWindow {
     }
 
     Component.onCompleted: {
+        // Answer `mailapp --open` clicks from now on; before the startup
+        // read below, so a click in between is not missed.
+        var relay = backend.listen_for_open();
+        if (relay !== "")
+            console.warn(relay);
         appSettings.load();
         root.narrowPane = appSettings.start_view === "inbox" ? "list" : "folders";
         var r = reloadAll();
