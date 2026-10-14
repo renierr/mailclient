@@ -88,8 +88,13 @@ Dialog {
     signal scheduleRequested(string payload, string sendAt)
     signal saveDraftRequested(string payload)
 
-    // The account the composer writes for (Main binds the selected one):
-    // sending, saving and discarding a draft act for it.
+    // The selected account and the account list (`{id, email, from_name}`
+    // rows), bound by Main. A composition takes its account when it opens.
+    property int selectedAccountId: -1
+    property var accounts
+    // The account this composition writes for: fixed while it is open, so
+    // a switch underneath (a notification click jumps accounts) never moves
+    // sending, saving or discarding a draft to another account.
     property int accountId: -1
     property string accountEmail: ""
     property string accountFromName: ""
@@ -254,6 +259,24 @@ Dialog {
             root.close();
     }
 
+    // Fix the composition's account: the one its draft names (a draft, a
+    // forward or an outbox mail can arrive after a switch), else the
+    // selected one.
+    function takeAccount(id) {
+        var wanted = id !== undefined && id >= 0 ? id : root.selectedAccountId;
+        root.accountId = wanted;
+        root.accountEmail = "";
+        root.accountFromName = "";
+        for (var i = 0; root.accounts && i < root.accounts.count; i++) {
+            var a = root.accounts.get(i);
+            if (a.id === wanted) {
+                root.accountEmail = a.email || "";
+                root.accountFromName = a.from_name || "";
+                return;
+            }
+        }
+    }
+
     function resetHeaders() {
         fromLocal.text = root.accountLocalPart;
         fromName.text = root.accountFromName;
@@ -311,6 +334,7 @@ Dialog {
     function openBlank() {
         if (!root.readyForNew())
             return;
+        root.takeAccount();
         root.sourceMode = false;
         root.resetHeaders();
         var draft = root.backend ? FeedJson.parse(root.backend.blank_draft_json(), ({})) : ({});
@@ -336,6 +360,7 @@ Dialog {
             root.statusMessage(qsTr("This message is no longer available"));
             return;
         }
+        root.takeAccount(draft.account_id);
         root.sourceMode = false;
         root.resetHeaders();
         // A reply answers from the alias the mail was delivered to.
@@ -358,6 +383,7 @@ Dialog {
     function openForDraft(draft) {
         if (!root.readyForNew())
             return;
+        root.takeAccount(draft.account_id);
         root.sourceMode = false;
         root.resetHeaders();
         root.draftUid = draft.draft_uid === undefined ? -1 : draft.draft_uid;

@@ -58,6 +58,7 @@ impl qobject::Bridge {
         });
         let json = match result {
             Ok(e) => serde_json::json!({
+                "account_id": account_id,
                 "draft_uid": -1,
                 "from": e.from,
                 "reply_to": e.reply_to,

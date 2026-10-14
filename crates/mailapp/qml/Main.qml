@@ -1733,9 +1733,8 @@ ApplicationWindow {
 
     Composer {
         id: composer
-        accountId: backend.current_account_id
-        accountEmail: backend.current_account_email
-        accountFromName: backend.current_account_from_name
+        selectedAccountId: backend.current_account_id
+        accounts: accountModel
         sendFormat: appSettings.compose_send_format
         readerFont: appSettings.reader_font_size
         backend: backend

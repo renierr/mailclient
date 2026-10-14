@@ -7,7 +7,7 @@ use mailcore::compose::{self, ComposeForm};
 use crate::bridge::messages::file_url;
 use crate::bridge::qobject;
 use crate::bridge::worker::{spawn_job, JobDone, JobRefresh, BUSY_MESSAGE};
-use crate::bridge::{qstring, shared_db};
+use crate::bridge::{folder_account, qstring, shared_db};
 use mailcore::sync::attachments::ensure_cached;
 
 // Thin adapter over `mailcore::compose`: parse the QML form, start the job,
@@ -305,6 +305,7 @@ impl qobject::Bridge {
             let body_html = compose::draft_editor_html(db, &message);
             Ok((
                 serde_json::json!({
+                    "account_id": message.account_id,
                     "draft_uid": message.uid,
                     "from": message.from_addr.unwrap_or_default(),
                     "reply_to": message.reply_to.unwrap_or_default(),
@@ -339,7 +340,9 @@ impl qobject::Bridge {
 }
 
 /// The forward or resend answer draft with the staged files merged in, the
-/// way the QML composer takes a draft (`attachments` as `file://` URLs).
+/// way the QML composer takes a draft (`attachments` as `file://` URLs), and
+/// the account it answers from: a fetch job can finish after the user
+/// switched accounts.
 fn answer_payload(
     db: &mailcore::Db,
     folder_id: i64,
@@ -360,5 +363,6 @@ fn answer_payload(
         })
         .collect();
     draft["files_notice"] = files.notice.into();
+    draft["account_id"] = folder_account(db, folder_id)?.into();
     Ok(draft.to_string())
 }

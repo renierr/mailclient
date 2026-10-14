@@ -317,8 +317,9 @@ pub mod qobject {
         fn forward_missing(&self, folder_id: i64, uid: i32) -> i32;
 
         /// Forward draft as JSON: `answer_draft_json`'s shape plus the
-        /// original's cached files as `attachments` (`[{path, name}]`) and
-        /// `files_notice` naming any left out. Local, never downloads.
+        /// original's cached files as `attachments` (`[{path, name}]`),
+        /// `files_notice` naming any left out, and the `account_id` it
+        /// answers from. Local, never downloads.
         #[qinvokable]
         fn forward_draft_json(&self, folder_id: i64, uid: i32) -> QString;
 
@@ -770,8 +771,9 @@ pub mod qobject {
         #[qinvokable]
         fn editor_document(&self, options_json: &QString) -> QString;
 
-        /// Full Composer form for a draft in the Drafts folder `folder_id`.
-        /// Opening a draft explicitly downloads and materializes its files.
+        /// Full Composer form for a draft in the Drafts folder `folder_id`,
+        /// with the `account_id` it belongs to. Opening a draft explicitly
+        /// downloads and materializes its files.
         #[qinvokable]
         fn draft_form(self: Pin<&mut Self>, folder_id: i64, uid: i32) -> QString;
 
@@ -818,7 +820,8 @@ pub mod qobject {
 
         /// Take an unsent mail of `account_id` out of the outbox into the
         /// composer (`mailcore::outbox::take_for_edit`): the composer's draft
-        /// shape with its files staged as `file://` URLs, or `{error}`. The
+        /// shape (with `account_id`) and its files staged as `file://` URLs,
+        /// or `{error}`. The
         /// row is gone once this succeeds.
         #[qinvokable]
         fn outbox_edit(&self, account_id: i64, id: i64) -> QString;
