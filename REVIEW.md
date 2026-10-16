@@ -511,7 +511,7 @@ unbounded `mpsc` net queue and uncoalesced `spawn_flag_push` in `mailapp` (and D
 One sleeping OS thread per undoable action. Kept as **D8**, which covers both frontends
 (`mailapp/src/bridge/worker.rs:135-141` and `crates/mailffi/src/net.rs:288-294`).
 
-### B7 · medium · UIDVALIDITY change wipes the cache before the replacement exists — confirmed
+### B7 · medium · UIDVALIDITY change wipes the cache before the replacement exists — confirmed — **OPEN** (effort: medium — defer delete / staging table in sync_folder_window)
 `sync/imap/engine/sync.rs:77-81`
 
 ```rust
@@ -589,7 +589,7 @@ the **destination** folder, so a subsequent `set_flags_by_uid` on the source fol
 The only residual effect of a failed move after a successful STORE is local-unread vs server-read, which the
 next flag refresh corrects. No action.
 
-### B13 · low · sessions checked back into the pool after an error — confirmed
+### B13 · low · sessions checked back into the pool after an error — confirmed — **no change** (partly fixed by B3; self-heals via is_healthy)
 `sync/pool.rs:89-92,113` vs `sync/attachments.rs:30-33` — the pool documents that anything but clean
 completion should drop the session, but `imap.checkin()` also runs on the error path. It self-heals via
 `is_healthy()`, but a timed-out session goes back with stale reply data pending.
@@ -690,7 +690,7 @@ parts decode to about three quarters of their encoded size, so the stored total 
 only for a message the user explicitly downloaded. A smaller cap would make a large but legitimate
 attachment set impossible to open. C4 already bounds what the feed parses out of those bytes.
 
-### B20 · low · systemic blocking SQLite on the async runtime
+### B20 · low · systemic blocking SQLite on the async runtime — **no change** (architectural; no user-facing impact)
 Every `messages::upsert` / `set_flags_by_uid` inside `sync_folder_window`'s loops
 (`engine/sync.rs:201-218,263-288,304-309`) is a synchronous rusqlite commit on `mailclient-net`; step 5
 deletes one row per statement. Acceptable today, but a 200-message window plus a large expunge sweep is a
@@ -1098,7 +1098,7 @@ pins `2^32 + 5` (which used to become uid 5) as an error. The Android twin (`mai
 used `try_from`. The two parsers duplicate the same selection rules, a D11/§1 duplication left for a later
 move into `mailcore`.
 
-### D3 · medium · every message API crosses the bridge as `uid: i32` while `mailcore` UIDs are `u32` *(suspected)*
+### D3 · medium · every message API crosses the bridge as `uid: i32` while `mailcore` UIDs are `u32` *(suspected)* — **OPEN** (effort: hard — i32→i64 across bridge.rs, QML `int` properties, JNI, Kotlin)
 `bridge.rs:221,226,279,285,291,296,302,312,317,322,415,421,426,433,491,496,506,514,520,525,537,647,653` vs
 `mailcore/src/models.rs:134`. A UID ≥ 2³¹ arrives negative and every method bails out
 (`bridge/messages.rs:104-107`), so such mail cannot be opened, starred, deleted or exported from Qt at all.
@@ -1107,7 +1107,7 @@ the SQL `uid = ?` comparison, so it silently matches nothing. Real servers excee
 hence "suspected" rather than confirmed.
 **Fix:** widen to `i64`/`u32` for uid and add a range guard.
 
-### D4 · low · uid/attachment ids kept in QML `int` — confirmed
+### D4 · low · uid/attachment ids kept in QML `int` — confirmed — **no change** (implausibly high ids; cosmetic)
 `EmlExportDialog.qml:13`, `MessageView.qml:93`, `Main.qml:61` use 32-bit signed properties/signals.
 `MessageView.showRemoteOnce` compares a `double` (`root.message.uid`, MessageView.qml:130) against an `int`
 (`messageUid`), which disagree above 2³¹. Attachment ids are the same shape: feed/`i64`
@@ -1225,7 +1225,7 @@ the thread, the moves wait for the next sync, as they already did when the app q
 table was not used: it dedupes running jobs, not future deadlines. Test: five actions of one account and one
 of another, on a 40 ms timer, give exactly one push each.
 
-### D9 · low · timer polling does a DB read
+### D9 · low · timer polling does a DB read — **no change** (minor; timer cadence already low)
 `Main.qml:993-999` `pendingOpenTimer` (2 s repeat) calls `consume_pending_open()` → a SQLite settings read on
 the GUI thread. Documented as cheap.
 
@@ -1375,7 +1375,7 @@ is the effective visibility, false once the dialog closes. What remains is the p
 compositions. Destroying it would make every new message reload WebEngine from scratch, so that is a
 trade-off, not a defect.
 
-### D19 · low · a deliberately leaked connection per bridge thread — confirmed
+### D19 · low · a deliberately leaked connection per bridge thread — confirmed — **no change** (deliberate, documented)
 `bridge.rs:791` `Box::leak`s a `rusqlite::Connection` per thread that touches the bridge (documented, bounded
 at GUI + net today). The `mpsc` channel in `net_tx()` keeps job closures alive until the net thread drains
 them; nothing caps that queue, so a burst of dropped requests retains all closures until thread exit.
@@ -1484,7 +1484,7 @@ subscriber just `scope.launch(Dispatchers.Main)`.
 **Fixed in `9af48e6`:** the waiter is still registered on Main first (so a fast job cannot finish unseen), then
 `queue()` runs in `withContext(Dispatchers.IO)`.
 
-### E5 · low · attach policy is weaker than assumed `[corrected]`
+### E5 · low · attach policy is weaker than assumed `[corrected]` — **no change** (corrected; no further action)
 `crates/mailffi/src/android.rs:1346` and `:247` — `self.vm.attach_current_thread(|env| …)`.
 **Correction:** jni 0.22's `attach_current_thread` (`jni-0.22.4/src/vm/java_vm.rs:488`) "requests to
 permanently attach the current thread", is cheap when already attached (a TLS check, no JNI call), and
@@ -1568,7 +1568,7 @@ Verified with `./build.sh --android` and Android `cargo ndk clippy`.
 **The thread-per-action half is fixed by D8 (`d199c25`).** `spawn_flag_push` after a plain read/star toggle is
 still queued once per click; each push exits without touching the network when nothing is dirty.
 
-### E11 · low · the list refresh is skipped while the shell is disposed `[corrected]`
+### E11 · low · the list refresh is skipped while the shell is disposed `[corrected]` — **no change** (corrected)
 `ui/shell/MailShell.kt:353-359`
 
 ```kotlin
@@ -1653,7 +1653,7 @@ floor AGENTS.md requires.
 
 **Fixed in `83875ab`.**
 
-### E17 · low · `usesCleartextTraffic="true"` app-wide with no `networkSecurityConfig` — confirmed — **comment fixed** `[corrected]`
+### E17 · low · `usesCleartextTraffic="true"` app-wide with no `networkSecurityConfig` — confirmed — **comment fixed** `[corrected]` — **OPEN** (effort: easy — add networkSecurityConfig XML + manifest ref)
 `AndroidManifest.xml:40` — the comment says cleartext is "opt-in per account", but the flag is global: with
 `load_remote_images` on, an `http://` image from a plaintext-configured account's mail is fetched in the clear
 by the reader WebView regardless of the account's TLS choice.
@@ -1665,7 +1665,7 @@ platform HTTP stacks, i.e. the reader WebView fetching `http://` remote images a
 images. Scoping by account host would not help, because image hosts are arbitrary. Turning it off would block
 `http://` images on Android while the Qt reader still loads them: feature drift, and a product decision.
 
-### E18 · low · possible double insets on the shell `Scaffold` *(very likely wrong — verify on device)*
+### E18 · low · possible double insets on the shell `Scaffold` *(very likely wrong — verify on device)* — **no change** (verify on device; likely fine)
 `ui/shell/MailShell.kt:439-443` — the shell applies `Modifier.fillMaxSize().safeDrawingPadding()` while
 `Scaffold`'s default `contentWindowInsets` also applies; the reader's own `Scaffold` opts out with
 `contentWindowInsets = WindowInsets(0)`. A reviewer points out that Material3's `Scaffold` already subtracts
@@ -1702,7 +1702,7 @@ an untagged enum that also accepts the old pre-built string, because the retired
 `MailNotifier.kt` calls the same JNI `plan` and must keep working unchanged. Tests: both shapes, plus a
 missing body.
 
-### E21 · low · the "Similar to: …" sentence template is duplicated in both frontends `[corrected]`
+### E21 · low · the "Similar to: …" sentence template is duplicated in both frontends `[corrected]` — **no change** (corrected; low value)
 `ui/list/ListScreen.kt` / `ui/state/MailStateSearch.kt:79` and `crates/mailapp/qml/MessageList.qml:773`
 
 ```kotlin
@@ -1754,7 +1754,7 @@ Including two that the first draft proposed changing in the wrong direction.
 `SHARED-CORE.md`, so it is neither an approved exception nor a documented violation; role→icon is
 unambiguously toolkit-side (a drawable id). No action.
 
-### E25 · verified clean · no leaked parent `Global<JObject>`
+### E25 · verified clean · no leaked parent `Global<JObject>` — **no change** (verified clean)
 `pushStart` (`android.rs:297-310`) drops the old monitor and its `Arc<KotlinListener>` before installing the new
 one, and `MailPushService.onDestroy` calls `pushStop()`, so the service's global ref is released.
 
