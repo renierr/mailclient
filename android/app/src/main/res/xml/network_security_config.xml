@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Explicit network security policy. Cleartext is permitted because the
+     reader WebView loads a mail's http:// remote images once the user
+     allows them (matching the Qt reader). IMAP/SMTP plaintext is governed
+     by the per-account opt-in in the Rust core, which uses its own sockets
+     and is not affected by this config. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system"/>
+        </trust-anchors>
+    </base-config>
+</network-security-config>

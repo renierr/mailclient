@@ -1653,7 +1653,7 @@ floor AGENTS.md requires.
 
 **Fixed in `83875ab`.**
 
-### E17 · low · `usesCleartextTraffic="true"` app-wide with no `networkSecurityConfig` — confirmed — **comment fixed** `[corrected]` — **OPEN** (effort: easy — add networkSecurityConfig XML + manifest ref)
+### E17 · low · `usesCleartextTraffic="true"` app-wide with no `networkSecurityConfig` — confirmed — **comment fixed** `[corrected]` — **FIXED** `[fixed]` (added `res/xml/network_security_config.xml`, referenced via `android:networkSecurityConfig`; dropped app-wide `usesCleartextTraffic`)
 `AndroidManifest.xml:40` — the comment says cleartext is "opt-in per account", but the flag is global: with
 `load_remote_images` on, an `http://` image from a plaintext-configured account's mail is fetched in the clear
 by the reader WebView regardless of the account's TLS choice.
