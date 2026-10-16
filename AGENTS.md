@@ -10,7 +10,7 @@ This file is normative for all coding agents (human or AI) working in this repo.
   - `mailcore`: pure-Rust library — SQLite storage, models, IMAP/SMTP sync engine. **No Qt dependency.**
   - `mailapp`: thin Qt/QML bridge binary using **cxx-qt 0.9** + `mailcore`. Only crate allowed to depend on Qt.
   - `mailffi`: `cdylib` exposing `mailcore` to the Android frontends — JNI
-    for native Android (`src/android.rs`, the `jni` crate) and
+    for native Android (`src/android/`, the `jni` crate) and
     **flutter_rust_bridge 2** (`dart:ffi`, in process) for Flutter. No Qt,
     no mail logic — a translation layer only, same rule as `mailapp`.
 - Frontends: all over `mailcore`, which is the base for everything. A
@@ -115,7 +115,7 @@ This file is normative for all coding agents (human or AI) working in this repo.
 How the Compose app is written. `android/README.md` covers the build and the JNI seam.
 
 - **Where code lives.** One feature directory per area under `ui/` (`shell/`, `folders/`, `list/`, `reader/`, `composer/`, `accounts/`, `contacts/`, `settings/`, `outbox/`, `lock/`); pieces used by more than one feature go in `ui/common/`, not copied. `ui/state/MailState.kt` holds what the shell shows; JNI calls go through `MailNative`, and screens subscribe to `JobEvents` (never `MailNative.setJobListener`) and close the subscription on dispose. A file past ~500 lines is a prompt to check for a second job, not a limit (see "File size" below): split by responsibility when there is one, otherwise leave it.
-- **No Kotlin twins of core logic.** A decision, format or rule the Qt side also needs is a `mailcore` function reached through a `MailNative` extern in `crates/mailffi/src/android.rs`. Kotlin keeps toolkit code: layout, navigation, gestures, theme, WebView hosting, SAF pickers, notifications.
+- **No Kotlin twins of core logic.** A decision, format or rule the Qt side also needs is a `mailcore` function reached through a `MailNative` extern in `crates/mailffi/src/android/`. Kotlin keeps toolkit code: layout, navigation, gestures, theme, WebView hosting, SAF pickers, notifications.
 - **Layout keys on width and text scale**, never on device type: below 700dp one pane, below 1100dp folders + list (the reader takes the list's place), else three (`ui/shell/MailPanes.kt`). Labels sit *above* inputs on narrow layouts. No fixed content widths.
 - The composer and Settings are always full pages, on every width — never dialogs. Qt keeps them as resizable dialogs; that is a deliberate UI difference (§1).
 - The shell bar mirrors the Qt toolbar: back (one pane) or sidebar toggle (three panes), Compose, a width-capped search field, then Sync and the tools (Manage folders, Contacts, Accounts, Settings); in one pane the scope toggle and tools collapse into an overflow menu. No folder name in the bar: the list header already shows it. The sidebar account chip only switches accounts; adding/managing lives under Accounts. Do not add a second Compose, Manage-folders or Accounts entry.
@@ -178,7 +178,7 @@ cover storage (`rusqlite`, bundled), errors (`thiserror`), serialisation
 `cxx-qt`, `cxx-qt-lib`, `cxx-qt-build`) and `winresource` for the Windows
 executable resources. The Flutter bridge adds
 `flutter_rust_bridge` (pinned with `=`), `anyhow` and `android_logger`, plus
-`jni` for the Kotlin entry points on Android (`mailffi/src/android.rs`).
+`jni` for the Kotlin entry points on Android (`mailffi/src/android/`).
 
 The `=` pin on `flutter_rust_bridge` is deliberate: the codegen tool, the Rust
 crate and the Dart package must be the same version, so a range would let
@@ -218,7 +218,7 @@ it needs the same ask.
 - New feature (Qt and native Android): build it **core-first**, in this order.
   1. Write the `mailcore` API: logic, decisions, error/edge cases, and its tests.
   2. Expose it through the thin adapters (`mailapp` bridge, `mailffi`'s JNI
-     externs in `src/android.rs` + `MailNative.kt`). No FRB API or codegen
+     externs in `src/android/` + `MailNative.kt`). No FRB API or codegen
      for Flutter is needed. An adapter only translates types. It takes explicit ids
      (account, `folder_id`, uid) from the caller and never fills in its own
      "current" state, so the same call does the same thing from either
@@ -272,7 +272,7 @@ signing), not a compile check: it costs minutes where these cost seconds.
 | `mailapp` Rust (bridge) | `cargo clippy -p mailapp -- -D warnings` + `cargo test -p mailapp` (needs qmake on `PATH`; on Windows `source scripts/qt-env.sh` in the same shell) |
 | QML | item 2 |
 | `mailffi`, shared and FRB code | `cargo clippy -p mailffi -- -D warnings` |
-| `mailffi/src/android.rs` (JNI) | `cargo ndk -t arm64-v8a clippy -p mailffi -- -D warnings`, with `ANDROID_NDK_HOME` at the NDK pinned as `ndkVersion` in `android/app/build.gradle.kts`. Host clippy skips this file: it is `cfg(target_os = "android")` |
+| `mailffi/src/android/` (JNI) | `cargo ndk -t arm64-v8a clippy -p mailffi -- -D warnings`, with `ANDROID_NDK_HOME` at the NDK pinned as `ndkVersion` in `android/app/build.gradle.kts`. Host clippy skips this module: it is `cfg(target_os = "android")` |
 | Kotlin/Compose | `./gradlew :app:compileDebugKotlin` from `android/`. It compiles Kotlin without the cargo-ndk build, which is wired only to the JNI-lib merge tasks |
 | Dart | `flutter analyze` + `flutter test` in `flutter/` |
 

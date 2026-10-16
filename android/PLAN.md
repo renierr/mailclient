@@ -50,7 +50,7 @@ thread the FRB stream uses, each event (`kind`, `phase` progress/finished,
 `status`, `ok`, ids) crossing as one JSON string; Kotlin fans it out via
 `JobEvents`.
 
-- **0a — shell reads** ✅ done (all 15 symbols in `android.rs` + `MailNative.kt`,
+- **0a — shell reads** ✅ done (all 15 symbols in `android/` + `MailNative.kt`,
   `ShellReadsProbe` smoke card in `HomeScreen`, verified on emulator):
   `accountsJson`, `accountForm`, `accountFormDefaults`,
   `accountGuess`, `accountPortForSecurity`, `accountFormCheck`, `saveAccount`,

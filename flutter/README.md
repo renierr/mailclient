@@ -212,7 +212,7 @@ AllowWhileIdle and still fire, just not at the exact minute.
 
 None of the three starts a Flutter engine. The worker, the alarm and the
 push service call the Rust core directly over JNI (`MailNative.kt` ↔
-`crates/mailffi/src/android.rs`, the same `libmailffi.so` and database the
+`crates/mailffi/src/android/`, the same `libmailffi.so` and database the
 Dart side uses). What the notification says and does is decided in
 `mailcore::sync::background::notify`; `MailNotifier.kt` only reads back
 what is on screen, posts the plan and commits it. Taps reach Dart through

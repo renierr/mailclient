@@ -1,7 +1,7 @@
 # Native Android frontend (Kotlin + Jetpack Compose)
 
 The Android client. Native Kotlin + Compose over `mailcore` through JNI
-(`MailNative` ↔ `crates/mailffi/src/android.rs`); background checks, push
+(`MailNative` ↔ `crates/mailffi/src/android/`); background checks, push
 and notifications run natively too. It is kept feature-for-feature in step
 with the Qt desktop client (AGENTS.md §1, PROJECT.md §9); the Flutter
 Android app is retired.
@@ -81,7 +81,7 @@ x86_64 only, so the loop stays fast).
   retired Flutter app.
 - Behaviour changes belong in `mailcore` (AGENTS.md core-first rule); this
   app only translates ids and renders. New screens that need core data add
-  `MailNative` externs in `crates/mailffi/src/android.rs` next to the reader
+  `MailNative` externs in `crates/mailffi/src/android/` next to the reader
   ones, never a second source of truth.
 - New dependencies (beyond the pinned Compose BOM / WorkManager / core-ktx
   already here) need user approval, same as crates and pubspec.
