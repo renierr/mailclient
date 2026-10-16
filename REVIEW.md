@@ -1098,7 +1098,7 @@ pins `2^32 + 5` (which used to become uid 5) as an error. The Android twin (`mai
 used `try_from`. The two parsers duplicate the same selection rules, a D11/§1 duplication left for a later
 move into `mailcore`.
 
-### D3 · medium · every message API crosses the bridge as `uid: i32` while `mailcore` UIDs are `u32` *(suspected)* — **OPEN** (effort: hard — i32→i64 across bridge.rs, QML `int` properties, JNI, Kotlin)
+### D3 · medium · every message API crosses the bridge as `uid: i32` while `mailcore` UIDs are `u32` *(suspected)* — **no change** (deliberately left: the bug only bites above 2^31 messages per folder, which no real mailbox reaches; the fix is invasive across bridge/QML/JNI/Kotlin for no practical benefit. Reopen only if a large-mailbox case appears.)
 `bridge.rs:221,226,279,285,291,296,302,312,317,322,415,421,426,433,491,496,506,514,520,525,537,647,653` vs
 `mailcore/src/models.rs:134`. A UID ≥ 2³¹ arrives negative and every method bails out
 (`bridge/messages.rs:104-107`), so such mail cannot be opened, starred, deleted or exported from Qt at all.
