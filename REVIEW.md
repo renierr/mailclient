@@ -1229,7 +1229,7 @@ of another, on a 40 ms timer, give exactly one push each.
 `Main.qml:993-999` `pendingOpenTimer` (2 s repeat) calls `consume_pending_open()` → a SQLite settings read on
 the GUI thread. Documented as cheap.
 
-### D10 · low · two `ScrollView`s whose content does not bind width to the ScrollView's own id `[corrected]`
+### D10 · low · two `ScrollView`s whose content does not bind width to the ScrollView's own id `[corrected]` — **FIXED** `[fixed]`
 `Main.qml:1920-1926` and `Composer.qml:772-781`
 
 ```qml
@@ -1247,9 +1247,9 @@ rated high and is out of the fix order until checked on a narrow window. The one
 long error sentence cannot be read.
 **Fix:** if it reproduces, bind each child's `width` to the ScrollView's own `id`.
 
-**Partly fixed:** `statusTextArea` now binds `width: statusScroll.availableWidth`
-(`Main.qml` `statusDetailsDialog`, migrated to `AppDialog` — see D14). `Composer.qml`
-source area still unbound.
+**Fixed:** `statusTextArea` binds `width: statusScroll.availableWidth`
+(`Main.qml` `statusDetailsDialog`), and `Composer.qml` source area now binds
+`width: sourceScroll.availableWidth`.
 
 ### D11 · medium · core protocol parsing in JS `[corrected]` — confirmed, severity trimmed — **FIXED** `[fixed]`
 - `Main.qml:1456-1464` `undoMove(batch)` re-implements how undo batches are encoded — `batch.split(",")`,

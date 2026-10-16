@@ -825,6 +825,7 @@ Dialog {
             }
 
             ScrollView {
+                id: sourceScroll
                 anchors.fill: parent
                 anchors.margins: 1
                 visible: root.sourceMode
@@ -832,6 +833,7 @@ Dialog {
 
                 TextArea {
                     id: sourceArea
+                    width: sourceScroll.availableWidth
                     placeholderText: qsTr("HTML source…")
                     wrapMode: TextArea.Wrap
                     textFormat: TextArea.PlainText
