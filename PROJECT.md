@@ -304,8 +304,8 @@ and need no Qt twin unless noted.
 |---|---|---|
 | ~~Desktop `mailto:` handler~~ | Qt | ❌ rejected — not needed |
 | Home-screen widget (unread count / newest mail) | Android | Plain `RemoteViews` needs nothing new; Jetpack Glance would be a dependency decision |
-| Keyboard shortcuts with a hardware keyboard | Android | Today touch has none by design (§9); the key map could follow Qt's |
-| Autofill hints on the account form | Android | Content types on the login fields so password managers fill IMAP/SMTP credentials |
+| ~~Keyboard shortcuts with a hardware keyboard~~ | Android | ❌ rejected — not needed (touch has none by design, §9) |
+| ~~Autofill hints on the account form~~ | Android | ❌ rejected — not needed |
 | Per-app language | Android | `localeConfig`; only worth it once strings are translated |
 | ~~App lock (fingerprint / face)~~ | Android | ✅ done — see §9 "Background & notifications (Android)" |
 
