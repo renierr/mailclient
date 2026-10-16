@@ -384,8 +384,8 @@ ApplicationWindow {
                 root.narrowPane = "list";
             }
             root.searching = true;
-            root.searchRows = FeedJson.parse(backend.search_json(backend.current_account_id, root.searchPlan.query,
-                                                                 root.searchScope()), []);
+            root.searchRows = FeedJson.parse(backend.search_json(backend.current_account_id, root.searchPlan.query, root.searchScope()),
+                                             []);
             // Thin local hits get topped up from the server once typing
             // settles (debounced below); the job refresh re-runs this.
             if (fromTyping)
@@ -729,16 +729,16 @@ ApplicationWindow {
     }
 
     function bulkMarkRead(targets, read) {
-        var r = root.runBulk(targets, json => backend.mark_read_many(backend.current_folder_id, json, read),
-                             json => backend.mark_read_hits(backend.current_account_id, json, read));
+        var r = root.runBulk(targets, json => backend.mark_read_many(backend.current_folder_id, json, read), json
+        => backend.mark_read_hits(backend.current_account_id, json, read));
         reloadFolders();
         root.afterBulkFlags(targets);
         root.statusText = r;
     }
 
     function bulkStar(targets, starred) {
-        var r = root.runBulk(targets, json => backend.set_star_many(backend.current_folder_id, json, starred),
-                             json => backend.set_star_hits(backend.current_account_id, json, starred));
+        var r = root.runBulk(targets, json => backend.set_star_many(backend.current_folder_id, json, starred), json
+        => backend.set_star_hits(backend.current_account_id, json, starred));
         root.afterBulkFlags(targets);
         root.statusText = r;
     }
@@ -746,8 +746,8 @@ ApplicationWindow {
     function bulkArchive(targets) {
         root.dropPreviewIfGone(targets);
         root.statusText = qsTr("Archiving…");
-        var r = root.runBulk(targets, json => backend.archive_many(backend.current_folder_id, json),
-                             json => backend.archive_hits(backend.current_account_id, json));
+        var r = root.runBulk(targets, json => backend.archive_many(backend.current_folder_id, json), json
+        => backend.archive_hits(backend.current_account_id, json));
         if (r !== "")
             root.statusText = r;
     }
@@ -755,8 +755,9 @@ ApplicationWindow {
     function bulkMoveTo(targets, path) {
         root.dropPreviewIfGone(targets);
         root.statusText = qsTr("Moving…");
-        var r = root.runBulk(targets, json => backend.move_many(backend.current_folder_id, json, path),
-                             json => backend.move_hits(backend.current_account_id, json, path));
+        var r = root.runBulk(targets, json => backend.move_many(backend.current_folder_id, json, path), json => backend.move_hits(
+                                                                                                                    backend.current_account_id,
+                                                                                                                    json, path));
         if (r !== "")
             root.statusText = r;
     }
@@ -779,8 +780,8 @@ ApplicationWindow {
     function doBulkDelete(targets) {
         root.dropPreviewIfGone(targets);
         root.statusText = qsTr("Deleting…");
-        var r = root.runBulk(targets, json => backend.delete_many(backend.current_folder_id, json),
-                             json => backend.delete_hits(backend.current_account_id, json));
+        var r = root.runBulk(targets, json => backend.delete_many(backend.current_folder_id, json), json
+        => backend.delete_hits(backend.current_account_id, json));
         if (r !== "")
             root.statusText = r;
     }
@@ -788,8 +789,8 @@ ApplicationWindow {
     function bulkPurge(targets) {
         root.dropPreviewIfGone(targets);
         root.statusText = qsTr("Deleting…");
-        var r = root.runBulk(targets, json => backend.purge_many(backend.current_folder_id, json),
-                             json => backend.purge_hits(backend.current_account_id, json));
+        var r = root.runBulk(targets, json => backend.purge_many(backend.current_folder_id, json), json
+        => backend.purge_hits(backend.current_account_id, json));
         if (r !== "")
             root.statusText = r;
     }
@@ -1079,7 +1080,6 @@ ApplicationWindow {
         repeat: false
         onTriggered: root.kickServerSearch()
     }
-
 
     // Scheduled sends: one shot for the earliest waiting row across all
     // accounts. Fires `flush_due_sends` (every account, not just the open
@@ -1493,10 +1493,9 @@ ApplicationWindow {
         MessageList {
             id: messageList
             accountId: backend.current_account_id
-            visible: !root.outboxOpen && !root.readerFullscreen && (root.wideLayout ? true : root.mediumLayout ? root.currentUid
-                                                                                                                  < 0 :
-                                                                                                                  root.narrowPane
-                                                                                                                  === "list")
+            visible: !root.outboxOpen && !root.readerFullscreen && (root.wideLayout ? true : root.mediumLayout
+                                                                                      ? root.currentUid < 0 :
+                                                                                        root.narrowPane === "list")
             enabled: visible
             SplitView.preferredWidth: 360
             SplitView.minimumWidth: 240
@@ -1574,8 +1573,8 @@ ApplicationWindow {
             id: messageView
             SplitView.fillWidth: !root.outboxOpen
             SplitView.minimumWidth: 260
-            visible: !root.outboxOpen && (root.wideLayout ? true : root.mediumLayout ? root.currentUid >= 0 :
-                                                                                       root.narrowPane === "reader")
+            visible: !root.outboxOpen && (root.wideLayout ? true : root.mediumLayout ? root.currentUid >= 0 : root.narrowPane
+                                                                                       === "reader")
             enabled: visible
             isFullscreen: root.readerFullscreen
             showBack: root.mediumLayout ? root.currentUid >= 0 : !root.wideLayout && root.narrowPane === "reader"
@@ -2027,21 +2026,14 @@ ApplicationWindow {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: statusDetailsDialog
         title: qsTr("Status Details")
-        modal: true
-        anchors.centerIn: parent
-        width: Math.min(640, root.width - 32)
-        height: Math.min(380, root.height - 64)
-        padding: Theme.lg
-
-        background: Rectangle {
-            color: Theme.bgRaised
-            radius: Theme.radius
-            border.color: Theme.border
-            border.width: 1
-        }
+        subtitle: qsTr("Full status text, selectable and copyable")
+        preferredWidth: 640
+        preferredHeight: 380
+        minWidth: 380
+        minHeight: 280
 
         footer: RowLayout {
             spacing: Theme.sm
@@ -2077,12 +2069,14 @@ ApplicationWindow {
             }
 
             ScrollView {
+                id: statusScroll
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
 
                 TextArea {
                     id: statusTextArea
+                    width: statusScroll.availableWidth
                     text: root.statusText
                     color: Theme.text
                     font.pixelSize: Theme.fontBase

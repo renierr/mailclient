@@ -1157,8 +1157,11 @@ per keystroke and per filter toggle.
 (user-initiated, and they need the whole list). After any feed change QML still re-runs `MessageList`'s
 O(n) model diff in JS. With a quick filter or typed filter active, every patch and every keystroke also
 re-runs `list_filter_uids`, which reads every cached row of the folder (`list_compact_by_folder`, no
-limit): no rows cross the bridge any more, but the cost is still O(cached rows), and on Qt it is an
-undebounced call on the GUI thread — the "debounce onto the net thread" half of the fix is not done. `ModelSync.sync`
+limit): no rows cross the bridge any more, but the cost is still O(cached rows).
+Qt filter inputs are now debounced (`MessageList.qml` `filterTimer`, 150 ms, newest wins;
+`rebuildFiltered` stops a pending tick on entry so a structural rebuild never pays twice) — the
+"debounce onto the net thread" half is still open (the read stays on the GUI thread).
+`ModelSync.sync`
 rebuilds its index map after every insert or move, so a re-sort or a large load-older batch is O(n²) in
 JS. Android's job-finished reloads still read the whole folder, but on IO. Not measured on a large
 folder or a device.
@@ -1244,6 +1247,10 @@ rated high and is out of the fix order until checked on a narrow window. The one
 long error sentence cannot be read.
 **Fix:** if it reproduces, bind each child's `width` to the ScrollView's own `id`.
 
+**Partly fixed:** `statusTextArea` now binds `width: statusScroll.availableWidth`
+(`Main.qml` `statusDetailsDialog`, migrated to `AppDialog` — see D14). `Composer.qml`
+source area still unbound.
+
 ### D11 · medium · core protocol parsing in JS `[corrected]` — confirmed, severity trimmed — **FIXED** `[fixed]`
 - `Main.qml:1456-1464` `undoMove(batch)` re-implements how undo batches are encoded — `batch.split(",")`,
   while Rust joins them in `bridge/messages/bulk.rs:193-197`.
@@ -1302,10 +1309,11 @@ calls `indexAt`/`itemAtIndex` on every scroll-pixel change during a flick.
 **Fix:** build a local proxy list; throttle scroll memory.
 
 **Mutation fixed in `777b5d5`:** the key is set on the row `displayRow` builds, not on Main's `searchRows`
-objects. The scroll-memory throttle is not done: a deferred write could land after a folder switch under the
-new folder's name. It needs a check on a running GUI, which this environment cannot do.
+objects. **Throttle fixed:** `onContentYChanged` now calls `requestRememberScroll`
+(`MessageList.qml`), which coalesces the flick through an 80 ms single-shot timer and drops the
+write when the folder changed since the request (`pendingScrollFolder` guard).
 
-### D14 · medium · non-resizable dialogs, against the stated rule — confirmed, severity trimmed
+### D14 · medium · non-resizable dialogs, against the stated rule — confirmed, severity trimmed — **PARTLY FIXED**
 Only the large managers use `AppDialog`; every small aux dialog is a plain `Dialog` with a fixed `width:`
 (and often a fixed `height:`) and no resize grip: `Main.qml:1724-1730` (`deleteConfirm`),
 `Main.qml:1793-1799` (`purgeConfirm`), `Main.qml:1871-1877` (`statusDetailsDialog`, also
@@ -1314,6 +1322,11 @@ Only the large managers use `AppDialog`; every small aux dialog is a plain `Dial
 `Accounts.qml:177-183`, `Settings.qml:1267-1272`, `components/ImagePlacementDialog.qml:10-26`. The
 status-details dialog is the practical loss: a long error sentence cannot be enlarged.
 **Fix:** migrate to `AppDialog` with geometry memory.
+
+**Partly fixed:** `statusDetailsDialog` (`Main.qml`) and `headersDialog` (`MessageView.qml`)
+are now `AppDialog` (resizable, draggable, geometry memory; 640×380 / 520×560 preferred,
+380×280 minimum). The rest (`deleteConfirm`, `purgeConfirm`, `examineLinkDialog`, Composer ×3,
+Accounts, Settings, `ImagePlacementDialog`) are still plain `Dialog` — mechanical follow-ups.
 
 ### D15 · low · main window width expression has no floor — confirmed — **FIXED** `[fixed]`
 `Main.qml:20-21` `width: Math.min(1320, Screen.desktopAvailableWidth - 80)` goes negative on a screen

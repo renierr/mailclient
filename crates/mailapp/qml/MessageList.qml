@@ -60,10 +60,12 @@ Rectangle {
     // offer Delete permanently in place of Move to Trash.
     property var deletePermanentFor: targets => false
     readonly property bool bulkDeletePermanent: root.deletePermanentFor(root.selectionTargets())
-    readonly property bool menuDeletePermanent: root.deletePermanentFor(root.searching ? [{
-                                                                                              folder: root.menuFolderPath,
-                                                                                              uid: root.menuUid
-                                                                                          }] : [root.menuUid])
+    readonly property bool menuDeletePermanent: root.deletePermanentFor(root.searching ? [
+                                                                                             {
+                                                                                                 folder: root.menuFolderPath,
+                                                                                                 uid: root.menuUid
+                                                                                             }
+                                                                                         ] : [root.menuUid])
     property var searchRows: []
     // Similar messages mode: if non-empty, displays the dismissable chip
     property string similarSubject: ""
@@ -395,8 +397,8 @@ Rectangle {
     function keptMessages(rows, text) {
         if ((!root.hasQuickFilter && text === "") || !root.backend)
             return rows;
-        var kept = JSON.parse(root.backend.list_filter_uids(root.backend.current_folder_id, JSON.stringify(
-                                                                 root.listFilter(text))));
+        var kept = JSON.parse(root.backend.list_filter_uids(root.backend.current_folder_id, JSON.stringify(root.listFilter(
+                                                                                                               text))));
         if (!kept)
             return rows;
         var keep = {};
@@ -462,11 +464,13 @@ Rectangle {
     function emptyText() {
         if (!root.backend)
             return "";
-        return root.backend.empty_list_text(root.searching, root.serverSearching, root.hasQuickFilter,
-                                            (root.searchRows || []).length, root.filterText);
+        return root.backend.empty_list_text(root.searching, root.serverSearching, root.hasQuickFilter, (root.searchRows
+                                                                                                        || []).length,
+                                            root.filterText);
     }
 
     function rebuildFiltered() {
+        filterTimer.stop();
         var rows = [];
         if (root.searching) {
             // The feed arrives grouped by folder for the section headers
@@ -584,12 +588,15 @@ Rectangle {
         root.pruneSelection();
         root.scheduleRebuild();
     }
-    onFilterTextChanged: root.scheduleRebuild()
-    onFilterUnreadChanged: root.scheduleRebuild()
-    onFilterStarredChanged: root.scheduleRebuild()
-    onFilterAttachmentsChanged: root.scheduleRebuild()
-    onFilterAfterChanged: root.scheduleRebuild()
-    onFilterBeforeChanged: root.scheduleRebuild()
+    // Filter inputs hit the core per keystroke/toggle (`list_filter_uids`
+    // reads every cached row of the folder), so they wait out a short
+    // debounce instead of rebuilding on every press.
+    onFilterTextChanged: root.scheduleFilterRebuild()
+    onFilterUnreadChanged: root.scheduleFilterRebuild()
+    onFilterStarredChanged: root.scheduleFilterRebuild()
+    onFilterAttachmentsChanged: root.scheduleFilterRebuild()
+    onFilterAfterChanged: root.scheduleFilterRebuild()
+    onFilterBeforeChanged: root.scheduleFilterRebuild()
     onSearchRowsChanged: {
         root.pruneSelection();
         root.scheduleRebuild();
@@ -609,6 +616,42 @@ Rectangle {
     // one rebuild, not two, and never one while a click handler is unwinding.
     function scheduleRebuild() {
         Qt.callLater(root.rebuildFiltered);
+    }
+
+    // Debounced: typing or toggling filters restarts a short timer, so a
+    // burst of keystrokes pays for one core filter read (newest wins).
+    Timer {
+        id: filterTimer
+        interval: 150
+        repeat: false
+        onTriggered: root.rebuildFiltered()
+    }
+
+    function scheduleFilterRebuild() {
+        filterTimer.restart();
+    }
+
+    // Throttled: a flick fires contentY per pixel; remembering the position
+    // on each one costs indexAt/itemAtIndex every time. The timer coalesces
+    // the burst and the folder guard stops a deferred write landing under a
+    // new folder's name after a switch.
+    property string pendingScrollFolder: ""
+    Timer {
+        id: scrollTimer
+        interval: 80
+        repeat: false
+        onTriggered: {
+            if (root.pendingScrollFolder !== root.folderName)
+                return;
+            root.rememberScroll();
+        }
+    }
+
+    function requestRememberScroll() {
+        if (root.scrollRestoring)
+            return;
+        root.pendingScrollFolder = root.folderName;
+        scrollTimer.restart();
     }
 
     Column {
@@ -853,7 +896,7 @@ Rectangle {
             clip: true
             model: filtered
             boundsBehavior: Flickable.StopAtBounds
-            onContentYChanged: root.rememberScroll()
+            onContentYChanged: root.requestRememberScroll()
             // Account-wide hits live in many folders: one header per folder.
             section.property: root.searching && root.searchFolder === "" ? "folder" : ""
             section.delegate: Rectangle {

@@ -1286,21 +1286,14 @@ Rectangle {
     }
 
     // --- headers dialog ---------------------------------------------------
-    Dialog {
+    AppDialog {
         id: headersDialog
         title: qsTr("Headers")
-        modal: true
-        anchors.centerIn: parent
-        width: Math.min(parent ? parent.width - 120 : 520, 520)
-        height: Math.min(parent ? parent.height - 80 : 560, 560)
-        padding: Theme.lg
-
-        background: Rectangle {
-            color: Theme.bg
-            radius: Theme.radiusLg
-            border.width: 1
-            border.color: Theme.border
-        }
+        subtitle: qsTr("Full message headers")
+        preferredWidth: 520
+        preferredHeight: 560
+        minWidth: 380
+        minHeight: 280
 
         footer: RowLayout {
             spacing: Theme.sm
