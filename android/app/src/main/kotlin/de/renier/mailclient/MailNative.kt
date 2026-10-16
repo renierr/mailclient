@@ -171,8 +171,11 @@ object MailNative {
     // Filesystem-safe `.eml` name for one message.
     @JvmStatic external fun suggestedEmlName(folderId: Long, uid: Int): String
 
-    // Download-then-assemble as one blocking call (Dart waits for a job).
-    @JvmStatic external fun exportEmlBytes(folderId: Long, uid: Int): ByteArray
+    // "Export" as one core job (like Qt): the message's missing files
+    // download under `export:<folderId>:<uid>`; once it finishes,
+    // assembleEml builds the file locally (fails while bytes are missing).
+    @JvmStatic external fun exportFetch(folderId: Long, uid: Int)
+    @JvmStatic external fun assembleEml(folderId: Long, uid: Int): ByteArray
 
     // Step 0a shell reads: accounts, folder navigation, outbox pill.
     // JSON or plain strings across, ids back as strings.

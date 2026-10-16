@@ -47,6 +47,13 @@ pub fn safe_eml_filename(subject: Option<&str>, uid: u32) -> String {
     }
 }
 
+/// How many files (inline parts included) [`prepare`] still has to
+/// download: zero means an export needs no network.
+pub fn missing(db: &Db, folder_id: i64, uid: u32) -> std::result::Result<usize, String> {
+    let m = messages::get_by_uid(db, folder_id, uid).map_err(|e| e.to_string())?;
+    crate::sync::attachments::missing_count(db, m.id, true).map_err(|e| e.to_string())
+}
+
 /// Download whatever attachment bytes (inline parts included) the message
 /// is still missing, so [`assemble_eml`] can build a complete file. A no-op
 /// without network access when everything is cached.

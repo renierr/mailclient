@@ -308,3 +308,59 @@ fn eml_names_follow_the_attachment_rules() {
     assert_eq!(safe_eml_filename(Some("a/b\\c"), 1), "a_b_c.eml");
     assert!(safe_eml_filename(Some(&"ü".repeat(200)), 1).len() <= 150);
 }
+
+#[test]
+fn missing_counts_uncached_files_inline_included() {
+    let (db, acc_id, folder_id) = make_test_db();
+    let id = messages::upsert(
+        &db,
+        &NewMessage {
+            account_id: acc_id,
+            folder_id,
+            uid: 104,
+            message_id_header: None,
+            thread_id: None,
+            subject: Some("Files".into()),
+            from_addr: Some("sender@example.com".into()),
+            from_name: None,
+            to_addrs: vec!["me@example.com".into()],
+            cc_addrs: vec![],
+            bcc_addrs: vec![],
+            reply_to: None,
+            date: Some("2026-10-03T15:00:00Z".into()),
+            snippet: None,
+            body_text: Some("See files".into()),
+            body_html: None,
+            raw_headers: None,
+            is_read: true,
+            is_starred: false,
+            is_draft: false,
+            has_attachments: true,
+            keywords: vec![],
+            size: 50,
+            downloaded_full: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(missing(&db, folder_id, 104), Ok(0));
+    let add = |name: &str, data: Option<&[u8]>, inline: bool| {
+        messages::add_attachment(
+            &db,
+            id,
+            &crate::models::NewAttachment {
+                filename: Some(name.into()),
+                mime_type: Some("application/octet-stream".into()),
+                content_id: None,
+                size: 4,
+                data: data.map(<[u8]>::to_vec),
+                is_inline: inline,
+            },
+        )
+        .unwrap();
+    };
+    add("cached.bin", Some(b"data"), false);
+    add("absent.bin", None, false);
+    add("logo.png", None, true);
+    assert_eq!(missing(&db, folder_id, 104), Ok(2));
+    assert!(missing(&db, folder_id, 999).is_err());
+}

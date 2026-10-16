@@ -500,9 +500,4 @@ the open Qt ↔ native differences are listed at the end.
 
 From a code audit of both frontends. Fix in `mailcore` where the gap is a
 decision both should share; remove the row when closed (numbers stay, so
-a closed gap leaves a hole). G1–G14 are closed; what is left are the
-deliberate or minor differences below.
-
-| # | Gap | Side | Kind |
-|---|---|---|---|
-| G15 | .eml export on native downloads on a throwaway runtime outside the job queue, with no progress line; an account switch re-runs an active search in Qt, clears it on native (send/draft refusals unified: per-kind now, so a Qt send queues behind a sync like native) | both | minor |
+a closed gap leaves a hole). G1–G15 are closed; none is open.

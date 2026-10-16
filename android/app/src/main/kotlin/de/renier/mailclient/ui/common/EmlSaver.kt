@@ -14,6 +14,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import de.renier.mailclient.MailNative
+import de.renier.mailclient.ui.state.MailState
+import de.renier.mailclient.ui.state.isAlreadyRunning
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -37,14 +39,19 @@ fun writeBytes(context: Context, uri: Uri, bytes: ByteArray) {
         ?: throw IllegalStateException("cannot write")
 }
 
+private const val EXPORT_WAIT_MS = 120_000L
+
 /**
- * Save one RFC822 message through the SAF picker: export the bytes and the
- * core's suggested file name, then write the picked document. The returned
- * lambda takes the message's folder id and uid. `onSaved` / `onFailed` run
- * on the main thread for status lines.
+ * Save one RFC822 message through the SAF picker. Missing files download in
+ * the core's queued "Export" job (status line and busy state like any
+ * job, the same as Qt); once it finishes the bytes and the core's suggested
+ * file name are read locally and the picked document is written. The
+ * returned lambda takes the message's folder id and uid. `onSaved` /
+ * `onFailed` run on the main thread for status lines.
  */
 @Composable
 fun rememberEmlSaver(
+    state: MailState,
     onSaved: () -> Unit,
     onFailed: (String) -> Unit,
 ): (folderId: Long, uid: Int) -> Unit {
@@ -64,18 +71,39 @@ fun rememberEmlSaver(
         }
     }
     return { folderId, uid ->
-        scope.launch(Dispatchers.IO) {
-            val exported = runCatching {
-                MailNative.exportEmlBytes(folderId, uid) to MailNative.suggestedEmlName(folderId, uid)
+        scope.launch {
+            val key = "export:$folderId:$uid"
+            val queue = {
+                MailNative.ensureInit(context)
+                MailNative.exportFetch(folderId, uid)
             }
-            val (bytes, name) = exported.getOrElse {
-                withContext(Dispatchers.Main) { onFailed(it.message ?: "Could not export the message") }
+            val done = try {
+                state.awaitFinished(key, EXPORT_WAIT_MS, queue)
+            } catch (e: Exception) {
+                if (!e.isAlreadyRunning()) {
+                    onFailed(e.message ?: "Could not export the message")
+                    return@launch
+                }
+                // A tap while ours runs: wait for that job's finish instead.
+                state.awaitFinished(key, EXPORT_WAIT_MS) {}
+            }
+            if (done != null && !done.first) {
+                onFailed(done.second.ifEmpty { "Could not export the message" })
                 return@launch
             }
-            withContext(Dispatchers.Main) {
-                pending = bytes
-                picker.launch(name to "message/rfc822")
+            // A timed-out wait still tries: the assembly refuses while
+            // files are missing.
+            val exported = withContext(Dispatchers.IO) {
+                runCatching {
+                    MailNative.assembleEml(folderId, uid) to MailNative.suggestedEmlName(folderId, uid)
+                }
             }
+            val (bytes, name) = exported.getOrElse {
+                onFailed(it.message ?: "Could not export the message")
+                return@launch
+            }
+            pending = bytes
+            picker.launch(name to "message/rfc822")
         }
     }
 }

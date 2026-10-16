@@ -168,6 +168,7 @@ fun ReaderScreen(
         }
     }
     val emlSaver = rememberEmlSaver(
+        state = state,
         onSaved = { state.info("Saved") },
         onFailed = { state.info(it) },
     )

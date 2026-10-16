@@ -505,8 +505,11 @@ impl qobject::Bridge {
             .and_then(|db| folder_for_path(db, account_id, folder_path))
             .filter(|_| uid >= 0);
         let path = path.to_string();
-        spawn_job(self, "Export", move |db, _progress| async move {
+        spawn_job(self, "Export", move |db, progress| async move {
             let folder_id = folder_id.ok_or_else(|| "unknown message".to_string())?;
+            if mailcore::export::missing(db, folder_id, uid as u32).unwrap_or(0) > 0 {
+                progress.report("Downloading…");
+            }
             mailcore::export::prepare(db, folder_id, uid as u32).await?;
             let dest = mailcore::export::export_eml_to(db, folder_id, uid as u32, &path)
                 .map_err(|e| e.to_string())?;

@@ -873,14 +873,15 @@ ApplicationWindow {
         if (r === "") {
             markReadTimer.stop();
             messageList.setSelectionMode(false);
+            // An active search (or find-similar) belongs to the previous
+            // account: the switch ends it, like native.
+            searchField.text = "";
+            root.clearSimilar();
             root.currentUid = -1;
             root.currentFolder = "";
             reloadAccounts();
             reloadFolders();
             reloadMessages();
-            // An active search belongs to the previous account: re-run it
-            // here so results (and any server top-up) follow the switch.
-            root.updateSearch(true);
             root.statusText = qsTr("Account: %1").arg(backend.current_account_email);
             // Render the selected account's cache before the synchronous
             // account-scoped refresh begins. Only the account just selected

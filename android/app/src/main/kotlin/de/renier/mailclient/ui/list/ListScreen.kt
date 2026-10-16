@@ -141,6 +141,7 @@ fun ListScreen(
     var rowTrash by remember { mutableStateOf<MessageRow?>(null) }
     var rowPurge by remember { mutableStateOf<MessageRow?>(null) }
     val emlSaver = rememberEmlSaver(
+        state = state,
         onSaved = { state.info("Saved") },
         onFailed = { state.info(it) },
     )
