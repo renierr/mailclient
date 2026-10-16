@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -55,6 +56,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import de.renier.mailclient.AppLock
 import de.renier.mailclient.MailNative
 import de.renier.mailclient.MailNotifier
 import de.renier.mailclient.R
@@ -73,6 +75,7 @@ private enum class Section(val label: String, val icon: Int) {
     Mailbox("Mailbox", R.drawable.ic_inbox),
     Reading("Reading", R.drawable.ic_mail),
     Composing("Composing", R.drawable.ic_edit),
+    Privacy("Privacy", R.drawable.ic_lock),
     Sync("Accounts & sync", R.drawable.ic_sync),
     Maintenance("Maintenance", R.drawable.ic_save),
     About("About", R.drawable.ic_info),
@@ -163,6 +166,7 @@ fun SettingsScreen(state: MailState, onClose: () -> Unit) {
             }
             result.onSuccess { (before, after) ->
                 state.settingsSaved()
+                AppLock.reload()
                 // Background checks just got switched on: Doze postpones a
                 // battery-optimised app's checks by hours, so ask for the
                 // exemption now (the shell asks for notifications itself).
@@ -228,6 +232,7 @@ fun SettingsScreen(state: MailState, onClose: () -> Unit) {
                                 Section.Mailbox -> MailboxSection(d)
                                 Section.Reading -> ReadingSection(d)
                                 Section.Composing -> ComposingSection(d)
+                                Section.Privacy -> PrivacySection(d) { error = it }
                                 Section.Sync -> SyncSection(state, d, choices, syncScope, { syncScope = it }, accountDrafts, ::testNotification)
                                 else -> Unit
                             }
@@ -370,6 +375,46 @@ private fun ComposingSection(d: SettingsDraft) {
         help = "Pre-checks the same toggle in the Send-later dialog, where it can still be changed for one mail. " +
             "When the send goes out, this phone mails itself a note naming the subject, the time and how many " +
             "recipients it had.",
+    )
+}
+
+@Composable
+private fun PrivacySection(d: SettingsDraft, onError: (String) -> Unit) {
+    val activity = LocalActivity.current
+    val support = remember(activity) { activity?.let { AppLock.support(it) } ?: AppLock.Support.Unsupported }
+    var asking by remember { mutableStateOf(false) }
+    val on = d.flag("app_lock_enabled")
+    SettingSwitch(
+        "Lock with fingerprint",
+        on,
+        { want ->
+            if (!want) {
+                d.setFlag("app_lock_enabled", false)
+            } else if (activity != null && !asking) {
+                // Turning it on proves the unlock works first.
+                asking = true
+                AppLock.authenticate(activity, "Turn on app lock") { ok, message ->
+                    asking = false
+                    if (ok) d.setFlag("app_lock_enabled", true) else message?.let(onError)
+                }
+            }
+        },
+        help = when (support) {
+            AppLock.Support.Ready ->
+                "Asks for your fingerprint when the app starts and when you come back to it. The phone's " +
+                    "screen lock works too, so a sensor that fails never locks you out. Hides the app's " +
+                    "preview in recent apps."
+            AppLock.Support.NoScreenLock -> "Set up a screen lock on this phone first."
+            AppLock.Support.Unsupported -> "Needs Android 9 or newer."
+        },
+        enabled = support == AppLock.Support.Ready && !asking || on,
+    )
+    Offered(
+        d,
+        "Lock again after leaving the app",
+        "app_lock_after_secs",
+        help = "Short trips, such as picking a file to attach, stay unlocked within this time.",
+        enabled = on,
     )
 }
 

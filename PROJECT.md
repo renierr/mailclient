@@ -304,7 +304,7 @@ and need no Qt twin unless noted.
 | Keyboard shortcuts with a hardware keyboard | Android | Today touch has none by design (§9); the key map could follow Qt's |
 | Autofill hints on the account form | Android | Content types on the login fields so password managers fill IMAP/SMTP credentials |
 | Per-app language | Android | `localeConfig`; only worth it once strings are translated |
-| App lock (fingerprint / face) | Android | Framework `BiometricPrompt` (Android 9+, no dependency), opt-in setting |
+| ~~App lock (fingerprint / face)~~ | Android | ✅ done — see §9 "Background & notifications (Android)" |
 
 ## 8. Known Flaws & Repair List (user-reported)
 
@@ -479,7 +479,7 @@ the open Qt ↔ native differences are listed at the end.
 
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
-| Full settings (interface/mailbox/reading/composing/sync/maintenance/about) | ✅ dialog | ✅ page | ✅ page | Touch: full page, section rail where there is room, tabs (native) or a dropdown (Flutter) on a phone; draft + Save writes only changed keys. Native asks before discarding unsaved changes and applies the interface scale to every dp |
+| Full settings (interface/mailbox/reading/composing/sync/maintenance/about) | ✅ dialog | ✅ page | ✅ page | Touch: full page, section rail where there is room, tabs (native) or a dropdown (Flutter) on a phone; draft + Save writes only changed keys. Native asks before discarding unsaved changes and applies the interface scale to every dp, and adds a Privacy section for the app lock (Android only) |
 | Per-account overrides, About + server capabilities | ✅ | ✅ | ✅ | |
 
 ### Background & notifications (Android)
@@ -495,6 +495,7 @@ the open Qt ↔ native differences are listed at the end.
 | Archive-or-Delete and Reply buttons on a single mail's notification | — | — | ✅ | Android shows three buttons: Mark read, the one the `notification_action` setting picks (Archive default, or Delete), Reply with an inline text field. Which buttons a notification gets is the core's plan (`notify::plan_for`); the buttons call `notify::act` (move queued with no undo window, pushed by `MailFlagWorker` via `headless::push_changes`; a delete that would destroy is refused) and `notify::quick_reply` (the reply draft with the typed text, queued like a composer send, delivered on `mailclient-net` by `MailReplyWorker`, never retried; a failure posts a "Reply not sent" notification that keeps the text). Flutter ignores the new plan fields |
 | Open `mailto:` links, share into the composer | — (`mailcore::compose::prefill` is ready for a desktop `mailto:` handler) | — | ✅ | `ComposeEntryActivity` takes VIEW/SENDTO `mailto:` and SEND/SEND_MULTIPLE (listing the app as a mail app and share target) and hands over to the shell in the app's own task. The core parses the link (RFC 6068: to/cc/bcc/subject/body only) and merges the extras (`compose::prefill_draft`); shared files are copied in like picked ones, `file://` and the app's own providers refused. A share while the composer is open is declined with a notice rather than replacing the draft |
 | Launcher shortcuts (long-press the app icon: Compose, each account's inbox) | — (`mailapp --open` serves widgets/notifications) | — | ✅ | Compose is static (`res/xml/shortcuts.xml`, via `ShortcutTrampolineActivity` so a running shell is not cleared), so it shows from install on; the inboxes are dynamic (`MailShortcuts.kt`), republished on an account-list load when they changed; icons are the core's avatar initials/colour; a home-screen copy of a removed account's inbox is disabled. Taps reuse the notification-open path (`compose`, `inbox:<id>` payloads) |
+| App lock (fingerprint, screen lock as fallback) | — | — | ✅ | Opt-in under Settings → Privacy (`app_lock_enabled`, `app_lock_after_secs`: immediately, 30 s, 1/5/15 min, default 1 min; core keys, delays snap down). Locks on a cold start and on return after the delay away (`AppLock.kt`); turning it on asks for the fingerprint first. Framework `BiometricPrompt` (Android 9+), screen lock always accepted (Android 9 via the confirm-credential page), so a failing sensor never locks anyone out; needs a secure lock screen and lifts itself if that is removed. The cover (`ui/lock/LockCover.kt`) sits over the still-composed shell, so drafts survive; it blocks touch, hardware keys and accessibility to the shell, back sends the app to the background. Hides the recents preview on Android 13+. Notifications still show sender and subject |
 
 ### Open Qt ↔ native gaps
 

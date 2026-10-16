@@ -74,6 +74,12 @@ const TABLE: &[(&str, Kind, &[&str])] = &[
     (QUIET_HOURS_ENABLED, Kind::Flag, &[]),
     (QUIET_HOURS_START, Kind::Text, &[]),
     (QUIET_HOURS_END, Kind::Text, &[]),
+    (APP_LOCK_ENABLED, Kind::Flag, &[]),
+    (
+        APP_LOCK_AFTER_SECS,
+        Kind::Int,
+        &["0", "30", "60", "300", "900"],
+    ),
 ];
 
 fn typed(kind: Kind, raw: &str) -> Value {
@@ -135,6 +141,7 @@ mod tests {
                 NOTIFICATION_ACTION => normalize_notification_action(raw).into(),
                 MARK_READ_DELAY_SECS => normalize_delay_secs(raw.parse().unwrap()).to_string(),
                 SYNC_INTERVAL_MINUTES => normalize_sync_interval(raw.parse().unwrap()).to_string(),
+                APP_LOCK_AFTER_SECS => normalize_app_lock_after(raw.parse().unwrap()).to_string(),
                 UI_SCALE => {
                     let v: f32 = raw.parse().unwrap();
                     assert_eq!(normalize_ui_scale(v), v, "{key}={raw}");

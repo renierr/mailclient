@@ -107,6 +107,15 @@ pub const QUIET_HOURS_ENABLED: &str = "quiet_hours_enabled";
 pub const QUIET_HOURS_START: &str = "quiet_hours_start";
 /// Local time the quiet hours end (exclusive), `HH:MM` (default `07:00`).
 pub const QUIET_HOURS_END: &str = "quiet_hours_end";
+/// Lock the Android app behind the fingerprint (or the phone's screen lock)
+/// on a cold start and on return after [`APP_LOCK_AFTER_SECS`] away
+/// (`1`/`0`, default off). Needs a secure lock screen. Qt never reads it.
+pub const APP_LOCK_ENABLED: &str = "app_lock_enabled";
+/// How long the app may be away before it locks again, in seconds: `0`
+/// (immediately) | `30` | `60` (default) | `300` | `900`. Other values snap
+/// down to the next offered step, so a hand-edited row never locks later
+/// than asked.
+pub const APP_LOCK_AFTER_SECS: &str = "app_lock_after_secs";
 /// Last account selected in the UI. Absent/invalid values deliberately leave
 /// startup selection to the normal first-account fallback.
 pub const LAST_ACTIVE_ACCOUNT_ID: &str = "last_active_account_id";
@@ -154,6 +163,8 @@ pub fn defaults(key: &str) -> Option<&'static str> {
         QUIET_HOURS_ENABLED => Some("0"),
         QUIET_HOURS_START => Some("00:00"),
         QUIET_HOURS_END => Some("07:00"),
+        APP_LOCK_ENABLED => Some("0"),
+        APP_LOCK_AFTER_SECS => Some("60"),
         _ => None,
     }
 }
@@ -566,6 +577,25 @@ pub fn get_notification_action(db: &Db) -> String {
     }
 }
 
+/// The app-lock delays offered, in seconds, shortest first.
+pub const APP_LOCK_AFTER_STEPS: [i64; 5] = [0, 30, 60, 300, 900];
+
+/// Snap an app-lock delay down to an offered step: never later than asked.
+#[must_use]
+pub fn normalize_app_lock_after(raw: i64) -> i64 {
+    APP_LOCK_AFTER_STEPS
+        .iter()
+        .copied()
+        .rev()
+        .find(|&step| step <= raw)
+        .unwrap_or(0)
+}
+
+/// Seconds away before the app locks again (see [`APP_LOCK_AFTER_SECS`]).
+pub fn get_app_lock_after(db: &Db) -> i64 {
+    get_number(db, APP_LOCK_AFTER_SECS, normalize_app_lock_after)
+}
+
 /// Plain-text signature body (`""` when unset).
 pub fn get_signature_text(db: &Db) -> String {
     match get(db, SIGNATURE_TEXT) {
@@ -828,6 +858,30 @@ mod tests {
         assert_eq!(get_sync_interval(&db), 0);
         set(&db, SIGNATURE_TEXT, "Kind regards").unwrap();
         assert_eq!(get_signature_text(&db), "Kind regards");
+    }
+
+    #[test]
+    fn app_lock_is_off_and_delays_snap_down_to_a_step() {
+        let db = Db::open_in_memory().unwrap();
+        assert!(!get_bool(&db, APP_LOCK_ENABLED).unwrap());
+        assert_eq!(get_app_lock_after(&db), 60);
+        for (raw, kept) in [
+            (-5, 0),
+            (0, 0),
+            (29, 0),
+            (30, 30),
+            (299, 60),
+            (300, 300),
+            (99999, 900),
+        ] {
+            assert_eq!(normalize_app_lock_after(raw), kept, "{raw}");
+        }
+        set(&db, APP_LOCK_AFTER_SECS, "120").unwrap();
+        assert_eq!(get_app_lock_after(&db), 60);
+        set(&db, APP_LOCK_AFTER_SECS, "nonsense").unwrap();
+        assert_eq!(get_app_lock_after(&db), 60);
+        set_many(&db, &[(APP_LOCK_ENABLED.into(), "1".into())]).unwrap();
+        assert!(get_bool(&db, APP_LOCK_ENABLED).unwrap());
     }
 
     #[test]

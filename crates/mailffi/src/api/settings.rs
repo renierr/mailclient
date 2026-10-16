@@ -53,10 +53,13 @@ pub fn settings_json() -> anyhow::Result<String> {
         // Android-only (READ_CONTACTS), like NOTIFICATION_ACTION; the
         // other frontends have no phone book to offer.
         s::SUGGEST_PHONE_CONTACTS,
+        // Android-only too: the fingerprint lock.
+        s::APP_LOCK_ENABLED,
     ] {
         out[key] = flag(key).into();
     }
     out[s::NOTIFICATION_ACTION] = s::get_notification_action(db).into();
+    out[s::APP_LOCK_AFTER_SECS] = s::get_app_lock_after(db).into();
     Ok(out.to_string())
 }
 

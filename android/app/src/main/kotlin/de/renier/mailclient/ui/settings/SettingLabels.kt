@@ -35,6 +35,13 @@ object SettingLabels {
             "60" -> "Every hour"
             else -> "Every $value minutes"
         }
+        "app_lock_after_secs" -> when (value) {
+            "0" -> "Immediately"
+            "60" -> "After 1 minute"
+            "300" -> "After 5 minutes"
+            "900" -> "After 15 minutes"
+            else -> "After $value seconds"
+        }
         "notification_action" -> if (value == "trash") "Delete" else "Archive"
         "background_scheduler" -> when (value) {
             "alarm" -> "On-time alarm"

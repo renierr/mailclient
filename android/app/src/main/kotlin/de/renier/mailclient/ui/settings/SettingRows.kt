@@ -98,7 +98,13 @@ fun SettingChoice(
 
 /** An on/off setting: title (and hint) with a switch at the end. */
 @Composable
-fun SettingSwitch(title: String, checked: Boolean, onChange: (Boolean) -> Unit, help: String? = null) {
+fun SettingSwitch(
+    title: String,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit,
+    help: String? = null,
+    enabled: Boolean = true,
+) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -108,7 +114,7 @@ fun SettingSwitch(title: String, checked: Boolean, onChange: (Boolean) -> Unit, 
             Text(title, style = MaterialTheme.typography.bodyLarge)
             help?.let { SettingHint(it) }
         }
-        Switch(checked = checked, onCheckedChange = onChange)
+        Switch(checked = checked, onCheckedChange = onChange, enabled = enabled)
     }
 }
 
