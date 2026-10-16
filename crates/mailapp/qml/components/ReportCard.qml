@@ -23,8 +23,8 @@ Rectangle {
     readonly property string outcome: root.report ? root.report.outcome : ""
     readonly property string toneName: root.loaded && root.report.tone ? root.report.tone : "neutral"
     readonly property color tone: root.toneFor(root.toneName)
-    readonly property bool hasOriginal: !!root.report && !!root.report.original_folder_path
-                                        && root.report.original_uid !== undefined && root.report.original_uid !== null
+    readonly property bool hasOriginal: !!root.report && !!root.report.original_folder_path && root.report.original_uid
+                                        !== undefined && root.report.original_uid !== null
 
     readonly property string icon: {
         if (root.report && root.report.kind === "read")
@@ -99,8 +99,8 @@ Rectangle {
                 Label {
                     Layout.fillWidth: true
                     visible: !!root.report && !!root.report.original_subject
-                    text: (root.report && root.report.original_subject)
-                          ? qsTr("Original: %1").arg(root.report.original_subject) : ""
+                    text: (root.report && root.report.original_subject) ? qsTr("Original: %1").arg(
+                                                                              root.report.original_subject) : ""
                     color: Theme.text
                     font.pixelSize: Theme.fontSmall
                     elide: Text.ElideRight

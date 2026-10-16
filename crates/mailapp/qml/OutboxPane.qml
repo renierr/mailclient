@@ -109,7 +109,8 @@ Rectangle {
             wrapMode: Text.Wrap
             color: Theme.textMuted
             font.pixelSize: Theme.fontSmall
-            text: qsTr("Mail waiting to be sent from this device. Failed sends try again by themselves for a while, then stop and wait for you.")
+            text: qsTr(
+                      "Mail waiting to be sent from this device. Failed sends try again by themselves for a while, then stop and wait for you.")
         }
 
         Label {

@@ -19,8 +19,8 @@ Rectangle {
     signal downloadClicked
 
     readonly property bool loaded: !!root.mail && root.mail.loaded === true
-    readonly property bool hasFile: !!root.mail && root.mail.attachment_id !== undefined
-                                    && root.mail.attachment_id !== null
+    readonly property bool hasFile: !!root.mail && root.mail.attachment_id !== undefined && root.mail.attachment_id
+                                    !== null
 
     radius: Theme.radius
     color: Theme.bgAlt
