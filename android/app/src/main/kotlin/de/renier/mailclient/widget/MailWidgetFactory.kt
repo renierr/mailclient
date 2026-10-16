@@ -7,15 +7,15 @@ import android.widget.RemoteViews
 import android.widget.RemoteViewsService
 import de.renier.mailclient.R
 
-class MailWidgetFactory(private val context: Context) : RemoteViewsService.RemoteViewsFactory {
+class MailWidgetFactory(private val context: Context, private val widgetId: Int) : RemoteViewsService.RemoteViewsFactory {
     private var state: WidgetState = WidgetState(-1, -1, 0, emptyList(), false)
 
     override fun onCreate() {
-        state = WidgetData.load(context)
+        state = WidgetData.load(context, widgetId)
     }
 
     override fun onDataSetChanged() {
-        state = WidgetData.load(context)
+        state = WidgetData.load(context, widgetId)
     }
 
     override fun onDestroy() {}

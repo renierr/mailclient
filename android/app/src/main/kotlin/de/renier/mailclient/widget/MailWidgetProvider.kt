@@ -16,6 +16,10 @@ class MailWidgetProvider : AppWidgetProvider() {
         for (id in appWidgetIds) updateWidget(context, appWidgetManager, id)
     }
 
+    override fun onAppWidgetOptionsChanged(context: Context, appWidgetManager: AppWidgetManager, appWidgetId: Int, newOptions: android.os.Bundle) {
+        updateWidget(context, appWidgetManager, appWidgetId)
+    }
+
     companion object {
         const val EXTRA_ACCOUNT = "widget_account"
         const val EXTRA_FOLDER = "widget_folder"
@@ -28,11 +32,11 @@ class MailWidgetProvider : AppWidgetProvider() {
             for (id in ids) updateWidget(context, mgr, id)
         }
 
-        private fun updateWidget(context: Context, mgr: AppWidgetManager, id: Int) {
-            val state = WidgetData.load(context)
+        public fun updateWidget(context: Context, mgr: AppWidgetManager, id: Int) {
+            val state = WidgetData.load(context, id)
             val options = mgr.getAppWidgetOptions(id)
             val minW = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0)
-            val useList = minW >= 200
+            val useList = minW >= 160
             val layout = if (useList) R.layout.widget_list else R.layout.widget_compact
             val rv = RemoteViews(context.packageName, layout)
 

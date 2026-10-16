@@ -26,15 +26,18 @@ data class WidgetState(
 )
 
 object WidgetData {
-    fun load(context: Context): WidgetState {
+    fun load(context: Context, widgetId: Int = -1): WidgetState {
         MailNative.ensureInit(context)
         val accounts = runCatching { JSONArray(MailNative.accountsJson()) }.getOrDefault(JSONArray())
         if (accounts.length() == 0) {
             return WidgetState(-1, -1, 0, emptyList(), false)
         }
-        // Default to the first account's inbox.
-        val acct = accounts.optJSONObject(0) ?: return WidgetState(-1, -1, 0, emptyList(), false)
-        val accountId = acct.optLong("id", -1)
+        val saved = MailWidgetConfigActivity.selectedAccount(context, widgetId)
+        val acct = if (saved >= 0) {
+            (0 until accounts.length()).mapNotNull { accounts.optJSONObject(it) }
+                .firstOrNull { it.optLong("id", -1) == saved }
+        } else null ?: accounts.optJSONObject(0)
+        val accountId = acct?.optLong("id", -1) ?: -1
         if (accountId < 0) return WidgetState(-1, -1, 0, emptyList(), false)
 
         val folders = runCatching { JSONArray(MailNative.foldersJson(accountId)) }.getOrDefault(JSONArray())

@@ -222,5 +222,9 @@
             android:name=".widget.MailWidgetService"
             android:permission="android.permission.BIND_REMOTEVIEWS"
             android:exported="true" />
+        <activity
+            android:name=".widget.MailWidgetConfigActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.DeviceDefault.Light.Dialog" />
     </application>
 </manifest>
