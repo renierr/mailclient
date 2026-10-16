@@ -511,7 +511,7 @@ unbounded `mpsc` net queue and uncoalesced `spawn_flag_push` in `mailapp` (and D
 One sleeping OS thread per undoable action. Kept as **D8**, which covers both frontends
 (`mailapp/src/bridge/worker.rs:135-141` and `crates/mailffi/src/net.rs:288-294`).
 
-### B7 · medium · UIDVALIDITY change wipes the cache before the replacement exists — confirmed — **OPEN** (effort: medium — defer delete / staging table in sync_folder_window)
+### B7 · medium · UIDVALIDITY change wipes the cache before the replacement exists — confirmed — **FIXED** `[fixed]` (deferred purge: old rows are kept until the new window is fetched/stored, then stale UIDs are purged; a failed sync leaves stale-but-non-empty cache instead of an empty folder)
 `sync/imap/engine/sync.rs:77-81`
 
 ```rust

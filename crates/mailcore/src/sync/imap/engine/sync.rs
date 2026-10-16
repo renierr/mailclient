@@ -92,14 +92,21 @@ impl ImapSync {
             mb.vanished.len()
         );
 
-        // UIDVALIDITY change => server-side rebuild, drop local copies.
+        // UIDVALIDITY change => server-side rebuild. Defer dropping the
+        // local copies until the new window has been fetched and stored, so a
+        // failed/aborted sync leaves the old (stale but non-empty) cache in
+        // place instead of an empty folder with a lost badge/notification
+        // baseline. Old rows whose UID survives on the server are kept (they
+        // were re-fetched/updated); the rest are purged below.
         let validity_changed = mb
             .uid_validity
             .is_some_and(|v| folder.uid_validity.is_some_and(|old| old != v));
-        if validity_changed {
+        let old_uids: std::collections::HashSet<u32> = if validity_changed {
             log::warn!("imap: UIDVALIDITY changed for {} — resyncing", folder.path);
-            messages::delete_by_folder(db, folder_id)?;
-        }
+            messages::list_uids(db, folder_id)?.into_iter().collect()
+        } else {
+            std::collections::HashSet::new()
+        };
 
         let mut expunged = 0u64;
 
@@ -145,7 +152,10 @@ impl ImapSync {
             }
         }
 
-        let local_uids: HashSet<u32> = messages::list_uids(db, folder_id)?.into_iter().collect();
+        let local_uids: HashSet<u32> = messages::list_uids(db, folder_id)?
+            .into_iter()
+            .filter(|u| !validity_changed || !old_uids.contains(u))
+            .collect();
 
         // Fast path: the server reports exactly the state we cached, so UID
         // SEARCH + flag refresh + body FETCH would all be no-ops — one
@@ -302,6 +312,21 @@ impl ImapSync {
                     folder.path,
                     skipped
                 );
+            }
+        }
+
+        // 4b. On a UIDVALIDITY change, purge the now-stale old rows now that
+        // the new window is in place. Only UIDs that did not survive on the
+        // server are removed; a UID that collided with a new server row was
+        // already upserted above and is kept.
+        if validity_changed {
+            let stale: Vec<u32> = old_uids
+                .iter()
+                .copied()
+                .filter(|u| !server_uids.contains(u))
+                .collect();
+            for chunk in stale.chunks(FETCH_CHUNK) {
+                messages::delete_many_by_uids(db, folder_id, chunk)?;
             }
         }
 
