@@ -51,6 +51,7 @@ class MailCheckWorker(context: Context, params: WorkerParameters) : Worker(conte
             // runs its own check, marked explicit, in the shade instead).
             val report = MailNative.check(trigger, now = false)
             MailNotifier.deliver(applicationContext, report)
+            de.renier.mailclient.widget.MailWidgetProvider.updateAll(applicationContext)
             // The check flushes outboxes too: a scheduled send may have
             // given up there.
             runCatching { JSONArray(MailNative.takeSendFailures()) }
