@@ -25,6 +25,7 @@
             android:layout_weight="1"
             android:layout_marginStart="8dp"
             android:text="mailclient"
+            android:textColor="@color/widget_text_primary"
             android:textSize="13sp"
             android:textStyle="bold" />
 
@@ -33,6 +34,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="0 unread"
+            android:textColor="@color/widget_text_secondary"
             android:textSize="12sp" />
     </LinearLayout>
 
@@ -51,5 +53,6 @@
         android:layout_weight="1"
         android:gravity="center"
         android:text="No unread mail"
+        android:textColor="@color/widget_text_secondary"
         android:textSize="12sp" />
 </LinearLayout>
