@@ -82,6 +82,11 @@ fun registerCargoNdk(name: String, abis: List<String>, profileArgs: List<String>
         // A missing cargo-ndk is a setup problem with a one-line fix, so say
         // so rather than letting Gradle report a bare non-zero exit.
         isIgnoreExitValue = false
+        // The cargo-ndk invocation is not configuration-cache compatible
+        // (it reads env/local.properties at execution time and spawns an
+        // external process), so opt this task out; the rest of the build
+        // still benefits from the cache.
+        notCompatibleWithConfigurationCache("cargo-ndk Exec task reads env/local.properties at execution time")
         // Drop the previous copy first: when cargo has nothing to rebuild,
         // cargo-ndk leaves an existing .so in place, so a release build after
         // a debug run packaged the ~150 MB unoptimised debug core.

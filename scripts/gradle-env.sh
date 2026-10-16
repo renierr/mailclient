@@ -27,6 +27,16 @@ gradle_env_setup() {
     local dir="${1:-android}"
 
     # -- JDK -----------------------------------------------------------
+    # AGP 9.x needs a JDK whose jlink can build the android-36 system
+    # modules image; JDK 27+ fails that transform, so fall back to an
+    # Android Studio JBR when JAVA_HOME points at one of those.
+    if [ -n "${JAVA_HOME:-}" ]; then
+        local _jv
+        _jv="$("$JAVA_HOME/bin/java" -version 2>&1 | head -n 1 | sed -E 's/.*version "([0-9]+).*/\1/')"
+        if [ -n "$_jv" ] && [ "$_jv" -ge 27 ] 2>/dev/null; then
+            unset JAVA_HOME
+        fi
+    fi
     if [ -z "${JAVA_HOME:-}" ]; then
         local jbr
         for jbr in \
