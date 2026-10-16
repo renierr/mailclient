@@ -415,7 +415,7 @@ the open Qt ↔ native differences are listed at the end.
 | Feature | Qt | Flutter | Native | Notes |
 |---|---|---|---|---|
 | Short input = row filter, 3+ = FTS + server backfill | ✅ | ✅ | ✅ | Core `search::plan`; same thresholds. 1–2 letters filter the open folder in place ("X of Y shown", sort and footer stay); the local index answers every keystroke, only the server backfill waits out the debounce |
-| Folder-scoped vs account-wide | ✅ | ✅ | ✅ | A folder-scoped search follows a folder change; a scope toggle or folder change starts a fresh server backfill. An account switch re-runs the search in Qt, clears it on native |
+| Folder-scoped vs account-wide | ✅ | ✅ | ✅ | A folder-scoped search follows a folder change; a scope toggle or folder change starts a fresh server backfill. An account switch ends the search (and find-similar) in both |
 | Hits grouped under folder section headers | ✅ | ✅ | ✅ | Account-wide + similar only; folder-scoped stays flat everywhere |
 | Jump to hit (opens in its folder) | ✅ | ✅ | ✅ | Native opens hit directly |
 
