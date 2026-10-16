@@ -8,9 +8,10 @@
 //   build/timeline.js                scene times, cue times, subtitle cues, mouth envelope
 //   build/subtitles.srt / .vtt       the same subtitles as sidecar files
 //
-// Voice: Kokoro (local neural TTS, offline once set up) by default, or Microsoft Edge's
-// online voices (voice.engine: 'edge'). Python, packages and models live in one
-// per-user cache shared by all videos — see "shared python + models" below.
+// Voice: Kokoro (local neural TTS, offline once set up) by default; opt-in Qwen3-TTS
+// (voice.engine: 'qwen3', local, GPU) with preset speakers or a clone of a recorded voice;
+// or Microsoft Edge's online voices (voice.engine: 'edge'). Python, packages and models
+// live in one per-user cache shared by all videos — see "shared python + models" below.
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -28,7 +29,7 @@ const FFMPEG = process.env.FFMPEG || 'ffmpeg';
 
 const { scenes, voice } = script;
 const pronounce = script.pronounce ?? {};
-const RATE = 24000; // Hz, mono — what both engines deliver
+const RATE = 24000; // Hz, mono — what every engine delivers
 const FPS = 30;     // resolution of the mouth envelope
 // Silences in seconds; script.mjs may override any of them with `export const timing`.
 const { leadIn: LEAD_IN, tail: TAIL, firstLeadIn: FIRST_LEAD_IN, lastTail: LAST_TAIL } = {
@@ -66,27 +67,14 @@ function parseScene(scene) {
   return { ...scene, words, cueAt, spoken };
 }
 
-// ---------------------------------------------------------------- voice engine
-
-// Kokoro is local and the default. Edge is picked explicitly, or recognised by an
-// Edge-style voice name ("en-US-…") so scripts written before Kokoro keep their voice.
-const ENGINE_NAME = voice.engine ?? (/^[a-z]{2,3}-[A-Z]{2}-/.test(voice.name ?? '') ? 'edge' : 'kokoro');
-const SETTINGS = {
-  kokoro: { name: voice.name ?? 'af_heart', speed: voice.speed ?? 1 },
-  edge: { name: voice.name ?? 'en-US-AvaMultilingualNeural', rate: voice.rate ?? '+0%', pitch: voice.pitch ?? '+0Hz' },
-}[ENGINE_NAME];
-if (!SETTINGS) throw new Error(`Unknown voice.engine "${ENGINE_NAME}" in script.mjs — use "kokoro" or "edge".`);
-if (ENGINE_NAME === 'kokoro' && !/^[ab]/.test(SETTINGS.name)) {
-  throw new Error(`Kokoro voice "${SETTINGS.name}": only English voices (a… US, b… UK) are set up, e.g. af_heart, bf_emma.`);
-}
-
 // ---------------------------------------------------------------- shared python + models
 //
 // One per-user cache, shared by every video on the machine, so the Python runtime,
 // packages and voice models are set up once and not per project:
-//   <cache>/python    uv-managed Python runtimes      <cache>/uv   uv's package cache
-//   <cache>/venv-<engine>  one environment per engine  <cache>/hf   Kokoro model + voices
-// EXPLAINER_VIDEO_CACHE overrides the location.
+//   <cache>/python    uv-managed Python runtimes      <cache>/uv     uv's package cache
+//   <cache>/venv-<engine>  one environment per engine  <cache>/hf     Kokoro + Qwen3 models
+//   <cache>/torch     the word aligner (Qwen3)          <cache>/voices recorded voices to clone
+// EXPLAINER_VIDEO_CACHE overrides the location. scripts/video-kit.mjs resolves it the same way.
 
 const CACHE = process.env.EXPLAINER_VIDEO_CACHE || (process.platform === 'win32'
   ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'explainer-video')
@@ -94,6 +82,44 @@ const CACHE = process.env.EXPLAINER_VIDEO_CACHE || (process.platform === 'win32'
     ? path.join(os.homedir(), 'Library', 'Caches', 'explainer-video')
     : path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'), 'explainer-video'));
 const HF_HOME = path.join(CACHE, 'hf');
+const TORCH_HOME = path.join(CACHE, 'torch');
+
+// ---------------------------------------------------------------- voice engine
+
+/**
+ * A recorded voice for Qwen3 to clone: a name registered with `video-kit voice` (kept in the
+ * per-user cache, so a personal recording never lands in a repo) or a path to a .wav in the
+ * project. Either way the exact transcript sits next to it as .txt.
+ */
+function cloneVoice(ref) {
+  const named = !/[\\/]|\.\w+$/.test(ref);
+  const audio = named ? path.join(CACHE, 'voices', `${ref}.wav`) : path.resolve(ROOT, ref);
+  const transcript = audio.replace(/\.\w+$/, '.txt');
+  if (!fs.existsSync(audio) || !fs.existsSync(transcript)) {
+    throw new Error(named
+      ? `Voice "${ref}" is not registered: run \`bun <kit>/scripts/video-kit.mjs voice ${ref} <recording> --text "<what is said>"\`.`
+      : `Voice clone: need both ${audio} and its exact transcript ${transcript}.`);
+  }
+  // The recording's hash is part of the settings, so re-recording re-voices every scene.
+  const hash = createHash('sha1').update(fs.readFileSync(audio)).digest('hex').slice(0, 10);
+  return { audio, text: fs.readFileSync(transcript, 'utf8').trim(), hash };
+}
+
+// Kokoro is local and the default. Edge is picked explicitly, or recognised by an
+// Edge-style voice name ("en-US-…") so scripts written before Kokoro keep their voice.
+const ENGINE_NAME = voice.engine ?? (/^[a-z]{2,3}-[A-Z]{2}-/.test(voice.name ?? '') ? 'edge' : 'kokoro');
+const SETTINGS = {
+  kokoro: () => ({ name: voice.name ?? 'af_heart', speed: voice.speed ?? 1 }),
+  edge: () => ({ name: voice.name ?? 'en-US-AvaMultilingualNeural', rate: voice.rate ?? '+0%', pitch: voice.pitch ?? '+0Hz' }),
+  // seed: Qwen3 samples, so a fixed seed keeps a re-voiced scene the same take.
+  qwen3: () => voice.clone
+    ? { name: `clone of ${voice.clone}`, clone: cloneVoice(voice.clone), language: voice.language ?? 'English', seed: voice.seed ?? 0 }
+    : { name: voice.name ?? 'Ryan', instruct: voice.instruct ?? '', language: voice.language ?? 'English', seed: voice.seed ?? 0 },
+}[ENGINE_NAME]?.();
+if (!SETTINGS) throw new Error(`Unknown voice.engine "${ENGINE_NAME}" in script.mjs — use "kokoro", "qwen3" or "edge".`);
+if (ENGINE_NAME === 'kokoro' && !/^[ab]/.test(SETTINGS.name)) {
+  throw new Error(`Kokoro voice "${SETTINGS.name}": only English voices (a… US, b… UK) are set up, e.g. af_heart, bf_emma.`);
+}
 
 const PACKAGES = {
   kokoro: {
@@ -104,6 +130,15 @@ const PACKAGES = {
     ],
     // CPU-only PyTorch: a fraction of the size of the default CUDA build.
     index: ['--extra-index-url', 'https://download.pytorch.org/whl/cpu'],
+  },
+  qwen3: {
+    probe: 'import qwen_tts, torchaudio',
+    // CUDA PyTorch, installed first and from its own index only: mixed with PyPI, a newer
+    // CPU-only build wins on version number. A 1.7B model is only practical on an NVIDIA GPU;
+    // cu128 covers Blackwell too. Where that index has no wheels (macOS), PyPI's build is used.
+    torch: { install: ['torch', 'torchaudio'], index: ['--index-url', 'https://download.pytorch.org/whl/cu128'] },
+    install: ['qwen-tts>=0.1.1'],
+    index: [],
   },
   edge: { probe: 'import edge_tts', install: ['edge-tts'], index: [] },
 };
@@ -134,41 +169,60 @@ function ensurePython(engine) {
   const pkg = PACKAGES[engine];
   let py = venvPython(venv);
   if (py && ok(py, ['-c', pkg.probe])) return py;
+  // A broken environment (wrong PyTorch build, half-finished install) is rebuilt from scratch:
+  // installing over it would keep whatever already satisfies the requirements.
+  if (py) fs.rmSync(venv, { recursive: true, force: true });
 
   fs.mkdirSync(CACHE, { recursive: true });
   const env = { ...process.env, UV_PYTHON_INSTALL_DIR: path.join(CACHE, 'python'), UV_CACHE_DIR: path.join(CACHE, 'uv') };
   console.log(`Setting up the ${engine} voice in ${venv} (once per machine) …`);
+  const noTorch = () => console.log('  No CUDA build of PyTorch for this platform: using the default one (CPU).');
   if (ok('uv', ['--version'])) {
     // Offline first: whatever an earlier setup downloaded is in the uv cache already.
     const uv = (args) => ok('uv', [...args, '--offline'], env) || execFileSync('uv', args, { stdio: 'inherit', env });
     uv(['venv', '--quiet', '--allow-existing', '--python', '3.12', venv]);
     py = venvPython(venv);
+    if (pkg.torch) {
+      const args = ['pip', 'install', '--quiet', '--python', py, ...pkg.torch.install, ...pkg.torch.index];
+      if (!ok('uv', [...args, '--offline'], env) && !ok('uv', args, env)) noTorch();
+    }
     uv(['pip', 'install', '--quiet', '--python', py, ...pkg.install, ...pkg.index, '--index-strategy', 'unsafe-best-match']);
   } else {
     const base = basePython();
     if (!base) {
       throw new Error('The voice needs uv (recommended: https://docs.astral.sh/uv/) or a native Python 3.10–3.12 on the PATH.');
     }
-    if (!py) execFileSync(base[0], [...base.slice(1), '-m', 'venv', venv], { stdio: 'inherit' });
+    execFileSync(base[0], [...base.slice(1), '-m', 'venv', venv], { stdio: 'inherit' });
     py = venvPython(venv);
+    if (pkg.torch && !ok(py, ['-m', 'pip', 'install', '--quiet', ...pkg.torch.install, ...pkg.torch.index])) noTorch();
     execFileSync(py, ['-m', 'pip', 'install', '--quiet', ...pkg.install, ...pkg.index], { stdio: 'inherit' });
   }
   return py;
 }
 
-/** True when the Kokoro model and this voice are already cached: then no network is touched at all. */
-function kokoroCached(name) {
-  const snapshots = path.join(HF_HOME, 'hub', 'models--hexgrad--Kokoro-82M', 'snapshots');
+/** True when one snapshot of a Hugging Face repo holds all these files. */
+function hfCached(repo, files) {
+  const snapshots = path.join(HF_HOME, 'hub', `models--${repo.replace('/', '--')}`, 'snapshots');
   if (!fs.existsSync(snapshots)) return false;
-  return fs.readdirSync(snapshots).some((snap) =>
-    fs.existsSync(path.join(snapshots, snap, 'kokoro-v1_0.pth')) && fs.existsSync(path.join(snapshots, snap, 'voices', `${name}.pt`)));
+  return fs.readdirSync(snapshots).some((snap) => files.every((f) => fs.existsSync(path.join(snapshots, snap, f))));
+}
+
+/** True when everything this voice needs is cached already: then no network is touched at all. */
+function modelsCached() {
+  if (ENGINE_NAME === 'kokoro') return hfCached('hexgrad/Kokoro-82M', ['kokoro-v1_0.pth', `voices/${SETTINGS.name}.pt`]);
+  if (ENGINE_NAME !== 'qwen3') return false;
+  const repo = `Qwen/Qwen3-TTS-12Hz-1.7B-${SETTINGS.clone ? 'Base' : 'CustomVoice'}`;
+  return hfCached(repo, ['model.safetensors', 'speech_tokenizer/model.safetensors'])
+    && fs.existsSync(path.join(TORCH_HOME, 'hub', 'checkpoints', 'model.pt'));
 }
 
 function synthesise(parsed) {
   const ext = ENGINE_NAME === 'edge' ? 'mp3' : 'wav';
   const todo = [];
+  // A clone counts by its recording's content, not its path: moving the cache re-voices nothing.
+  const voiceKey = SETTINGS.clone ? { ...SETTINGS, clone: { hash: SETTINGS.clone.hash, text: SETTINGS.clone.text } } : SETTINGS;
   for (const s of parsed) {
-    const hash = createHash('sha1').update(JSON.stringify([ENGINE_NAME, SETTINGS, s.spoken])).digest('hex').slice(0, 10);
+    const hash = createHash('sha1').update(JSON.stringify([ENGINE_NAME, voiceKey, s.spoken])).digest('hex').slice(0, 10);
     s.audio = path.join(AUDIO, `${s.id}-${hash}.${ext}`);
     s.wordsFile = path.join(AUDIO, `${s.id}-${hash}.json`);
     if (!fs.existsSync(s.audio) || !fs.existsSync(s.wordsFile)) {
@@ -179,8 +233,8 @@ function synthesise(parsed) {
     const py = ensurePython(ENGINE_NAME);
     const job = path.join(AUDIO, 'job.json');
     fs.writeFileSync(job, JSON.stringify({ engine: ENGINE_NAME, settings: SETTINGS, scenes: todo }));
-    const env = { ...process.env, HF_HOME, PYTHONIOENCODING: 'utf-8', PYTHONWARNINGS: 'ignore' };
-    if (ENGINE_NAME === 'kokoro' && kokoroCached(SETTINGS.name)) env.HF_HUB_OFFLINE = '1';
+    const env = { ...process.env, HF_HOME, TORCH_HOME, PYTHONIOENCODING: 'utf-8', PYTHONWARNINGS: 'ignore' };
+    if (modelsCached()) env.HF_HUB_OFFLINE = '1';
     const where = ENGINE_NAME === 'edge' ? 'online, Microsoft Edge' : env.HF_HUB_OFFLINE ? 'local, offline' : 'local; downloading the model once';
     console.log(`Synthesising ${todo.length} scene(s) with ${ENGINE_NAME} ${SETTINGS.name} (${where}) …`);
     execFileSync(py, [path.join(ENGINE, 'tts.py'), job], { stdio: 'inherit', env });
