@@ -12,8 +12,9 @@
 // bf_emma, … (a = US, b = UK English). edge: Microsoft's online voices, e.g.
 // { engine: 'edge', name: 'en-US-AvaMultilingualNeural', rate: '+4%' } — sends the text to Microsoft.
 export const voice = {
-  engine: 'qwen3',
-  clone: 'renier',
+  engine: 'kokoro',
+  name: 'af_heart',
+  speed: 1.0,
 };
 
 export const pronounce = {
