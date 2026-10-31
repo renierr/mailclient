@@ -16,11 +16,11 @@
 
   <section class="scene" data-scene="intro" data-avatar="center, hero@title" data-wave="hi">
     <div class="hero-copy">
-      <div class="eyebrow" data-fx="up" data-cue="hi" data-delay="0.2">A desktop mail app for Omarchy Linux</div>
+      <div class="eyebrow" data-fx="up" data-cue="hi" data-delay="0.2">Desktop and Android mail, offline first</div>
       <h1 class="mega" data-fx="blur" data-cue="title" data-dur="1"><span class="grad">mailclient</span></h1>
       <p class="lead" data-fx="up" data-cue="title" data-delay="0.6">Inbox, minus the chaos.</p>
       <div class="chips" data-fx="up" data-cue="title" data-delay="1.1">
-        <span class="chip">Rust core</span><span class="chip">SQLite cache</span><span class="chip">Qt + Flutter</span>
+        <span class="chip">Rust core</span><span class="chip">SQLite cache</span><span class="chip">Qt + Android</span>
       </div>
     </div>
   </section>
@@ -40,22 +40,20 @@
   </section>
 
   <section class="scene" data-scene="core" data-look="0.3,-0.8">
-    <h2 class="title" data-fx="up" data-delay="0.2">One Rust core, two apps</h2>
+    <h2 class="title" data-fx="up" data-delay="0.2">One Rust core, two frontends</h2>
     <svg class="net" viewBox="0 0 1920 1080">
       <g class="links">
-        <path d="M470,380 C700,380 700,540 880,540" pathLength="1" data-fx="draw" data-cue="imap" data-delay="0.3" data-flow />
-        <path d="M470,540 L880,540" pathLength="1" data-fx="draw" data-cue="imap" data-delay="0.5" data-flow />
-        <path d="M1040,540 C1220,540 1220,310 1430,310" pathLength="1" data-fx="draw" data-cue="qt" data-flow />
-        <path d="M1040,540 C1220,540 1220,470 1430,470" pathLength="1" data-fx="draw" data-cue="flutter" data-flow />
-        <path d="M1040,540 C1220,540 1220,630 1430,630" pathLength="1" data-fx="draw" data-cue="flutter" data-delay="0.4" data-flow />
+        <path d="M410,460 C650,460 700,540 880,540" pathLength="1" data-fx="draw" data-cue="imap" data-delay="0.3" data-flow />
+        <path d="M410,620 C650,620 700,540 880,540" pathLength="1" data-fx="draw" data-cue="imap" data-delay="0.5" data-flow />
+        <path d="M1040,540 C1220,540 1220,430 1430,430" pathLength="1" data-fx="draw" data-cue="qt" data-flow />
+        <path d="M1040,540 C1220,540 1220,650 1430,650" pathLength="1" data-fx="draw" data-cue="android" data-flow />
       </g>
     </svg>
-    <div class="node source" style="left:250px;top:380px;--c1:#38bdf8" data-fx="left" data-cue="imap">personal IMAP</div>
-    <div class="node source" style="left:250px;top:540px;--c1:#a78bfa" data-fx="left" data-cue="imap" data-delay="0.2">work IMAP + SMTP</div>
+    <div class="node source" style="left:250px;top:460px;--c1:#38bdf8" data-fx="left" data-cue="imap">personal IMAP</div>
+    <div class="node source" style="left:250px;top:620px;--c1:#a78bfa" data-fx="left" data-cue="imap" data-delay="0.2">work IMAP + SMTP</div>
     <div class="hub" data-fx="pop" data-cue="core"><div class="hub-ring pulse"></div><span>mailcore<br>Rust + SQLite</span></div>
-    <div class="node target" style="left:1640px;top:310px" data-fx="right" data-cue="qt"><i class="ic ic-window"></i>Qt desktop</div>
-    <div class="node target" style="left:1640px;top:470px" data-fx="right" data-cue="flutter"><i class="ic ic-hex"></i>Flutter Linux + Win</div>
-    <div class="node target" style="left:1640px;top:630px" data-fx="right" data-cue="flutter" data-delay="0.4"><i class="ic ic-bell"></i>Android + bar widget</div>
+    <div class="node target" style="left:1620px;top:430px" data-fx="right" data-cue="qt"><i class="ic ic-window"></i>Qt · Linux + Win</div>
+    <div class="node target" style="left:1620px;top:650px" data-fx="right" data-cue="android"><i class="ic ic-hex"></i>Android · Kotlin</div>
   </section>
 
   <section class="scene" data-scene="workspace">
@@ -68,7 +66,7 @@
       </div>
       <div class="card brand" style="--c1:#a78bfa;--c2:#7c3aed" data-fx="flip" data-cue="list" data-delay="0.2">
         <div class="logo">ML</div><h4>Message list</h4>
-        <p>stars · attachment clips · sort</p>
+        <p>avatars · stars · attachment clips</p>
         <span class="badge ok">3 → 1 panes</span>
       </div>
       <div class="card brand" style="--c1:#6ee7b7;--c2:#10b981" data-fx="flip" data-cue="read" data-delay="0.4">
@@ -89,19 +87,44 @@
       <div class="msg bot" data-fx="up" data-cue="hits" data-delay="-0.4">
         <div class="tool" data-fx="left" data-cue="hits" data-delay="-0.2"><i class="ic ic-file"></i>full-text search · offline · 3 letters</div>
         <p data-fx="fade" data-cue="hits" data-delay="0.8">Subjects, senders and bodies ranked instantly, no network needed.</p>
+        <p data-fx="fade" data-cue="syntax" data-delay="0.2"><code>is:unread</code> · <code>has:attachment</code> · <code>after:2026-01-01</code></p>
+        <p data-fx="fade" data-cue="syntax" data-delay="0.4">Full query syntax, AND-combined.</p>
         <p data-fx="fade" data-cue="backfill" data-delay="0.2">Thin local results quietly backfill from the server.</p>
       </div>
       <div class="note" data-fx="fade" data-cue="hits" data-delay="1.6">illustration</div>
     </div>
   </section>
 
-  <section class="scene" data-scene="safe">
-    <h2 class="title" data-fx="up" data-delay="0.2">Write and read with confidence</h2>
+  <section class="scene" data-scene="reader">
+    <h2 class="title" data-fx="up" data-delay="0.2">Rich mail, decoded safely</h2>
     <div class="facts">
-      <div class="fact green" data-fx="up" data-cue="read"><i class="ic ic-shield"></i><div><h4>Protective reader</h4><p>Cleaned HTML, remote images blocked, show-once.</p></div></div>
+      <div class="fact green" data-fx="up" data-cue="read"><i class="ic ic-shield"></i><div><h4>Protective reader</h4><p>Cleaned HTML with remote images blocked until you ask.</p></div></div>
       <div class="fact amber" data-fx="up" data-cue="links"><i class="ic ic-chat"></i><div><h4>Link check first</h4><p>Examine every URL before it opens.</p></div></div>
-      <div class="fact violet" data-fx="up" data-cue="write"><i class="ic ic-pen"></i><div><h4>Rich composer</h4><p>Drafts, attachments, replies and forwards.</p></div></div>
-      <div class="fact cyan" data-fx="up" data-cue="write" data-delay="0.4"><i class="ic ic-refresh"></i><div><h4>Queued sending</h4><p>Outbox survives a closed window.</p></div></div>
+      <div class="fact violet" data-fx="up" data-cue="cards"><i class="ic ic-ticket"></i><div><h4>Smart cards</h4><p>Invites, delivery reports, read receipts, attached mail, contacts.</p></div></div>
+      <div class="fact cyan" data-fx="up" data-cue="attached"><i class="ic ic-file"></i><div><h4>Attachments on demand</h4><p>Open, save or save all — bytes only when you ask.</p></div></div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="compose">
+    <h2 class="title" data-fx="up" data-delay="0.2">Write once, send when ready</h2>
+    <div class="facts">
+      <div class="fact violet" data-fx="up" data-cue="write"><i class="ic ic-pen"></i><div><h4>Rich composer</h4><p>Formatting, quotes, inline images, source view, drafts.</p></div></div>
+      <div class="fact cyan" data-fx="up" data-cue="later"><i class="ic ic-refresh"></i><div><h4>Send later</h4><p>Scheduled mail retries automatically, then says when it gives up.</p></div></div>
+      <div class="fact amber" data-fx="up" data-cue="queue"><i class="ic ic-file"></i><div><h4>Outbox that survives</h4><p>Queued mail keeps its built message across a closed window.</p></div></div>
+      <div class="fact green" data-fx="up" data-cue="undo"><i class="ic ic-shield"></i><div><h4>Undo window</h4><p>Delete, archive and move stay reversible for a moment.</p></div></div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="android">
+    <h2 class="title" data-fx="up" data-delay="0.2">Native on Android</h2>
+    <div class="facts">
+      <div class="fact cyan" data-fx="up" data-cue="native"><i class="ic ic-hex"></i><div><h4>Same core, native UI</h4><p>Kotlin and Compose over JNI, no browser and no second engine.</p></div></div>
+      <div class="fact green" data-fx="up" data-cue="push"><i class="ic ic-bell"></i><div><h4>Real push</h4><p>Opt-in IMAP IDLE delivers new mail in seconds, not minutes.</p></div></div>
+      <div class="fact violet" data-fx="up" data-cue="quiet"><i class="ic ic-shield"></i><div><h4>Quiet hours</h4><p>Per-account silence windows keep nights and weekends calm.</p></div></div>
+      <div class="fact amber" data-fx="up" data-cue="lock"><i class="ic ic-key"></i><div><h4>Locked and quick</h4><p>Fingerprint app lock, plus compose and inbox shortcuts.</p></div></div>
+    </div>
+    <div class="row spaced">
+      <div class="pill" data-fx="pop" data-cue="actions"><i class="ic ic-bell"></i>mark read · archive · quick reply from the shade</div>
     </div>
   </section>
 
@@ -110,6 +133,7 @@
     <div class="row spaced">
       <div class="pill" data-fx="pop"><i class="ic ic-hex"></i>Rust stable</div>
       <div class="pill" data-fx="pop"><i class="ic ic-window"></i>Qt 6 + WebEngine</div>
+      <div class="pill alt" data-fx="pop"><i class="ic ic-code"></i>Kotlin + Compose</div>
       <div class="pill alt" data-fx="pop"><i class="ic ic-file"></i>SQLite bundled</div>
     </div>
     <div class="term" data-fx="zoom" data-cue="cmd" data-delay="0.4">
@@ -118,13 +142,16 @@
         <div class="line"><span class="prompt" data-fx="fade" data-cue="cmd">$</span> <span class="typed" data-fx="type" data-cue="cmd" data-dur="1.6" data-text="./build.sh --qt"></span></div>
         <div class="line"><span class="prompt" data-fx="fade" data-cue="install">$</span> <span class="typed" data-fx="type" data-cue="install" data-delay="0.3" data-dur="1.8" data-text="./scripts/install-local.sh"></span></div>
         <div class="line"><span class="prompt" data-fx="fade" data-cue="dev">$</span> <span class="typed" data-fx="type" data-cue="dev" data-delay="0.3" data-dur="1.0" data-text="./dev.sh"></span></div>
+        <div class="line"><span class="prompt" data-fx="fade" data-cue="android">$</span> <span class="typed" data-fx="type" data-cue="android" data-delay="0.3" data-dur="1.9" data-text="./build.sh --android"></span></div>
+        <div class="line"><span class="prompt" data-fx="fade" data-cue="android" data-delay="1.4">$</span> <span class="typed" data-fx="type" data-cue="android" data-delay="1.6" data-dur="2.0" data-text="./scripts/android-dev.sh --run"></span></div>
       </div>
     </div>
   </section>
 
   <section class="scene" data-scene="outro" data-avatar="hero" data-wave="bye+" data-confetti="bye">
     <div class="hero-copy spread">
-      <div class="pill big" data-fx="pop" data-cue="free"><i class="ic ic-shield"></i>Free and open source · Rust · Qt · SQLite · offline-first</div>
+      <div class="pill big" data-fx="pop" data-cue="free"><i class="ic ic-shield"></i>Free and open source</div>
+      <div class="pill big" data-fx="pop" data-cue="free" data-delay="0.25"><i class="ic ic-hex"></i>Rust · Qt · Compose · SQLite</div>
       <h1 class="mega" data-fx="blur" data-cue="bye"><span class="grad">Happy mailing!</span></h1>
     </div>
   </section>

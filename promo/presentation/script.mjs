@@ -26,6 +26,7 @@ export const pronounce = {
   Qt: 'cute',
   Omarchy: 'oh mar kee',
   FTS: 'F T S',
+  Kotlin: 'kot lin',
 };
 
 // Optional: silences around the narration, in seconds.
@@ -34,7 +35,7 @@ export const pronounce = {
 export const scenes = [
   {
     id: 'intro',
-    say: "[hi]Hi everyone! I'm the mailclient team's fluffy stand-in. [title]Meet mailclient: your inbox, minus the chaos, a desktop mail app built for Omarchy Linux.",
+    say: "[hi]Hi everyone! I'm the mailclient team's fluffy stand-in. [title]Meet mailclient: your inbox, minus the chaos. [apps]A desktop mail app for Omarchy Linux and Windows, with a native Android companion.",
   },
   {
     id: 'problem',
@@ -42,26 +43,34 @@ export const scenes = [
   },
   {
     id: 'core',
-    say: '[core]Underneath there is one Rust core. [imap]It speaks IMAP and SMTP, caches everything in SQLite on your machine, [qt]and feeds two apps: a Qt desktop app, [flutter]and Flutter on Linux, Windows and Android.',
+    say: '[core]Underneath there is one Rust core. [imap]It speaks IMAP and SMTP, caches everything in SQLite on your machine, [qt]and feeds two frontends: a Qt and QML desktop app for Linux and Windows, [android]and native Kotlin and Compose on Android. Same behaviour, every platform.',
   },
   {
     id: 'workspace',
-    say: '[side]The workspace stays calm: sidebar, [list]message list, [read]and reader. [narrow]It squeezes from three panes down to one on narrow screens, [unread]with unread pills, stars and attachments at a glance.',
+    say: '[side]The workspace stays calm: sidebar, [list]message list, [read]and reader. [narrow]Three panes collapse to one on narrow screens, desktop or phone, [unread]with unread dots, stars and attachments at a glance.',
   },
   {
     id: 'search',
-    say: '[type]Type three letters and full text search answers instantly, [hits]over subjects, senders and bodies, even offline. [backfill]When the local cache runs thin, it quietly backfills from the server.',
+    say: '[type]Type three letters and full text search answers instantly, [hits]over subjects, senders and bodies, even offline. [syntax]Narrow it with is colon unread, has colon attachment, or after colon a date. [backfill]When the local cache runs thin, it quietly backfills from the server.',
   },
   {
-    id: 'safe',
-    say: '[read]Reading is protective: cleaned HTML with remote images blocked, [links]and a link check before anything opens. [write]Writing is confident: rich text composer, drafts, attachments, and queued sending that survives a closed window.',
+    id: 'reader',
+    say: '[read]Reading is protective: cleaned HTML with remote images blocked, [links]and a link check before anything opens. [cards]Meeting invites, delivery reports, read receipts, attached mail and contact cards all become simple cards, [attached]with attachments opened, saved or saved all.',
+  },
+  {
+    id: 'compose',
+    say: '[write]Writing is confident: rich text composer, drafts, attachments, read receipts and delivery confirmations. [later]Send later schedules the mail, [queue]and the outbox survives a closed window. [undo]Delete, archive and move stay undoable.',
+  },
+  {
+    id: 'android',
+    say: '[native]On Android, the native app runs the same core. [push]Opt in to push and new mail arrives in seconds, [quiet]while quiet hours keep nights silent. [actions]Notifications can be marked read, archived or answered right from the shade, [lock]and an app lock keeps the inbox private.',
   },
   {
     id: 'start',
-    say: 'Getting started is simple. [cmd]Build the Qt bundle with build dot sh dash dash qt, [install]install it locally, [dev]and hack on the live interface with dev dot sh.',
+    say: '[cmd]Build the Qt bundle with build dot sh dash dash qt, [install]install it locally, [dev]and hack on the live interface with dev dot sh. [android]On Android, build the signed APK with build dot sh dash dash android, or run it with the Android dev script.',
   },
   {
     id: 'outro',
-    say: '[free]It is free and open source, Rust plus Qt plus SQLite, offline first. [bye]Inbox, minus the chaos. Happy mailing!',
+    say: '[free]It is free and open source: Rust plus Qt plus Compose plus SQLite, offline first, on desktop and Android. [bye]Inbox, minus the chaos. Happy mailing!',
   },
 ];
