@@ -6,6 +6,30 @@ use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::JClass;
 use jni::EnvUnowned;
 
+/// Queue one inbox-only refresh for the opted-in accounts.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_syncCombinedInbox<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) {
+    unowned
+        .with_env(|_env| -> Result<()> {
+            crate::net::spawn(
+                "Sync",
+                "sync:combined-inbox".into(),
+                |db, progress| async move {
+                    progress.report("Syncing combined inboxes…");
+                    let report = mailcore::combined_inbox::sync(db)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok((mailcore::combined_inbox::sync_status(&report), None))
+                },
+            )?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `MailNative.resumeSyncDue(accountId)`: whether returning to the app
 /// should sync the account (`mailcore::sync::resume::resume_sync_due`) —
 /// not when it finished a sync within the grace period.

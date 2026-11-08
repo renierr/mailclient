@@ -30,6 +30,7 @@ fun MailState.refreshAll(syncAfter: Boolean = false, coldStart: Boolean = false)
     }
     MailShortcuts.update(appContext, loaded)
     loadFolders()
+    refreshCombined()
     if (coldStart) {
         val view = runCatching { JSONObject(MailNative.settingsJson()).optString("start_view") }.getOrNull()
         withContext(Dispatchers.Main) { startView = view ?: "folders" }
@@ -59,6 +60,7 @@ fun MailState.selectAccount(id: Long) = io {
     MailNative.ensureInit(appContext)
     val parsed = JSONObject(MailNative.selectAccount(id))
     withContext(Dispatchers.Main) {
+        combinedOpen = false
         activeAccountId = parsed.optLong("account_id", id)
         folderId = parsed.optLong("folder_id", -1)
         messages = emptyList()
@@ -87,6 +89,7 @@ internal fun MailState.loadFolders() = io {
         return@io
     }
     val tree = parseFolders(MailNative.foldersJson(id))
+    refreshCombined()
     withContext(Dispatchers.Main) {
         // Another account was selected meanwhile (a shortcut or notification
         // tap racing the cold-start load): its own load paints.
@@ -139,7 +142,8 @@ internal fun MailState.refreshSidebarRows() {
 fun MailState.openFolder(id: Long) {
     // Re-picking the shown folder just returns to its list, like Qt and
     // Flutter: no second fill of what is already showing.
-    if (id == folderId && messages.isNotEmpty()) return
+    if (!combinedOpen && id == folderId && messages.isNotEmpty()) return
+    combinedOpen = false
     exitSelectionMode()
     folderId = id
     messages = emptyList()
@@ -193,6 +197,14 @@ fun MailState.loadMore() = io {
 }
 
 fun MailState.syncNow() {
+    if (combinedOpen) {
+        io {
+            MailNative.ensureInit(appContext)
+            runCatching { MailNative.syncCombinedInbox() }
+                .onFailure { if (!it.isAlreadyRunning()) fail(it.message ?: "sync failed") }
+        }
+        return
+    }
     val id = activeAccountId
     if (id < 0) {
         io { putStatus("No accounts yet", true) }

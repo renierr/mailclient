@@ -7,6 +7,7 @@ pub mod attached;
 pub mod badge;
 pub mod bulk;
 pub mod calendar;
+pub mod combined_inbox;
 pub mod compose;
 mod content_line;
 pub mod db;

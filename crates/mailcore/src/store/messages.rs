@@ -144,6 +144,10 @@ pub fn upsert(db: &Db, m: &NewMessage) -> Result<i64> {
 /// Compact message metadata for list views (no bodies, raw headers, or JSON arrays).
 #[derive(Debug, Clone)]
 pub struct CompactMessage {
+    /// Owning account of the row (its folder's account). Views that span
+    /// folders — the combined inbox — read it to attribute and act per row.
+    pub account_id: i64,
+    pub folder_id: i64,
     pub uid: u32,
     pub subject: Option<String>,
     pub from_addr: Option<String>,
@@ -178,7 +182,7 @@ fn folder_sort_clause(sort_field: &str, descending: bool) -> String {
     }
 }
 
-/// Lightweight query for folder message lists: selects only the 8 columns
+/// Lightweight query for folder message lists: selects only the columns
 /// needed for compact rows, skipping heavy bodies, raw headers, and JSON arrays.
 pub fn list_compact_by_folder_sorted(
     db: &Db,
@@ -212,6 +216,42 @@ pub fn list_compact_by_folder(db: &Db, folder_id: i64) -> Result<Vec<CompactMess
     Ok(rows)
 }
 
+/// Listed rows of several folders, merged into one view, sorted by the same
+/// rule as a single folder listing (see [`folder_sort_clause`]) and paged over
+/// the merged set. For views that span folders — the combined inbox merges the
+/// opted-in accounts' inboxes into one.
+pub fn list_compact_by_folders_sorted(
+    db: &Db,
+    folder_ids: &[i64],
+    limit: u64,
+    offset: u64,
+    sort_field: &str,
+    descending: bool,
+) -> Result<Vec<CompactMessage>> {
+    if folder_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    // json_each keeps the parameter count fixed even with many accounts.
+    let ids = serde_json::to_string(folder_ids)?;
+    let order = folder_sort_clause(sort_field, descending);
+    let mut stmt = db.conn().prepare(&format!(
+        "select {COMPACT_COLUMNS} from messages
+         where folder_id in (select value from json_each(?1)) and {HIDDEN}
+         order by {order}, id desc limit ?2 offset ?3"
+    ))?;
+    let rows = stmt
+        .query_map(
+            params![
+                ids,
+                limit.min(i64::MAX as u64) as i64,
+                offset.min(i64::MAX as u64) as i64
+            ],
+            compact_row,
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 /// The listed rows among `uids` in `folder_id`, in uid order. Uids not
 /// cached, or hidden by a pending move, are skipped. One query per 900 uids.
 pub fn list_compact_by_uids(db: &Db, folder_id: i64, uids: &[u32]) -> Result<Vec<CompactMessage>> {
@@ -237,20 +277,21 @@ pub fn list_compact_by_uids(db: &Db, folder_id: i64, uids: &[u32]) -> Result<Vec
 }
 
 /// The columns [`compact_row`] reads, in its order.
-const COMPACT_COLUMNS: &str =
-    "uid, subject, from_addr, from_name, date, snippet, is_read, is_starred, has_attachments";
+const COMPACT_COLUMNS: &str = "account_id, folder_id, uid, subject, from_addr, from_name, date, snippet, is_read, is_starred, has_attachments";
 
 fn compact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CompactMessage> {
     Ok(CompactMessage {
-        uid: crate::store::int_col(row, 0)?,
-        subject: row.get(1)?,
-        from_addr: row.get(2)?,
-        from_name: row.get(3)?,
-        date: row.get(4)?,
-        snippet: row.get(5)?,
-        is_read: opt_bool(row.get::<_, i64>(6)?),
-        is_starred: opt_bool(row.get::<_, i64>(7)?),
-        has_attachments: opt_bool(row.get::<_, i64>(8)?),
+        account_id: row.get(0)?,
+        folder_id: row.get(1)?,
+        uid: crate::store::int_col(row, 2)?,
+        subject: row.get(3)?,
+        from_addr: row.get(4)?,
+        from_name: row.get(5)?,
+        date: row.get(6)?,
+        snippet: row.get(7)?,
+        is_read: opt_bool(row.get::<_, i64>(8)?),
+        is_starred: opt_bool(row.get::<_, i64>(9)?),
+        has_attachments: opt_bool(row.get::<_, i64>(10)?),
     })
 }
 

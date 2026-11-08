@@ -491,31 +491,35 @@ fn list_rows_json(rows: Vec<messages::CompactMessage>, is_trash: bool) -> Result
     Ok(serde_json::to_string(
         &rows
             .into_iter()
-            .map(|m| {
-                let date = short_date(m.date.as_deref());
-                let from = m.from_addr.unwrap_or_else(|| NO_SENDER.to_string());
-                let from_name = m.from_name.unwrap_or_default();
-                let badge = sender_badge(&from_name, &from);
-                let mut row = json!({
-                    "uid": m.uid,
-                    "subject": m.subject.unwrap_or_else(|| NO_SUBJECT.to_string()),
-                    "from": from,
-                    "from_name": from_name,
-                    "date": date.text,
-                    "date_key": date.key,
-                    // Raw UTC timestamp for the list date quick-filter
-                    // (`search::date_passes`); `date` above is display text.
-                    "date_raw": m.date,
-                    "snippet": m.snippet.unwrap_or_default(),
-                    "unread": !is_trash && !m.is_read,
-                    "starred": m.is_starred,
-                    "has_attachments": m.has_attachments,
-                });
-                badge.extend(&mut row);
-                row
-            })
+            .map(|m| list_row_json(m, is_trash))
             .collect::<Vec<_>>(),
     )?)
+}
+
+pub(crate) fn list_row_json(m: messages::CompactMessage, is_trash: bool) -> serde_json::Value {
+    let date = short_date(m.date.as_deref());
+    let from = m.from_addr.unwrap_or_else(|| NO_SENDER.to_string());
+    let from_name = m.from_name.unwrap_or_default();
+    let badge = sender_badge(&from_name, &from);
+    let mut row = json!({
+        "account_id": m.account_id,
+        "folder_id": m.folder_id,
+        "uid": m.uid,
+        "subject": m.subject.unwrap_or_else(|| NO_SUBJECT.to_string()),
+        "from": from,
+        "from_name": from_name,
+        "date": date.text,
+        "date_key": date.key,
+        // Raw UTC timestamp for the list date quick-filter
+        // (`search::date_passes`); `date` above is display text.
+        "date_raw": m.date,
+        "snippet": m.snippet.unwrap_or_default(),
+        "unread": !is_trash && !m.is_read,
+        "starred": m.is_starred,
+        "has_attachments": m.has_attachments,
+    });
+    badge.extend(&mut row);
+    row
 }
 
 /// Full reader payload for one message, produced on demand after selection.
@@ -852,6 +856,22 @@ pub fn search_json(
     limit: u64,
     folder: &str,
 ) -> Result<String> {
+    search_scoped_json(db, Some(account_id), query, limit, folder)
+}
+
+/// Search only the cached inboxes opted into the combined view. No server
+/// search is started; hits retain their real account and folder identities.
+pub fn combined_inbox_search_json(db: &Db, query: &str, limit: u64) -> Result<String> {
+    search_scoped_json(db, None, query, limit, "")
+}
+
+fn search_scoped_json(
+    db: &Db,
+    account_id: Option<i64>,
+    query: &str,
+    limit: u64,
+    folder: &str,
+) -> Result<String> {
     let parsed = crate::search::parse_query_full(query);
     let match_query = crate::search::fts_query(query);
 
@@ -880,13 +900,20 @@ pub fn search_json(
     };
     let flag = |v: Option<bool>| v.map(i64::from);
     let filters = &parsed.filters;
+    let scope = if account_id.is_some() {
+        "m.account_id = ?1"
+    } else {
+        "?1 is null and f.role = 'inbox' and f.subscribed = 1 and exists
+             (select 1 from account_settings s where s.account_id = m.account_id
+              and s.key = ?10 and s.value = '1')"
+    };
     let sql = format!(
         "select m.uid, m.folder_id, f.path, m.subject, m.from_addr, m.date,
                 {snippet},
-                m.is_read, m.is_starred, m.has_attachments, m.from_name
+                m.is_read, m.is_starred, m.has_attachments, m.from_name, m.account_id
          from {source}
          join folders f on f.id = m.folder_id
-         where {text_clause} and m.account_id = ?1
+         where {text_clause} and ({scope})
            and (?3 = '' or f.path = ?3)
            and m.id not in (select message_id from pending_moves)
            and (?4 is null or m.is_read = ?4)
@@ -894,6 +921,7 @@ pub fn search_json(
            and (?6 is null or m.has_attachments = ?6)
            and (?7 is null or m.date >= ?7)
            and (?8 is null or m.date < ?8)
+           and (?10 is not null)
          order by m.date desc, m.id desc limit ?2"
     );
     let mut stmt = db.conn().prepare(&sql)?;
@@ -908,9 +936,10 @@ pub fn search_json(
             filters.after,
             filters.before,
             text_param,
+            settings::COMBINED_INBOX,
         ],
         |row| {
-            Ok(hit_json(HitRow {
+            let mut hit = hit_json(HitRow {
                 uid: row.get(0)?,
                 folder_id: row.get(1)?,
                 folder: row.get(2)?,
@@ -922,10 +951,17 @@ pub fn search_json(
                 is_starred: row.get::<_, i64>(8)? != 0,
                 has_attachments: row.get::<_, i64>(9)? != 0,
                 from_name: row.get(10)?,
-            }))
+            });
+            hit["account_id"] = json!(row.get::<_, i64>(11)?);
+            Ok(hit)
         },
     )?;
-    hits_json(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    let rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    if account_id.is_none() {
+        Ok(serde_json::to_string(&rows)?)
+    } else {
+        hits_json(rows)
+    }
 }
 
 /// One search-style hit as read from SQL, before it becomes JSON.

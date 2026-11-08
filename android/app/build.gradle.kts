@@ -38,8 +38,8 @@ android {
         applicationId = "de.renier.mailclient.native"
         // Mirror of the workspace root Cargo.toml version (see AGENTS.md
         // bump order); fresh versionCode track for the new applicationId.
-        versionCode = 8
-        versionName = "0.13.0"
+        versionCode = 9
+        versionName = "0.14.0"
         minSdk = 24
         targetSdk = 36
     }

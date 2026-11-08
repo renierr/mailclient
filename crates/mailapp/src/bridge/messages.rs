@@ -102,6 +102,40 @@ fn save_flags(db: &mailcore::Db, message_id: i64, read: bool, starred: bool) -> 
 }
 
 impl qobject::Bridge {
+    pub fn combined_inbox_counts_json(&self) -> QString {
+        let result = shared_db().and_then(|db| {
+            mailcore::combined_inbox::counts(db)
+                .and_then(|counts| Ok(serde_json::to_string(&counts)?))
+                .map_err(|e| e.to_string())
+        });
+        qstring(&result.unwrap_or_else(|e| {
+            log::warn!("combined inbox counts: {e}");
+            "{}".into()
+        }))
+    }
+
+    pub fn combined_inbox_messages_json(&self, limit: i32, offset: i32) -> QString {
+        let result = shared_db().and_then(|db| {
+            mailcore::combined_inbox::messages_json(db, limit.max(0) as u64, offset.max(0) as u64)
+                .map_err(|e| e.to_string())
+        });
+        qstring(&result.unwrap_or_else(|e| {
+            log::warn!("combined inbox messages: {e}");
+            "[]".into()
+        }))
+    }
+
+    pub fn combined_inbox_search_json(&self, query: &QString) -> QString {
+        let result = shared_db().and_then(|db| {
+            feed::combined_inbox_search_json(db, &query.to_string(), mailcore::search::HIT_LIMIT)
+                .map_err(|e| e.to_string())
+        });
+        qstring(&result.unwrap_or_else(|e| {
+            log::warn!("combined inbox search: {e}");
+            "[]".into()
+        }))
+    }
+
     pub fn message_html(&self, folder_id: i64, uid: i32, allow_remote: bool) -> QString {
         let Ok(db) = shared_db() else {
             return qstring("");

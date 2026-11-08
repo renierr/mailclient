@@ -63,6 +63,8 @@ internal fun parseMessages(json: String): List<MessageRow> {
             avatarLight = o.optString("avatar_light"),
             avatarDark = o.optString("avatar_dark"),
             folderId = o.optLong("folder_id", -1),
+            accountId = o.optLong("account_id", -1),
+            accountEmail = o.optString("account_email"),
         )
     }.filter { it.uid >= 0 }
 }

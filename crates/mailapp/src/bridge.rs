@@ -244,6 +244,17 @@ pub mod qobject {
         #[qinvokable]
         fn message_json(&self, folder_id: i64, uid: i32) -> QString;
 
+        /// Local combined-inbox counts and sorted list; rows carry their real
+        /// account and folder ids. No server is contacted.
+        #[qinvokable]
+        fn combined_inbox_counts_json(&self) -> QString;
+        #[qinvokable]
+        fn combined_inbox_messages_json(&self, limit: i32, offset: i32) -> QString;
+        #[qinvokable]
+        fn combined_inbox_search_json(&self, query: &QString) -> QString;
+        #[qinvokable]
+        fn sync_combined_inbox(self: Pin<&mut Self>) -> QString;
+
         /// The reader's paint for one HTML mail (`mailcore::html::reader::
         /// paint_for`): `theme`, `original` or `darkened`.
         #[qinvokable]

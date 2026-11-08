@@ -50,6 +50,15 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
         internal set
     var folderId by mutableStateOf(-1L)
         internal set
+    var combinedOpen by mutableStateOf(false)
+        internal set
+    var combinedInboxes by mutableStateOf(0)
+        internal set
+    var combinedUnread by mutableStateOf(0)
+        internal set
+    var combinedMessages: List<MessageRow> by mutableStateOf(emptyList())
+        internal set
+    internal var combinedGeneration = 0
     // Expanded folder parents, by id. Lives here (not in the pane) so
     // navigating into a folder and back keeps the tree as it was.
     // In-memory: every launch starts collapsed (default closed). Mutate
@@ -254,6 +263,7 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
     private fun settleDraft(phase: String, ok: Boolean, status: String) {
         val p = pendingDraft ?: return
         if (phase != "finished") return
+        refreshCombined()
         pendingDraft = null
         if (!ok) {
             reopenSend = p.copy(seed = p.seed.copy(failure = "Draft not saved: ${status.ifEmpty { "saving failed" }}"))

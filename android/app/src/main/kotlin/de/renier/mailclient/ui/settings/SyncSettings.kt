@@ -173,6 +173,13 @@ fun AccountSyncSettings(defaults: SettingsDraft, account: AccountDraft, choices:
     fun onOff(on: Boolean) = if (on) "On" else "Off"
     fun interval(v: String) = SettingLabels.of(INTERVAL, v)
 
+    SettingSwitch(
+        title = "Include this account in Combined Inbox",
+        checked = account["combined_inbox"] == "1",
+        onChange = { account["combined_inbox"] = if (it) "1" else "0" },
+        help = "Only this account's inbox is included; its other folders stay separate.",
+    )
+
     SettingChoice(
         title = "Check for new mail",
         value = account[INTERVAL],

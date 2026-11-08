@@ -16,6 +16,10 @@ fun MailState.setSearch(query: String) {
     serverSearchFired.set(false)
     serverSearchPending = false
     searchQuery = query
+    if (combinedOpen) {
+        refreshCombined()
+        return
+    }
     runSearch()
 }
 
@@ -33,6 +37,7 @@ fun MailState.clearSearch() {
     serverSearchFired.set(false)
     serverSearchPending = false
     searchQuery = ""
+    if (combinedOpen) refreshCombined()
     searchHits = emptyList()
     searchActive = false
     similarLabel = null

@@ -46,6 +46,7 @@ import de.renier.mailclient.ui.state.Folder
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.state.activeAccount
 import de.renier.mailclient.ui.state.openFolder
+import de.renier.mailclient.ui.state.openCombinedInbox
 import de.renier.mailclient.ui.state.selectAccount
 import de.renier.mailclient.ui.state.syncNow
 import de.renier.mailclient.ui.state.toggleFolderExpanded
@@ -60,6 +61,7 @@ fun FoldersScreen(
     onOpenFolder: () -> Unit,
     onAddAccount: () -> Unit,
     onOpenOutbox: () -> Unit,
+    onOpenCombined: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         if (state.accounts.isEmpty()) {
@@ -92,6 +94,26 @@ fun FoldersScreen(
         }
         PullToSync(onSync = { state.syncNow() }) {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
+                if (state.combinedInboxes >= 2 || state.combinedOpen) {
+                    item(key = "combined-inbox") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth()
+                                .background(if (state.combinedOpen) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface)
+                                .clickable {
+                                    state.openCombinedInbox()
+                                    onOpenCombined()
+                                }
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            FolderIcon("inbox")
+                            Text("Combined Inbox", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                            if (state.combinedUnread > 0) Badge { Text(state.combinedUnread.toString()) }
+                            Spacer(modifier = Modifier.size(28.dp))
+                        }
+                    }
+                }
                 if (folders.isEmpty()) {
                     item {
                         Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
@@ -107,7 +129,7 @@ fun FoldersScreen(
                 items(rows, key = { it.folder.id }) { row ->
                     FolderRow(
                         folder = row.folder,
-                        selected = !state.outboxOpen && row.folder.id == state.folderId,
+                        selected = !state.outboxOpen && !state.combinedOpen && row.folder.id == state.folderId,
                         unread = row.unread,
                         total = row.total,
                         collapsible = row.collapsible,

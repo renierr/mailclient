@@ -1027,6 +1027,16 @@ AppDialog {
                             Layout.fillWidth: true
                             spacing: Theme.sm
 
+                            AppCheckBox {
+                                Layout.fillWidth: true
+                                checked: root.accountDraft("combined_inbox") === "1"
+                                text: qsTr("Include this account in Combined Inbox")
+                                onToggled: root.setAccountDraft("combined_inbox", checked ? "1" : "0")
+                            }
+                            HintLabel {
+                                text: qsTr("Only this account's inbox is included; its other folders stay separate.")
+                            }
+
                             ChoiceRow {
                                 caption: qsTr("Check for new mail")
                                 model: [qsTr("Default (%1)").arg(root.choiceLabel("sync_interval_minutes",

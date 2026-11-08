@@ -28,7 +28,9 @@ This file is normative for all coding agents (human or AI) working in this repo.
     a feature added to Qt and native does not need a Flutter twin, and
     Flutter's column in the parity table may fall behind. Obvious bugs may
     still be fixed there. Do not remove it or its build wiring without
-    asking. See `flutter/README.md`.
+    asking. Mirroring the product version in `flutter/pubspec.yaml` is
+    bookkeeping, not a Flutter feature change; by itself it does not require
+    Flutter checks or a Flutter bundle. See `flutter/README.md`.
   - **Features stay comparable between Qt and native; UI may differ.**
     Every user-facing feature exists in both. Layout, placement of elements
     and interaction patterns may drift where touch and small screens call
@@ -62,7 +64,7 @@ This file is normative for all coding agents (human or AI) working in this repo.
 - Keep passwords/secrets **out of SQLite and git**. DB stores only `auth_vault_key`; actual secrets live in the OS keyring (`keyring` crate) or memory — on Android, in the app-private `auth_vault.json` (not the Android Keystore; see `flutter/README.md`).
 - Run `cargo fmt`, `cargo clippy -- -D warnings`, and `cargo test -p mailcore` before finishing a backend change. After changing anything in `crates/mailffi/src/api/`, re-run `flutter_rust_bridge_codegen generate` from the repo root and commit both generated files.
 - Run `qmllint` (from `/usr/lib/qt6/bin`) and `scripts/qml-format.sh` on changed QML when available (`qmllint` needs `-I` for the built `Mailclient` import; unresolved-`Mailclient` warnings are expected pre-build).
-- Run `flutter analyze` (must be clean) and `flutter test` in `flutter/` before finishing a Flutter change.
+- Run `flutter analyze` (must be clean) and `flutter test` in `flutter/` before finishing a Flutter change, except when the only Flutter edit is the mirrored version in `pubspec.yaml`.
 - Update `PROJECT.md` ("Where we stand") when a milestone step completes.
 - Put build artefacts only in `dist/` (gitignored). Never commit binaries, `.sqlite` files, or secrets.
 
@@ -230,7 +232,7 @@ it needs the same ask.
   a sequence each adapter assembles itself. If you notice you are writing the
   same `if`/loop/format in QML and Kotlin, or in `mailapp` and `mailffi`, stop
   and move it down.
-- Tests: `cargo test --workspace` (plus `flutter test` in `flutter/` when Flutter changed). QML smoke: `qml6 qml/Main.qml` or `qmllint qml/*.qml` if no display.
+- Tests: `cargo test --workspace` (plus `flutter test` in `flutter/` when Flutter changed beyond the mirrored version). QML smoke: `qml6 qml/Main.qml` or `qmllint qml/*.qml` if no display.
 - Debugging crashes on Omarchy: load the `diagnose-crash` skill path (systemd-coredump) — do not guess.
 - Desktop integration files live in `resources/` (`.desktop`, icons). Install script links them; do not hardcode `$HOME` in code — use `directories`.
 
@@ -262,6 +264,13 @@ gitignored config (`.env`, `flutter/android/key.properties`,
 `android/key.properties`, `local.properties`). State that verification was
 skipped and why instead of running suites "just in case".
 
+A version-only update to `flutter/pubspec.yaml` mirrors the workspace version
+and Android build number; it does not by itself require `flutter analyze`,
+`flutter test`, or a Flutter release build. Other Flutter changes still need
+their normal checks, and explicitly requested Flutter bundles or releases
+still need the applicable packaging build. Check Qt and native Android as
+required by their own changes.
+
 Anything else gets the fast check for each layer it touches, and no more. A
 full `./build.sh` is a packaging step (release builds, every Android ABI,
 signing), not a compile check: it costs minutes where these cost seconds.
@@ -283,7 +292,7 @@ trailing command can hide the failure.
 
 1. `cargo fmt --check`, `cargo clippy -p mailcore -- -D warnings`, `cargo test -p mailcore` green.
 2. `scripts/qml-check.sh` green on touched QML (lint gate + headless QML tests + format check; or noted as skipped headless with reason — the format check skips itself without the pinned qmlformat). Qt/WebEngine enum and API names verified against the installed headers or Qt docs — QML misspellings of them fail silently.
-3. Full build, only when packaging itself can change: build scripts, manifests, Gradle files, dependencies or `Cargo.toml` features, bundled resources and icons; or when the user asks for a bundle, or a release is being shipped. Then the affected `./build.sh` target produces a runnable bundle in `dist/` (`--qt` → `dist/mailclient/bin/mailapp`, `--flutter` → `dist/mailclient-flutter/`, `--apk` → `dist/mailclient-apk/`, `--android` → `dist/mailclient-android/`). Otherwise say it was skipped and which fast checks ran instead.
+3. Full build, only when packaging itself can change: build scripts, manifests, Gradle files, dependencies or `Cargo.toml` features, bundled resources and icons; or when the user asks for a bundle, or a release is being shipped. The mirrored Flutter version alone is the exception above. Then the affected `./build.sh` target produces a runnable bundle in `dist/` (`--qt` → `dist/mailclient/bin/mailapp`, `--flutter` → `dist/mailclient-flutter/`, `--apk` → `dist/mailclient-apk/`, `--android` → `dist/mailclient-android/`). Otherwise say it was skipped and which fast checks ran instead.
 4. `PROJECT.md` status table updated; no secrets/binaries/`dist/` staged.
 5. Cross-frontend features get a duplication check: read both adapters' new
    functions and both UIs' new code side by side. Do they show any logic

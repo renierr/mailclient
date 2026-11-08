@@ -28,10 +28,13 @@ Rectangle {
     // the pane is open.
     property var outboxStatus: ({})
     property bool outboxCurrent: false
+    property var combinedCounts: ({})
+    property bool combinedCurrent: false
 
     signal folderSelected(string path)
     signal accountSelected(int id)
     signal outboxSelected
+    signal combinedSelected
 
     // Visible subset of `folders` (subscribed !== false). Kept as its own
     // model so hiding a folder never destroys the full feed the manager
@@ -222,6 +225,42 @@ Rectangle {
             }
         }
 
+        ItemDelegate {
+            id: combinedRow
+            Layout.fillWidth: true
+            Layout.preferredHeight: Theme.rowHeight
+            visible: (root.combinedCounts.inboxes || 0) >= 2 || root.combinedCurrent
+            onClicked: root.emitLater(root.combinedSelected)
+            Accessible.name: qsTr("Combined Inbox: %1 unread").arg(root.combinedCounts.unread || 0)
+            background: Rectangle {
+                anchors.fill: parent
+                anchors.leftMargin: Theme.sm
+                anchors.rightMargin: Theme.sm
+                radius: Theme.radius
+                color: root.combinedCurrent ? Theme.selected : combinedRow.hovered ? Theme.hover : "transparent"
+            }
+            contentItem: RowLayout {
+                spacing: Theme.sm
+                Label {
+                    text: Icons.inbox
+                    font.family: Icons.fontFamily
+                    font.pixelSize: Theme.fontBase
+                }
+                Label {
+                    Layout.fillWidth: true
+                    text: qsTr("Combined Inbox")
+                    elide: Text.ElideRight
+                    color: root.combinedCurrent ? Theme.accent : Theme.text
+                    font.pixelSize: Theme.fontBase
+                }
+                Label {
+                    text: root.combinedCounts.unread || 0
+                    visible: (root.combinedCounts.unread || 0) > 0
+                    color: Theme.textMuted
+                }
+            }
+        }
+
         ListView {
             id: folderList
             Layout.fillWidth: true
@@ -239,7 +278,7 @@ Rectangle {
                 height: Theme.rowHeight
 
                 required property var model
-                readonly property bool current: !root.outboxCurrent && folderRow.model.name === root.currentFolder
+                readonly property bool current: !root.outboxCurrent && !root.combinedCurrent && folderRow.model.name === root.currentFolder
 
                 onClicked: root.emitLater(root.folderSelected, folderRow.model.name)
                 ToolTip.visible: folderRow.hovered

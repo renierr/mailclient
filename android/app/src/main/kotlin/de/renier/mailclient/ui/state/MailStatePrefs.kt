@@ -38,6 +38,7 @@ fun MailState.loadReaderPrefs() = io {
  * and re-plan the background checks.
  */
 fun MailState.settingsSaved() {
+    refreshCombined()
     loadReaderPrefs()
     loadSort()
     reloadMessages()

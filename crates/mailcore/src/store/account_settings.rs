@@ -39,8 +39,10 @@ pub const IDLE_HEARTBEAT_PREFIX: &str = "idle_heartbeat_secs_";
 /// are worth a hint in the account's settings.
 pub const FREQUENT_HEARTBEAT_SECS: i64 = 15 * 60;
 
-/// The settings an account can override.
-pub const KEYS: [&str; 8] = [
+/// The settings an account can override. The combined inbox is per account:
+/// an account opts itself into (or out of) the combined view of all opted-in
+/// inboxes.
+pub const KEYS: [&str; 9] = [
     settings::SYNC_INTERVAL_MINUTES,
     PUSH_ENABLED,
     settings::SENT_COPY_ENABLED,
@@ -49,6 +51,7 @@ pub const KEYS: [&str; 8] = [
     QUIET_HOURS_ENABLED,
     QUIET_HOURS_START,
     QUIET_HOURS_END,
+    settings::COMBINED_INBOX,
 ];
 
 /// The account's own values, keyed like [`KEYS`]. Keys it inherits are absent.
@@ -157,6 +160,11 @@ pub fn push_enabled(db: &Db, account_id: i64) -> bool {
     }
 }
 
+/// Whether `account_id` opted its inbox into the combined view.
+pub fn combined_inbox(db: &Db, account_id: i64) -> bool {
+    stored(db, account_id, settings::COMBINED_INBOX).as_deref() == Some("1")
+}
+
 /// The account's quiet hours, or `None` while they are off (or the window
 /// is empty, start equal to end). An account that switches them on itself
 /// may set its own times; otherwise both the switch and the times come from
@@ -197,6 +205,9 @@ pub fn is_quiet_now(db: &Db, account_id: i64) -> bool {
 
 /// A yes/no setting for `account_id`: its override, else the app-wide value.
 pub fn get_bool(db: &Db, account_id: i64, key: &str) -> bool {
+    if key == settings::COMBINED_INBOX {
+        return combined_inbox(db, account_id);
+    }
     if key == PUSH_ENABLED {
         return push_enabled(db, account_id);
     }

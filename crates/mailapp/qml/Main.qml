@@ -164,6 +164,53 @@ ApplicationWindow {
     // Unsent mail counts for the current account (`mailcore::outbox::status`:
     // `{queued, sending, failed, retryable, pending}`); `{}` before first read.
     property var outboxStatus: ({})
+    property bool combinedOpen: false
+    property var combinedCounts: ({})
+    property var combinedRows: []
+
+    function reloadCombined() {
+        root.combinedCounts = FeedJson.parse(backend.combined_inbox_counts_json(), ({}));
+        if (!root.combinedOpen)
+            return;
+        var q = searchField.text.trim();
+        root.combinedRows = q === "" ? FeedJson.parse(backend.combined_inbox_messages_json(root.combinedCounts.total || 0, 0), []) : FeedJson.parse(backend.combined_inbox_search_json(q), []);
+    }
+
+    function openCombined() {
+        markReadTimer.stop();
+        serverSearchTimer.stop();
+        messageList.setSelectionMode(false);
+        root.currentUid = -1;
+        root.currentMessage = undefined;
+        root.outboxOpen = false;
+        root.combinedOpen = true;
+        root.searching = false;
+        searchField.text = "";
+        root.narrowPane = "list";
+        root.reloadCombined();
+    }
+
+    function openCombinedMessage(row) {
+        if (!row || row.account_id < 0 || !row.folder || row.uid < 0)
+            return;
+        root.combinedOpen = false;
+        searchField.text = "";
+        if (backend.current_account_id !== row.account_id)
+            root.selectAccount(row.account_id);
+        if (backend.current_account_id !== row.account_id)
+            return;
+        root.selectFolder(row.folder);
+        if (backend.current_folder_id === row.folder_id)
+            root.openMessage(row.uid);
+    }
+
+    function combinedAccountName(row) {
+        for (var i = 0; i < accountModel.count; i++) {
+            if (accountModel.get(i).id === row.account_id)
+                return accountModel.get(i).email;
+        }
+        return "";
+    }
 
     // --- feed plumbing ----------------------------------------------------
 
@@ -190,6 +237,7 @@ ApplicationWindow {
             }
             root.currentFolder = inbox !== "" ? inbox : (folderModel.count > 0 ? folderModel.get(0).name : "");
         }
+        root.reloadCombined();
     }
 
     function reloadMessages() {
@@ -217,6 +265,7 @@ ApplicationWindow {
         reloadFolders();
         reloadMessages();
         reloadOutboxStatus();
+        reloadCombined();
         return r;
     }
 
@@ -227,6 +276,7 @@ ApplicationWindow {
     }
 
     function openOutbox() {
+        root.combinedOpen = false;
         markReadTimer.stop();
         root.currentUid = -1;
         root.outboxOpen = true;
@@ -364,6 +414,12 @@ ApplicationWindow {
     // server-search debounce — a job-finish refresh must not, or the
     // finished job would retrigger itself forever.
     function updateSearch(fromTyping) {
+        if (root.combinedOpen) {
+            serverSearchTimer.stop();
+            root.searching = false;
+            root.reloadCombined();
+            return;
+        }
         if (root.similarSubject !== "") {
             if (fromTyping) {
                 root.clearSimilar();
@@ -590,7 +646,7 @@ ApplicationWindow {
         if (root.busy)
             return;
         root.statusText = qsTr("Syncing…");
-        var r = backend.sync_now(backend.current_account_id);
+        var r = root.combinedOpen ? backend.sync_combined_inbox() : backend.sync_now(backend.current_account_id);
         if (r !== "")
             root.statusText = r;
     }
@@ -864,6 +920,7 @@ ApplicationWindow {
     function selectFolder(path, underSearch) {
         var r = backend.select_folder(backend.current_account_id, path);
         if (r === "") {
+            root.combinedOpen = false;
             markReadTimer.stop();
             if (underSearch !== true)
                 messageList.setSelectionMode(false);
@@ -923,6 +980,7 @@ ApplicationWindow {
     function selectAccount(id) {
         var r = backend.select_account(id);
         if (r === "") {
+            root.combinedOpen = false;
             markReadTimer.stop();
             messageList.setSelectionMode(false);
             // An active search (or find-similar) belongs to the previous
@@ -1018,6 +1076,7 @@ ApplicationWindow {
                 reloadMessages();
             }
             reloadOutboxStatus();
+            root.reloadCombined();
             // A due send may have gone out (or just been scheduled): the
             // next held row needs its timer. After a flush that sent nothing
             // (another process held the sync lock), wait a minute rather
@@ -1357,7 +1416,7 @@ ApplicationWindow {
                 Layout.minimumWidth: 60
                 Layout.maximumWidth: 460
                 implicitHeight: Theme.controlHeight
-                placeholderText: root.compactToolbar ? (folderScopeCheck.checked ? qsTr("Search folder…") : qsTr(
+                placeholderText: root.combinedOpen ? qsTr("Search combined inbox (local)…") : root.compactToolbar ? (folderScopeCheck.checked ? qsTr("Search folder…") : qsTr(
                                                                                        "Search…")) :
                                                        folderScopeCheck.checked ? qsTr(
                                                                                       "Search this folder… (3+ letters: folder + server)") :
@@ -1411,6 +1470,7 @@ ApplicationWindow {
             CheckBox {
                 id: folderScopeCheck
                 visible: !root.compactToolbar
+                enabled: !root.combinedOpen
                 text: root.width > 640 ? qsTr("Folder") : ""
                 Accessible.name: qsTr("Search only the current folder")
                 ToolTip.text: qsTr("Search only the current folder")
@@ -1473,6 +1533,7 @@ ApplicationWindow {
             AppMenuItem {
                 glyph: folderScopeCheck.checked ? Icons.checkBox : Icons.checkBoxBlank
                 label: qsTr("Search only this folder")
+                enabled: !root.combinedOpen
                 onTriggered: {
                     folderScopeCheck.checked = !folderScopeCheck.checked;
                     root.folderScopeToggled();
@@ -1536,15 +1597,18 @@ ApplicationWindow {
             currentAccountId: backend.current_account_id
             outboxStatus: root.outboxStatus
             outboxCurrent: root.outboxOpen
+            combinedCounts: root.combinedCounts
+            combinedCurrent: root.combinedOpen
             onFolderSelected: path => root.selectFolder(path)
             onAccountSelected: id => root.selectAccount(id)
             onOutboxSelected: root.openOutbox()
+            onCombinedSelected: root.openCombined()
         }
 
         MessageList {
             id: messageList
             accountId: backend.current_account_id
-            visible: !root.outboxOpen && !root.readerFullscreen && (root.wideLayout ? true : root.mediumLayout
+            visible: !root.combinedOpen && !root.outboxOpen && !root.readerFullscreen && (root.wideLayout ? true : root.mediumLayout
                                                                                       ? root.currentUid < 0 :
                                                                                         root.narrowPane === "list")
             enabled: visible
@@ -1596,6 +1660,72 @@ ApplicationWindow {
             onStatusMessage: text => root.statusText = text
         }
 
+        Rectangle {
+            visible: root.combinedOpen && !root.readerFullscreen && (root.wideLayout || root.mediumLayout || root.narrowPane === "list")
+            enabled: visible
+            SplitView.preferredWidth: 360
+            SplitView.fillWidth: root.combinedOpen
+            SplitView.minimumWidth: 240
+            color: Theme.bg
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: 0
+                Label {
+                    Layout.fillWidth: true
+                    Layout.margins: Theme.md
+                    text: qsTr("Combined Inbox")
+                    font.bold: true
+                    color: Theme.text
+                }
+                Label {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: Theme.md
+                    Layout.rightMargin: Theme.md
+                    text: qsTr("Cached inboxes · Search is local. Open a message to use its account.")
+                    wrapMode: Text.Wrap
+                    color: Theme.textMuted
+                }
+                ListView {
+                    id: combinedList
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    model: root.combinedRows
+                    ScrollBar.vertical: ScrollBar { }
+                    delegate: ItemDelegate {
+                        required property var modelData
+                        width: combinedList.width
+                        onClicked: {
+                            var target = { account_id: modelData.account_id, folder_id: modelData.folder_id, folder: modelData.folder, uid: modelData.uid };
+                            Qt.callLater(root.openCombinedMessage, target);
+                        }
+                        contentItem: ColumnLayout {
+                            spacing: Theme.xs
+                            Label {
+                                Layout.fillWidth: true
+                                text: modelData.from_name || modelData.from || ""
+                                font.bold: modelData.unread === true
+                                elide: Text.ElideRight
+                                color: Theme.text
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: modelData.subject || ""
+                                elide: Text.ElideRight
+                                color: Theme.text
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: root.combinedAccountName(modelData) + " · " + (modelData.date || "")
+                                elide: Text.ElideRight
+                                color: Theme.textMuted
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         OutboxPane {
             id: outboxPane
             visible: root.outboxOpen && !root.readerFullscreen && (root.wideLayout || root.mediumLayout
@@ -1620,7 +1750,7 @@ ApplicationWindow {
             id: messageView
             SplitView.fillWidth: !root.outboxOpen
             SplitView.minimumWidth: 260
-            visible: !root.outboxOpen && (root.wideLayout ? true : root.mediumLayout ? root.currentUid >= 0 : root.narrowPane
+            visible: !root.combinedOpen && !root.outboxOpen && (root.wideLayout ? true : root.mediumLayout ? root.currentUid >= 0 : root.narrowPane
                                                                                        === "reader")
             enabled: visible
             isFullscreen: root.readerFullscreen
@@ -2068,6 +2198,7 @@ ApplicationWindow {
             // The image setting changes what the feed sanitizes to, so the
             // open message must re-render from a fresh feed.
             reloadMessages();
+            root.reloadCombined();
             root.syncSettingsRevision++;
             root.statusText = text;
         }

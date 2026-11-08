@@ -71,6 +71,9 @@ import de.renier.mailclient.ui.contacts.ContactsScreen
 import de.renier.mailclient.ui.folders.FolderManagerScreen
 import de.renier.mailclient.ui.folders.FoldersScreen
 import de.renier.mailclient.ui.list.ListScreen
+import de.renier.mailclient.ui.list.CombinedInbox
+import de.renier.mailclient.ui.state.openCombinedMessage
+import de.renier.mailclient.ui.state.closeCombinedInbox
 import de.renier.mailclient.ui.outbox.OutboxScreen
 import de.renier.mailclient.ui.reader.ReaderScreen
 import de.renier.mailclient.ui.settings.SettingsScreen
@@ -175,6 +178,7 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
     // sidebar's Outbox entry is the open "folder"), a page of its own on a
     // phone.
     fun openOutbox() {
+        state.closeCombinedInbox()
         if (wide) {
             state.outboxOpen = true
             stack = mailStack()
@@ -535,8 +539,8 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
 
     // Tools menu: the search scope toggle, then the tools (AGENTS.md shell
     // order). No second Compose or Accounts entry anywhere else.
-    val tools = listOf(
-        ShellMenuItem(
+    val tools = listOfNotNull(
+        if (state.combinedOpen) null else ShellMenuItem(
             label = "Search this folder only",
             icon = R.drawable.ic_search,
             checked = state.searchFolderOnly,
@@ -587,7 +591,9 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                         val folderName = state.openFolder?.leaf
                         SearchTopBar(
                             query = state.searchQuery,
-                            placeholder = if (state.searchFolderOnly && folderName != null) {
+                            placeholder = if (state.combinedOpen) {
+                                "Search combined inbox (local)"
+                            } else if (state.searchFolderOnly && folderName != null) {
                                 "Search in $folderName"
                             } else {
                                 "Search mail"
@@ -666,11 +672,14 @@ fun MailShell(openPayload: String?, onConsumeOpen: () -> Unit) {
                         onOpenFolder = ::openFolderPane,
                         onAddAccount = { go(Route.Setup(-1)) },
                         onOpenOutbox = ::openOutbox,
+                        onOpenCombined = ::openFolderPane,
                     )
                 }
                 val list: @Composable () -> Unit = {
                     if (state.outboxOpen) {
                         OutboxScreen(state = state, onEdit = ::editOutbox)
+                    } else if (state.combinedOpen) {
+                        CombinedInbox(state) { row -> state.openCombinedMessage(row, ::openRow) }
                     } else {
                         ListScreen(
                             state = state,

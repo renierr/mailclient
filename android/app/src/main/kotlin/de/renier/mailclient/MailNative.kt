@@ -206,6 +206,7 @@ object MailNative {
     // "busy"; this is for a screen that starts while jobs already run.
     @JvmStatic external fun netBusy(): String
     @JvmStatic external fun syncAccount(accountId: Long)
+    @JvmStatic external fun syncCombinedInbox()
     @JvmStatic external fun syncFolder(accountId: Long, folderId: Long)
     @JvmStatic external fun loadOlderMessages(accountId: Long, folderId: Long)
     @JvmStatic external fun refreshFolders(accountId: Long)
@@ -222,6 +223,9 @@ object MailNative {
     // ([1,2,3], [{"folder":"INBOX","uid":1}]); undoable moves answer
     // {"batch","label","purging"}.
     @JvmStatic external fun messagesJson(folderId: Long, limit: Long, offset: Long): String
+    @JvmStatic external fun combinedInboxCountsJson(): String
+    @JvmStatic external fun combinedInboxMessagesJson(limit: Long, offset: Long): String
+    @JvmStatic external fun combinedInboxSearchJson(query: String): String
     // Just these rows (JSON uid array), shaped like messagesJson's: swapped
     // in after a read/star change instead of re-reading the folder.
     @JvmStatic external fun messageRowsJson(folderId: Long, uids: String): String

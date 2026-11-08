@@ -62,6 +62,8 @@ data class MessageRow(
     val avatarDark: String = "",
     // Search hits span folders and carry their own; list rows leave -1.
     val folderId: Long = -1,
+    val accountId: Long = -1,
+    val accountEmail: String = "",
 )
 
 data class UndoOffer(val batch: String, val label: String)

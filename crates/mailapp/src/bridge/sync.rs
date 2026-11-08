@@ -23,6 +23,16 @@ fn format_job_duration(started: std::time::Instant) -> String {
 }
 
 impl qobject::Bridge {
+    pub fn sync_combined_inbox(self: Pin<&mut Self>) -> QString {
+        spawn_job(self, "Sync", move |db, progress| async move {
+            progress.report("Syncing combined inboxes…");
+            let report = mailcore::combined_inbox::sync(db)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok((mailcore::combined_inbox::sync_status(&report), None))
+        })
+    }
+
     pub fn sync_now(self: Pin<&mut Self>, account_id: i64) -> QString {
         // The shown folder stays shown after the sync when it still exists.
         let (_, current) = self.shown();

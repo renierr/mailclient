@@ -6,6 +6,25 @@ use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::{JClass, JString};
 use jni::EnvUnowned;
 
+/// Search the local combined-inbox cache, without a server backfill.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_combinedInboxSearchJson<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    query: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let rows = mailcore::feed::combined_inbox_search_json(
+                crate::db::shared_db()?,
+                &string(env, &query)?,
+                mailcore::search::HIT_LIMIT,
+            )?;
+            Ok(env.new_string(rows)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// Step 0e search/contacts/settings/misc (`android/PLAN.md`): the last JNI
 /// slice — everything the list, composer, contacts, settings, outbox and
 /// reader screens need beyond 0a–0d. Same translation-only rule throughout.

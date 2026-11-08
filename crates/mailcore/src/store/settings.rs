@@ -126,6 +126,8 @@ pub const APP_LOCK_AFTER_SECS: &str = "app_lock_after_secs";
 /// Last account selected in the UI. Absent/invalid values deliberately leave
 /// startup selection to the normal first-account fallback.
 pub const LAST_ACTIVE_ACCOUNT_ID: &str = "last_active_account_id";
+/// Whether an account's inbox joins the combined inbox (per-account only).
+pub const COMBINED_INBOX: &str = "combined_inbox";
 /// Prefix for per-account full-discovery timestamps (unix seconds, internal
 /// bookkeeping for the discovery throttle — not a user preference, no
 /// default): `last_full_discovery_{account_id}`.
