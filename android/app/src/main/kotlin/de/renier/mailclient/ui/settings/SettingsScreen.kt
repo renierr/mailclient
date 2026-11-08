@@ -321,6 +321,8 @@ private fun MailboxSection(d: SettingsDraft) {
         onChange = { d["message_sort_desc"] = it },
     )
     Offered(d, "Density", "list_density")
+    Offered(d, "Swipe left", "swipe_left_action", help = "What dragging a message row to the left does. None leaves that direction unused.")
+    Offered(d, "Swipe right", "swipe_right_action", help = "What dragging a message row to the right does. None leaves that direction unused.")
     SettingSwitch("Confirm before moving mail to Trash", d.flag("confirm_delete"), { d.setFlag("confirm_delete", it) })
 }
 

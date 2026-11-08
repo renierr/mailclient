@@ -479,6 +479,57 @@ ApplicationWindow {
             root.statusText = r;
     }
 
+    // Local read change: flags + feed patch, the one path the row menu and a
+    // swiped row both now use.
+    function setRead(uid, read) {
+        if (uid < 0)
+            return;
+        var r = backend.mark_read(backend.current_folder_id, uid, read);
+        reloadFolders();
+        root.patchRows([uid]);
+        if (root.searching)
+            root.updateSearch(false);
+        root.statusText = r !== "" ? r : (read ? qsTr("Marked as read") : qsTr("Marked as unread"));
+    }
+
+    function setStar(uid, starred) {
+        if (uid < 0)
+            return;
+        root.showResult("", backend.set_star_many(backend.current_folder_id, JSON.stringify([uid]), starred));
+        root.patchRows([uid]);
+        if (root.searching)
+            root.updateSearch(false);
+    }
+
+    // A swiped row runs the action its direction was configured for. The
+    // swipe adds no new rules: the row menu's actions all route here, so a
+    // delete still goes through the same prompt, an archive still has its
+    // undo batch, and a mark/stare touches only the swiped message.
+    function runSwipeAction(uid, action) {
+        if (uid < 0)
+            return;
+        switch (action) {
+        case "archive":
+            root.archiveMessage(uid);
+            break;
+        case "delete":
+            root.deleteMessage(uid);
+            break;
+        case "mark_read":
+            root.setRead(uid, true);
+            break;
+        case "mark_unread":
+            root.setRead(uid, false);
+            break;
+        case "star":
+            root.setStar(uid, true);
+            break;
+        case "unstar":
+            root.setStar(uid, false);
+            break;
+        }
+    }
+
     function openMessage(uid) {
         if (uid < 0 || uid === root.currentUid)
             // already open: re-clicking a row must not reload anything
@@ -1513,6 +1564,8 @@ ApplicationWindow {
             sortField: backend.sort_field
             sortDescending: backend.sort_descending
             density: appSettings.list_density
+            swipeLeftAction: appSettings.swipe_left_action
+            swipeRightAction: appSettings.swipe_right_action
             searching: root.searching
             deletePermanentFor: targets => root.deletePrompt(true, root.targetsDeletePermanent(targets)).permanent
             searchRows: root.searchRows
@@ -1528,16 +1581,10 @@ ApplicationWindow {
             onStarToggled: uid => root.toggleStar(uid)
             onArchiveRequested: uid => root.archiveMessage(uid)
             onMoveRequested: uid => root.openMove(uid)
-            onMarkReadRequested: (uid, read) => {
-                var r = backend.mark_read(backend.current_folder_id, uid, read);
-                reloadFolders();
-                root.patchRows([uid]);
-                if (root.searching)
-                    root.updateSearch(false);
-                root.statusText = r !== "" ? r : (read ? qsTr("Marked as read") : qsTr("Marked as unread"));
-            }
+            onMarkReadRequested: (uid, read) => root.setRead(uid, read)
             onDeleteRequested: uid => root.deleteMessage(uid)
             onPurgeRequested: uid => root.confirmPurge(uid)
+            onSwipeActionRequested: (uid, action) => root.runSwipeAction(uid, action)
             onBulkMarkReadRequested: (uids, read) => root.bulkMarkRead(uids, read)
             onBulkStarRequested: (uids, starred) => root.bulkStar(uids, starred)
             onBulkArchiveRequested: uids => root.bulkArchive(uids)

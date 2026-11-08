@@ -105,6 +105,18 @@ impl qobject::SettingsBridge {
             );
             self.as_mut()
                 .set_list_density(qstring(&mailcore::store::settings::get_density(db)));
+            self.as_mut().set_swipe_left_action(qstring(
+                &mailcore::store::settings::get_swipe_action(
+                    db,
+                    mailcore::store::settings::SWIPE_LEFT_ACTION,
+                ),
+            ));
+            self.as_mut().set_swipe_right_action(qstring(
+                &mailcore::store::settings::get_swipe_action(
+                    db,
+                    mailcore::store::settings::SWIPE_RIGHT_ACTION,
+                ),
+            ));
             self.as_mut()
                 .set_reader_font_size(qstring(&mailcore::store::settings::get_reader_font(db)));
             self.as_mut()
@@ -195,6 +207,14 @@ impl qobject::SettingsBridge {
         let density =
             mailcore::store::settings::normalize_density(&self.list_density().to_string())
                 .to_string();
+        let swipe_left = mailcore::store::settings::normalize_swipe_action(
+            &self.swipe_left_action().to_string(),
+        )
+        .to_string();
+        let swipe_right = mailcore::store::settings::normalize_swipe_action(
+            &self.swipe_right_action().to_string(),
+        )
+        .to_string();
         let reader_font =
             mailcore::store::settings::normalize_reader_font(&self.reader_font_size().to_string())
                 .to_string();
@@ -281,6 +301,22 @@ impl qobject::SettingsBridge {
         note(
             "list density",
             mailcore::store::settings::set(db, mailcore::store::settings::LIST_DENSITY, &density),
+        );
+        note(
+            "swipe left action",
+            mailcore::store::settings::set(
+                db,
+                mailcore::store::settings::SWIPE_LEFT_ACTION,
+                &swipe_left,
+            ),
+        );
+        note(
+            "swipe right action",
+            mailcore::store::settings::set(
+                db,
+                mailcore::store::settings::SWIPE_RIGHT_ACTION,
+                &swipe_right,
+            ),
         );
         note(
             "reader font size",

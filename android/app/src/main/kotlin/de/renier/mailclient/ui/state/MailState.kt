@@ -116,6 +116,12 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
         internal set
     var compactList by mutableStateOf(false)
         internal set
+    // What swiping a list row left/right runs, from the swipe_*_action
+    // settings; `none` disables that side. Loaded like the other reader prefs.
+    var swipeLeftAction by mutableStateOf("none")
+        internal set
+    var swipeRightAction by mutableStateOf("none")
+        internal set
     // Server capabilities per account, from the "Capabilities" job (About).
     var capabilities by mutableStateOf<Map<Long, JSONObject>>(emptyMap())
         internal set

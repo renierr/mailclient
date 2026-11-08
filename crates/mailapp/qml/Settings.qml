@@ -40,6 +40,8 @@ AppDialog {
     property bool localCollectContacts
     property bool localConfirmDelete
     property string localDensity
+    property string localSwipeLeft
+    property string localSwipeRight
     property string localReaderFont
     property string localLinkClick
     property string localStartView
@@ -265,6 +267,9 @@ AppDialog {
             return v === "from" ? qsTr("Sender") : (v === "subject" ? qsTr("Subject") : qsTr("Date"));
         case "list_density":
             return v === "compact" ? qsTr("Compact") : qsTr("Comfortable");
+        case "swipe_left_action":
+        case "swipe_right_action":
+            return root.swipeActionLabel(v);
         case "start_view":
             return v === "inbox" ? qsTr("Inbox of the last used account") : qsTr("Folder list");
         case "mark_read_delay_secs":
@@ -283,6 +288,25 @@ AppDialog {
             return v === 60 ? qsTr("Every hour") : qsTr("Every %1 minutes").arg(v);
         }
         return String(v);
+    }
+
+    // What one swipe direction does, in the same words on both frontends.
+    function swipeActionLabel(v) {
+        switch (v) {
+        case "archive":
+            return qsTr("Archive");
+        case "delete":
+            return qsTr("Delete");
+        case "mark_read":
+            return qsTr("Mark as read");
+        case "mark_unread":
+            return qsTr("Mark as unread");
+        case "star":
+            return qsTr("Star");
+        case "unstar":
+            return qsTr("Remove star");
+        }
+        return qsTr("None");
     }
 
     // The app-wide quiet hours, as an account's "Default (...)" choice names them.
@@ -448,6 +472,8 @@ AppDialog {
         root.localCollectContacts = settingsBridge.collect_sent_contacts;
         root.localConfirmDelete = settingsBridge.confirm_delete;
         root.localDensity = settingsBridge.list_density;
+        root.localSwipeLeft = settingsBridge.swipe_left_action;
+        root.localSwipeRight = settingsBridge.swipe_right_action;
         root.localReaderFont = settingsBridge.reader_font_size;
         root.localLinkClick = settingsBridge.link_click_action;
         root.localStartView = settingsBridge.start_view;
@@ -715,6 +741,24 @@ AppDialog {
                         help: qsTr("Compact hides the preview line and tightens the rows.")
                         onChosen: index => {
                             root.localDensity = root.choiceValue("list_density", index);
+                        }
+                    }
+                    ChoiceRow {
+                        caption: qsTr("Swipe left")
+                        model: root.choiceLabels("swipe_left_action")
+                        currentIndex: root.choiceIndex("swipe_left_action", root.localSwipeLeft)
+                        help: qsTr("What dragging a message row to the left does. None leaves that direction unused.")
+                        onChosen: index => {
+                            root.localSwipeLeft = root.choiceValue("swipe_left_action", index);
+                        }
+                    }
+                    ChoiceRow {
+                        caption: qsTr("Swipe right")
+                        model: root.choiceLabels("swipe_right_action")
+                        currentIndex: root.choiceIndex("swipe_right_action", root.localSwipeRight)
+                        help: qsTr("What dragging a message row to the right does. None leaves that direction unused.")
+                        onChosen: index => {
+                            root.localSwipeRight = root.choiceValue("swipe_right_action", index);
                         }
                     }
                     AppCheckBox {
@@ -1351,6 +1395,8 @@ AppDialog {
         settingsBridge.collect_sent_contacts = root.localCollectContacts;
         settingsBridge.confirm_delete = root.localConfirmDelete;
         settingsBridge.list_density = root.localDensity;
+        settingsBridge.swipe_left_action = root.localSwipeLeft;
+        settingsBridge.swipe_right_action = root.localSwipeRight;
         settingsBridge.reader_font_size = root.localReaderFont;
         settingsBridge.link_click_action = root.localLinkClick;
         settingsBridge.start_view = root.localStartView;

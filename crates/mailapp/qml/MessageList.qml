@@ -98,6 +98,10 @@ Rectangle {
     // "comfortable" (default) | "compact": compact tightens rows and hides
     // the preview line. Bound to the `list_density` setting via Main.
     property string density: "comfortable"
+    // What dragging a row left/right does (`none` = that side is unused).
+    // Bound to the `swipe_left_action` / `swipe_right_action` settings.
+    property string swipeLeftAction: "none"
+    property string swipeRightAction: "none"
 
     signal messageSelected(int uid)
     signal searchJump(string folderPath, int uid)
@@ -111,6 +115,9 @@ Rectangle {
     signal markReadRequested(int uid, bool read)
     signal deleteRequested(int uid)
     signal purgeRequested(int uid)
+    // A row was dragged far enough left/right to run `action` on it (Main
+    // dispatches it to the same calls the row menu uses).
+    signal swipeActionRequested(int uid, string action)
     signal loadOlderRequested
     signal bulkMarkReadRequested(var uids, bool read)
     signal bulkStarRequested(var uids, bool starred)
@@ -156,6 +163,73 @@ Rectangle {
         if (root.searching)
             root.searchFolderNeeded(root.menuFolderPath);
         return root.menuUid;
+    }
+
+    // --- swipe ----------------------------------------------------------
+    // Dragging a row sideways reveals the configured action and runs it when
+    // released past the threshold. The row always snaps back; the action
+    // itself (delete confirmation included) is the row menu's, dispatched by
+    // Main, so swipe adds no second set of rules.
+
+    function swipeAction(direction) {
+        return direction === "left" ? root.swipeLeftAction : root.swipeRightAction;
+    }
+
+    function swipeEnabled(direction) {
+        var action = root.swipeAction(direction);
+        return action !== "" && action !== "none";
+    }
+
+    function swipeIcon(action) {
+        switch (action) {
+        case "archive":
+            return Icons.archive;
+        case "delete":
+            return Icons.trash;
+        case "mark_read":
+            return Icons.markRead;
+        case "mark_unread":
+            return Icons.markUnread;
+        case "star":
+            return Icons.star;
+        case "unstar":
+            return Icons.starBorder;
+        }
+        return "";
+    }
+
+    function swipeLabel(action) {
+        switch (action) {
+        case "archive":
+            return qsTr("Archive");
+        case "delete":
+            return qsTr("Delete");
+        case "mark_read":
+            return qsTr("Mark read");
+        case "mark_unread":
+            return qsTr("Mark unread");
+        case "star":
+            return qsTr("Star");
+        case "unstar":
+            return qsTr("Remove star");
+        }
+        return "";
+    }
+
+    function swipeColor(action) {
+        if (action === "delete")
+            return Theme.danger;
+        if (action === "star" || action === "unstar")
+            return Theme.star;
+        return Theme.accent;
+    }
+
+    // A search hit acts in its own folder, like the row menu: select that
+    // folder first, then run the action after the current handler unwinds.
+    function requestSwipe(uid, folderPath, action) {
+        if (root.searching)
+            root.searchFolderNeeded(folderPath);
+        Qt.callLater(root.swipeActionRequested, uid, action);
     }
 
     color: Theme.bg
@@ -934,10 +1008,91 @@ Rectangle {
                                                                                       === root.folderName)
                 readonly property bool checked: root.selectionVersion >= 0 && root.isSelected(row.model.key)
 
+                // Swipe state: the fixed MouseArea below tracks the drag and
+                // this offset moves only the row's visuals, so the pointer
+                // never chases a moving hit area.
+                property real swipeOffset: 0
+                property bool swipeDragging: false
+                property bool swipeConsumed: false
+                readonly property string swipeCueAction: row.swipeOffset < 0 ? root.swipeLeftAction
+                                                                              : row.swipeOffset > 0
+                                                                                ? root.swipeRightAction : ""
+                readonly property int swipeLimit: Math.min(Math.round(row.width * 0.6), Math.round(
+                                                               140 * Theme.uiScale))
+                readonly property int swipeThreshold: Math.round(72 * Theme.uiScale)
+
+                function finishSwipe() {
+                    var direction = row.swipeOffset < 0 ? "left" : "right";
+                    var action = root.swipeAction(direction);
+                    var passed = Math.abs(row.swipeOffset) >= row.swipeThreshold && action !== "none";
+                    var uid = row.model.uid;
+                    var folderPath = row.model.folder !== undefined ? row.model.folder : root.folderName;
+                    row.swipeDragging = false;
+                    row.swipeOffset = 0;
+                    if (passed)
+                        root.requestSwipe(uid, folderPath, action);
+                }
+
+                // The action cue behind the row: it appears on the side the
+                // row uncovers and moves with no content of its own.
+                Rectangle {
+                    anchors.fill: parent
+                    visible: row.swipeCueAction !== "" && row.swipeCueAction !== "none"
+                    color: Theme.bgAlt
+                }
+                Row {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.right: parent.right
+                    anchors.rightMargin: Theme.md
+                    spacing: Theme.xs
+                    visible: row.swipeCueAction !== "" && row.swipeCueAction !== "none"
+                             && row.swipeOffset < 0
+                    Label {
+                        text: root.swipeIcon(row.swipeCueAction)
+                        font.family: Icons.fontFamily
+                        color: root.swipeColor(row.swipeCueAction)
+                        font.pixelSize: Theme.fontBase
+                    }
+                    Label {
+                        text: root.swipeLabel(row.swipeCueAction)
+                        color: root.swipeColor(row.swipeCueAction)
+                        font.pixelSize: Theme.fontSmall
+                    }
+                }
+                Row {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left
+                    anchors.leftMargin: Theme.md
+                    spacing: Theme.xs
+                    visible: row.swipeCueAction !== "" && row.swipeCueAction !== "none"
+                             && row.swipeOffset > 0
+                    Label {
+                        text: root.swipeIcon(row.swipeCueAction)
+                        font.family: Icons.fontFamily
+                        color: root.swipeColor(row.swipeCueAction)
+                        font.pixelSize: Theme.fontBase
+                    }
+                    Label {
+                        text: root.swipeLabel(row.swipeCueAction)
+                        color: root.swipeColor(row.swipeCueAction)
+                        font.pixelSize: Theme.fontSmall
+                    }
+                }
+
                 Rectangle {
                     anchors.fill: parent
                     color: row.checked ? Theme.selected : row.current ? Theme.selected : hoverArea.containsMouse
                                                                         ? Theme.hover : "transparent"
+                    transform: Translate {
+                        x: row.swipeOffset
+                        Behavior on x {
+                            enabled: !row.swipeDragging
+                            NumberAnimation {
+                                duration: 140
+                                easing.type: Easing.OutCubic
+                            }
+                        }
+                    }
 
                     // Accent bar marks the selected row without relying on
                     // ListView.isCurrentItem (which is only valid on the
@@ -962,7 +1117,42 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    property real pressX: 0
+                    onPressed: mouse => {
+                        hoverArea.pressX = mouse.x;
+                        row.swipeDragging = false;
+                        row.swipeConsumed = false;
+                    }
+                    onPositionChanged: mouse => {
+                        if (!hoverArea.pressed || root.selectionMode)
+                            return;
+                        var dx = mouse.x - hoverArea.pressX;
+                        if (!row.swipeDragging) {
+                            if (Math.abs(dx) < Math.round(12 * Theme.uiScale))
+                                return;
+                            if (!root.swipeEnabled(dx < 0 ? "left" : "right"))
+                                return;
+                            row.swipeDragging = true;
+                        }
+                        var limit = Math.min(row.width * 0.6, row.swipeLimit);
+                        row.swipeOffset = Math.max(-limit, Math.min(limit, dx));
+                    }
+                    onReleased: {
+                        if (row.swipeDragging) {
+                            row.swipeConsumed = true;
+                            row.finishSwipe();
+                        }
+                    }
+                    onCanceled: {
+                        row.swipeConsumed = row.swipeDragging;
+                        row.swipeDragging = false;
+                        row.swipeOffset = 0;
+                    }
                     onClicked: mouse => {
+                        if (row.swipeConsumed) {
+                            row.swipeConsumed = false;
+                            return;
+                        }
                         if (mouse.button === Qt.RightButton) {
                             root.menuUid = row.model.uid;
                             root.menuFolderPath = row.model.folder !== undefined ? row.model.folder : root.folderName;
@@ -998,6 +1188,16 @@ Rectangle {
                     anchors.topMargin: Theme.xs
                     anchors.bottomMargin: Theme.xs
                     spacing: Theme.xs
+                    transform: Translate {
+                        x: row.swipeOffset
+                        Behavior on x {
+                            enabled: !row.swipeDragging
+                            NumberAnimation {
+                                duration: 140
+                                easing.type: Easing.OutCubic
+                            }
+                        }
+                    }
 
                     // Avatar slot: in selection mode the checkbox takes the
                     // avatar's place instead of a column of its own, so the

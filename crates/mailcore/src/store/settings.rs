@@ -49,6 +49,13 @@ pub const CONFIRM_DELETE: &str = "confirm_delete";
 /// Message list density: `comfortable` (default) | `compact`.
 /// Unknown/empty values fall back to `comfortable`.
 pub const LIST_DENSITY: &str = "list_density";
+/// What swiping a list row to the left does: `none` (default) | `archive` |
+/// `delete` | `mark_read` | `mark_unread` | `star` | `unstar`. Unknown
+/// values fall back to `none`, so a hand-edited row never deletes mail.
+pub const SWIPE_LEFT_ACTION: &str = "swipe_left_action";
+/// What swiping a list row to the right does; same values as
+/// [`SWIPE_LEFT_ACTION`] (default `none`).
+pub const SWIPE_RIGHT_ACTION: &str = "swipe_right_action";
 /// Plain-text reader size: `small` | `normal` (default) | `large`.
 /// Unknown/empty values fall back to `normal`.
 pub const READER_FONT_SIZE: &str = "reader_font_size";
@@ -146,6 +153,8 @@ pub fn defaults(key: &str) -> Option<&'static str> {
         MESSAGE_SORT_DESC => Some("1"),
         CONFIRM_DELETE => Some("1"),
         LIST_DENSITY => Some("comfortable"),
+        SWIPE_LEFT_ACTION => Some("none"),
+        SWIPE_RIGHT_ACTION => Some("none"),
         READER_FONT_SIZE => Some("normal"),
         LINK_CLICK_ACTION => Some("examine"),
         START_VIEW => Some("folders"),
@@ -451,6 +460,31 @@ pub fn get_density(db: &Db) -> String {
     }
 }
 
+/// Validated swipe action: `none` | `archive` | `delete` | `mark_read` |
+/// `mark_unread` | `star` | `unstar`. Unknown/empty values fall back to
+/// `none`; aliases are accepted so a hand-edited row still reads.
+#[must_use]
+pub fn normalize_swipe_action(raw: &str) -> &'static str {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "archive" => "archive",
+        "delete" | "trash" => "delete",
+        "mark_read" | "read" => "mark_read",
+        "mark_unread" | "unread" => "mark_unread",
+        "star" => "star",
+        "unstar" | "remove_star" => "unstar",
+        _ => "none",
+    }
+}
+
+/// Current action for one swipe direction (see [`SWIPE_LEFT_ACTION`] and
+/// [`SWIPE_RIGHT_ACTION`]), resilient to unknown stored values.
+pub fn get_swipe_action(db: &Db, key: &str) -> String {
+    match get(db, key) {
+        Ok(Some(v)) => normalize_swipe_action(&v).to_string(),
+        _ => defaults(key).unwrap_or("none").to_string(),
+    }
+}
+
 /// Validated reader size: `small` | `normal` | `large`.
 #[must_use]
 pub fn normalize_reader_font(raw: &str) -> &'static str {
@@ -663,6 +697,24 @@ mod tests {
         assert!(reader_text_scale("small") < 1.0);
         assert!(reader_text_scale(" LARGE ") > 1.0);
         assert!((reader_text_scale("bogus") - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn swipe_actions_default_off_and_reject_unknown_values() {
+        assert_eq!(normalize_swipe_action(" archive "), "archive");
+        assert_eq!(normalize_swipe_action("trash"), "delete");
+        assert_eq!(normalize_swipe_action("READ"), "mark_read");
+        assert_eq!(normalize_swipe_action("mark_unread"), "mark_unread");
+        assert_eq!(normalize_swipe_action("remove_star"), "unstar");
+        assert_eq!(normalize_swipe_action("nonsense"), "none");
+        assert_eq!(normalize_swipe_action(""), "none");
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(get_swipe_action(&db, SWIPE_LEFT_ACTION), "none");
+        assert_eq!(get_swipe_action(&db, SWIPE_RIGHT_ACTION), "none");
+        set(&db, SWIPE_LEFT_ACTION, "archive").unwrap();
+        assert_eq!(get_swipe_action(&db, SWIPE_LEFT_ACTION), "archive");
+        set(&db, SWIPE_RIGHT_ACTION, "weird").unwrap();
+        assert_eq!(get_swipe_action(&db, SWIPE_RIGHT_ACTION), "none");
     }
 
     #[test]

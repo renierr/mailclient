@@ -43,6 +43,15 @@ object SettingLabels {
             else -> "After $value seconds"
         }
         "notification_action" -> if (value == "trash") "Delete" else "Archive"
+        "swipe_left_action", "swipe_right_action" -> when (value) {
+            "archive" -> "Archive"
+            "delete" -> "Delete"
+            "mark_read" -> "Mark as read"
+            "mark_unread" -> "Mark as unread"
+            "star" -> "Star"
+            "unstar" -> "Remove star"
+            else -> "None"
+        }
         "background_scheduler" -> when (value) {
             "alarm" -> "On-time alarm"
             "push" -> "Push (IMAP IDLE)"

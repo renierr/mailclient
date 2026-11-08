@@ -60,6 +60,8 @@ pub fn settings_json() -> anyhow::Result<String> {
     }
     out[s::NOTIFICATION_ACTION] = s::get_notification_action(db).into();
     out[s::APP_LOCK_AFTER_SECS] = s::get_app_lock_after(db).into();
+    out[s::SWIPE_LEFT_ACTION] = s::get_swipe_action(db, s::SWIPE_LEFT_ACTION).into();
+    out[s::SWIPE_RIGHT_ACTION] = s::get_swipe_action(db, s::SWIPE_RIGHT_ACTION).into();
     Ok(out.to_string())
 }
 

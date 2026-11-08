@@ -13,6 +13,8 @@ fun MailState.loadReaderPrefs() = io {
     val o = JSONObject(MailNative.settingsJson())
     val scale = o.optDouble("ui_scale", 1.0).toFloat().takeIf { it in 0.5f..3f } ?: 1f
     val compact = o.optString("list_density") == "compact"
+    val swipeLeft = o.optString("swipe_left_action", "none")
+    val swipeRight = o.optString("swipe_right_action", "none")
     val prefs = ReaderPrefs(
         autoMarkRead = o.optBoolean("auto_mark_read", true),
         markReadDelaySecs = o.optLong("mark_read_delay_secs", 0),
@@ -25,6 +27,8 @@ fun MailState.loadReaderPrefs() = io {
         readerPrefs = prefs
         uiScale = scale
         compactList = compact
+        swipeLeftAction = swipeLeft
+        swipeRightAction = swipeRight
     }
 }
 

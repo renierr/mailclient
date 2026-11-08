@@ -160,6 +160,21 @@ fun ListScreen(
         }
     }
 
+    // A swiped row runs the action its direction was configured for; the
+    // dispatch is the swipe's side of the row menu's, so delete still goes
+    // through the same core prompt and archive keeps its undo batch.
+    fun onSwipe(action: String, m: MessageRow) {
+        when (action) {
+            "archive" -> state.rowArchive(m)
+            "delete" -> if (state.rowDeletePrompt(m).ask) rowTrash = m else state.rowTrash(m)
+            "mark_read" -> state.rowMarkRead(m, true)
+            "mark_unread" -> state.rowMarkRead(m, false)
+            "star" -> state.rowStar(m, true)
+            "unstar" -> state.rowStar(m, false)
+            else -> Unit
+        }
+    }
+
     rowMove?.let { m ->
         MoveToDialog(
             folders = state.visibleFolders,
@@ -301,36 +316,43 @@ fun ListScreen(
                         val m = (entry as ListEntry.Row).row
                         val key = state.selectionKey(m)
                         val rowFolder = state.rowFolderId(m)
-                        MessageItem(
-                            m = m,
-                            folderLabel = if (showFolder) folderNames[rowFolder] else null,
-                            selected = if (state.selectionMode) key in state.selectedKeys else null,
-                            compact = state.compactList,
-                            permanent = permanentIn[rowFolder] ?: state.rowDeleteIsPermanent(m),
-                            onAction = { onRowAction(it, m) },
-                            modifier = Modifier
-                                .then(
-                                    if (openMessage == rowFolder to m.uid) {
-                                        Modifier.background(MaterialTheme.colorScheme.secondaryContainer)
-                                    } else {
-                                        Modifier
-                                    },
-                                )
-                                .combinedClickable(
-                                    onClick = {
-                                        if (state.selectionMode) {
-                                            state.toggleSelected(key)
+                        SwipeableRow(
+                            leftAction = state.swipeLeftAction,
+                            rightAction = state.swipeRightAction,
+                            enabled = !state.selectionMode,
+                            onAction = { action -> onSwipe(action, m) },
+                        ) {
+                            MessageItem(
+                                m = m,
+                                folderLabel = if (showFolder) folderNames[rowFolder] else null,
+                                selected = if (state.selectionMode) key in state.selectedKeys else null,
+                                compact = state.compactList,
+                                permanent = permanentIn[rowFolder] ?: state.rowDeleteIsPermanent(m),
+                                onAction = { onRowAction(it, m) },
+                                modifier = Modifier
+                                    .then(
+                                        if (openMessage == rowFolder to m.uid) {
+                                            Modifier.background(MaterialTheme.colorScheme.secondaryContainer)
                                         } else {
-                                            onOpenReader(state.activeAccountId, rowFolder, m.uid)
-                                        }
-                                    },
-                                    onLongClick = {
-                                        if (!state.selectionMode) state.enterSelectionMode(key)
-                                    },
-                                    onLongClickLabel = "Select message",
-                                ),
-                            onToggle = { state.toggleSelected(key) },
-                        )
+                                            Modifier
+                                        },
+                                    )
+                                    .combinedClickable(
+                                        onClick = {
+                                            if (state.selectionMode) {
+                                                state.toggleSelected(key)
+                                            } else {
+                                                onOpenReader(state.activeAccountId, rowFolder, m.uid)
+                                            }
+                                        },
+                                        onLongClick = {
+                                            if (!state.selectionMode) state.enterSelectionMode(key)
+                                        },
+                                        onLongClickLabel = "Select message",
+                                    ),
+                                onToggle = { state.toggleSelected(key) },
+                            )
+                        }
                     }
                     if (!searching && state.olderState.isNotEmpty() && state.olderState != "empty") {
                         item {

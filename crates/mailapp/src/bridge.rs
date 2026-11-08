@@ -867,6 +867,8 @@ pub mod qobject {
         #[qproperty(bool, collect_sent_contacts)]
         #[qproperty(bool, confirm_delete)]
         #[qproperty(QString, list_density)]
+        #[qproperty(QString, swipe_left_action)]
+        #[qproperty(QString, swipe_right_action)]
         #[qproperty(QString, reader_font_size)]
         #[qproperty(QString, link_click_action)]
         #[qproperty(QString, start_view)]
@@ -1271,6 +1273,8 @@ pub struct SettingsBridgeRust {
     collect_sent_contacts: bool,
     confirm_delete: bool,
     list_density: QString,
+    swipe_left_action: QString,
+    swipe_right_action: QString,
     reader_font_size: QString,
     link_click_action: QString,
     start_view: QString,
@@ -1299,6 +1303,8 @@ impl Default for SettingsBridgeRust {
             collect_sent_contacts: true,
             confirm_delete: true,
             list_density: qstring("comfortable"),
+            swipe_left_action: qstring("none"),
+            swipe_right_action: qstring("none"),
             reader_font_size: qstring("normal"),
             link_click_action: qstring("examine"),
             start_view: qstring("folders"),

@@ -410,7 +410,8 @@ the open Qt ↔ native differences are listed at the end.
 | Find-similar mode + chip | ✅ | ✅ | ✅ | From the reader and the row menu; dismissable "Similar to: …" bar on native. Hits re-read after row, reader, undo and job changes; three panes keep the reader open |
 | Drafts rows open the composer | ✅ | ✅ | ✅ | Native: any row whose folder has the `drafts` role, search hits included |
 | List density (comfortable/compact) | ✅ | ✅ | ✅ | Compact drops the snippet line and tightens the rows |
-| Swipe actions, mark-all-read | ❌ | ❌ | ❌ | None anywhere; not planned |
+| Swipe actions (left/right, configurable) | ✅ | ✅ | ✅ | Both frontends: drag a row sideways past a threshold runs the action that side's setting picks (`swipe_left_action`/`swipe_right_action`, default `none`, per-frontend settings). Archive keeps its undo batch, delete goes through the same core prompt; a search hit acts in its own folder |
+| Mark-all-read | ❌ | ❌ | ❌ | Not implemented |
 | Save as .eml | ✅ | ✅ | ✅ | Native via reader menu |
 
 ### Search
