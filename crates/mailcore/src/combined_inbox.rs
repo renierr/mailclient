@@ -60,6 +60,31 @@ pub fn sync_status(report: &crate::sync::headless::SyncAllReport) -> String {
     }
 }
 
+/// Queue a combined-inbox delete without silently escalating a Trash move
+/// into a permanent delete if the folder configuration changed meanwhile.
+pub fn queue_delete(
+    db: &Db,
+    account_id: i64,
+    folder_id: i64,
+    uid: u32,
+    confirmed_permanent: bool,
+) -> std::result::Result<crate::undo::Queued, String> {
+    if uid == 0 {
+        return Err("invalid message".into());
+    }
+    let queued = crate::undo::queue_move(
+        db,
+        account_id,
+        folder_id,
+        &[uid],
+        crate::undo::MoveTarget::Trash,
+    )?;
+    if matches!(queued, crate::undo::Queued::Permanent) && !confirmed_permanent {
+        return Err("Trash is no longer available; refresh and confirm permanent deletion".into());
+    }
+    Ok(queued)
+}
+
 /// Counts cover the local cache, excluding messages awaiting a move.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct Counts {
@@ -91,24 +116,48 @@ pub fn messages_json(db: &Db, limit: u64, offset: u64) -> Result<String> {
         &settings::get_sort_field(db),
         settings::get_sort_descending(db),
     )?;
-    let accounts: HashMap<_, _> = accounts::list(db)?.into_iter().map(|a| (a.id, a)).collect();
-    let paths: HashMap<_, _> = ids
-        .iter()
-        .filter_map(|id| folders::get(db, *id).ok().map(|f| (f.id, f.path)))
-        .collect();
-    let rows: Vec<_> = rows
+    let rows = rows
         .into_iter()
-        .map(|m| {
-            let account = accounts.get(&m.account_id);
-            let folder = paths.get(&m.folder_id);
-            let mut row = feed::list_row_json(m, false);
-            row["folder"] = serde_json::json!(folder.map(String::as_str).unwrap_or(""));
-            row["account_name"] = serde_json::json!(account.map(|a| a.name.as_str()).unwrap_or(""));
-            row["account_email"] =
-                serde_json::json!(account.map(|a| a.email_address.as_str()).unwrap_or(""));
-            row
-        })
+        .map(|m| feed::list_row_json(m, false))
         .collect();
+    decorate_rows(db, rows)
+}
+
+/// Local search hits with the same account and action metadata as list rows.
+pub fn search_json(db: &Db, query: &str, limit: u64) -> Result<String> {
+    let rows = serde_json::from_str(&feed::combined_inbox_search_json(db, query, limit)?)?;
+    decorate_rows(db, rows)
+}
+
+fn decorate_rows(db: &Db, mut rows: Vec<serde_json::Value>) -> Result<String> {
+    let mut metadata = HashMap::new();
+    for account in included_accounts(db)? {
+        let all = folders::list_by_account(db, account.id)?;
+        for folder in &all {
+            if folder.subscribed && folder.role == FolderRole::Inbox {
+                metadata.insert(
+                    folder.id,
+                    (
+                        account.name.clone(),
+                        account.email_address.clone(),
+                        folder.path.clone(),
+                        crate::undo::delete_is_permanent(folder, &all),
+                    ),
+                );
+            }
+        }
+    }
+    for row in &mut rows {
+        let Some((name, email, path, permanent)) =
+            row["folder_id"].as_i64().and_then(|id| metadata.get(&id))
+        else {
+            continue;
+        };
+        row["folder"] = serde_json::json!(path);
+        row["account_name"] = serde_json::json!(name);
+        row["account_email"] = serde_json::json!(email);
+        row["delete_is_permanent"] = serde_json::json!(permanent);
+    }
     Ok(serde_json::to_string(&rows)?)
 }
 
@@ -160,6 +209,8 @@ mod tests {
         assert_eq!(rows[0]["account_id"], b);
         assert_eq!(rows[0]["folder_id"], fb);
         assert_eq!(rows[0]["uid"], 7);
+        assert_eq!(rows[0]["account_email"], "b@example.org");
+        assert_eq!(rows[0]["delete_is_permanent"], true);
         let next: Vec<serde_json::Value> =
             serde_json::from_str(&messages_json(&db, 1, 1).unwrap()).unwrap();
         assert_eq!(next[0]["folder_id"], fa);
@@ -207,11 +258,12 @@ mod tests {
         }
         opt_in(&db, a);
         let rows: Vec<serde_json::Value> =
-            serde_json::from_str(&feed::combined_inbox_search_json(&db, "Hello", 20).unwrap())
-                .unwrap();
+            serde_json::from_str(&search_json(&db, "Hello", 20).unwrap()).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["account_id"], a);
         assert_eq!(rows[0]["folder_id"], fa);
+        assert_eq!(rows[0]["account_email"], "a@example.com");
+        assert_eq!(rows[0]["delete_is_permanent"], true);
         opt_in(&db, b);
         let rows: Vec<serde_json::Value> =
             serde_json::from_str(&feed::combined_inbox_search_json(&db, "is:unread", 20).unwrap())
@@ -268,6 +320,60 @@ mod tests {
             serde_json::from_str(&messages_json(&db, 2, 0).unwrap()).unwrap();
         assert_eq!(rows[0]["folder_id"], fb);
         assert_eq!(rows[1]["folder_id"], fa);
+    }
+
+    #[test]
+    fn row_identity_and_delete_policy_stay_with_the_originating_account() {
+        use crate::undo::{self, MoveTarget, Queued};
+
+        let db = Db::open_in_memory().unwrap();
+        let a = accounts::create_for_test(&db, "a@example.com");
+        let b = accounts::create_for_test(&db, "b@example.org");
+        let fa = folders::upsert(&db, a, "INBOX", "/", FolderRole::Inbox).unwrap();
+        let fb = folders::upsert(&db, b, "INBOX", "/", FolderRole::Inbox).unwrap();
+        let trash = folders::upsert(&db, a, "Trash", "/", FolderRole::Trash).unwrap();
+        opt_in(&db, a);
+        opt_in(&db, b);
+        messages::upsert(&db, &messages::sample_new(a, fa, 7)).unwrap();
+        messages::upsert(&db, &messages::sample_new(b, fb, 7)).unwrap();
+
+        for json in [
+            messages_json(&db, 10, 0).unwrap(),
+            search_json(&db, "Hello", 10).unwrap(),
+        ] {
+            let rows: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+            let ar = rows.iter().find(|r| r["folder_id"] == fa).unwrap();
+            let br = rows.iter().find(|r| r["folder_id"] == fb).unwrap();
+            assert_eq!(ar["account_id"], a);
+            assert_eq!(ar["delete_is_permanent"], false);
+            assert_eq!(br["account_id"], b);
+            assert_eq!(br["delete_is_permanent"], true);
+        }
+        messages::set_read_many_by_uids(&db, fa, &[7], true).unwrap();
+        assert!(messages::get_by_uid(&db, fa, 7).unwrap().is_read);
+        assert!(!messages::get_by_uid(&db, fb, 7).unwrap().is_read);
+        assert!(undo::queue_move(&db, b, fa, &[7], MoveTarget::Trash).is_err());
+        assert!(queue_delete(&db, b, fb, 7, false).is_err());
+        assert!(matches!(
+            queue_delete(&db, b, fb, 7, true).unwrap(),
+            Queued::Permanent
+        ));
+        assert!(messages::is_listed(&db, fb, 7).unwrap());
+        let Queued::Pending { batch, .. } = queue_delete(&db, a, fa, 7, false).unwrap() else {
+            panic!("expected a reversible move");
+        };
+        assert!(!messages::is_listed(&db, fa, 7).unwrap());
+        assert!(messages::is_listed(&db, fb, 7).unwrap());
+        assert_eq!(undo::undo(&db, &batch).unwrap(), 1);
+        db.conn()
+            .execute("delete from folders where id = ?1", [trash])
+            .unwrap();
+        assert!(queue_delete(&db, a, fa, 7, false).is_err());
+        assert!(messages::is_listed(&db, fa, 7).unwrap());
+        assert!(matches!(
+            queue_delete(&db, a, fa, 7, true).unwrap(),
+            Queued::Permanent
+        ));
     }
 
     #[test]

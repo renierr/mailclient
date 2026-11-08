@@ -30,6 +30,7 @@ Rectangle {
     // Plain JS array, not a ListModel: see qml/ModelSync.qml for why the feed
     // is never handed around as model-owned objects.
     property var messages: []
+    property bool combined: false
     property int currentUid: -1
     property string folderName: ""
     property string filterText: ""
@@ -60,7 +61,7 @@ Rectangle {
     // offer Delete permanently in place of Move to Trash.
     property var deletePermanentFor: targets => false
     readonly property bool bulkDeletePermanent: root.deletePermanentFor(root.selectionTargets())
-    readonly property bool menuDeletePermanent: root.deletePermanentFor(root.searching ? [
+    readonly property bool menuDeletePermanent: root.combined ? root.menuCombined.delete_is_permanent !== false : root.deletePermanentFor(root.searching ? [
                                                                                              {
                                                                                                  folder: root.menuFolderPath,
                                                                                                  uid: root.menuUid
@@ -104,6 +105,8 @@ Rectangle {
     property string swipeRightAction: "none"
 
     signal messageSelected(int uid)
+    signal combinedMessageSelected(var row)
+    signal combinedAction(var row, string action)
     signal searchJump(string folderPath, int uid)
     // A search hit's row action needs its folder selected first (Main).
     signal searchFolderNeeded(string folderPath)
@@ -129,8 +132,8 @@ Rectangle {
     signal statusMessage(string text)
 
     readonly property bool hasDateFilter: root.filterAfter !== "" || root.filterBefore !== ""
-    readonly property bool hasQuickFilter: root.filterUnread || root.filterStarred || root.filterAttachments
-                                           || root.hasDateFilter
+    readonly property bool hasQuickFilter: !root.combined && (root.filterUnread || root.filterStarred || root.filterAttachments
+                                           || root.hasDateFilter)
     readonly property bool hasAnyFilter: root.filterText !== "" || root.hasQuickFilter
     // Filters only narrow the loaded rows, so older mail stays reachable
     // under them (Flutter shows its Load older row the same way).
@@ -156,6 +159,17 @@ Rectangle {
     property string menuFolderPath: ""
     property bool menuStarred: false
     property bool menuUnread: false
+    property var menuCombined: ({})
+
+    function combinedTarget(m) {
+        return { account_id: m.account_id, folder_id: m.folder_id, folder: m.folder, uid: m.uid,
+                 subject: m.subject, unread: m.unread, starred: m.starred,
+                 delete_is_permanent: m.delete_is_permanent, account_email: m.account_email };
+    }
+
+    function combinedMenuAction(action) {
+        Qt.callLater(root.combinedAction, root.menuCombined, action);
+    }
 
     // The menu's UID, after making sure a search hit's folder is the one the
     // bridge acts on.
@@ -226,7 +240,11 @@ Rectangle {
 
     // A search hit acts in its own folder, like the row menu: select that
     // folder first, then run the action after the current handler unwinds.
-    function requestSwipe(uid, folderPath, action) {
+    function requestSwipe(uid, folderPath, action, model) {
+        if (root.combined) {
+            Qt.callLater(root.combinedAction, root.combinedTarget(model), action);
+            return;
+        }
         if (root.searching)
             root.searchFolderNeeded(folderPath);
         Qt.callLater(root.swipeActionRequested, uid, action);
@@ -368,7 +386,11 @@ Rectangle {
     // The rows the checkbox set is drawn from, keyed like `displayRow`.
     function sourceByKey() {
         var out = {};
-        if (root.searching) {
+        if (root.combined) {
+            var combined = root.messages || [];
+            for (var c = 0; c < combined.length; c++)
+                out[combined[c].folder_id + ":" + combined[c].uid] = combined[c];
+        } else if (root.searching) {
             var hits = root.searchRows || [];
             for (var i = 0; i < hits.length; i++)
                 out[hits[i].folder_id + ":" + hits[i].uid] = hits[i];
@@ -510,6 +532,10 @@ Rectangle {
             key: m.key !== undefined ? String(m.key) : String(m.uid),
             uid: m.uid,
             folder: m.folder || "",
+            folder_id: m.folder_id === undefined ? -1 : m.folder_id,
+            account_id: m.account_id === undefined ? -1 : m.account_id,
+            account_email: m.account_email || "",
+            delete_is_permanent: m.delete_is_permanent !== false,
             subject: m.subject,
             from: m.from,
             sender: (m.from_name || "") !== "" ? m.from_name : m.from,
@@ -536,6 +562,8 @@ Rectangle {
     // and from "nothing here" — mailcore's words (`search::empty_list_text`),
     // the same the native list shows.
     function emptyText() {
+        if (root.combined)
+            return root.filterText !== "" ? qsTr("No matches") : qsTr("No cached messages");
         if (!root.backend)
             return "";
         return root.backend.empty_list_text(root.searching, root.serverSearching, root.hasQuickFilter, (root.searchRows
@@ -546,6 +574,19 @@ Rectangle {
     function rebuildFiltered() {
         filterTimer.stop();
         var rows = [];
+        if (root.combined) {
+            var combined = root.messages || [];
+            for (var c = 0; c < combined.length; c++) {
+                var combinedRow = root.displayRow(combined[c]);
+                combinedRow.key = combined[c].folder_id + ":" + combined[c].uid;
+                rows.push(combinedRow);
+            }
+            root.scrollRestoring = true;
+            ModelSync.sync(filtered, rows, "key");
+            root.scrollRestoring = false;
+            root.restoreScroll();
+            return;
+        }
         if (root.searching) {
             // The feed arrives grouped by folder for the section headers
             // (mailcore `feed::search_json`): folders in the order of their
@@ -594,6 +635,7 @@ Rectangle {
         var item = list.itemAtIndex(idx);
         root.scrollMemory[root.folderName] = {
             uid: filtered.get(idx).uid,
+            key: filtered.get(idx).key,
             index: idx,
             offset: item ? list.contentY - item.y : 0,
             atTop: list.atYBeginning
@@ -608,7 +650,7 @@ Rectangle {
         if (mem === undefined || mem.atTop) {
             list.positionViewAtBeginning();
         } else {
-            var idx = root.indexOfUid(mem.uid);
+            var idx = root.combined ? root.indexOfKey(mem.key) : root.indexOfUid(mem.uid);
             var offset = mem.offset;
             if (idx < 0) {
                 idx = Math.min(mem.index, filtered.count - 1);
@@ -635,6 +677,10 @@ Rectangle {
     function step(delta) {
         if (filtered.count === 0)
             return;
+        if (root.combined) {
+            root.combinedMessageSelected(root.combinedTarget(filtered.get(0)));
+            return;
+        }
         if (root.searching) {
             var k = 0;
             for (var i = 0; i < filtered.count; i++) {
@@ -682,6 +728,10 @@ Rectangle {
     onSearchingChanged: {
         // A checkbox set belongs to the list it was made in: carried across,
         // its keys would point at the wrong rows.
+        root.setSelectionMode(false);
+        root.scheduleRebuild();
+    }
+    onCombinedChanged: {
         root.setSelectionMode(false);
         root.scheduleRebuild();
     }
@@ -756,6 +806,7 @@ Rectangle {
                     // Selection-mode toggle: checkboxes stay out of the way
                     // until bulk actions are actually wanted.
                     IconButton {
+                        visible: !root.combined
                         Layout.leftMargin: Theme.xs
                         text: root.selectionMode ? Icons.checkBox : Icons.checkBoxBlank
                         iconFont: true
@@ -839,6 +890,7 @@ Rectangle {
                         font.pixelSize: Theme.fontSmall
                     }
                     IconButton {
+                        visible: !root.combined
                         text: Icons.filterList
                         iconFont: true
                         fontSize: Theme.fontSmall
@@ -847,7 +899,7 @@ Rectangle {
                         onClicked: filterMenu.popup()
                     }
                     IconButton {
-                        visible: !root.searching
+                        visible: !root.searching && (!root.combined || root.filterText === "")
                         text: Icons.sort
                         iconFont: true
                         fontSize: Theme.fontSmall
@@ -855,7 +907,7 @@ Rectangle {
                         onClicked: sortMenu.popup()
                     }
                     Label {
-                        visible: !root.searching
+                        visible: !root.searching && (!root.combined || root.filterText === "")
                         text: root.sortLabel()
                         color: Theme.textMuted
                         font.pixelSize: Theme.fontTiny
@@ -997,13 +1049,13 @@ Rectangle {
             delegate: Item {
                 id: row
                 width: list.width
-                height: root.density === "compact" ? Math.round(58 * Theme.uiScale) : Theme.listItemHeight
+                height: root.density === "compact" ? Math.round((root.combined ? 70 : 58) * Theme.uiScale) : Theme.listItemHeight
 
                 required property int index
                 required property var model
 
                 // Search hits span folders: a UID is only unique within one.
-                readonly property bool current: row.model.uid === root.currentUid && (!root.searching
+                readonly property bool current: !root.combined && row.model.uid === root.currentUid && (!root.searching
                                                                                       || row.model.folder
                                                                                       === root.folderName)
                 readonly property bool checked: root.selectionVersion >= 0 && root.isSelected(row.model.key)
@@ -1030,7 +1082,7 @@ Rectangle {
                     row.swipeDragging = false;
                     row.swipeOffset = 0;
                     if (passed)
-                        root.requestSwipe(uid, folderPath, action);
+                        root.requestSwipe(uid, folderPath, action, row.model);
                 }
 
                 // The action cue behind the row: it appears on the side the
@@ -1158,7 +1210,10 @@ Rectangle {
                             root.menuFolderPath = row.model.folder !== undefined ? row.model.folder : root.folderName;
                             root.menuStarred = row.model.starred;
                             root.menuUnread = row.model.unread;
+                            root.menuCombined = root.combinedTarget(row.model);
                             rowMenu.popup();
+                        } else if (root.combined) {
+                            root.emitLater(root.combinedMessageSelected, root.combinedTarget(row.model));
                         } else if (mouse.modifiers & Qt.ControlModifier) {
                             if (!root.selectionMode)
                                 root.setSelectionMode(true);
@@ -1365,18 +1420,33 @@ Rectangle {
                                                                                            root.folderName;
                                     root.menuStarred = row.model.starred;
                                     root.menuUnread = row.model.unread;
+                                    root.menuCombined = root.combinedTarget(row.model);
                                     rowMenu.popup();
                                 }
                             }
                         }
-                        Label {
-                            visible: root.density !== "compact"
-                            text: row.model.snippet
-                            color: Theme.textMuted
-                            font.pixelSize: Theme.fontSmall
-                            elide: Text.ElideRight
-                            maximumLineCount: 1
+                        Row {
+                            visible: root.combined || root.density !== "compact"
                             width: parent.width
+                            spacing: Theme.xs
+                            Label {
+                                id: accountLabel
+                                visible: root.combined
+                                text: row.model.account_email
+                                width: visible ? Math.min(implicitWidth, parent.width * 0.45) : 0
+                                color: Theme.accent
+                                font.pixelSize: Theme.fontSmall
+                                elide: Text.ElideRight
+                            }
+                            Label {
+                                visible: root.density !== "compact"
+                                text: row.model.snippet
+                                color: Theme.textMuted
+                                font.pixelSize: Theme.fontSmall
+                                elide: Text.ElideRight
+                                maximumLineCount: 1
+                                width: Math.max(0, parent.width - accountLabel.width - (accountLabel.visible ? Theme.xs : 0))
+                            }
                         }
                     }
                 }
@@ -1390,7 +1460,7 @@ Rectangle {
             width: parent.width
             // Hidden for an empty folder the server agrees is empty: the
             // list's own empty text says so.
-            implicitHeight: root.folderName !== "" && root.olderState !== "" && root.olderState !== "empty" ? 56 : 0
+            implicitHeight: !root.combined && root.folderName !== "" && root.olderState !== "" && root.olderState !== "empty" ? 56 : 0
             visible: implicitHeight > 0
             color: Theme.bgAlt
             clip: true
@@ -1440,55 +1510,70 @@ Rectangle {
         // the hit's folder first, so the folder-scoped actions hit the right
         // message (the results stay on screen).
         AppMenuItem {
-            visible: root.searching
+            visible: root.searching || root.combined
             glyph: Icons.mail
             label: qsTr("Open message")
-            onTriggered: Qt.callLater(root.searchJump, root.menuFolderPath, root.menuUid)
+            onTriggered: {
+                if (root.combined)
+                    root.emitLater(root.combinedMessageSelected, root.menuCombined);
+                else
+                    Qt.callLater(root.searchJump, root.menuFolderPath, root.menuUid);
+            }
         }
         MenuSeparator {
-            visible: root.searching
+            visible: root.searching || root.combined
         }
         AppMenuItem {
             glyph: root.menuUnread ? Icons.markRead : Icons.markUnread
             label: root.menuUnread ? qsTr("Mark as read") : qsTr("Mark as unread")
-            onTriggered: Qt.callLater(root.markReadRequested, root.menuTarget(), root.menuUnread)
+            onTriggered: {
+                if (root.combined)
+                    root.combinedMenuAction(root.menuUnread ? "mark_read" : "mark_unread");
+                else
+                    Qt.callLater(root.markReadRequested, root.menuTarget(), root.menuUnread);
+            }
         }
         AppMenuItem {
             glyph: root.menuStarred ? Icons.starBorder : Icons.star
             label: root.menuStarred ? qsTr("Remove star") : qsTr("Star")
-            onTriggered: root.emitLater(root.starToggled, root.menuTarget())
+            onTriggered: {
+                if (root.combined)
+                    root.combinedMenuAction(root.menuStarred ? "unstar" : "star");
+                else
+                    root.emitLater(root.starToggled, root.menuTarget());
+            }
         }
         AppMenuItem {
             glyph: Icons.archive
             label: qsTr("Archive")
-            onTriggered: root.emitLater(root.archiveRequested, root.menuTarget())
+            onTriggered: root.combined ? root.combinedMenuAction("archive") : root.emitLater(root.archiveRequested, root.menuTarget())
         }
         AppMenuItem {
             glyph: Icons.driveFileMove
             label: qsTr("Move to…")
-            onTriggered: root.emitLater(root.moveRequested, root.menuTarget())
+            onTriggered: root.combined ? root.combinedMenuAction("move") : root.emitLater(root.moveRequested, root.menuTarget())
         }
         AppMenuItem {
             glyph: root.menuDeletePermanent ? Icons.deleteForever : Icons.trash
             label: root.menuDeletePermanent ? qsTr("Delete permanently…") : qsTr("Move to Trash")
-            onTriggered: root.emitLater(root.deleteRequested, root.menuTarget())
+            onTriggered: root.combined ? root.combinedMenuAction("delete") : root.emitLater(root.deleteRequested, root.menuTarget())
         }
         MenuSeparator {}
         AppMenuItem {
             glyph: Icons.search
             label: qsTr("Find similar")
-            onTriggered: root.emitLater2(root.findSimilarRequested, root.menuFolderPath, root.menuUid)
+            onTriggered: root.combined ? root.combinedMenuAction("similar") : root.emitLater2(root.findSimilarRequested, root.menuFolderPath, root.menuUid)
         }
         AppMenuItem {
             glyph: Icons.fileDownload
             label: qsTr("Save as .eml…")
-            onTriggered: exportEmlDialog.openFor(root.menuFolderPath, root.menuUid)
+            onTriggered: exportEmlDialog.openFor(root.menuFolderPath, root.menuUid, root.combined ? root.menuCombined.account_id : root.accountId)
         }
         AppMenuItem {
             visible: !root.menuDeletePermanent
             glyph: Icons.deleteForever
             label: qsTr("Delete permanently…")
-            onTriggered: root.emitLater(root.purgeRequested, root.menuTarget())
+            onTriggered: root.combined ? root.combinedMenuAction("purge") : root.emitLater(root.purgeRequested, root.menuTarget())
         }
     }
 

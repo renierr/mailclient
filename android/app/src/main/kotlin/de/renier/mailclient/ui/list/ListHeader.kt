@@ -43,6 +43,7 @@ internal fun ListHeaderRow(
     title: String,
     subtitle: String,
     onCustomRange: () -> Unit,
+    combined: Boolean = false,
 ) {
     // Each menu renders inside a Box around its own button, so it anchors
     // to the button instead of floating at the screen edge.
@@ -109,7 +110,7 @@ internal fun ListHeaderRow(
                 )
             }
         } else {
-            if (!state.searchActive) {
+            if (!state.searchActive && (!combined || state.searchQuery.isEmpty())) {
                 Box {
                     IconButton(onClick = { sortOpen = true }) {
                         Icon(
@@ -120,7 +121,7 @@ internal fun ListHeaderRow(
                     if (sortOpen) SortMenu(state) { sortOpen = false }
                 }
             }
-            Box {
+            if (!combined) Box {
                 IconButton(onClick = { filterOpen = true }) {
                     Icon(
                         painter = painterResource(R.drawable.ic_filter),

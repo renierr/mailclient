@@ -21,6 +21,44 @@ use mailcore::sync::pool::job_account;
 use super::{parse_hits_json, parse_uids_json};
 
 impl qobject::Bridge {
+    pub fn combined_delete_message(
+        mut self: Pin<&mut Self>,
+        folder_id: i64,
+        uid: i32,
+        confirmed_permanent: bool,
+    ) -> QString {
+        let Some(uid) = u32::try_from(uid).ok().filter(|&uid| uid != 0) else {
+            return qstring("invalid message");
+        };
+        let db = match shared_db() {
+            Ok(db) => db,
+            Err(e) => return qstring(&e),
+        };
+        let account_id = match folder_account(db, folder_id) {
+            Ok(id) => id,
+            Err(e) => return qstring(&e),
+        };
+        match mailcore::combined_inbox::queue_delete(
+            db,
+            account_id,
+            folder_id,
+            uid,
+            confirmed_permanent,
+        ) {
+            Ok(Queued::Pending { batch, label, .. }) => {
+                let (shown_account, shown_folder) = self.shown();
+                push_feeds(&mut self, db, shown_account, shown_folder);
+                self.as_mut()
+                    .undo_available(&qstring(&batch), &qstring(&label));
+                spawn_push_after_grace(account_id);
+                qstring(&label)
+            }
+            Ok(Queued::Permanent) => self.purge_uids(folder_id, vec![uid]),
+            Ok(Queued::AlreadyThere) => qstring("Already here"),
+            Err(e) => qstring(&e),
+        }
+    }
+
     pub fn mark_read_many(
         mut self: Pin<&mut Self>,
         folder_id: i64,

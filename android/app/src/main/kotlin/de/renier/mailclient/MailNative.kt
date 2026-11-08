@@ -234,6 +234,7 @@ object MailNative {
     @JvmStatic external fun markReadHits(accountId: Long, hits: String, read: Boolean): String
     @JvmStatic external fun setStarHits(accountId: Long, hits: String, starred: Boolean): String
     @JvmStatic external fun deleteMessages(accountId: Long, folderId: Long, uids: String): String
+    @JvmStatic external fun combinedDeleteMessage(accountId: Long, folderId: Long, uid: Int, confirmedPermanent: Boolean): String
     @JvmStatic external fun archiveMessages(accountId: Long, folderId: Long, uids: String): String
     @JvmStatic external fun moveMessages(accountId: Long, folderId: Long, uids: String, destPath: String): String
     @JvmStatic external fun purgeMessages(accountId: Long, folderId: Long, uids: String)

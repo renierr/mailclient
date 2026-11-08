@@ -10,6 +10,7 @@ FileDialog {
 
     property var backend
     property int accountId: -1
+    property int targetAccountId: -1
     property string folderPath: ""
     property int uid: -1
 
@@ -20,22 +21,23 @@ FileDialog {
     nameFilters: [qsTr("Mail files (*.eml)"), qsTr("All files (*)")]
 
     // `folderPath` names the message's folder in `accountId`.
-    function openFor(folderPath, uid) {
+    function openFor(folderPath, uid, account) {
         if (!root.backend || uid < 0)
             return;
         root.folderPath = folderPath;
         root.uid = uid;
+        root.targetAccountId = account === undefined ? root.accountId : account;
         var dir = StandardPaths.writableLocation(StandardPaths.DownloadLocation).toString().replace(/\\/g, "/");
         if (dir.indexOf("file:") !== 0)
             dir = "file://" + (dir.length >= 2 && dir[1] === ":" ? "/" : "") + dir;
-        var name = root.backend.suggested_eml_name(root.accountId, folderPath, uid);
+        var name = root.backend.suggested_eml_name(root.targetAccountId, folderPath, uid);
         root.selectedFile = dir.replace(/\/+$/, "") + "/" + encodeURIComponent(name);
         root.open();
     }
 
     onAccepted: {
         root.statusMessage(qsTr("Exporting…"));
-        var r = root.backend.export_message(root.accountId, root.folderPath, root.uid, root.selectedFile.toString());
+        var r = root.backend.export_message(root.targetAccountId, root.folderPath, root.uid, root.selectedFile.toString());
         if (r !== "")
             root.statusMessage(r);
     }

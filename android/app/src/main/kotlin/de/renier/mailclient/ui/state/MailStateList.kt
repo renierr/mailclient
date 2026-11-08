@@ -14,6 +14,7 @@ fun MailState.setSort(field: String, descending: Boolean) = io {
     MailNative.setSort(field, descending)
     loadSort()
     reloadMessages()
+    refreshCombined()
 }
 
 internal fun MailState.loadSort() = io {
@@ -270,10 +271,17 @@ fun MailState.bulkPurge() = io {
 // folder it lives in, a list row in the open one.
 
 /** The id of the folder [m] lives in. */
-fun MailState.rowFolderId(m: MessageRow): Long = if (searchActive && m.folderId >= 0) m.folderId else folderId
+fun MailState.rowFolderId(m: MessageRow): Long = if (m.folderId >= 0) m.folderId else folderId
+
+private fun MailState.rowAccountId(m: MessageRow): Long = if (m.accountId >= 0) m.accountId else activeAccountId
 
 /** Deleting [m] alone: destroys or moves to Trash, and whether to ask. */
-fun MailState.rowDeletePrompt(m: MessageRow): DeletePrompt = deletePrompt(bulk = false, listOf(rowFolder(m)))
+fun MailState.rowDeletePrompt(m: MessageRow): DeletePrompt {
+    val permanent = m.deleteIsPermanent ?: rowFolder(m)?.deleteIsPermanent
+    val flags = "[${permanent?.toString() ?: "null"}]"
+    val o = runCatching { JSONObject(MailNative.deletePrompt(readerPrefs.confirmDelete, false, flags)) }.getOrNull()
+    return DeletePrompt(o?.optBoolean("permanent", true) ?: true, o?.optBoolean("ask", true) ?: true)
+}
 
 /** Delete in [m]'s folder destroys instead of moving to Trash. */
 fun MailState.rowDeleteIsPermanent(m: MessageRow): Boolean = rowDeletePrompt(m).permanent
@@ -281,27 +289,27 @@ fun MailState.rowDeleteIsPermanent(m: MessageRow): Boolean = rowDeletePrompt(m).
 fun MailState.rowMarkRead(m: MessageRow, read: Boolean) = io {
     MailNative.ensureInit(appContext)
     val folder = rowFolderId(m)
-    MailNative.markReadMany(activeAccountId, folder, "[${m.uid}]", read)
+    MailNative.markReadMany(rowAccountId(m), folder, "[${m.uid}]", read)
     afterFlags(folder, "[${m.uid}]")
 }
 
 fun MailState.rowStar(m: MessageRow, starred: Boolean) = io {
     MailNative.ensureInit(appContext)
     val folder = rowFolderId(m)
-    MailNative.setStarMany(activeAccountId, folder, "[${m.uid}]", starred)
+    MailNative.setStarMany(rowAccountId(m), folder, "[${m.uid}]", starred)
     afterFlags(folder, "[${m.uid}]")
 }
 
 fun MailState.rowArchive(m: MessageRow) = io {
     MailNative.ensureInit(appContext)
-    val result = MailNative.archiveMessages(activeAccountId, rowFolderId(m), "[${m.uid}]")
+    val result = MailNative.archiveMessages(rowAccountId(m), rowFolderId(m), "[${m.uid}]")
     withContext(Dispatchers.Main) { offerUndo(result) }
     afterRow()
 }
 
 fun MailState.rowMove(m: MessageRow, destPath: String) = io {
     MailNative.ensureInit(appContext)
-    val result = MailNative.moveMessages(activeAccountId, rowFolderId(m), "[${m.uid}]", destPath)
+    val result = MailNative.moveMessages(rowAccountId(m), rowFolderId(m), "[${m.uid}]", destPath)
     withContext(Dispatchers.Main) { offerUndo(result) }
     afterRow()
 }
@@ -309,7 +317,7 @@ fun MailState.rowMove(m: MessageRow, destPath: String) = io {
 /** To Trash (undoable), or destroyed where the folder says so. */
 fun MailState.rowTrash(m: MessageRow) = io {
     MailNative.ensureInit(appContext)
-    val result = MailNative.deleteMessages(activeAccountId, rowFolderId(m), "[${m.uid}]")
+    val result = MailNative.deleteMessages(rowAccountId(m), rowFolderId(m), "[${m.uid}]")
     withContext(Dispatchers.Main) { offerUndo(result) }
     afterRow()
 }
@@ -317,7 +325,7 @@ fun MailState.rowTrash(m: MessageRow) = io {
 /** Destroy server-side. No undo — the UI always confirms first. */
 fun MailState.rowPurge(m: MessageRow) = io {
     MailNative.ensureInit(appContext)
-    MailNative.purgeMessages(activeAccountId, rowFolderId(m), "[${m.uid}]")
+    MailNative.purgeMessages(rowAccountId(m), rowFolderId(m), "[${m.uid}]")
     afterRow()
 }
 

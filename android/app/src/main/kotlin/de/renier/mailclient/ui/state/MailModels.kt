@@ -64,6 +64,7 @@ data class MessageRow(
     val folderId: Long = -1,
     val accountId: Long = -1,
     val accountEmail: String = "",
+    val deleteIsPermanent: Boolean? = null,
 )
 
 data class UndoOffer(val batch: String, val label: String)

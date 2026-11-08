@@ -57,6 +57,55 @@ fn move_result_json<'a>(
     Ok(env.new_string(serde_json::to_string(&json)?)?)
 }
 
+/// Delete a combined row, refusing an unconfirmed permanent escalation.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_de_renier_mailclient_MailNative_combinedDeleteMessage<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    account_id: i64,
+    folder_id: i64,
+    uid: i32,
+    confirmed_permanent: bool,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>> {
+            let uid = uid_arg(uid)?;
+            let queued = mailcore::combined_inbox::queue_delete(
+                crate::db::shared_db()?,
+                account_id,
+                folder_id,
+                uid,
+                confirmed_permanent,
+            )
+            .map_err(BridgeError)?;
+            let result = match queued {
+                mailcore::undo::Queued::Pending { batch, label, .. } => {
+                    crate::net::spawn_push_after_grace(account_id);
+                    crate::api::mutate::MoveResult {
+                        batch,
+                        label,
+                        purging: false,
+                    }
+                }
+                mailcore::undo::Queued::Permanent => {
+                    crate::api::mutate::purge_messages(account_id, folder_id, vec![uid])?;
+                    crate::api::mutate::MoveResult {
+                        batch: String::new(),
+                        label: String::new(),
+                        purging: true,
+                    }
+                }
+                mailcore::undo::Queued::AlreadyThere => crate::api::mutate::MoveResult {
+                    batch: String::new(),
+                    label: "Already here".into(),
+                    purging: false,
+                },
+            };
+            move_result_json(env, result)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `MailNative.deleteMessage(accountId, folderId, uid)`: Trash (undoable)
 /// or a purge job where Trash does not apply — `{"batch","label","purging"}`.
 #[unsafe(no_mangle)]

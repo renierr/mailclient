@@ -65,6 +65,7 @@ internal fun parseMessages(json: String): List<MessageRow> {
             folderId = o.optLong("folder_id", -1),
             accountId = o.optLong("account_id", -1),
             accountEmail = o.optString("account_email"),
+            deleteIsPermanent = if (o.has("delete_is_permanent")) o.optBoolean("delete_is_permanent") else null,
         )
     }.filter { it.uid >= 0 }
 }

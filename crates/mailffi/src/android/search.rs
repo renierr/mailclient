@@ -15,7 +15,7 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_combinedInboxSearchJ
 ) -> JString<'caller> {
     unowned
         .with_env(|env| -> Result<JString<'caller>> {
-            let rows = mailcore::feed::combined_inbox_search_json(
+            let rows = mailcore::combined_inbox::search_json(
                 crate::db::shared_db()?,
                 &string(env, &query)?,
                 mailcore::search::HIT_LIMIT,

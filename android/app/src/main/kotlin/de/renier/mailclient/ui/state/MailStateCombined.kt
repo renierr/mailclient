@@ -45,6 +45,19 @@ fun MailState.closeCombinedInbox() {
     combinedOpen = false
 }
 
+fun MailState.deleteCombinedMessage(row: MessageRow, confirmedPermanent: Boolean) = io {
+    MailNative.ensureInit(appContext)
+    val result = try {
+        MailNative.combinedDeleteMessage(row.accountId, row.folderId, row.uid, confirmedPermanent)
+    } catch (e: Exception) {
+        refreshCombined()
+        throw e
+    }
+    withContext(Dispatchers.Main) { offerUndo(result) }
+    refreshCombined()
+    loadFolders()
+}
+
 /** Land on the real account and folder before opening any reader actions. */
 fun MailState.openCombinedMessage(row: MessageRow, onReady: (Long, Long, Int) -> Unit) = io {
     MailNative.ensureInit(appContext)

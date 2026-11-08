@@ -204,12 +204,57 @@ ApplicationWindow {
             root.openMessage(row.uid);
     }
 
-    function combinedAccountName(row) {
-        for (var i = 0; i < accountModel.count; i++) {
-            if (accountModel.get(i).id === row.account_id)
-                return accountModel.get(i).email;
+    function combinedRowAction(row, action) {
+        if (!row || row.folder_id < 0 || row.uid < 0)
+            return;
+        var result = "";
+        switch (action) {
+        case "mark_read":
+        case "mark_unread":
+            result = backend.mark_read(row.folder_id, row.uid, action === "mark_read");
+            break;
+        case "star":
+        case "unstar":
+            result = backend.set_star_many(row.folder_id, JSON.stringify([row.uid]), action === "star");
+            break;
+        case "archive":
+            result = backend.archive_message(row.folder_id, row.uid);
+            break;
+        case "move":
+            combinedMoveDialog.target = row;
+            ModelSync.sync(combinedMoveFolders, FeedJson.parse(backend.combined_inbox_folders_json(row.account_id), []), "id");
+            combinedMoveDialog.open();
+            return;
+        case "delete":
+            var prompt = root.deletePrompt(false, [row.delete_is_permanent]);
+            if (prompt.ask) {
+                deleteConfirm.combinedTarget = row;
+                deleteConfirm.uid = row.uid;
+                deleteConfirm.uids = [];
+                deleteConfirm.subject = row.subject;
+                deleteConfirm.permanent = prompt.permanent;
+                deleteConfirm.open();
+                return;
+            }
+            result = backend.combined_delete_message(row.folder_id, row.uid, false);
+            break;
+        case "purge":
+            purgeConfirm.combinedTarget = row;
+            purgeConfirm.uid = row.uid;
+            purgeConfirm.uids = [];
+            purgeConfirm.subject = row.subject;
+            purgeConfirm.open();
+            return;
+        case "similar":
+            root.openCombinedMessage(row);
+            if (backend.current_account_id === row.account_id && backend.current_folder_id === row.folder_id)
+                root.findSimilar(row.folder, row.uid);
+            return;
         }
-        return "";
+        if (result !== "")
+            root.statusText = result;
+        root.reloadCombined();
+        root.reloadFolders();
     }
 
     // --- feed plumbing ----------------------------------------------------
@@ -715,6 +760,7 @@ ApplicationWindow {
             return;
         }
         var m = root.messageByUid(uid);
+        deleteConfirm.combinedTarget = null;
         deleteConfirm.uid = uid;
         deleteConfirm.uids = [];
         deleteConfirm.subject = m !== undefined ? m.subject : "";
@@ -782,6 +828,7 @@ ApplicationWindow {
         if (uid < 0)
             return;
         var m = root.messageByUid(uid);
+        purgeConfirm.combinedTarget = null;
         purgeConfirm.uid = uid;
         purgeConfirm.uids = [];
         purgeConfirm.subject = m !== undefined ? m.subject : "";
@@ -791,6 +838,7 @@ ApplicationWindow {
     function confirmBulkPurge(uids) {
         if (!uids || uids.length === 0)
             return;
+        purgeConfirm.combinedTarget = null;
         purgeConfirm.uid = -1;
         purgeConfirm.uids = uids.slice();
         purgeConfirm.subject = "";
@@ -877,6 +925,7 @@ ApplicationWindow {
             root.doBulkDelete(targets);
             return;
         }
+        deleteConfirm.combinedTarget = null;
         deleteConfirm.uid = -1;
         deleteConfirm.uids = targets.slice();
         deleteConfirm.subject = "";
@@ -909,6 +958,7 @@ ApplicationWindow {
             return;
         }
         reloadMessages();
+        root.reloadCombined();
         var label = field === "from" ? qsTr("From") : field === "subject" ? qsTr("Subject") : qsTr("Date");
         var dir = descending ? qsTr("descending") : qsTr("ascending");
         root.statusText = qsTr("Sorted by %1 (%2)").arg(label).arg(dir);
@@ -1608,15 +1658,17 @@ ApplicationWindow {
         MessageList {
             id: messageList
             accountId: backend.current_account_id
-            visible: !root.combinedOpen && !root.outboxOpen && !root.readerFullscreen && (root.wideLayout ? true : root.mediumLayout
+            visible: !root.outboxOpen && !root.readerFullscreen && (root.wideLayout ? true : root.mediumLayout
                                                                                       ? root.currentUid < 0 :
                                                                                         root.narrowPane === "list")
             enabled: visible
             SplitView.preferredWidth: 360
+            SplitView.fillWidth: root.combinedOpen
             SplitView.minimumWidth: 240
-            messages: root.messageRows
+            combined: root.combinedOpen
+            messages: root.combinedOpen ? root.combinedRows : root.messageRows
             currentUid: root.currentUid
-            folderName: root.currentFolder
+            folderName: root.combinedOpen ? qsTr("Combined Inbox") : root.currentFolder
             filterText: searchField.text
             backend: backend
             totalCount: backend.messages_total
@@ -1638,6 +1690,8 @@ ApplicationWindow {
             similarSubject: root.similarSubject
             serverSearching: root.serverSearching
             onMessageSelected: uid => root.openMessage(uid)
+            onCombinedMessageSelected: row => root.openCombinedMessage(row)
+            onCombinedAction: (row, action) => root.combinedRowAction(row, action)
             onSearchJump: (path, uid) => root.jumpToSearchResult(path, uid)
             onSearchFolderNeeded: path => root.useSearchFolder(path)
             onFindSimilarRequested: (folderPath, uid) => root.findSimilar(folderPath, uid)
@@ -1658,72 +1712,6 @@ ApplicationWindow {
             onLoadOlderRequested: root.loadOlder()
             onSortRequested: (field, descending) => root.changeSort(field, descending)
             onStatusMessage: text => root.statusText = text
-        }
-
-        Rectangle {
-            visible: root.combinedOpen && !root.readerFullscreen && (root.wideLayout || root.mediumLayout || root.narrowPane === "list")
-            enabled: visible
-            SplitView.preferredWidth: 360
-            SplitView.fillWidth: root.combinedOpen
-            SplitView.minimumWidth: 240
-            color: Theme.bg
-            ColumnLayout {
-                anchors.fill: parent
-                spacing: 0
-                Label {
-                    Layout.fillWidth: true
-                    Layout.margins: Theme.md
-                    text: qsTr("Combined Inbox")
-                    font.bold: true
-                    color: Theme.text
-                }
-                Label {
-                    Layout.fillWidth: true
-                    Layout.leftMargin: Theme.md
-                    Layout.rightMargin: Theme.md
-                    text: qsTr("Cached inboxes · Search is local. Open a message to use its account.")
-                    wrapMode: Text.Wrap
-                    color: Theme.textMuted
-                }
-                ListView {
-                    id: combinedList
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    clip: true
-                    model: root.combinedRows
-                    ScrollBar.vertical: ScrollBar { }
-                    delegate: ItemDelegate {
-                        required property var modelData
-                        width: combinedList.width
-                        onClicked: {
-                            var target = { account_id: modelData.account_id, folder_id: modelData.folder_id, folder: modelData.folder, uid: modelData.uid };
-                            Qt.callLater(root.openCombinedMessage, target);
-                        }
-                        contentItem: ColumnLayout {
-                            spacing: Theme.xs
-                            Label {
-                                Layout.fillWidth: true
-                                text: modelData.from_name || modelData.from || ""
-                                font.bold: modelData.unread === true
-                                elide: Text.ElideRight
-                                color: Theme.text
-                            }
-                            Label {
-                                Layout.fillWidth: true
-                                text: modelData.subject || ""
-                                elide: Text.ElideRight
-                                color: Theme.text
-                            }
-                            Label {
-                                Layout.fillWidth: true
-                                text: root.combinedAccountName(modelData) + " · " + (modelData.date || "")
-                                elide: Text.ElideRight
-                                color: Theme.textMuted
-                            }
-                        }
-                    }
-                }
-            }
         }
 
         OutboxPane {
@@ -2027,6 +2015,31 @@ ApplicationWindow {
         }
     }
 
+    ListModel {
+        id: combinedMoveFolders
+    }
+
+    MoveTo {
+        id: combinedMoveDialog
+        property var target: null
+        folders: combinedMoveFolders
+        currentFolder: target ? target.folder : ""
+        subject: target ? target.subject : ""
+        onFolderChosen: path => {
+            var row = target;
+            combinedMoveDialog.close();
+            Qt.callLater(function () {
+                if (!row)
+                    return;
+                var result = backend.move_message(row.folder_id, row.uid, path);
+                if (result !== "")
+                    root.statusText = result;
+                root.reloadCombined();
+                root.reloadFolders();
+            });
+        }
+    }
+
     MoveTo {
         id: moveDialog
         folders: folderModel
@@ -2069,6 +2082,7 @@ ApplicationWindow {
         property var uids: []
         property string subject: ""
         property bool permanent: false
+        property var combinedTarget: null
 
         background: Rectangle {
             color: Theme.bg
@@ -2096,10 +2110,18 @@ ApplicationWindow {
                     var targets = deleteConfirm.uids && deleteConfirm.uids.length > 0 ? deleteConfirm.uids.slice() :
                                                                                         [deleteConfirm.uid];
                     var bulk = deleteConfirm.uids && deleteConfirm.uids.length > 0;
+                    var row = deleteConfirm.combinedTarget;
+                    var confirmedPermanent = deleteConfirm.permanent;
                     deleteConfirm.close();
                     // Out of the click handler: deleting rebuilds the feed.
                     Qt.callLater(function () {
-                        if (bulk)
+                        if (row) {
+                            var result = backend.combined_delete_message(row.folder_id, row.uid, confirmedPermanent);
+                            if (result !== "")
+                                root.statusText = result;
+                            root.reloadCombined();
+                            root.reloadFolders();
+                        } else if (bulk)
                             root.doBulkDelete(targets);
                         else
                             root.doDelete(targets[0]);
@@ -2137,6 +2159,7 @@ ApplicationWindow {
         property int uid: -1
         property var uids: []
         property string subject: ""
+        property var combinedTarget: null
 
         background: Rectangle {
             color: Theme.bg
@@ -2164,10 +2187,16 @@ ApplicationWindow {
                     var targets = purgeConfirm.uids && purgeConfirm.uids.length > 0 ? purgeConfirm.uids.slice() :
                                                                                       [purgeConfirm.uid];
                     var bulk = purgeConfirm.uids && purgeConfirm.uids.length > 0;
+                    var row = purgeConfirm.combinedTarget;
                     purgeConfirm.close();
                     // Out of the click handler: purging rebuilds the feed.
                     Qt.callLater(function () {
-                        if (bulk)
+                        if (row) {
+                            var result = backend.purge_message(row.folder_id, row.uid);
+                            if (result !== "")
+                                root.statusText = result;
+                            root.reloadCombined();
+                        } else if (bulk)
                             root.bulkPurge(targets);
                         else
                             root.purgeMessage(targets[0]);

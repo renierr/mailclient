@@ -253,6 +253,15 @@ pub mod qobject {
         #[qinvokable]
         fn combined_inbox_search_json(&self, query: &QString) -> QString;
         #[qinvokable]
+        fn combined_inbox_folders_json(&self, account_id: i64) -> QString;
+        #[qinvokable]
+        fn combined_delete_message(
+            self: Pin<&mut Self>,
+            folder_id: i64,
+            uid: i32,
+            confirmed_permanent: bool,
+        ) -> QString;
+        #[qinvokable]
         fn sync_combined_inbox(self: Pin<&mut Self>) -> QString;
 
         /// The reader's paint for one HTML mail (`mailcore::html::reader::
