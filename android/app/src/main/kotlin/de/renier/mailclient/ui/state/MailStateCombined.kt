@@ -6,18 +6,23 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
-/** Refresh local counts and, while open, the combined inbox or local search. */
+/**
+ * Refresh local counts and, while open, the combined inbox (its first
+ * [MailState.combinedPages] pages) or its local search. Runs from
+ * [loadFolders], so every folder refresh covers it.
+ */
 fun MailState.refreshCombined() {
     scope.launch(Dispatchers.Main) {
         val generation = ++combinedGeneration
         val query = searchQuery.trim()
         val open = combinedOpen
+        val pages = combinedPages
         val result = withContext(Dispatchers.IO) {
             runCatching {
                 MailNative.ensureInit(appContext)
                 val counts = JSONObject(MailNative.combinedInboxCountsJson())
                 val rows = if (!open) emptyList() else if (query.isEmpty()) {
-                    parseMessages(MailNative.combinedInboxMessagesJson(counts.optLong("total"), 0))
+                    parseMessages(MailNative.combinedInboxMessagesJson(pages))
                 } else {
                     parseMessages(MailNative.combinedInboxSearchJson(query))
                 }
@@ -26,17 +31,29 @@ fun MailState.refreshCombined() {
         }
         if (generation != combinedGeneration) return@launch
         result.onSuccess { (counts, rows) ->
-            combinedInboxes = counts.optInt("inboxes")
+            combinedAccounts = counts.optInt("accounts")
             combinedUnread = counts.optInt("unread")
+            combinedTotal = counts.optInt("total")
             if (open && combinedOpen && searchQuery.trim() == query) combinedMessages = rows
         }.onFailure { fail(it.message ?: "Could not load combined inbox") }
     }
+}
+
+/** More cached rows exist than the combined list shows (no search running). */
+val MailState.combinedHasMore: Boolean
+    get() = searchQuery.isEmpty() && combinedMessages.size < combinedTotal
+
+/** One more page of the combined list. */
+fun MailState.showMoreCombined() {
+    combinedPages++
+    refreshCombined()
 }
 
 fun MailState.openCombinedInbox() {
     clearSearch()
     exitSelectionMode()
     outboxOpen = false
+    combinedPages = 1
     combinedOpen = true
     refreshCombined()
 }
@@ -44,6 +61,11 @@ fun MailState.openCombinedInbox() {
 fun MailState.closeCombinedInbox() {
     combinedOpen = false
 }
+
+/** What the empty combined list says; it only ever searches locally. */
+fun MailState.combinedEmptyText(): String = runCatching {
+    MailNative.emptyListText(searchQuery.isNotEmpty(), false, false, 0, searchQuery)
+}.getOrDefault("")
 
 fun MailState.deleteCombinedMessage(row: MessageRow, confirmedPermanent: Boolean) = io {
     MailNative.ensureInit(appContext)
@@ -54,36 +76,25 @@ fun MailState.deleteCombinedMessage(row: MessageRow, confirmedPermanent: Boolean
         throw e
     }
     withContext(Dispatchers.Main) { offerUndo(result) }
-    refreshCombined()
     loadFolders()
 }
 
-/** Land on the real account and folder before opening any reader actions. */
+/**
+ * Leave the combined view for the row's own account and inbox — the same
+ * switch the account chip makes — then hand over to [onReady].
+ */
 fun MailState.openCombinedMessage(row: MessageRow, onReady: (Long, Long, Int) -> Unit) = io {
     MailNative.ensureInit(appContext)
-    val selected = JSONObject(MailNative.selectAccount(row.accountId))
-    val account = selected.optLong("account_id", -1)
-    val tree = parseFolders(MailNative.foldersJson(account))
-    if (account != row.accountId || tree.none { it.id == row.folderId && it.role == "inbox" }) {
+    val exists = parseFolders(MailNative.foldersJson(row.accountId)).any { it.id == row.folderId }
+    if (!exists) {
         fail("This inbox is no longer available")
         return@io
     }
-    val accepted = withContext(Dispatchers.Main) {
-        if (!combinedOpen) return@withContext false
-        combinedOpen = false
-        clearSearch()
-        activeAccountId = account
-        folderId = row.folderId
-        folders = tree
-        messages = emptyList()
-        shownMessages = emptyList()
-        refreshSidebarRows()
-        onReady(account, row.folderId, row.uid)
-        true
+    if (!withContext(Dispatchers.Main) { combinedOpen }) return@io
+    val landed = switchAccount(row.accountId, row.folderId)
+    if (landed != row.accountId) {
+        fail("This inbox is no longer available")
+        return@io
     }
-    if (!accepted) return@io
-    refreshOutbox()
-    reloadMessages()
-    loadAutoSyncMinutes(account)
-    withContext(Dispatchers.Main) { restartAutoSync() }
+    withContext(Dispatchers.Main) { onReady(landed, row.folderId, row.uid) }
 }

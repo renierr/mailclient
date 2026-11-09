@@ -249,11 +249,13 @@ pub mod qobject {
         #[qinvokable]
         fn combined_inbox_counts_json(&self) -> QString;
         #[qinvokable]
-        fn combined_inbox_messages_json(&self, limit: i32, offset: i32) -> QString;
+        fn combined_inbox_messages_json(&self, pages: i32) -> QString;
         #[qinvokable]
         fn combined_inbox_search_json(&self, query: &QString) -> QString;
+        /// Any account's folder feed (`feed::folders_json`), for acting on
+        /// a combined-inbox row outside the current account.
         #[qinvokable]
-        fn combined_inbox_folders_json(&self, account_id: i64) -> QString;
+        fn account_folders_json(&self, account_id: i64) -> QString;
         #[qinvokable]
         fn combined_delete_message(
             self: Pin<&mut Self>,

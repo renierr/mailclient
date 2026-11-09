@@ -52,9 +52,15 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
         internal set
     var combinedOpen by mutableStateOf(false)
         internal set
-    var combinedInboxes by mutableStateOf(0)
+    // Opted-in accounts with an inbox; the entry shows from two on.
+    var combinedAccounts by mutableStateOf(0)
         internal set
     var combinedUnread by mutableStateOf(0)
+        internal set
+    // Cached rows across the combined inboxes, and the pages on screen.
+    var combinedTotal by mutableStateOf(0)
+        internal set
+    var combinedPages by mutableStateOf(1)
         internal set
     var combinedMessages: List<MessageRow> by mutableStateOf(emptyList())
         internal set
@@ -263,7 +269,6 @@ class MailState(internal val appContext: Context, internal val scope: CoroutineS
     private fun settleDraft(phase: String, ok: Boolean, status: String) {
         val p = pendingDraft ?: return
         if (phase != "finished") return
-        refreshCombined()
         pendingDraft = null
         if (!ok) {
             reopenSend = p.copy(seed = p.seed.copy(failure = "Draft not saved: ${status.ifEmpty { "saving failed" }}"))

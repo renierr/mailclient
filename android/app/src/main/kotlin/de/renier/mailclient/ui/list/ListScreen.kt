@@ -160,19 +160,10 @@ fun ListScreen(
         }
     }
 
-    // A swiped row runs the action its direction was configured for; the
-    // dispatch is the swipe's side of the row menu's, so delete still goes
-    // through the same core prompt and archive keeps its undo batch.
-    fun onSwipe(action: String, m: MessageRow) {
-        when (action) {
-            "archive" -> state.rowArchive(m)
-            "delete" -> if (state.rowDeletePrompt(m).ask) rowTrash = m else state.rowTrash(m)
-            "mark_read" -> state.rowMarkRead(m, true)
-            "mark_unread" -> state.rowMarkRead(m, false)
-            "star" -> state.rowStar(m, true)
-            "unstar" -> state.rowStar(m, false)
-            else -> Unit
-        }
+    // A swiped row runs the action its direction was configured for; delete
+    // still goes through the same core prompt as the row menu.
+    fun onSwipe(action: String, m: MessageRow) = state.runSwipe(action, m) {
+        if (state.rowDeletePrompt(it).ask) rowTrash = it else state.rowTrash(it)
     }
 
     rowMove?.let { m ->

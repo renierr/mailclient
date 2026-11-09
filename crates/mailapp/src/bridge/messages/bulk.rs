@@ -21,8 +21,10 @@ use mailcore::sync::pool::job_account;
 use super::{parse_hits_json, parse_uids_json};
 
 impl qobject::Bridge {
+    /// Delete one combined-inbox row through the undo queue, refusing a
+    /// permanent delete the user did not confirm (`combined_inbox::queue_delete`).
     pub fn combined_delete_message(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         folder_id: i64,
         uid: i32,
         confirmed_permanent: bool,
@@ -30,33 +32,15 @@ impl qobject::Bridge {
         let Some(uid) = u32::try_from(uid).ok().filter(|&uid| uid != 0) else {
             return qstring("invalid message");
         };
-        let db = match shared_db() {
-            Ok(db) => db,
-            Err(e) => return qstring(&e),
-        };
-        let account_id = match folder_account(db, folder_id) {
-            Ok(id) => id,
-            Err(e) => return qstring(&e),
-        };
-        match mailcore::combined_inbox::queue_delete(
-            db,
-            account_id,
-            folder_id,
-            uid,
-            confirmed_permanent,
-        ) {
-            Ok(Queued::Pending { batch, label, .. }) => {
-                let (shown_account, shown_folder) = self.shown();
-                push_feeds(&mut self, db, shown_account, shown_folder);
-                self.as_mut()
-                    .undo_available(&qstring(&batch), &qstring(&label));
-                spawn_push_after_grace(account_id);
-                qstring(&label)
-            }
-            Ok(Queued::Permanent) => self.purge_uids(folder_id, vec![uid]),
-            Ok(Queued::AlreadyThere) => qstring("Already here"),
-            Err(e) => qstring(&e),
-        }
+        self.queue_with(folder_id, vec![uid], |db, acc_id, uids| {
+            mailcore::combined_inbox::queue_delete(
+                db,
+                acc_id,
+                folder_id,
+                uids[0],
+                confirmed_permanent,
+            )
+        })
     }
 
     pub fn mark_read_many(
@@ -306,10 +290,23 @@ impl qobject::Bridge {
     /// that can only destroy falls through to [`Self::purge_uids`] — QML has
     /// already confirmed it as permanent.
     pub(crate) fn queue_undoable(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         folder_id: i64,
         uids: Vec<u32>,
         target: MoveTarget,
+    ) -> QString {
+        self.queue_with(folder_id, uids, |db, acc_id, uids| {
+            undo::queue_move(db, acc_id, folder_id, uids, target)
+        })
+    }
+
+    /// Resolve `folder_id`'s account, queue through `queue`, then act on
+    /// the outcome: announce the Undo, purge, or report.
+    fn queue_with(
+        mut self: Pin<&mut Self>,
+        folder_id: i64,
+        uids: Vec<u32>,
+        queue: impl FnOnce(&mailcore::Db, i64, &[u32]) -> Result<Queued, String>,
     ) -> QString {
         let db = match shared_db() {
             Ok(d) => d,
@@ -319,7 +316,7 @@ impl qobject::Bridge {
             Ok(a) => a,
             Err(e) => return qstring(&e),
         };
-        match undo::queue_move(db, acc_id, folder_id, &uids, target) {
+        match queue(db, acc_id, &uids) {
             Ok(Queued::Pending { batch, label, .. }) => {
                 let (shown_account, shown_folder) = self.shown();
                 push_feeds(&mut self, db, shown_account, shown_folder);

@@ -19,10 +19,10 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_syncCombinedInbox<'c
                 "sync:combined-inbox".into(),
                 |db, progress| async move {
                     progress.report("Syncing combined inboxes…");
-                    let report = mailcore::combined_inbox::sync(db)
+                    let status = mailcore::combined_inbox::sync(db)
                         .await
                         .map_err(|e| e.to_string())?;
-                    Ok((mailcore::combined_inbox::sync_status(&report), None))
+                    Ok((status, None))
                 },
             )?;
             Ok(())

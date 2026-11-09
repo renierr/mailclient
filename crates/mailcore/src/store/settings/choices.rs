@@ -29,6 +29,17 @@ enum Kind {
     Text,
 }
 
+/// The values both swipe directions offer, `none` first (the default).
+const SWIPE_ACTIONS: &[&str] = &[
+    "none",
+    "archive",
+    "delete",
+    "mark_read",
+    "mark_unread",
+    "star",
+    "unstar",
+];
+
 /// Every user preference: key, kind and the offered values (raw form).
 const TABLE: &[(&str, Kind, &[&str])] = &[
     (SENT_COPY_ENABLED, Kind::Flag, &[]),
@@ -50,32 +61,8 @@ const TABLE: &[(&str, Kind, &[&str])] = &[
     (MESSAGE_SORT_DESC, Kind::Flag, &[]),
     (CONFIRM_DELETE, Kind::Flag, &[]),
     (LIST_DENSITY, Kind::Text, &["comfortable", "compact"]),
-    (
-        SWIPE_LEFT_ACTION,
-        Kind::Text,
-        &[
-            "none",
-            "archive",
-            "delete",
-            "mark_read",
-            "mark_unread",
-            "star",
-            "unstar",
-        ],
-    ),
-    (
-        SWIPE_RIGHT_ACTION,
-        Kind::Text,
-        &[
-            "none",
-            "archive",
-            "delete",
-            "mark_read",
-            "mark_unread",
-            "star",
-            "unstar",
-        ],
-    ),
+    (SWIPE_LEFT_ACTION, Kind::Text, SWIPE_ACTIONS),
+    (SWIPE_RIGHT_ACTION, Kind::Text, SWIPE_ACTIONS),
     (READER_FONT_SIZE, Kind::Text, &["small", "normal", "large"]),
     (LINK_CLICK_ACTION, Kind::Text, &["examine", "browser"]),
     (START_VIEW, Kind::Text, &["folders", "inbox"]),

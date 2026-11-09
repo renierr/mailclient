@@ -1,19 +1,24 @@
 package de.renier.mailclient.ui.list
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.MailNative
@@ -24,17 +29,19 @@ import de.renier.mailclient.ui.folders.MoveToDialog
 import de.renier.mailclient.ui.state.Folder
 import de.renier.mailclient.ui.state.MailState
 import de.renier.mailclient.ui.state.MessageRow
+import de.renier.mailclient.ui.state.combinedEmptyText
+import de.renier.mailclient.ui.state.combinedHasMore
 import de.renier.mailclient.ui.state.findSimilar
 import de.renier.mailclient.ui.state.deleteCombinedMessage
 import de.renier.mailclient.ui.state.openCombinedMessage
 import de.renier.mailclient.ui.state.parseFolders
 import de.renier.mailclient.ui.state.rowArchive
-import de.renier.mailclient.ui.state.rowDeleteIsPermanent
 import de.renier.mailclient.ui.state.rowDeletePrompt
 import de.renier.mailclient.ui.state.rowMarkRead
 import de.renier.mailclient.ui.state.rowMove
 import de.renier.mailclient.ui.state.rowPurge
 import de.renier.mailclient.ui.state.rowStar
+import de.renier.mailclient.ui.state.showMoreCombined
 import de.renier.mailclient.ui.state.syncNow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -63,9 +70,10 @@ fun CombinedInbox(state: MailState, onOpen: (MessageRow) -> Unit) {
         }, onDismiss = { moving = null })
     }
     deleting?.let { row ->
-        MessageDeleteConfirm(row.subject, 1, state.rowDeleteIsPermanent(row), onConfirm = {
+        val permanent = remember(row) { state.rowDeletePrompt(row).permanent }
+        MessageDeleteConfirm(row.subject, 1, permanent, onConfirm = {
             deleting = null
-            state.deleteCombinedMessage(row, state.rowDeleteIsPermanent(row))
+            state.deleteCombinedMessage(row, permanent)
         }, onDismiss = { deleting = null })
     }
     purging?.let { row ->
@@ -90,33 +98,25 @@ fun CombinedInbox(state: MailState, onOpen: (MessageRow) -> Unit) {
             RowAction.SaveEml -> saver(row.folderId, row.uid)
         }
     }
-    fun swipe(action: String, row: MessageRow) {
-        when (action) {
-            "archive" -> state.rowArchive(row)
-            "delete" -> trash(row)
-            "mark_read" -> state.rowMarkRead(row, true)
-            "mark_unread" -> state.rowMarkRead(row, false)
-            "star" -> state.rowStar(row, true)
-            "unstar" -> state.rowStar(row, false)
-        }
-    }
 
     Column(Modifier.fillMaxSize()) {
         ListHeaderRow(
             state = state,
             title = if (state.searchQuery.isEmpty()) "Combined Inbox" else "Search results",
-            subtitle = "${state.combinedMessages.size} messages",
+            subtitle = "${if (state.searchQuery.isEmpty()) state.combinedTotal else state.combinedMessages.size} messages",
             onCustomRange = {},
             combined = true,
         )
         if (state.combinedMessages.isEmpty()) {
-            Text("No cached messages", modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(state.combinedEmptyText(), modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         PullToSync(onSync = { state.syncNow() }, modifier = Modifier.weight(1f)) {
             LazyColumn(Modifier.fillMaxSize()) {
                 items(state.combinedMessages, key = { "${it.folderId}:${it.uid}" }) { row ->
                     val account = row.accountEmail.ifEmpty { state.accounts.firstOrNull { it.id == row.accountId }?.email.orEmpty() }
-                    SwipeableRow(state.swipeLeftAction, state.swipeRightAction, enabled = true, onAction = { swipe(it, row) }) {
+                    SwipeableRow(state.swipeLeftAction, state.swipeRightAction, enabled = true, onAction = {
+                        state.runSwipe(it, row, ::trash)
+                    }) {
                         MessageItem(
                             m = row,
                             folderLabel = account,
@@ -124,9 +124,27 @@ fun CombinedInbox(state: MailState, onOpen: (MessageRow) -> Unit) {
                             modifier = Modifier.clickable { onOpen(row) },
                             onToggle = {},
                             compact = state.compactList,
-                            permanent = state.rowDeleteIsPermanent(row),
+                            // The row carries it: no core round trip per row.
+                            permanent = row.deleteIsPermanent != false,
                             onAction = { action(it, row) },
                         )
+                    }
+                }
+                if (state.combinedHasMore) {
+                    item(key = "show-more") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "${state.combinedMessages.size} of ${state.combinedTotal} shown",
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            TextButton(onClick = { state.showMoreCombined() }) { Text("Show more") }
+                        }
                     }
                 }
             }

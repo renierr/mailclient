@@ -26,10 +26,10 @@ impl qobject::Bridge {
     pub fn sync_combined_inbox(self: Pin<&mut Self>) -> QString {
         spawn_job(self, "Sync", move |db, progress| async move {
             progress.report("Syncing combined inboxes…");
-            let report = mailcore::combined_inbox::sync(db)
+            let status = mailcore::combined_inbox::sync(db)
                 .await
                 .map_err(|e| e.to_string())?;
-            Ok((mailcore::combined_inbox::sync_status(&report), None))
+            Ok((status, None))
         })
     }
 

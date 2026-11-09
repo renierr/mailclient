@@ -30,7 +30,6 @@ fun MailState.refreshAll(syncAfter: Boolean = false, coldStart: Boolean = false)
     }
     MailShortcuts.update(appContext, loaded)
     loadFolders()
-    refreshCombined()
     if (coldStart) {
         val view = runCatching { JSONObject(MailNative.settingsJson()).optString("start_view") }.getOrNull()
         withContext(Dispatchers.Main) { startView = view ?: "folders" }
@@ -55,15 +54,23 @@ fun MailState.refreshAll(syncAfter: Boolean = false, coldStart: Boolean = false)
     }
 }
 
-fun MailState.selectAccount(id: Long) = io {
+fun MailState.selectAccount(id: Long) = io { switchAccount(id) }
+
+/**
+ * Make [id] the active account and land on [folder] (`-1`: the core's pick
+ * for the account). Shared by the account chip and by opening a combined
+ * inbox row, so both switch the same way. Returns the landed account.
+ */
+internal suspend fun MailState.switchAccount(id: Long, folder: Long = -1): Long {
     withContext(Dispatchers.Main) { clearSearch() }
     MailNative.ensureInit(appContext)
     val parsed = JSONObject(MailNative.selectAccount(id))
     withContext(Dispatchers.Main) {
         combinedOpen = false
         activeAccountId = parsed.optLong("account_id", id)
-        folderId = parsed.optLong("folder_id", -1)
+        folderId = if (folder >= 0) folder else parsed.optLong("folder_id", -1)
         messages = emptyList()
+        shownMessages = emptyList()
     }
     loadFolders()
     refreshOutbox()
@@ -76,6 +83,7 @@ fun MailState.selectAccount(id: Long) = io {
         withContext(Dispatchers.Main) { restartAutoSync() }
         syncAccount(landed)
     }
+    return landed
 }
 
 internal fun MailState.loadFolders() = io {

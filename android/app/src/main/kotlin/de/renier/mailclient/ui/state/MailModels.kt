@@ -60,9 +60,12 @@ data class MessageRow(
     val initials: String = "?",
     val avatarLight: String = "",
     val avatarDark: String = "",
-    // Search hits span folders and carry their own; list rows leave -1.
+    // Where the row lives. Every feed row carries both; -1 only for a
+    // payload that predates them (then the open folder/account applies).
     val folderId: Long = -1,
     val accountId: Long = -1,
+    // Combined-inbox rows only: the owning account, and whether a delete
+    // there destroys (computed by the core per inbox).
     val accountEmail: String = "",
     val deleteIsPermanent: Boolean? = null,
 )

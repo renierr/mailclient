@@ -31,6 +31,14 @@ Rectangle {
     // is never handed around as model-owned objects.
     property var messages: []
     property bool combined: false
+    // Cached rows across the combined inboxes; more than `messages` holds
+    // means "Show more" has another page to load.
+    property int combinedTotal: 0
+    // Keyboard cursor (row key) of the combined list, which has no open
+    // message: Up/Down move it, Return opens its row (Main).
+    property string combinedCursorKey: ""
+    readonly property bool combinedHasMore: root.combined && root.filterText === "" && (root.messages || []).length
+                                            < root.combinedTotal
     property int currentUid: -1
     property string folderName: ""
     property string filterText: ""
@@ -107,6 +115,7 @@ Rectangle {
     signal messageSelected(int uid)
     signal combinedMessageSelected(var row)
     signal combinedAction(var row, string action)
+    signal combinedMoreRequested
     signal searchJump(string folderPath, int uid)
     // A search hit's row action needs its folder selected first (Main).
     signal searchFolderNeeded(string folderPath)
@@ -192,50 +201,6 @@ Rectangle {
     function swipeEnabled(direction) {
         var action = root.swipeAction(direction);
         return action !== "" && action !== "none";
-    }
-
-    function swipeIcon(action) {
-        switch (action) {
-        case "archive":
-            return Icons.archive;
-        case "delete":
-            return Icons.trash;
-        case "mark_read":
-            return Icons.markRead;
-        case "mark_unread":
-            return Icons.markUnread;
-        case "star":
-            return Icons.star;
-        case "unstar":
-            return Icons.starBorder;
-        }
-        return "";
-    }
-
-    function swipeLabel(action) {
-        switch (action) {
-        case "archive":
-            return qsTr("Archive");
-        case "delete":
-            return qsTr("Delete");
-        case "mark_read":
-            return qsTr("Mark read");
-        case "mark_unread":
-            return qsTr("Mark unread");
-        case "star":
-            return qsTr("Star");
-        case "unstar":
-            return qsTr("Remove star");
-        }
-        return "";
-    }
-
-    function swipeColor(action) {
-        if (action === "delete")
-            return Theme.danger;
-        if (action === "star" || action === "unstar")
-            return Theme.star;
-        return Theme.accent;
     }
 
     // A search hit acts in its own folder, like the row menu: select that
@@ -562,10 +527,11 @@ Rectangle {
     // and from "nothing here" — mailcore's words (`search::empty_list_text`),
     // the same the native list shows.
     function emptyText() {
-        if (root.combined)
-            return root.filterText !== "" ? qsTr("No matches") : qsTr("No cached messages");
         if (!root.backend)
             return "";
+        // The combined list is local only: a query there is a finished search.
+        if (root.combined)
+            return root.backend.empty_list_text(root.filterText !== "", false, false, 0, root.filterText);
         return root.backend.empty_list_text(root.searching, root.serverSearching, root.hasQuickFilter, (root.searchRows
                                                                                                         || []).length,
                                             root.filterText);
@@ -678,7 +644,10 @@ Rectangle {
         if (filtered.count === 0)
             return;
         if (root.combined) {
-            root.combinedMessageSelected(root.combinedTarget(filtered.get(0)));
+            var at = root.indexOfKey(root.combinedCursorKey);
+            var to = at < 0 ? 0 : Math.max(0, Math.min(filtered.count - 1, at + delta));
+            root.combinedCursorKey = filtered.get(to).key;
+            list.positionViewAtIndex(to, ListView.Contain);
             return;
         }
         if (root.searching) {
@@ -698,6 +667,13 @@ Rectangle {
         var at = root.indexOfUid(root.currentUid);
         var following = at < 0 ? 0 : Math.max(0, Math.min(filtered.count - 1, at + delta));
         root.messageSelected(filtered.get(following).uid);
+    }
+
+    // Open the combined row under the keyboard cursor (Return, from Main).
+    function openCursor() {
+        var at = root.indexOfKey(root.combinedCursorKey);
+        if (root.combined && at >= 0)
+            root.combinedMessageSelected(root.combinedTarget(filtered.get(at)));
     }
 
     ListModel {
@@ -732,6 +708,7 @@ Rectangle {
         root.scheduleRebuild();
     }
     onCombinedChanged: {
+        root.combinedCursorKey = "";
         root.setSelectionMode(false);
         root.scheduleRebuild();
     }
@@ -1055,7 +1032,8 @@ Rectangle {
                 required property var model
 
                 // Search hits span folders: a UID is only unique within one.
-                readonly property bool current: !root.combined && row.model.uid === root.currentUid && (!root.searching
+                readonly property bool current: root.combined ? row.model.key === root.combinedCursorKey :
+                                                                row.model.uid === root.currentUid && (!root.searching
                                                                                       || row.model.folder
                                                                                       === root.folderName)
                 readonly property bool checked: root.selectionVersion >= 0 && root.isSelected(row.model.key)
@@ -1092,42 +1070,36 @@ Rectangle {
                     visible: row.swipeCueAction !== "" && row.swipeCueAction !== "none"
                     color: Theme.bgAlt
                 }
+                // On the side the row uncovers: left edge for a right swipe.
                 Row {
                     anchors.verticalCenter: parent.verticalCenter
-                    anchors.right: parent.right
-                    anchors.rightMargin: Theme.md
+                    x: row.swipeOffset > 0 ? Theme.md : row.width - width - Theme.md
                     spacing: Theme.xs
                     visible: row.swipeCueAction !== "" && row.swipeCueAction !== "none"
-                             && row.swipeOffset < 0
                     Label {
-                        text: root.swipeIcon(row.swipeCueAction)
+                        text: SwipeActions.icon(row.swipeCueAction)
                         font.family: Icons.fontFamily
-                        color: root.swipeColor(row.swipeCueAction)
+                        color: SwipeActions.color(row.swipeCueAction)
                         font.pixelSize: Theme.fontBase
                     }
                     Label {
-                        text: root.swipeLabel(row.swipeCueAction)
-                        color: root.swipeColor(row.swipeCueAction)
+                        text: SwipeActions.label(row.swipeCueAction)
+                        color: SwipeActions.color(row.swipeCueAction)
                         font.pixelSize: Theme.fontSmall
                     }
                 }
-                Row {
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.left: parent.left
-                    anchors.leftMargin: Theme.md
-                    spacing: Theme.xs
-                    visible: row.swipeCueAction !== "" && row.swipeCueAction !== "none"
-                             && row.swipeOffset > 0
-                    Label {
-                        text: root.swipeIcon(row.swipeCueAction)
-                        font.family: Icons.fontFamily
-                        color: root.swipeColor(row.swipeCueAction)
-                        font.pixelSize: Theme.fontBase
-                    }
-                    Label {
-                        text: root.swipeLabel(row.swipeCueAction)
-                        color: root.swipeColor(row.swipeCueAction)
-                        font.pixelSize: Theme.fontSmall
+
+                // Shifts the row's background and content together; it
+                // eases back to 0 once the drag ends.
+                Translate {
+                    id: swipeShift
+                    x: row.swipeOffset
+                    Behavior on x {
+                        enabled: !row.swipeDragging
+                        NumberAnimation {
+                            duration: 140
+                            easing.type: Easing.OutCubic
+                        }
                     }
                 }
 
@@ -1135,16 +1107,7 @@ Rectangle {
                     anchors.fill: parent
                     color: row.checked ? Theme.selected : row.current ? Theme.selected : hoverArea.containsMouse
                                                                         ? Theme.hover : "transparent"
-                    transform: Translate {
-                        x: row.swipeOffset
-                        Behavior on x {
-                            enabled: !row.swipeDragging
-                            NumberAnimation {
-                                duration: 140
-                                easing.type: Easing.OutCubic
-                            }
-                        }
-                    }
+                    transform: swipeShift
 
                     // Accent bar marks the selected row without relying on
                     // ListView.isCurrentItem (which is only valid on the
@@ -1176,7 +1139,7 @@ Rectangle {
                         row.swipeConsumed = false;
                     }
                     onPositionChanged: mouse => {
-                        if (!hoverArea.pressed || root.selectionMode)
+                        if (!(hoverArea.pressedButtons & Qt.LeftButton) || root.selectionMode)
                             return;
                         var dx = mouse.x - hoverArea.pressX;
                         if (!row.swipeDragging) {
@@ -1186,8 +1149,7 @@ Rectangle {
                                 return;
                             row.swipeDragging = true;
                         }
-                        var limit = Math.min(row.width * 0.6, row.swipeLimit);
-                        row.swipeOffset = Math.max(-limit, Math.min(limit, dx));
+                        row.swipeOffset = Math.max(-row.swipeLimit, Math.min(row.swipeLimit, dx));
                     }
                     onReleased: {
                         if (row.swipeDragging) {
@@ -1243,16 +1205,7 @@ Rectangle {
                     anchors.topMargin: Theme.xs
                     anchors.bottomMargin: Theme.xs
                     spacing: Theme.xs
-                    transform: Translate {
-                        x: row.swipeOffset
-                        Behavior on x {
-                            enabled: !row.swipeDragging
-                            NumberAnimation {
-                                duration: 140
-                                easing.type: Easing.OutCubic
-                            }
-                        }
-                    }
+                    transform: swipeShift
 
                     // Avatar slot: in selection mode the checkbox takes the
                     // avatar's place instead of a column of its own, so the
@@ -1455,12 +1408,14 @@ Rectangle {
 
         // One batch (200) per press: the newest server mail the cache lacks.
         // Only shown when older mail remains or when the server has not been checked.
+        // The combined list reuses it as "Show more": one more local page.
         Rectangle {
             id: loadOlderBar
             width: parent.width
             // Hidden for an empty folder the server agrees is empty: the
             // list's own empty text says so.
-            implicitHeight: !root.combined && root.folderName !== "" && root.olderState !== "" && root.olderState !== "empty" ? 56 : 0
+            implicitHeight: (root.combined ? root.combinedHasMore : root.folderName !== "" && root.olderState !== ""
+                                                                      && root.olderState !== "empty") ? 56 : 0
             visible: implicitHeight > 0
             color: Theme.bgAlt
             clip: true
@@ -1482,6 +1437,8 @@ Rectangle {
                     elide: Text.ElideRight
                     // mailcore's words (`feed::older_label`), as on Android.
                     text: {
+                        if (root.combined)
+                            return qsTr("%1 of %2 shown").arg((root.messages || []).length).arg(root.combinedTotal);
                         if (root.folderName === "" || !root.backend)
                             return "";
                         return root.backend.older_label(root.totalCount, root.serverTotal, root.hasAnyFilter);
@@ -1493,11 +1450,12 @@ Rectangle {
                 AppButton {
                     id: loadOlderButton
                     Layout.alignment: Qt.AlignVCenter
-                    visible: root.canLoadOlder
-                    text: root.busy ? qsTr("Loading…") : (root.olderState === "unchecked" ? qsTr("Check server") : qsTr(
-                                                                                                "Load older"))
-                    enabled: !root.busy
-                    onClicked: root.loadOlderRequested()
+                    visible: root.combined || root.canLoadOlder
+                    text: root.combined ? qsTr("Show more") : root.busy ? qsTr("Loading…") : (root.olderState === "unchecked"
+                                                                                              ? qsTr("Check server") : qsTr(
+                                                                                                    "Load older"))
+                    enabled: root.combined || !root.busy
+                    onClicked: root.combined ? root.combinedMoreRequested() : root.loadOlderRequested()
                 }
             }
         }

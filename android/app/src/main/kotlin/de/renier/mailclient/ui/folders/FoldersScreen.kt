@@ -94,7 +94,7 @@ fun FoldersScreen(
         }
         PullToSync(onSync = { state.syncNow() }) {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                if (state.combinedInboxes >= 2 || state.combinedOpen) {
+                if (state.combinedAccounts >= 2 || state.combinedOpen) {
                     item(key = "combined-inbox") {
                         Row(
                             modifier = Modifier.fillMaxWidth()

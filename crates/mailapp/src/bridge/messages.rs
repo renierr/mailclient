@@ -102,11 +102,11 @@ fn save_flags(db: &mailcore::Db, message_id: i64, read: bool, starred: bool) -> 
 }
 
 impl qobject::Bridge {
-    pub fn combined_inbox_folders_json(&self, account_id: i64) -> QString {
+    pub fn account_folders_json(&self, account_id: i64) -> QString {
         let result = shared_db()
             .and_then(|db| feed::folders_json(db, account_id).map_err(|e| e.to_string()));
         qstring(&result.unwrap_or_else(|e| {
-            log::warn!("combined inbox folders: {e}");
+            log::warn!("account folders: {e}");
             "[]".into()
         }))
     }
@@ -123,10 +123,9 @@ impl qobject::Bridge {
         }))
     }
 
-    pub fn combined_inbox_messages_json(&self, limit: i32, offset: i32) -> QString {
+    pub fn combined_inbox_messages_json(&self, pages: i32) -> QString {
         let result = shared_db().and_then(|db| {
-            mailcore::combined_inbox::messages_json(db, limit.max(0) as u64, offset.max(0) as u64)
-                .map_err(|e| e.to_string())
+            mailcore::combined_inbox::pages_json(db, pages.max(1) as u64).map_err(|e| e.to_string())
         });
         qstring(&result.unwrap_or_else(|e| {
             log::warn!("combined inbox messages: {e}");

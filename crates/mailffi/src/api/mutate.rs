@@ -185,6 +185,17 @@ fn queue(
     let db = shared_db()?;
     let queued =
         undo::queue_move(db, account_id, folder_id, &uids, target).map_err(anyhow::Error::msg)?;
+    queued_result(account_id, folder_id, uids, queued)
+}
+
+/// Act on a queued move: push after the grace period, purge where the
+/// move could only destroy, or report that nothing moved.
+pub(crate) fn queued_result(
+    account_id: i64,
+    folder_id: i64,
+    uids: Vec<u32>,
+    queued: Queued,
+) -> anyhow::Result<MoveResult> {
     Ok(match queued {
         Queued::Pending { batch, label, .. } => {
             spawn_push_after_grace(account_id);

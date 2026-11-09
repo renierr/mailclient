@@ -3,7 +3,7 @@
 //! This creates no IMAP folder and moves no messages. Every row retains its
 //! actual account, folder and UID so actions can target the original message.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
@@ -13,18 +13,43 @@ use crate::feed;
 use crate::models::{Account, FolderRole};
 use crate::store::{account_settings, accounts, folders, messages, settings};
 
+/// One member inbox, with what its rows need to be shown and acted on.
+struct Inbox {
+    folder_id: i64,
+    account_id: i64,
+    account_name: String,
+    account_email: String,
+    path: String,
+    delete_is_permanent: bool,
+}
+
+/// The member inboxes — the subscribed inbox folders of the opted-in
+/// accounts, in account order. The single definition of membership: the
+/// list, the counts and the search all read it.
+fn inboxes(db: &Db) -> Result<Vec<Inbox>> {
+    let mut out = Vec::new();
+    for account in included_accounts(db)? {
+        let all = folders::list_by_account(db, account.id)?;
+        for folder in all
+            .iter()
+            .filter(|f| f.subscribed && f.role == FolderRole::Inbox)
+        {
+            out.push(Inbox {
+                folder_id: folder.id,
+                account_id: account.id,
+                account_name: account.name.clone(),
+                account_email: account.email_address.clone(),
+                path: folder.path.clone(),
+                delete_is_permanent: crate::undo::delete_is_permanent(folder, &all),
+            });
+        }
+    }
+    Ok(out)
+}
+
 /// Subscribed inbox folders for the opted-in accounts, in account order.
 pub fn folder_ids(db: &Db) -> Result<Vec<i64>> {
-    let mut ids = Vec::new();
-    for account in included_accounts(db)? {
-        ids.extend(
-            folders::list_by_account(db, account.id)?
-                .into_iter()
-                .filter(|f| f.subscribed && f.role == FolderRole::Inbox)
-                .map(|f| f.id),
-        );
-    }
-    Ok(ids)
+    Ok(inboxes(db)?.into_iter().map(|i| i.folder_id).collect())
 }
 
 /// Accounts selected by the user, including those awaiting inbox discovery.
@@ -35,22 +60,25 @@ pub fn included_accounts(db: &Db) -> Result<Vec<Account>> {
         .collect())
 }
 
-/// Explicit foreground refresh, continuing if one account is unavailable.
-pub async fn sync(db: &Db) -> Result<crate::sync::headless::SyncAllReport> {
+/// Explicit foreground refresh of the opted-in accounts' inboxes,
+/// continuing past an unavailable account. Returns the status line; errors
+/// stay visible when other accounts succeed.
+pub async fn sync(db: &Db) -> Result<String> {
     let accounts = included_accounts(db)?;
-    Ok(crate::sync::headless::sync_accounts(
+    let report = crate::sync::headless::sync_accounts(
         db,
         &accounts,
         crate::sync::headless::SyncScope::InboxOnly,
     )
-    .await)
+    .await;
+    Ok(sync_status(&report))
 }
 
-/// Status for an explicit refresh; errors remain visible when others succeed.
-pub fn sync_status(report: &crate::sync::headless::SyncAllReport) -> String {
+fn sync_status(report: &crate::sync::headless::SyncAllReport) -> String {
+    let n = report.accounts.len();
     let base = format!(
-        "Synced {} accounts: +{} new, -{} removed",
-        report.accounts.len(),
+        "Synced {n} account{}: +{} new, -{} removed",
+        if n == 1 { "" } else { "s" },
         report.total_fetched,
         report.total_expunged
     );
@@ -86,28 +114,43 @@ pub fn queue_delete(
 }
 
 /// Counts cover the local cache, excluding messages awaiting a move.
+/// `accounts` is how many opted-in accounts have a member inbox; a frontend
+/// offers the view once there are two. `total` lets it page the list.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct Counts {
     pub total: u64,
     pub unread: u64,
-    pub inboxes: u64,
+    pub accounts: u64,
 }
 
 pub fn counts(db: &Db) -> Result<Counts> {
     let mut counts = Counts::default();
-    let mut account_ids = std::collections::HashSet::new();
-    for id in folder_ids(db)? {
-        account_ids.insert(folders::get(db, id)?.account_id);
-        counts.total += messages::count_by_folder(db, id)?;
-        counts.unread += messages::count_unread(db, id)?;
+    let mut account_ids = HashSet::new();
+    for inbox in inboxes(db)? {
+        account_ids.insert(inbox.account_id);
+        counts.total += messages::count_by_folder(db, inbox.folder_id)?;
+        counts.unread += messages::count_unread(db, inbox.folder_id)?;
     }
-    counts.inboxes = account_ids.len() as u64;
+    counts.accounts = account_ids.len() as u64;
     Ok(counts)
+}
+
+/// Rows per page of the combined list. The view starts with one page and
+/// grows a page at a time ("Show more"), so a large cache is never read
+/// whole on every refresh.
+pub const PAGE_SIZE: u64 = 200;
+
+/// The first `pages` pages of the combined list (at least one), as
+/// [`messages_json`] shapes them. A frontend has more to show while it holds
+/// fewer rows than [`Counts::total`].
+pub fn pages_json(db: &Db, pages: u64) -> Result<String> {
+    messages_json(db, pages.max(1).saturating_mul(PAGE_SIZE), 0)
 }
 
 /// A globally sorted page of locally cached messages, attributed to accounts.
 pub fn messages_json(db: &Db, limit: u64, offset: u64) -> Result<String> {
-    let ids = folder_ids(db)?;
+    let inboxes = inboxes(db)?;
+    let ids: Vec<i64> = inboxes.iter().map(|i| i.folder_id).collect();
     let rows = messages::list_compact_by_folders_sorted(
         db,
         &ids,
@@ -115,48 +158,32 @@ pub fn messages_json(db: &Db, limit: u64, offset: u64) -> Result<String> {
         offset,
         &settings::get_sort_field(db),
         settings::get_sort_descending(db),
-    )?;
-    let rows = rows
-        .into_iter()
-        .map(|m| feed::list_row_json(m, false))
-        .collect();
-    decorate_rows(db, rows)
+    )?
+    .into_iter()
+    .map(|m| feed::list_row_json(m, false))
+    .collect();
+    decorate_rows(&inboxes, rows)
 }
 
-/// Local search hits with the same account and action metadata as list rows.
+/// Local search hits with the same account and action metadata as list
+/// rows, newest first. No server search is started.
 pub fn search_json(db: &Db, query: &str, limit: u64) -> Result<String> {
-    let rows = serde_json::from_str(&feed::combined_inbox_search_json(db, query, limit)?)?;
-    decorate_rows(db, rows)
+    let inboxes = inboxes(db)?;
+    let ids: Vec<i64> = inboxes.iter().map(|i| i.folder_id).collect();
+    let rows = feed::search_hits(db, feed::SearchScope::Folders(&ids), query, limit, "")?;
+    decorate_rows(&inboxes, rows)
 }
 
-fn decorate_rows(db: &Db, mut rows: Vec<serde_json::Value>) -> Result<String> {
-    let mut metadata = HashMap::new();
-    for account in included_accounts(db)? {
-        let all = folders::list_by_account(db, account.id)?;
-        for folder in &all {
-            if folder.subscribed && folder.role == FolderRole::Inbox {
-                metadata.insert(
-                    folder.id,
-                    (
-                        account.name.clone(),
-                        account.email_address.clone(),
-                        folder.path.clone(),
-                        crate::undo::delete_is_permanent(folder, &all),
-                    ),
-                );
-            }
-        }
-    }
+fn decorate_rows(inboxes: &[Inbox], mut rows: Vec<serde_json::Value>) -> Result<String> {
+    let by_folder: HashMap<i64, &Inbox> = inboxes.iter().map(|i| (i.folder_id, i)).collect();
     for row in &mut rows {
-        let Some((name, email, path, permanent)) =
-            row["folder_id"].as_i64().and_then(|id| metadata.get(&id))
-        else {
+        let Some(inbox) = row["folder_id"].as_i64().and_then(|id| by_folder.get(&id)) else {
             continue;
         };
-        row["folder"] = serde_json::json!(path);
-        row["account_name"] = serde_json::json!(name);
-        row["account_email"] = serde_json::json!(email);
-        row["delete_is_permanent"] = serde_json::json!(permanent);
+        row["folder"] = serde_json::json!(inbox.path);
+        row["account_name"] = serde_json::json!(inbox.account_name);
+        row["account_email"] = serde_json::json!(inbox.account_email);
+        row["delete_is_permanent"] = serde_json::json!(inbox.delete_is_permanent);
     }
     Ok(serde_json::to_string(&rows)?)
 }
@@ -200,7 +227,7 @@ mod tests {
             Counts {
                 total: 2,
                 unread: 1,
-                inboxes: 2
+                accounts: 2
             }
         );
         let rows: Vec<serde_json::Value> =
@@ -229,7 +256,7 @@ mod tests {
             Counts {
                 total: 1,
                 unread: 1,
-                inboxes: 2
+                accounts: 2
             }
         );
         folders::set_subscribed(&db, fa, false).unwrap();
@@ -238,11 +265,31 @@ mod tests {
             Counts {
                 total: 0,
                 unread: 0,
-                inboxes: 1
+                accounts: 1
             }
         );
         accounts::delete(&db, b).unwrap();
         assert!(folder_ids(&db).unwrap().is_empty());
+    }
+
+    #[test]
+    fn pages_grow_by_page_size() {
+        let db = Db::open_in_memory().unwrap();
+        let a = accounts::create_for_test(&db, "a@example.com");
+        let fa = folders::upsert(&db, a, "INBOX", "/", FolderRole::Inbox).unwrap();
+        opt_in(&db, a);
+        for uid in 1..=(PAGE_SIZE as u32 + 5) {
+            messages::upsert(&db, &messages::sample_new(a, fa, uid)).unwrap();
+        }
+        let rows = |pages| {
+            serde_json::from_str::<Vec<serde_json::Value>>(&pages_json(&db, pages).unwrap())
+                .unwrap()
+                .len() as u64
+        };
+        assert_eq!(rows(0), PAGE_SIZE);
+        assert_eq!(rows(1), PAGE_SIZE);
+        assert_eq!(rows(2), PAGE_SIZE + 5);
+        assert_eq!(counts(&db).unwrap().total, PAGE_SIZE + 5);
     }
 
     #[test]
@@ -266,13 +313,11 @@ mod tests {
         assert_eq!(rows[0]["delete_is_permanent"], true);
         opt_in(&db, b);
         let rows: Vec<serde_json::Value> =
-            serde_json::from_str(&feed::combined_inbox_search_json(&db, "is:unread", 20).unwrap())
-                .unwrap();
+            serde_json::from_str(&search_json(&db, "is:unread", 20).unwrap()).unwrap();
         assert_eq!(rows.len(), 2);
         folders::set_subscribed(&db, fa, false).unwrap();
         let rows: Vec<serde_json::Value> =
-            serde_json::from_str(&feed::combined_inbox_search_json(&db, "Hello", 20).unwrap())
-                .unwrap();
+            serde_json::from_str(&search_json(&db, "Hello", 20).unwrap()).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["account_id"], b);
     }
@@ -383,7 +428,7 @@ mod tests {
         folders::upsert(&db, account, "INBOX", "/", FolderRole::Inbox).unwrap();
         folders::upsert(&db, account, "Other/Inbox", "/", FolderRole::Inbox).unwrap();
         opt_in(&db, account);
-        assert_eq!(counts(&db).unwrap().inboxes, 1);
+        assert_eq!(counts(&db).unwrap().accounts, 1);
         assert_eq!(included_accounts(&db).unwrap().len(), 1);
         let report = crate::sync::headless::SyncAllReport {
             accounts: vec![crate::sync::headless::AccountSyncResult::default()],
@@ -393,7 +438,7 @@ mod tests {
         };
         assert_eq!(
             sync_status(&report),
-            "Synced 1 accounts: +3 new, -0 removed; 1 error(s): offline"
+            "Synced 1 account: +3 new, -0 removed; 1 error(s): offline"
         );
     }
 }

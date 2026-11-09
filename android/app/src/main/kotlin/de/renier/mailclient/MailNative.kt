@@ -224,7 +224,8 @@ object MailNative {
     // {"batch","label","purging"}.
     @JvmStatic external fun messagesJson(folderId: Long, limit: Long, offset: Long): String
     @JvmStatic external fun combinedInboxCountsJson(): String
-    @JvmStatic external fun combinedInboxMessagesJson(limit: Long, offset: Long): String
+    // The first `pages` pages (mailcore `combined_inbox::PAGE_SIZE` rows each).
+    @JvmStatic external fun combinedInboxMessagesJson(pages: Int): String
     @JvmStatic external fun combinedInboxSearchJson(query: String): String
     // Just these rows (JSON uid array), shaped like messagesJson's: swapped
     // in after a read/star change instead of re-reading the folder.

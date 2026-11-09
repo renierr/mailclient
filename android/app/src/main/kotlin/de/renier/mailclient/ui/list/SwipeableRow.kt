@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,6 +33,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import de.renier.mailclient.R
+import de.renier.mailclient.ui.settings.SettingLabels
+import de.renier.mailclient.ui.state.MailState
+import de.renier.mailclient.ui.state.MessageRow
+import de.renier.mailclient.ui.state.rowArchive
+import de.renier.mailclient.ui.state.rowMarkRead
+import de.renier.mailclient.ui.state.rowStar
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -57,6 +64,11 @@ fun SwipeableRow(
     val threshold = with(density) { SWIPE_THRESHOLD_DP.dp.toPx() }
     val limit = with(density) { SWIPE_LIMIT_DP.dp.toPx() }
     val active = enabled && (leftAction != "none" || rightAction != "none")
+    // The gesture detector below starts once per row; these keep it on the
+    // current settings and callback instead of the ones it started with.
+    val left by rememberUpdatedState(leftAction)
+    val right by rememberUpdatedState(rightAction)
+    val run by rememberUpdatedState(onAction)
     var dragging by remember { mutableStateOf(false) }
     var dragOffset by remember { mutableStateOf(0f) }
     var cueAction by remember { mutableStateOf("") }
@@ -77,12 +89,12 @@ fun SwipeableRow(
                             onDragStart = { cueAction = "" },
                             onDragEnd = {
                                 val value = dragOffset
-                                val action = if (value < 0f) leftAction else rightAction
+                                val action = if (value < 0f) left else right
                                 val passed = abs(value) >= threshold && action != "none"
                                 dragging = false
                                 dragOffset = 0f
                                 cueAction = ""
-                                if (passed) onAction(action)
+                                if (passed) run(action)
                             },
                             onDragCancel = {
                                 dragging = false
@@ -95,8 +107,8 @@ fun SwipeableRow(
                                 dragOffset = next
                                 dragging = true
                                 cueAction = when {
-                                    next < 0f -> leftAction
-                                    next > 0f -> rightAction
+                                    next < 0f -> left
+                                    next > 0f -> right
                                     else -> ""
                                 }
                             },
@@ -107,7 +119,8 @@ fun SwipeableRow(
                 },
             ),
     ) {
-        if (cueAction.isNotEmpty() && cueAction != "none") {
+        val cueIcon = cueIcon(cueAction)
+        if (cueIcon != null) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -123,13 +136,13 @@ fun SwipeableRow(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
-                        painter = painterResource(cueIcon(cueAction)),
+                        painter = painterResource(cueIcon),
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(20.dp),
                     )
                     Text(
-                        cueText(cueAction),
+                        SettingLabels.of("swipe_left_action", cueAction),
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -148,22 +161,28 @@ fun SwipeableRow(
     }
 }
 
-private fun cueIcon(action: String): Int = when (action) {
+/** The cue's icon, or `null` for no cue (`none`, or no drag yet). */
+private fun cueIcon(action: String): Int? = when (action) {
     "archive" -> R.drawable.ic_archive
     "delete" -> R.drawable.ic_delete
     "mark_read" -> R.drawable.ic_mark_email_read
     "mark_unread" -> R.drawable.ic_mail
     "star" -> R.drawable.ic_star
     "unstar" -> R.drawable.ic_star_border
-    else -> R.drawable.ic_archive
+    else -> null
 }
 
-private fun cueText(action: String): String = when (action) {
-    "archive" -> "Archive"
-    "delete" -> "Delete"
-    "mark_read" -> "Mark as read"
-    "mark_unread" -> "Mark as unread"
-    "star" -> "Star"
-    "unstar" -> "Remove star"
-    else -> "None"
+/**
+ * Run swipe [action] on [m] — the row menu's own calls, so archive keeps its
+ * undo. [onDelete] decides how a delete goes (it may need to ask first).
+ */
+internal fun MailState.runSwipe(action: String, m: MessageRow, onDelete: (MessageRow) -> Unit) {
+    when (action) {
+        "archive" -> rowArchive(m)
+        "delete" -> onDelete(m)
+        "mark_read" -> rowMarkRead(m, true)
+        "mark_unread" -> rowMarkRead(m, false)
+        "star" -> rowStar(m, true)
+        "unstar" -> rowStar(m, false)
+    }
 }

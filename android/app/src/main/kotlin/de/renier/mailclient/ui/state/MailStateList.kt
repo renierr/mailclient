@@ -171,8 +171,12 @@ val MailState.selectionDeletePrompt: DeletePrompt
  * The core's delete-confirm rule over the target folders (`null`: not
  * in the feed, which the core treats as destroying).
  */
-fun MailState.deletePrompt(bulk: Boolean, folders: List<Folder?>): DeletePrompt {
-    val flags = folders.joinToString(",", "[", "]") { f -> f?.deleteIsPermanent?.toString() ?: "null" }
+fun MailState.deletePrompt(bulk: Boolean, folders: List<Folder?>): DeletePrompt =
+    deletePromptFor(bulk, folders.map { it?.deleteIsPermanent })
+
+/** [deletePrompt] over each target's own "delete destroys" flag. */
+private fun MailState.deletePromptFor(bulk: Boolean, permanent: List<Boolean?>): DeletePrompt {
+    val flags = permanent.joinToString(",", "[", "]") { it?.toString() ?: "null" }
     val o = runCatching { JSONObject(MailNative.deletePrompt(readerPrefs.confirmDelete, bulk, flags)) }.getOrNull()
     return DeletePrompt(o?.optBoolean("permanent", true) ?: true, o?.optBoolean("ask", true) ?: true)
 }
@@ -276,12 +280,8 @@ fun MailState.rowFolderId(m: MessageRow): Long = if (m.folderId >= 0) m.folderId
 private fun MailState.rowAccountId(m: MessageRow): Long = if (m.accountId >= 0) m.accountId else activeAccountId
 
 /** Deleting [m] alone: destroys or moves to Trash, and whether to ask. */
-fun MailState.rowDeletePrompt(m: MessageRow): DeletePrompt {
-    val permanent = m.deleteIsPermanent ?: rowFolder(m)?.deleteIsPermanent
-    val flags = "[${permanent?.toString() ?: "null"}]"
-    val o = runCatching { JSONObject(MailNative.deletePrompt(readerPrefs.confirmDelete, false, flags)) }.getOrNull()
-    return DeletePrompt(o?.optBoolean("permanent", true) ?: true, o?.optBoolean("ask", true) ?: true)
-}
+fun MailState.rowDeletePrompt(m: MessageRow): DeletePrompt =
+    deletePromptFor(bulk = false, listOf(m.deleteIsPermanent ?: rowFolder(m)?.deleteIsPermanent))
 
 /** Delete in [m]'s folder destroys instead of moving to Trash. */
 fun MailState.rowDeleteIsPermanent(m: MessageRow): Boolean = rowDeletePrompt(m).permanent

@@ -269,7 +269,7 @@ AppDialog {
             return v === "compact" ? qsTr("Compact") : qsTr("Comfortable");
         case "swipe_left_action":
         case "swipe_right_action":
-            return root.swipeActionLabel(v);
+            return SwipeActions.label(v);
         case "start_view":
             return v === "inbox" ? qsTr("Inbox of the last used account") : qsTr("Folder list");
         case "mark_read_delay_secs":
@@ -288,25 +288,6 @@ AppDialog {
             return v === 60 ? qsTr("Every hour") : qsTr("Every %1 minutes").arg(v);
         }
         return String(v);
-    }
-
-    // What one swipe direction does, in the same words on both frontends.
-    function swipeActionLabel(v) {
-        switch (v) {
-        case "archive":
-            return qsTr("Archive");
-        case "delete":
-            return qsTr("Delete");
-        case "mark_read":
-            return qsTr("Mark as read");
-        case "mark_unread":
-            return qsTr("Mark as unread");
-        case "star":
-            return qsTr("Star");
-        case "unstar":
-            return qsTr("Remove star");
-        }
-        return qsTr("None");
     }
 
     // The app-wide quiet hours, as an account's "Default (...)" choice names them.

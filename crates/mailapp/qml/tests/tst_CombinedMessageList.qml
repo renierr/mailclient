@@ -22,6 +22,34 @@ TestCase {
         signalName: "combinedAction"
     }
 
+    SignalSpy {
+        id: opened
+        target: list
+        signalName: "combinedMessageSelected"
+    }
+
+    function test_keyboard_cursor_moves_without_opening() {
+        var a = {account_id: 1, folder_id: 10, uid: 7, folder: "INBOX", subject: "A", from: "a@example.com", account_email: "a@example.com", date: "10:00", snippet: "First", unread: true, starred: false, delete_is_permanent: false};
+        var b = {account_id: 2, folder_id: 20, uid: 7, folder: "INBOX", subject: "B", from: "b@example.org", account_email: "b@example.org", date: "11:00", snippet: "Second", unread: true, starred: false, delete_is_permanent: true};
+        list.combined = true;
+        list.messages = [a, b];
+        list.rebuildFiltered();
+        opened.clear();
+        list.step(1);
+        compare(list.combinedCursorKey, "10:7");
+        list.step(1);
+        compare(list.combinedCursorKey, "20:7");
+        list.step(1);
+        compare(list.combinedCursorKey, "20:7");
+        list.step(-1);
+        compare(list.combinedCursorKey, "10:7");
+        compare(opened.count, 0);
+        list.openCursor();
+        compare(opened.count, 1);
+        compare(opened.signalArguments[0][0].folder_id, 10);
+        compare(opened.signalArguments[0][0].account_id, 1);
+    }
+
     function test_duplicate_uids_keep_their_folder_for_swipes() {
         var a = {account_id: 1, folder_id: 10, uid: 7, folder: "INBOX", subject: "A", from: "a@example.com", account_email: "a@example.com", date: "10:00", snippet: "First", unread: true, starred: false, delete_is_permanent: false};
         var b = {account_id: 2, folder_id: 20, uid: 7, folder: "INBOX", subject: "B", from: "b@example.org", account_email: "b@example.org", date: "11:00", snippet: "Second", unread: true, starred: false, delete_is_permanent: true};

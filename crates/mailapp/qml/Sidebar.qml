@@ -229,7 +229,7 @@ Rectangle {
             id: combinedRow
             Layout.fillWidth: true
             Layout.preferredHeight: Theme.rowHeight
-            visible: (root.combinedCounts.inboxes || 0) >= 2 || root.combinedCurrent
+            visible: (root.combinedCounts.accounts || 0) >= 2 || root.combinedCurrent
             onClicked: root.emitLater(root.combinedSelected)
             Accessible.name: qsTr("Combined Inbox: %1 unread").arg(root.combinedCounts.unread || 0)
             background: Rectangle {

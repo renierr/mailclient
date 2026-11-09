@@ -167,13 +167,24 @@ ApplicationWindow {
     property bool combinedOpen: false
     property var combinedCounts: ({})
     property var combinedRows: []
+    // Pages of the combined list on screen (`combined_inbox::pages_json`);
+    // "Show more" adds one, reopening the view starts over at one.
+    property int combinedPages: 1
 
+    // Counts always (the sidebar entry), rows only while the view is open.
+    // Runs from reloadFolders, so every feed refresh covers it.
     function reloadCombined() {
         root.combinedCounts = FeedJson.parse(backend.combined_inbox_counts_json(), ({}));
         if (!root.combinedOpen)
             return;
         var q = searchField.text.trim();
-        root.combinedRows = q === "" ? FeedJson.parse(backend.combined_inbox_messages_json(root.combinedCounts.total || 0, 0), []) : FeedJson.parse(backend.combined_inbox_search_json(q), []);
+        root.combinedRows = q === "" ? FeedJson.parse(backend.combined_inbox_messages_json(root.combinedPages), []) :
+                                       FeedJson.parse(backend.combined_inbox_search_json(q), []);
+    }
+
+    function showMoreCombined() {
+        root.combinedPages++;
+        root.reloadCombined();
     }
 
     function openCombined() {
@@ -183,6 +194,7 @@ ApplicationWindow {
         root.currentUid = -1;
         root.currentMessage = undefined;
         root.outboxOpen = false;
+        root.combinedPages = 1;
         root.combinedOpen = true;
         root.searching = false;
         searchField.text = "";
@@ -222,7 +234,7 @@ ApplicationWindow {
             break;
         case "move":
             combinedMoveDialog.target = row;
-            ModelSync.sync(combinedMoveFolders, FeedJson.parse(backend.combined_inbox_folders_json(row.account_id), []), "id");
+            ModelSync.sync(combinedMoveFolders, FeedJson.parse(backend.account_folders_json(row.account_id), []), "id");
             combinedMoveDialog.open();
             return;
         case "delete":
@@ -253,7 +265,6 @@ ApplicationWindow {
         }
         if (result !== "")
             root.statusText = result;
-        root.reloadCombined();
         root.reloadFolders();
     }
 
@@ -310,7 +321,6 @@ ApplicationWindow {
         reloadFolders();
         reloadMessages();
         reloadOutboxStatus();
-        reloadCombined();
         return r;
     }
 
@@ -760,7 +770,6 @@ ApplicationWindow {
             return;
         }
         var m = root.messageByUid(uid);
-        deleteConfirm.combinedTarget = null;
         deleteConfirm.uid = uid;
         deleteConfirm.uids = [];
         deleteConfirm.subject = m !== undefined ? m.subject : "";
@@ -828,7 +837,6 @@ ApplicationWindow {
         if (uid < 0)
             return;
         var m = root.messageByUid(uid);
-        purgeConfirm.combinedTarget = null;
         purgeConfirm.uid = uid;
         purgeConfirm.uids = [];
         purgeConfirm.subject = m !== undefined ? m.subject : "";
@@ -838,7 +846,6 @@ ApplicationWindow {
     function confirmBulkPurge(uids) {
         if (!uids || uids.length === 0)
             return;
-        purgeConfirm.combinedTarget = null;
         purgeConfirm.uid = -1;
         purgeConfirm.uids = uids.slice();
         purgeConfirm.subject = "";
@@ -925,7 +932,6 @@ ApplicationWindow {
             root.doBulkDelete(targets);
             return;
         }
-        deleteConfirm.combinedTarget = null;
         deleteConfirm.uid = -1;
         deleteConfirm.uids = targets.slice();
         deleteConfirm.subject = "";
@@ -1126,7 +1132,6 @@ ApplicationWindow {
                 reloadMessages();
             }
             reloadOutboxStatus();
-            root.reloadCombined();
             // A due send may have gone out (or just been scheduled): the
             // next held row needs its timer. After a flush that sent nothing
             // (another process held the sync lock), wait a minute rather
@@ -1361,6 +1366,13 @@ ApplicationWindow {
     Shortcut {
         sequences: ["Up"]
         onActivated: messageList.step(-1)
+    }
+    // The combined list has no open message: Up/Down move a cursor and
+    // Return opens the row under it in its own account.
+    Shortcut {
+        sequences: ["Return", "Enter"]
+        enabled: root.combinedOpen && !searchField.activeFocus
+        onActivated: messageList.openCursor()
     }
     Shortcut {
         sequences: ["Delete"]
@@ -1666,6 +1678,7 @@ ApplicationWindow {
             SplitView.fillWidth: root.combinedOpen
             SplitView.minimumWidth: 240
             combined: root.combinedOpen
+            combinedTotal: root.combinedCounts.total || 0
             messages: root.combinedOpen ? root.combinedRows : root.messageRows
             currentUid: root.currentUid
             folderName: root.combinedOpen ? qsTr("Combined Inbox") : root.currentFolder
@@ -1692,6 +1705,7 @@ ApplicationWindow {
             onMessageSelected: uid => root.openMessage(uid)
             onCombinedMessageSelected: row => root.openCombinedMessage(row)
             onCombinedAction: (row, action) => root.combinedRowAction(row, action)
+            onCombinedMoreRequested: root.showMoreCombined()
             onSearchJump: (path, uid) => root.jumpToSearchResult(path, uid)
             onSearchFolderNeeded: path => root.useSearchFolder(path)
             onFindSimilarRequested: (folderPath, uid) => root.findSimilar(folderPath, uid)
@@ -2034,7 +2048,6 @@ ApplicationWindow {
                 var result = backend.move_message(row.folder_id, row.uid, path);
                 if (result !== "")
                     root.statusText = result;
-                root.reloadCombined();
                 root.reloadFolders();
             });
         }
@@ -2082,7 +2095,10 @@ ApplicationWindow {
         property var uids: []
         property string subject: ""
         property bool permanent: false
+        // Set only by a combined-inbox row; cleared on close, so the next
+        // folder delete never inherits it.
         property var combinedTarget: null
+        onClosed: combinedTarget = null
 
         background: Rectangle {
             color: Theme.bg
@@ -2119,7 +2135,6 @@ ApplicationWindow {
                             var result = backend.combined_delete_message(row.folder_id, row.uid, confirmedPermanent);
                             if (result !== "")
                                 root.statusText = result;
-                            root.reloadCombined();
                             root.reloadFolders();
                         } else if (bulk)
                             root.doBulkDelete(targets);
@@ -2159,7 +2174,9 @@ ApplicationWindow {
         property int uid: -1
         property var uids: []
         property string subject: ""
+        // As in deleteConfirm: a combined row's target, cleared on close.
         property var combinedTarget: null
+        onClosed: combinedTarget = null
 
         background: Rectangle {
             color: Theme.bg
@@ -2195,7 +2212,7 @@ ApplicationWindow {
                             var result = backend.purge_message(row.folder_id, row.uid);
                             if (result !== "")
                                 root.statusText = result;
-                            root.reloadCombined();
+                            root.reloadFolders();
                         } else if (bulk)
                             root.bulkPurge(targets);
                         else

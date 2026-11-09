@@ -75,6 +75,9 @@ fn main() {
             // A scheduled send's time in local words, shared by the composer
             // status, the outbox rows and the Send-later dialog.
             .qml_file(QmlFile::from("qml/SendAt.qml").singleton(true))
+            // Swipe actions' labels, icons and colours, shared by the list's
+            // swipe cue and the Settings choices.
+            .qml_file(QmlFile::from("qml/SwipeActions.qml").singleton(true))
             .qml_file("qml/Main.qml")
             .qml_file("qml/Sidebar.qml")
             .qml_file("qml/MessageList.qml")

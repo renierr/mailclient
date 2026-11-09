@@ -16,21 +16,17 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_combinedInboxCountsJ
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-/// A globally sorted page of the local combined inbox.
+/// The first `pages` pages of the local combined inbox, globally sorted.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_de_renier_mailclient_MailNative_combinedInboxMessagesJson<'caller>(
     mut unowned: EnvUnowned<'caller>,
     _class: JClass<'caller>,
-    limit: i64,
-    offset: i64,
+    pages: i32,
 ) -> JString<'caller> {
     unowned
         .with_env(|env| -> Result<JString<'caller>> {
-            let rows = mailcore::combined_inbox::messages_json(
-                crate::db::shared_db()?,
-                limit.max(0) as u64,
-                offset.max(0) as u64,
-            )?;
+            let rows =
+                mailcore::combined_inbox::pages_json(crate::db::shared_db()?, pages.max(1) as u64)?;
             Ok(env.new_string(rows)?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()

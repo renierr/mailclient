@@ -856,29 +856,44 @@ pub fn search_json(
     limit: u64,
     folder: &str,
 ) -> Result<String> {
-    search_scoped_json(db, Some(account_id), query, limit, folder)
+    hits_json(search_hits(
+        db,
+        SearchScope::Account(account_id),
+        query,
+        limit,
+        folder,
+    )?)
 }
 
-/// Search only the cached inboxes opted into the combined view. No server
-/// search is started; hits retain their real account and folder identities.
-pub fn combined_inbox_search_json(db: &Db, query: &str, limit: u64) -> Result<String> {
-    search_scoped_json(db, None, query, limit, "")
+/// Where [`search_hits`] looks: one account, or an explicit folder set.
+pub(crate) enum SearchScope<'a> {
+    Account(i64),
+    Folders(&'a [i64]),
 }
 
-fn search_scoped_json(
+/// Search hits in `scope`, newest first, each carrying its `account_id`
+/// besides the [`hit_json`] fields. Callers decide the grouping.
+pub(crate) fn search_hits(
     db: &Db,
-    account_id: Option<i64>,
+    scope: SearchScope<'_>,
     query: &str,
     limit: u64,
     folder: &str,
-) -> Result<String> {
+) -> Result<Vec<serde_json::Value>> {
     let parsed = crate::search::parse_query_full(query);
     let match_query = crate::search::fts_query(query);
 
     // Exclusions alone search nothing (see `is_searchable`).
     if match_query.is_none() && parsed.filters.is_empty() {
-        return Ok("[]".to_string());
+        return Ok(Vec::new());
     }
+    // ?1 scopes to an account, ?10 to a folder set (json_each keeps the
+    // parameter count fixed however many folders there are).
+    let (account_id, folder_ids) = match scope {
+        SearchScope::Account(id) => (Some(id), None),
+        SearchScope::Folders([]) => return Ok(Vec::new()),
+        SearchScope::Folders(ids) => (None, Some(serde_json::to_string(ids)?)),
+    };
 
     // The text part, bound as ?9. With a positive term the FTS match carries
     // the `NOT`s and supplies the snippet; a filter-only query reads
@@ -900,20 +915,15 @@ fn search_scoped_json(
     };
     let flag = |v: Option<bool>| v.map(i64::from);
     let filters = &parsed.filters;
-    let scope = if account_id.is_some() {
-        "m.account_id = ?1"
-    } else {
-        "?1 is null and f.role = 'inbox' and f.subscribed = 1 and exists
-             (select 1 from account_settings s where s.account_id = m.account_id
-              and s.key = ?10 and s.value = '1')"
-    };
     let sql = format!(
         "select m.uid, m.folder_id, f.path, m.subject, m.from_addr, m.date,
                 {snippet},
                 m.is_read, m.is_starred, m.has_attachments, m.from_name, m.account_id
          from {source}
          join folders f on f.id = m.folder_id
-         where {text_clause} and ({scope})
+         where {text_clause}
+           and (?1 is null or m.account_id = ?1)
+           and (?10 is null or m.folder_id in (select value from json_each(?10)))
            and (?3 = '' or f.path = ?3)
            and m.id not in (select message_id from pending_moves)
            and (?4 is null or m.is_read = ?4)
@@ -921,14 +931,13 @@ fn search_scoped_json(
            and (?6 is null or m.has_attachments = ?6)
            and (?7 is null or m.date >= ?7)
            and (?8 is null or m.date < ?8)
-           and (?10 is not null)
          order by m.date desc, m.id desc limit ?2"
     );
     let mut stmt = db.conn().prepare(&sql)?;
     let rows = stmt.query_map(
         rusqlite::params![
             account_id,
-            limit as i64,
+            limit.min(i64::MAX as u64) as i64,
             folder,
             flag(filters.unread.map(|unread| !unread)),
             flag(filters.starred),
@@ -936,7 +945,7 @@ fn search_scoped_json(
             filters.after,
             filters.before,
             text_param,
-            settings::COMBINED_INBOX,
+            folder_ids,
         ],
         |row| {
             let mut hit = hit_json(HitRow {
@@ -956,12 +965,7 @@ fn search_scoped_json(
             Ok(hit)
         },
     )?;
-    let rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-    if account_id.is_none() {
-        Ok(serde_json::to_string(&rows)?)
-    } else {
-        hits_json(rows)
-    }
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 /// One search-style hit as read from SQL, before it becomes JSON.

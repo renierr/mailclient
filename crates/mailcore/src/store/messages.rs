@@ -178,7 +178,9 @@ fn folder_sort_clause(sort_field: &str, descending: bool) -> String {
         "subject" => {
             format!("coalesce(subject, '') collate nocase {dir}, date desc, id desc")
         }
-        _ => format!("date is null, date {dir}, uid {dir}"),
+        // `id desc` last: a uid only orders within one folder, and the
+        // combined listing spans several.
+        _ => format!("date is null, date {dir}, uid {dir}, id desc"),
     }
 }
 
@@ -237,7 +239,7 @@ pub fn list_compact_by_folders_sorted(
     let mut stmt = db.conn().prepare(&format!(
         "select {COMPACT_COLUMNS} from messages
          where folder_id in (select value from json_each(?1)) and {HIDDEN}
-         order by {order}, id desc limit ?2 offset ?3"
+         order by {order} limit ?2 offset ?3"
     ))?;
     let rows = stmt
         .query_map(

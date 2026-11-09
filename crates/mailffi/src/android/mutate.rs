@@ -78,29 +78,8 @@ pub extern "system" fn Java_de_renier_mailclient_MailNative_combinedDeleteMessag
                 confirmed_permanent,
             )
             .map_err(BridgeError)?;
-            let result = match queued {
-                mailcore::undo::Queued::Pending { batch, label, .. } => {
-                    crate::net::spawn_push_after_grace(account_id);
-                    crate::api::mutate::MoveResult {
-                        batch,
-                        label,
-                        purging: false,
-                    }
-                }
-                mailcore::undo::Queued::Permanent => {
-                    crate::api::mutate::purge_messages(account_id, folder_id, vec![uid])?;
-                    crate::api::mutate::MoveResult {
-                        batch: String::new(),
-                        label: String::new(),
-                        purging: true,
-                    }
-                }
-                mailcore::undo::Queued::AlreadyThere => crate::api::mutate::MoveResult {
-                    batch: String::new(),
-                    label: "Already here".into(),
-                    purging: false,
-                },
-            };
+            let result =
+                crate::api::mutate::queued_result(account_id, folder_id, vec![uid], queued)?;
             move_result_json(env, result)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
